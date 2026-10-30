@@ -1,0 +1,442 @@
+---
+import Doc from "../../layouts/Doc.astro";
+---
+<Doc titleZh="自托管：Cloudflare Workers 或 Docker" descriptionZh="在 Cloudflare Workers 加 Postgres 上运行 OpenUptime，或用一个 Docker 容器部署。" description="Run OpenUptime on Cloudflare Workers with Postgres, or in one Docker container." title="Self-host" updated="2026-10-12" toc>
+  <div lang="en">
+    <h1>Self-host OpenUptime</h1>
+    <p class="lede">Run your own copy on Cloudflare Workers or in Docker. Both use the same code and a Postgres database you control.</p>
+    <p>Pick one:</p>
+    <ul>
+      <li><a href="#docker"><strong>Docker</strong></a>: one container plus Postgres, on any machine. Quickest to try.</li>
+      <li><a href="#cloudflare"><strong>Cloudflare Workers</strong></a>: two Workers, a Queue and Hyperdrive in front of Postgres. Runs checks from Cloudflare's network.</li>
+    </ul>
+
+    <h2 id="docker">Docker</h2>
+    <p>One container runs the API, the web app and the check scheduler. The compose file also starts Postgres.</p>
+    <h3>Requirements</h3>
+    <ul><li>Docker with Compose v2</li><li>A machine that can reach the services you want to monitor</li></ul>
+    <h3>Start it</h3>
+    <p><strong>Option A: published image.</strong> Tagged releases are published to <code>ghcr.io/becoolme/openuptime</code> (<code>linux/amd64</code> and <code>linux/arm64</code>); nothing to clone or build.</p>
+    <pre><code is:raw>mkdir openuptime && cd openuptime
+curl -fsSLO https://raw.githubusercontent.com/becoolme/openuptime/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/becoolme/openuptime/main/.env.docker.example -o .env
+# edit .env: set POSTGRES_PASSWORD and BETTER_AUTH_SECRET (openssl rand -hex 32),
+# and uncomment OPENUPTIME_IMAGE (pin ghcr.io/becoolme/openuptime:0.1.0 or follow :latest)
+docker compose pull && docker compose up -d</code></pre>
+    <p><strong>Option B: build from source.</strong></p>
+    <pre><code is:raw>git clone https://github.com/becoolme/openuptime.git
+cd openuptime
+cp .env.docker.example .env
+# edit .env: set POSTGRES_PASSWORD and BETTER_AUTH_SECRET (openssl rand -hex 32)
+docker compose up -d --build</code></pre>
+    <p>Open <code>http://localhost:8080</code> and sign up. The schema is migrated automatically on every start and the data lives in the <code>pgdata</code> volume.</p>
+    <h3>Put it on a domain</h3>
+    <p>Run it behind a reverse proxy that terminates HTTPS (Caddy, nginx, Traefik, a load balancer) and set <code>PUBLIC_URL</code> in <code>.env</code> to the public address, for example <code>https://status.example.com</code>. Cookies, OAuth and links in emails all use this value, so sign-in will not work from a different origin than the one configured.</p>
+    <h3>Settings (<code>.env</code>)</h3>
+    <table class="vars">
+      <thead><tr><th>Variable</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>POSTGRES_PASSWORD</code></td><td>Required. Password of the bundled Postgres.</td></tr>
+        <tr><td><code>BETTER_AUTH_SECRET</code></td><td>Required. Signs sessions. Generate with <code>openssl rand -hex 32</code> and keep it stable.</td></tr>
+        <tr><td><code>PUBLIC_URL</code></td><td>Public origin. Default <code>http://localhost:8080</code>.</td></tr>
+        <tr><td><code>PORT</code></td><td>Host port. Default <code>8080</code>.</td></tr>
+        <tr><td><code>DISABLE_SIGNUP</code></td><td>Set to <code>true</code> to close registration once your own account exists. Invited people can still join.</td></tr>
+        <tr><td><code>LEGAL_LINKS</code></td><td>Set to <code>true</code> to add "you agree to the Terms and Privacy Policy" to the sign-up form. The bundled <code>/terms</code> and <code>/privacy</code> pages describe the hosted service at openuptime.app: replace them with your own text first.</td></tr>
+        <tr><td><code>TURNSTILE_SITE_KEY</code><br /><code>TURNSTILE_SECRET_KEY</code></td><td>Set both to put a <a href="https://developers.cloudflare.com/turnstile/">Cloudflare Turnstile</a> check on the email sign-up form; the API verifies the token too. GitHub sign-in is not covered.</td></tr>
+        <tr><td><code>INVITE_TTL_DAYS</code></td><td>How long invitations stay valid. Default 7.</td></tr>
+        <tr><td><code>CRON_SECRET</code></td><td>Optional. Lets an external scheduler call <code>POST /internal/run-checks</code>; unset leaves <code>/internal/*</code> closed.</td></tr>
+        <tr><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>Set to <code>true</code> to monitor internal services. By default monitors and alert webhooks pointing at private, loopback or link-local addresses (and single-label names such as compose service names) are refused, so a signed-up user cannot probe your network.</td></tr>
+        <tr><td><code>CHECK_USER_AGENT</code></td><td>Optional. User-Agent of HTTP checks.</td></tr>
+        <tr><td><code>SELFCHECK_URLS</code></td><td>Optional. Comma-separated URLs a failed check fetches to tell a down target from an offline server. Unset uses three public sites; empty turns it off.</td></tr>
+        <tr><td><code>PROBE_REGIONS</code><br><code>PROBE_SECRET</code></td><td>Optional. Remote probes for <a href="#regions">multi-region checks</a>. Unset, every check runs from this deployment.</td></tr>
+        <tr><td><code>EMAIL_FROM</code><br>+ one transport</td><td>Optional outgoing email. Transport is <code>RESEND_API_KEY</code>, <code>SMTP_URL</code> (<code>smtps://user:pass@host:465</code>) or <code>SMTP_HOST</code> / <code>SMTP_PORT</code> / <code>SMTP_USER</code> / <code>SMTP_PASS</code> (<code>SMTP_SECURE=true</code> for port 465). Without it emails are written to the container log.</td></tr>
+        <tr><td><code>GITHUB_CLIENT_ID</code><br><code>GITHUB_CLIENT_SECRET</code></td><td>Optional "Sign in with GitHub". <a href="#github">Setup and troubleshooting</a>.</td></tr>
+        <tr><td><code>PLAUSIBLE_DOMAIN</code><br><code>PLAUSIBLE_SRC</code></td><td>Optional Plausible analytics. Off when the domain is empty.</td></tr>
+      </tbody>
+    </table>
+    <h3>Operate</h3>
+    <ul>
+      <li><strong>Upgrade</strong>: with the published image, change the tag in <code>OPENUPTIME_IMAGE</code> if you pinned one, then <code>docker compose pull &amp;&amp; docker compose up -d</code>. Built from source: pull the new code, then <code>docker compose up -d --build</code>. Migrations run on start.</li>
+      <li><strong>Backup</strong>: <code>docker compose exec -T postgres pg_dump -U openuptime -Fc openuptime &gt; openuptime.dump</code>. Restore steps are in <a href="/docs/backup">Backup and restore</a>.</li>
+      <li><strong>Several containers</strong>: checks are leased with <code>FOR UPDATE SKIP LOCKED</code>, so more containers can share one database without duplicating checks.</li>
+      <li><strong>Logs</strong>: <code>docker compose logs -f openuptime</code>. A health endpoint is at <code>/health</code>.</li>
+    </ul>
+
+    <h2 id="cloudflare">Cloudflare Workers</h2>
+    <p>Two Workers: <code>openuptime-api</code> (the API under <code>/api/*</code>, the minute cron and the queue consumer) and <code>openuptime-web</code> (the site, which reaches the API through a service binding).</p>
+    <h3>Requirements</h3>
+    <ul>
+      <li>A Cloudflare account and a domain on Cloudflare. The <strong>Workers Paid</strong> plan is needed only for the Queue mode below; the Free plan works in inline mode at small scale</li>
+      <li>A Postgres database reachable from Cloudflare. It is accessed through Hyperdrive, so any hosted Postgres works (Neon, Supabase, RDS, your own)</li>
+      <li>Node.js 22+ and pnpm (<code>corepack enable</code> gives you the pinned version). Wrangler is installed with the project; sign in with <code>pnpm exec wrangler login</code> in <code>apps/api</code></li>
+    </ul>
+    <h3>1. Get the code</h3>
+    <pre><code is:raw>git clone https://github.com/becoolme/openuptime.git
+cd openuptime
+pnpm install</code></pre>
+    <h3>2. Choose how checks run, then create Hyperdrive</h3>
+    <p>Checks run in one of two modes. The mode follows from whether the <code>queues</code> block exists in <code>apps/api/wrangler.jsonc</code>, so it is a config switch, not a code change.</p>
+    <table class="vars">
+      <thead><tr><th>Mode</th><th>Plan</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Queue</strong> (default)</td><td>Workers <strong>Paid</strong></td><td>The cron fans due monitors out to a Queue, 25 per message, and the consumer runs them in parallel invocations. Scales to thousands of monitors.</td></tr>
+        <tr><td><strong>Inline</strong></td><td>Free or Paid</td><td>No Queue. The minute cron runs the checks itself, up to <strong>40 monitors per minute</strong>, within the Free plan's 50-subrequest and 10 ms CPU limits. Small installs only.</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Queue mode</strong> (the file ships this way): create the queue once.</p>
+    <pre><code is:raw>pnpm exec wrangler queues create openuptime-checks</code></pre>
+    <p><strong>Inline mode</strong>: delete the whole <code>"queues"</code> block from <code>apps/api/wrangler.jsonc</code> and skip the command above. Without a bound queue the Worker detects it and runs checks inline.</p>
+    <p>Then create Hyperdrive and copy its id into the <code>hyperdrive</code> block of <code>apps/api/wrangler.jsonc</code>:</p>
+    <pre><code is:raw>pnpm exec wrangler hyperdrive create openuptime-prod --connection-string="postgres://user:pass@host:5432/db"</code></pre>
+    <h3>3. Create the schema</h3>
+    <pre><code is:raw>DATABASE_URL="postgres://user:pass@host:5432/db" pnpm db:migrate</code></pre>
+    <p>It never issues <code>CREATE SCHEMA</code>, so a database role without database-level <code>CREATE</code> works too. Run it again after every upgrade.</p>
+    <p>Before an upgrade you can check the database without changing it: <code>DATABASE_URL="postgres://user:pass@host:5432/db" pnpm --filter @openuptime/db-pg exec node migrate-plain.mjs --check</code> verifies the applied history matches this version and lists the migrations that would run. Migrations run in one transaction, so <code>CREATE INDEX CONCURRENTLY</code> is not supported, and an enum value added in one migration cannot be used by a later migration in the same run.</p>
+    <h3>4. Point the config at your domain</h3>
+    <p>In <code>apps/api/wrangler.jsonc</code> set <code>routes</code> (<code>your-domain/api/*</code>), <code>BETTER_AUTH_URL</code> and <code>WEB_ORIGIN</code> (both <code>https://your-domain</code>) and <code>EMAIL_FROM</code>. Remove the <code>placement</code> block, or set it to your own database host.</p>
+    <p>In <code>apps/web/wrangler.jsonc</code> set the custom-domain <code>routes</code> pattern and <code>PRODUCT_URL</code> (where "Powered by" links to; use your own origin).</p>
+    <h3>5. Secrets</h3>
+    <pre><code is:raw>cd apps/api
+pnpm exec wrangler secret put BETTER_AUTH_SECRET     # openssl rand -hex 32
+pnpm exec wrangler secret put CRON_SECRET            # any long random string; guards /internal/*
+# optional "Sign in with GitHub": wrangler secret put GITHUB_CLIENT_ID, then GITHUB_CLIENT_SECRET (see the GitHub sign-in section)</code></pre>
+    <h3>6. Deploy</h3>
+    <pre><code is:raw>cd apps/api &amp;&amp; pnpm exec wrangler deploy
+cd ../web &amp;&amp; pnpm build &amp;&amp; pnpm exec wrangler deploy</code></pre>
+    <p>Deploy the API first: the web Worker binds to it. Then open your domain and sign up.</p>
+    <h3>Settings</h3>
+    <table class="vars vars-3">
+      <thead><tr><th>Where</th><th>Variable</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td>api vars</td><td><code>BETTER_AUTH_URL</code><br><code>WEB_ORIGIN</code></td><td>Public origin of the site. Used for cookies, OAuth and email links.</td></tr>
+        <tr><td>api vars</td><td><code>EMAIL_FROM</code></td><td>Sender address. Onboard the domain in Cloudflare Email Sending; without it emails are logged.</td></tr>
+        <tr><td>api vars</td><td><code>INVITE_TTL_DAYS</code></td><td>How long invitations stay valid. Default 7.</td></tr>
+        <tr><td>api vars</td><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>Set to <code>true</code> to let monitors and alert webhooks target private addresses. Default: refused. Cloudflare Workers cannot reach private ranges anyway; this mostly matters for Docker.</td></tr>
+        <tr><td>api vars + secret</td><td><code>PROBE_REGIONS</code>, <code>PROBE_SECRET</code></td><td>Optional. Remote probes for <a href="#regions">multi-region checks</a>. Put the region list in <code>vars</code> and the shared secret with <code>wrangler secret put PROBE_SECRET</code>.</td></tr>
+        <tr><td>api vars</td><td><code>DISABLE_SIGNUP</code></td><td>Set to <code>true</code> to close registration (email and GitHub). Create your own account first; afterwards only people with a pending invitation can still sign up.</td></tr>
+        <tr><td>api vars</td><td><code>LEGAL_LINKS</code></td><td>Set to <code>true</code> to add "you agree to the Terms and Privacy Policy" to the sign-up form. The bundled <code>/terms</code> and <code>/privacy</code> pages describe the hosted service at openuptime.app: replace them with your own text first.</td></tr>
+        <tr><td>api vars + secret</td><td><code>TURNSTILE_SITE_KEY</code>, <code>TURNSTILE_SECRET_KEY</code></td><td>Optional. Put the site key in the API <code>vars</code> and the secret key with <code>wrangler secret put TURNSTILE_SECRET_KEY</code>; email sign-up then requires a verified Turnstile token. Both must be set.</td></tr>
+        <tr><td>api secrets</td><td><code>BETTER_AUTH_SECRET</code><br><code>CRON_SECRET</code></td><td>See step 5.</td></tr>
+        <tr><td>web vars</td><td><code>PRODUCT_URL</code></td><td>Target of the "Powered by" link on status pages.</td></tr>
+        <tr><td>web vars</td><td><code>PLAUSIBLE_DOMAIN</code><br><code>PLAUSIBLE_SRC</code></td><td>Optional analytics. Off when the domain is unset.</td></tr>
+      </tbody>
+    </table>
+    <h3>How checks run</h3>
+    <p>A cron trigger fires every minute and leases the monitors that are due. In Queue mode it packs them 25 per message into the <code>openuptime-checks</code> Queue, and the queue consumer runs each pack, records results, opens and resolves incidents and sends alerts. In inline mode the cron does all of that itself for up to 40 monitors per run.</p>
+    <h3>Upgrade</h3>
+    <p>Pull the new code, run the migration again (it only applies what is new), then deploy the API and the web Worker in that order.</p>
+    <h3>Switching modes later</h3>
+    <ul>
+      <li><strong>Free to Paid</strong>: upgrade the plan, restore the <code>queues</code> block, run <code>pnpm exec wrangler queues create openuptime-checks</code>, then <code>pnpm exec wrangler deploy</code> the API.</li>
+      <li><strong>Paid to Free</strong>: remove the <code>queues</code> block and deploy the API again. You can delete the queue afterwards.</li>
+    </ul>
+    <p>No data migration is involved. Monitors, history and incidents are untouched.</p>
+
+    <h2 id="regions">Multi-region checks</h2>
+    <p>By default a monitor is checked from where OpenUptime runs. To check from several places, deploy the small probe in <code>apps/probe</code> to a few regions and tell the API where they are. A monitor uses them only when you pick regions for it; everything else keeps running from this deployment, so nothing changes until you opt in. How a verdict is reached and what the app shows are covered in <a href="/docs/regions">Multi-region checks</a>.</p>
+    <ol>
+      <li><strong>Deploy the probe</strong> in each place you want checks to come from. It is a small service that runs one check on request, and there are two ways to run it. Pick whichever fits, or mix them: every probe is just a URL to the API.</li>
+    </ol>
+    <h3>Option A: Docker or any Node host</h3>
+    <p>The probe is a plain Node server, so it runs on any VPS or machine in any country. The image is built from the repository root:</p>
+    <pre><code is:raw>docker build -f apps/probe/Dockerfile -t openuptime-probe .
+docker run -d --restart unless-stopped -p 8787:8787 \
+  -e PROBE_SECRET=&lt;a long random string&gt; -e PROBE_REGION=sao-paulo \
+  openuptime-probe</code></pre>
+    <p><code>apps/probe/docker-compose.yml</code> wraps it (it builds the image from this repository, or pulls <code>ghcr.io/becoolme/openuptime-probe</code> once one is published) and can add HTTPS with Caddy: <code is:raw>PROBE_DOMAIN=probe-sao.example.com docker compose --profile tls up -d</code>. Without Docker, run <code>pnpm --filter @openuptime/probe build:node</code> and then <code>PROBE_SECRET=… node apps/probe/dist/server.mjs</code> (Node 22). The API needs an <code>https</code> URL, so put the probe behind a reverse proxy or the bundled Caddy. Docker and Node probes answer <code>GET /</code> with <code is:raw>{"ok":true,"region":"…"}</code> for health checks; on Vercel the same answer is at <code>/api/probe/&lt;id&gt;</code> and the root path is a 404.</p>
+    <p>Settings: <code>PROBE_SECRET</code> (required), <code>PROBE_REGION</code> (a label), <code>PORT</code> (default 8787), <code>HOST</code> (default 0.0.0.0), <code>CHECK_USER_AGENT</code> (same as on the API). Private and internal targets are refused unless you set <code>ALLOW_PRIVATE_TARGETS=true</code> on that probe, which is what lets a probe inside your office or home network check internal services. Only do it for a probe that lives in the network you want to watch.</p>
+    <h3>Option B: Vercel, several regions at once</h3>
+    <p>The bundled build creates one function per region (<code>apps/probe/regions.json</code>, default: Virginia, San Francisco, Frankfurt, Singapore, Tokyo). Set <code>PROBE_SECRET</code> on the Vercel project, run <code>pnpm build:vercel</code> in <code>apps/probe</code>, then <code>vercel deploy --prebuilt --prod</code>. Running a function in several regions needs a Vercel plan that allows it.</p>
+    <ol start="2">
+      <li><strong>Tell the API.</strong> Set the same secret as <code>PROBE_SECRET</code> and list the regions as JSON in <code>PROBE_REGIONS</code>:</li>
+    </ol>
+    <pre><code is:raw>PROBE_SECRET=&lt;the same secret as on the probe&gt;
+PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-central":"https://probe.example.app/api/probe/eu-central","ap-southeast":{"url":"https://probe.example.app/api/probe/ap-southeast","name":"Singapore"}}</code></pre>
+    <p>Keys are region ids you choose (lowercase letters, digits and dashes). A value is a URL, or <code is:raw>{ "url", "name" }</code> to set the label shown in the app. URLs must be <code>https</code> (plain <code>http</code> is accepted for <code>localhost</code> only). The list appears in the app and in <code>GET /api/regions</code>, and a monitor can then pick up to its plan's limit.</p>
+    <h3>How it behaves</h3>
+    <ul>
+      <li>Only <strong>HTTP, TCP and WebSocket</strong> monitors can use regions. Other types, and heartbeats, always run from this deployment.</li>
+      <li>With several regions a run counts as failed only when <strong>most of the regions that answered</strong> failed, so one region's bad route does not open an incident. Each region's result is kept, and the monitor page shows uptime and latency per region.</li>
+      <li>A probe that cannot be reached is not a failed check. It is left out of the vote, and when no probe answers the check runs from this deployment instead, so a probe outage cannot blind monitoring.</li>
+      <li>Each region counts as one check against any check allowance. A single request can also be sent from one region on the monitor page (or <code>POST /api/monitors/:id/check</code> with a <code>region</code>); it is not recorded and does not change the monitor's status.</li>
+      <li>Probes only accept signed requests (HMAC-SHA256 over timestamp and body, 60 s skew) and refuse private, loopback and link-local targets whatever the signature (unless its own operator turns <code>ALLOW_PRIVATE_TARGETS</code> on), so a probe cannot be used as an open proxy.</li>
+    </ul>
+
+    <h2 id="github">GitHub sign-in</h2>
+    <p>"Continue with GitHub" is optional and off until you configure a GitHub OAuth App. Without it the GitHub button is hidden everywhere (web and mobile app) and email sign-in keeps working unchanged.</p>
+    <h3>1. Create the OAuth App</h3>
+    <p>In GitHub, open <strong>Settings → Developer settings → OAuth Apps → New OAuth App</strong> (or the same page of an organization). Fill in:</p>
+    <ul>
+      <li><strong>Homepage URL</strong>: your public address, for example <code>https://status.example.com</code>.</li>
+      <li><strong>Authorization callback URL</strong>: <code>&lt;BETTER_AUTH_URL&gt;/api/auth/callback/github</code>, exactly. With Docker <code>BETTER_AUTH_URL</code> is your <code>PUBLIC_URL</code>; on Cloudflare it is the <code>BETTER_AUTH_URL</code> var of the API Worker, the public origin of the site (the API is served at <code>/api</code> on the same domain). Example: <code>https://status.example.com/api/auth/callback/github</code>.</li>
+    </ul>
+    <p>Create a client secret and keep both values.</p>
+    <h3>2. Set the two variables</h3>
+    <ul>
+      <li><strong>Docker</strong>: add <code>GITHUB_CLIENT_ID</code> and <code>GITHUB_CLIENT_SECRET</code> to <code>.env</code>, then <code>docker compose up -d</code>.</li>
+      <li><strong>Cloudflare</strong>: in <code>apps/api</code> run <code>pnpm exec wrangler secret put GITHUB_CLIENT_ID</code> and <code>pnpm exec wrangler secret put GITHUB_CLIENT_SECRET</code>, then redeploy the API Worker.</li>
+    </ul>
+    <h3>3. Check it</h3>
+    <pre><code is:raw>curl https://status.example.com/api/config
+# "auth": { ..., "github": true, ... }</code></pre>
+    <p>Both variables must be set; with only one, <code>github</code> stays <code>false</code>. Signed-in users can then connect or disconnect GitHub under <strong>Account → Connected accounts</strong>, even when the GitHub email differs from the account email. A GitHub login is only matched to an existing account by email when GitHub reports that address as verified, and an account always keeps at least one way to sign in. <code>DISABLE_SIGNUP</code> also applies to first-time GitHub sign-ins.</p>
+    <p>A first GitHub sign-in creates the account and its personal workspace; it has no password. To add one, use <em>Forgot password</em> with the GitHub email (this needs outgoing email to be configured). Deleting such an account needs a recent sign-in instead of a password.</p>
+    <p>The mobile app uses the same provider: it reads <code>auth.github</code> from <code>/api/config</code> and opens the same OAuth App through <code>/api/auth/native/github</code>, so there is nothing extra to register (see <a href="/docs/api#native-signin">native sign-in</a>).</p>
+    <h3>Troubleshooting</h3>
+    <ul>
+      <li><strong>"redirect_uri is not associated with this application"</strong>: the callback URL in the OAuth App differs from <code>&lt;BETTER_AUTH_URL&gt;/api/auth/callback/github</code> (scheme, host, port or path). Fix it in GitHub, not in the app.</li>
+      <li><strong>The callback goes to the wrong host</strong>: <code>BETTER_AUTH_URL</code> (<code>PUBLIC_URL</code> in Docker) is wrong, often still <code>localhost</code>. Set it to the public address and restart.</li>
+      <li><strong>Behind a proxy</strong>: terminate HTTPS at the proxy and pass the original <code>Host</code> and <code>X-Forwarded-Proto</code> headers. The public address configured above is what GitHub must be given.</li>
+      <li><strong>Button missing</strong>: <code>/api/config</code> shows <code>github: false</code>, so a variable is empty or the service was not restarted.</li>
+      <li><strong>"Sign-ups are closed"</strong>: <code>DISABLE_SIGNUP=true</code>; invite the person first, or connect GitHub from an existing account.</li>
+    </ul>
+    <h2 id="apns">iOS push notifications (APNs)</h2>
+    <p>The OpenUptime iOS app can receive alerts as push notifications. The server sends them through Apple's APNs, so it needs an APNs credential. Push is off until all four variables below are set; <code>GET /api/config</code> then reports <code>push.apns: true</code> and the <em>Mobile app (push)</em> channel type appears under Alerting.</p>
+    <h3>What you need</h3>
+    <ul>
+      <li>An Apple Developer account and an App ID for the app, with the Push Notifications capability.</li>
+      <li>An APNs Auth Key (a <code>.p8</code> file) from <strong>Certificates, Identifiers &amp; Profiles → Keys</strong>, with its <strong>Key ID</strong>.</li>
+      <li>Your <strong>Team ID</strong> and the app's <strong>bundle id</strong>.</li>
+    </ul>
+    <table>
+      <thead><tr><th>Variable</th><th>Value</th></tr></thead>
+      <tbody>
+        <tr><td><code>APNS_KEY</code></td><td>The contents of the <code>.p8</code> file. A literal <code>\n</code> in place of line breaks is accepted, which is handy in <code>.env</code> files.</td></tr>
+        <tr><td><code>APNS_KEY_ID</code></td><td>The key's 10-character id.</td></tr>
+        <tr><td><code>APNS_TEAM_ID</code></td><td>Your Apple Developer team id.</td></tr>
+        <tr><td><code>APNS_BUNDLE_ID</code></td><td>The app's bundle id, used as the APNs topic.</td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><strong>Docker</strong>: add the four variables to <code>.env</code> and run <code>docker compose up -d</code>.</li>
+      <li><strong>Cloudflare</strong>: in <code>apps/api</code> run <code>pnpm exec wrangler secret put APNS_KEY</code> (paste the whole file), then the same for <code>APNS_KEY_ID</code>, <code>APNS_TEAM_ID</code> and <code>APNS_BUNDLE_ID</code>, and redeploy the API Worker.</li>
+    </ul>
+    <h3>How it works</h3>
+    <p>People register their phone from the app; a <code>push</code> channel then alerts every member of the workspace who has a registered device, each in their own language. Registering a phone as an owner or admin creates a <em>Mobile app</em> channel for you if the workspace has none. Phones that Apple reports as no longer valid are forgotten automatically.</p>
+    <p><strong>Important:</strong> an APNs key is tied to your Apple team and the app's bundle id, and a phone's token only works with the app that produced it. The official OpenUptime app can therefore receive push only from the hosted service. On a self-hosted server push works for an app you build and sign yourself with your own bundle id and key. A relay that would let the official app receive push from self-hosted servers is not implemented.</p>
+    <h2 id="after">After install</h2>
+    <ul>
+      <li>Create your first monitor, then a <a href="/docs/embed">status page</a> and, optionally, embed its state on your site.</li>
+      <li>Automate with the <a href="/docs/api">API</a> or connect an agent through <a href="/docs/mcp">MCP</a>. Use your own domain in the examples.</li>
+    </ul>
+  </div>
+
+  <div lang="zh-CN">
+    <h1>自托管 OpenUptime</h1>
+    <p class="lede">在 Cloudflare Workers 或 Docker 上运行你自己的实例。两种方式使用同一套代码和一个由你掌控的 Postgres 数据库。</p>
+    <p>二选一：</p>
+    <ul>
+      <li><a href="#docker-zh"><strong>Docker</strong></a>：一个容器加 Postgres，任意机器可跑，最适合快速试用。</li>
+      <li><a href="#cloudflare-zh"><strong>Cloudflare Workers</strong></a>：两个 Worker，加 Queue 和连接 Postgres 的 Hyperdrive，从 Cloudflare 网络发起检测。</li>
+    </ul>
+
+    <h2 id="docker-zh">Docker</h2>
+    <p>一个容器同时运行 API、网页应用和检测调度器，compose 文件会一并启动 Postgres。</p>
+    <h3>环境要求</h3>
+    <ul><li>Docker 和 Compose v2</li><li>能访问被监控服务的机器</li></ul>
+    <h3>启动</h3>
+    <p><strong>方式 A：直接使用发布的镜像。</strong>发布版本会推送到 <code>ghcr.io/becoolme/openuptime</code>（支持 <code>linux/amd64</code> 和 <code>linux/arm64</code>），无需克隆代码，也无需构建。</p>
+    <pre><code is:raw>mkdir openuptime && cd openuptime
+curl -fsSLO https://raw.githubusercontent.com/becoolme/openuptime/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/becoolme/openuptime/main/.env.docker.example -o .env
+# 编辑 .env：设置 POSTGRES_PASSWORD 和 BETTER_AUTH_SECRET（openssl rand -hex 32），
+# 并取消 OPENUPTIME_IMAGE 的注释（固定版本 ghcr.io/becoolme/openuptime:0.1.0，或跟随 :latest）
+docker compose pull && docker compose up -d</code></pre>
+    <p><strong>方式 B：从源码构建。</strong></p>
+    <pre><code is:raw>git clone https://github.com/becoolme/openuptime.git
+cd openuptime
+cp .env.docker.example .env
+# 编辑 .env：设置 POSTGRES_PASSWORD 和 BETTER_AUTH_SECRET（openssl rand -hex 32）
+docker compose up -d --build</code></pre>
+    <p>打开 <code>http://localhost:8080</code> 注册即可。数据库结构在每次启动时自动迁移，数据保存在 <code>pgdata</code> 卷中。</p>
+    <h3>绑定域名</h3>
+    <p>在能终止 HTTPS 的反向代理（Caddy、nginx、Traefik、负载均衡器）后面运行，并把 <code>.env</code> 里的 <code>PUBLIC_URL</code> 设为公网地址，例如 <code>https://status.example.com</code>。Cookie、OAuth 和邮件里的链接都使用该值，用与配置不一致的域名访问会无法登录。</p>
+    <h3>配置项（<code>.env</code>）</h3>
+    <table class="vars">
+      <thead><tr><th>变量</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><code>POSTGRES_PASSWORD</code></td><td>必填。内置 Postgres 的密码。</td></tr>
+        <tr><td><code>BETTER_AUTH_SECRET</code></td><td>必填。用于签名会话。用 <code>openssl rand -hex 32</code> 生成，并保持不变。</td></tr>
+        <tr><td><code>PUBLIC_URL</code></td><td>公网地址，默认 <code>http://localhost:8080</code>。</td></tr>
+        <tr><td><code>PORT</code></td><td>宿主机端口，默认 <code>8080</code>。</td></tr>
+        <tr><td><code>DISABLE_SIGNUP</code></td><td>设为 <code>true</code> 关闭注册（请先创建好自己的账号），受邀的人仍可加入。</td></tr>
+        <tr><td><code>LEGAL_LINKS</code></td><td>设为 <code>true</code> 后，注册表单会显示“创建账户即表示同意服务条款与隐私政策”。自带的 <code>/terms</code> 和 <code>/privacy</code> 描述的是 openuptime.app 托管服务，请先换成你自己的文本。</td></tr>
+        <tr><td><code>TURNSTILE_SITE_KEY</code><br /><code>TURNSTILE_SECRET_KEY</code></td><td>两者都设置后，邮箱注册表单会显示 <a href="https://developers.cloudflare.com/turnstile/">Cloudflare Turnstile</a> 验证，API 也会校验令牌。GitHub 登录不受影响。</td></tr>
+        <tr><td><code>INVITE_TTL_DAYS</code></td><td>邀请有效天数，默认 7。</td></tr>
+        <tr><td><code>CRON_SECRET</code></td><td>可选。允许外部调度器调用 <code>POST /internal/run-checks</code>；不设置则 <code>/internal/*</code> 保持关闭。</td></tr>
+        <tr><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>设为 <code>true</code> 以监控内网服务。默认拒绝指向私有、回环、链路本地地址（以及 compose 服务名这类单段主机名）的监控项和告警 Webhook，避免已注册用户探测你的内网。</td></tr>
+        <tr><td><code>CHECK_USER_AGENT</code></td><td>可选。HTTP 检查使用的 User-Agent。</td></tr>
+        <tr><td><code>SELFCHECK_URLS</code></td><td>可选。检查失败时用来区分“目标故障”与“服务器断网”的网址，逗号分隔。不设置则使用三个公共站点；留空则关闭。</td></tr>
+        <tr><td><code>PROBE_REGIONS</code><br><code>PROBE_SECRET</code></td><td>可选。用于<a href="#regions-zh">多区域检测</a>的远程探针。不设置时，所有检测都从本部署发起。</td></tr>
+        <tr><td><code>EMAIL_FROM</code><br>+ 一种发信方式</td><td>可选的发信配置。方式为 <code>RESEND_API_KEY</code>、<code>SMTP_URL</code>（<code>smtps://user:pass@host:465</code>）或 <code>SMTP_HOST</code> / <code>SMTP_PORT</code> / <code>SMTP_USER</code> / <code>SMTP_PASS</code>（465 端口加 <code>SMTP_SECURE=true</code>）。不配置时邮件只写入容器日志。</td></tr>
+        <tr><td><code>GITHUB_CLIENT_ID</code><br><code>GITHUB_CLIENT_SECRET</code></td><td>可选，启用 GitHub 登录。<a href="#github-zh">配置与排错</a>。</td></tr>
+        <tr><td><code>PLAUSIBLE_DOMAIN</code><br><code>PLAUSIBLE_SRC</code></td><td>可选的 Plausible 统计。域名为空则关闭。</td></tr>
+      </tbody>
+    </table>
+    <h3>运维</h3>
+    <ul>
+      <li><strong>升级</strong>：使用发布镜像时，若固定了版本就修改 <code>OPENUPTIME_IMAGE</code> 的标签，再执行 <code>docker compose pull &amp;&amp; docker compose up -d</code>；从源码构建时拉取新代码后执行 <code>docker compose up -d --build</code>。迁移在启动时自动运行。</li>
+      <li><strong>备份</strong>：<code>docker compose exec -T postgres pg_dump -U openuptime -Fc openuptime &gt; openuptime.dump</code>。恢复步骤见<a href="/docs/backup">备份与恢复</a>。</li>
+      <li><strong>多个容器</strong>：检测通过 <code>FOR UPDATE SKIP LOCKED</code> 加租约，多个容器共用一个数据库也不会重复检测。</li>
+      <li><strong>日志</strong>：<code>docker compose logs -f openuptime</code>。健康检查接口为 <code>/health</code>。</li>
+    </ul>
+
+    <h2 id="cloudflare-zh">Cloudflare Workers</h2>
+    <p>两个 Worker：<code>openuptime-api</code>（<code>/api/*</code> 下的 API、每分钟的 cron 和队列消费者）和 <code>openuptime-web</code>（站点本身，通过 service binding 访问 API）。</p>
+    <h3>环境要求</h3>
+    <ul>
+      <li>一个 Cloudflare 账号，以及托管在 Cloudflare 的域名。只有下文的 Queue 模式需要 <strong>Workers 付费版</strong>；免费版可用内联模式，适合小规模</li>
+      <li>一个 Cloudflare 能访问的 Postgres 数据库。通过 Hyperdrive 连接，所以 Neon、Supabase、RDS 或自建均可</li>
+      <li>Node.js 22+ 和 pnpm（<code>corepack enable</code> 会装好指定版本）。Wrangler 随项目安装，在 <code>apps/api</code> 中执行 <code>pnpm exec wrangler login</code> 登录</li>
+    </ul>
+    <h3>1. 获取代码</h3>
+    <pre><code is:raw>git clone https://github.com/becoolme/openuptime.git
+cd openuptime
+pnpm install</code></pre>
+    <h3>2. 选择检测运行方式，并创建 Hyperdrive</h3>
+    <p>检测有两种运行模式，是否保留 <code>apps/api/wrangler.jsonc</code> 里的 <code>queues</code> 配置块决定使用哪一种，只是配置切换，不需要改代码。</p>
+    <table class="vars">
+      <thead><tr><th>模式</th><th>套餐</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td><strong>Queue</strong>（默认）</td><td>Workers <strong>付费版</strong></td><td>cron 把到期的监控项按每 25 个一条消息放入 Queue，由消费者并行执行，可扩展到数千个监控项。</td></tr>
+        <tr><td><strong>内联</strong></td><td>免费版或付费版</td><td>不用 Queue。每分钟的 cron 自己执行检测，每次最多 <strong>40 个监控项</strong>，受免费版 50 个子请求和 10 ms CPU 限制，仅适合小规模。</td></tr>
+      </tbody>
+    </table>
+    <p><strong>Queue 模式</strong>（配置文件默认如此）：创建一次队列。</p>
+    <pre><code is:raw>pnpm exec wrangler queues create openuptime-checks</code></pre>
+    <p><strong>内联模式</strong>：从 <code>apps/api/wrangler.jsonc</code> 中删除整个 <code>"queues"</code> 配置块，并跳过上面的命令。没有绑定队列时 Worker 会自动改为内联执行。</p>
+    <p>然后创建 Hyperdrive，把得到的 id 填进 <code>apps/api/wrangler.jsonc</code> 的 <code>hyperdrive</code> 配置块：</p>
+    <pre><code is:raw>pnpm exec wrangler hyperdrive create openuptime-prod --connection-string="postgres://user:pass@host:5432/db"</code></pre>
+    <h3>3. 创建数据库结构</h3>
+    <pre><code is:raw>DATABASE_URL="postgres://user:pass@host:5432/db" pnpm db:migrate</code></pre>
+    <p>它不会执行 <code>CREATE SCHEMA</code>，所以没有数据库级 <code>CREATE</code> 权限的角色也能运行。每次升级后重新执行即可。</p>
+    <p>升级前可以只读检查数据库：<code>DATABASE_URL="postgres://user:pass@host:5432/db" pnpm --filter @openuptime/db-pg exec node migrate-plain.mjs --check</code> 会验证已执行的迁移历史与当前版本一致，并列出将要执行的迁移，不会修改数据库。迁移在同一个事务中执行，因此不支持 <code>CREATE INDEX CONCURRENTLY</code>，同一次运行中也不能使用前一个迁移刚新增的枚举值。</p>
+    <h3>4. 把配置指向你的域名</h3>
+    <p>在 <code>apps/api/wrangler.jsonc</code> 中设置 <code>routes</code>（<code>你的域名/api/*</code>）、<code>BETTER_AUTH_URL</code> 和 <code>WEB_ORIGIN</code>（都填 <code>https://你的域名</code>）以及 <code>EMAIL_FROM</code>。删除 <code>placement</code> 块，或改成你自己的数据库主机。</p>
+    <p>在 <code>apps/web/wrangler.jsonc</code> 中设置自定义域名的 <code>routes</code>，以及 <code>PRODUCT_URL</code>（"Powered by" 链接的目标，填你自己的地址）。</p>
+    <h3>5. 密钥</h3>
+    <pre><code is:raw>cd apps/api
+pnpm exec wrangler secret put BETTER_AUTH_SECRET     # openssl rand -hex 32
+pnpm exec wrangler secret put CRON_SECRET            # 任意足够长的随机字符串，保护 /internal/*
+# 可选：GITHUB_CLIENT_ID 和 GITHUB_CLIENT_SECRET，用于 GitHub 登录</code></pre>
+    <h3>6. 部署</h3>
+    <pre><code is:raw>cd apps/api &amp;&amp; pnpm exec wrangler deploy
+cd ../web &amp;&amp; pnpm build &amp;&amp; pnpm exec wrangler deploy</code></pre>
+    <p>务必先部署 API：web Worker 依赖它。然后打开你的域名注册即可。</p>
+    <h3>配置项</h3>
+    <table class="vars vars-3">
+      <thead><tr><th>位置</th><th>变量</th><th>说明</th></tr></thead>
+      <tbody>
+        <tr><td>api vars</td><td><code>BETTER_AUTH_URL</code><br><code>WEB_ORIGIN</code></td><td>站点公网地址，用于 Cookie、OAuth 和邮件链接。</td></tr>
+        <tr><td>api vars</td><td><code>EMAIL_FROM</code></td><td>发件地址。需在 Cloudflare Email Sending 中接入该域名；不配置则邮件只写日志。</td></tr>
+        <tr><td>api vars</td><td><code>INVITE_TTL_DAYS</code></td><td>邀请有效天数，默认 7。</td></tr>
+        <tr><td>api vars</td><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>设为 <code>true</code> 允许监控项和告警 Webhook 指向私有地址，默认拒绝。Cloudflare Workers 本身无法访问私有网段，此项主要影响 Docker 部署。</td></tr>
+        <tr><td>api vars + secret</td><td><code>PROBE_REGIONS</code>, <code>PROBE_SECRET</code></td><td>可选。用于<a href="#regions-zh">多区域检测</a>的远程探针。区域列表放在 <code>vars</code>，共享密钥用 <code>wrangler secret put PROBE_SECRET</code> 设置。</td></tr>
+        <tr><td>api vars</td><td><code>DISABLE_SIGNUP</code></td><td>设为 <code>true</code> 关闭注册（邮箱与 GitHub 均适用）。请先创建好自己的账号；之后只有持有待处理邀请的人还能注册。</td></tr>
+        <tr><td>api vars</td><td><code>LEGAL_LINKS</code></td><td>设为 <code>true</code> 后，注册表单会显示“创建账户即表示同意服务条款与隐私政策”。自带的 <code>/terms</code> 和 <code>/privacy</code> 描述的是 openuptime.app 托管服务，请先换成你自己的文本。</td></tr>
+        <tr><td>api vars + secret</td><td><code>TURNSTILE_SITE_KEY</code>、<code>TURNSTILE_SECRET_KEY</code></td><td>可选。站点密钥放进 API 的 <code>vars</code>，私钥用 <code>wrangler secret put TURNSTILE_SECRET_KEY</code> 设置；之后邮箱注册需要通过 Turnstile 验证。两者必须同时设置。</td></tr>
+        <tr><td>api secrets</td><td><code>BETTER_AUTH_SECRET</code><br><code>CRON_SECRET</code></td><td>见第 5 步。</td></tr>
+        <tr><td>web vars</td><td><code>PRODUCT_URL</code></td><td>状态页 "Powered by" 链接的目标。</td></tr>
+        <tr><td>web vars</td><td><code>PLAUSIBLE_DOMAIN</code><br><code>PLAUSIBLE_SRC</code></td><td>可选统计。未设置域名则关闭。</td></tr>
+      </tbody>
+    </table>
+    <h3>检测如何运行</h3>
+    <p>cron 每分钟触发一次并租约到期的监控项。Queue 模式下每 25 个打包成一条消息放入 <code>openuptime-checks</code> 队列，由消费者执行每个分组，记录结果、开启和解决事件并发送告警。内联模式下这些都由 cron 自己完成，每次最多 40 个监控项。</p>
+    <h3>升级</h3>
+    <p>拉取新代码，重新执行迁移（只会应用新增的部分），然后先部署 API、再部署 web Worker。</p>
+    <h3>之后切换模式</h3>
+    <ul>
+      <li><strong>免费版升级到付费版</strong>：升级套餐，恢复 <code>queues</code> 配置块，执行 <code>pnpm exec wrangler queues create openuptime-checks</code>，再 <code>pnpm exec wrangler deploy</code> API。</li>
+      <li><strong>付费版降到免费版</strong>：删除 <code>queues</code> 配置块并重新部署 API，之后可以删除队列。</li>
+    </ul>
+    <p>不涉及数据迁移，监控项、历史记录和事件都不受影响。</p>
+
+    <h2 id="regions-zh">多区域检测</h2>
+    <p>默认情况下，监控项从 OpenUptime 自身所在位置发起检测。想从多个地点检测，可把 <code>apps/probe</code> 中的小型探针部署到几个区域，再把它们的地址告诉 API。只有你为某个监控项指定了区域，才会使用探针；其他监控项仍从本部署发起，因此不主动开启就不会有任何变化。结论如何得出、应用里能看到什么，见<a href="/docs/regions">多区域检测</a>。</p>
+    <ol>
+      <li><strong>部署探针</strong>到你想让检测发起的每个地点。探针是个小服务，按请求执行一次检测，有两种运行方式，可任选或混用：对 API 来说每个探针只是一个 URL。</li>
+    </ol>
+    <h3>方式 A：Docker 或任意 Node 主机</h3>
+    <p>探针就是一个普通的 Node 服务，可以跑在任何国家的任意 VPS 或机器上。镜像在仓库根目录构建：</p>
+    <pre><code is:raw>docker build -f apps/probe/Dockerfile -t openuptime-probe .
+docker run -d --restart unless-stopped -p 8787:8787 \
+  -e PROBE_SECRET=&lt;一段足够长的随机字符串&gt; -e PROBE_REGION=sao-paulo \
+  openuptime-probe</code></pre>
+    <p><code>apps/probe/docker-compose.yml</code> 对它做了封装（会用本仓库构建镜像；一旦发布了 <code>ghcr.io/becoolme/openuptime-probe</code>，则直接拉取），并可用 Caddy 自动加上 HTTPS：<code is:raw>PROBE_DOMAIN=probe-sao.example.com docker compose --profile tls up -d</code>。不用 Docker 时，运行 <code>pnpm --filter @openuptime/probe build:node</code>，再 <code>PROBE_SECRET=… node apps/probe/dist/server.mjs</code>（Node 22）。API 需要 <code>https</code> 地址，所以请把探针放在反向代理或自带的 Caddy 后面。Docker 和 Node 探针对 <code>GET /</code> 返回 <code is:raw>{"ok":true,"region":"…"}</code>，可用于健康检查；Vercel 上同样的响应在 <code>/api/probe/&lt;id&gt;</code>，根路径是 404。</p>
+    <p>配置项：<code>PROBE_SECRET</code>（必填）、<code>PROBE_REGION</code>（标签）、<code>PORT</code>（默认 8787）、<code>HOST</code>（默认 0.0.0.0）、<code>CHECK_USER_AGENT</code>（与 API 上的含义相同）。默认拒绝私有和内部地址；只有在该探针上设置 <code>ALLOW_PRIVATE_TARGETS=true</code> 才允许，这样就可以把探针放在办公室或家里的内网中，检测内部服务。请只对确实位于被监控网络内的探针这样做。</p>
+    <h3>方式 B：Vercel，一次部署多个区域</h3>
+    <p>自带的构建会为每个区域生成一个函数（<code>apps/probe/regions.json</code>，默认：弗吉尼亚、旧金山、法兰克福、新加坡、东京）。在 Vercel 项目上设置 <code>PROBE_SECRET</code>，在 <code>apps/probe</code> 中运行 <code>pnpm build:vercel</code>，再 <code>vercel deploy --prebuilt --prod</code>。让函数在多个区域运行，需要允许这一点的 Vercel 套餐。</p>
+    <ol start="2">
+      <li><strong>告诉 API。</strong>把同一个密钥设为 <code>PROBE_SECRET</code>，并用 JSON 在 <code>PROBE_REGIONS</code> 中列出区域：</li>
+    </ol>
+    <pre><code is:raw>PROBE_SECRET=&lt;与探针相同的密钥&gt;
+PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-central":"https://probe.example.app/api/probe/eu-central","ap-southeast":{"url":"https://probe.example.app/api/probe/ap-southeast","name":"Singapore"}}</code></pre>
+    <p>键是你自己定的区域 id（小写字母、数字和连字符）。值可以是 URL，或 <code is:raw>{ "url", "name" }</code> 以设置在应用中显示的名称。URL 必须是 <code>https</code>。区域列表会出现在应用和 <code>GET /api/regions</code> 中，监控项可在套餐上限内选择多个区域。</p>
+    <h3>行为说明</h3>
+    <ul>
+      <li>只有 <strong>HTTP、TCP 和 WebSocket</strong> 监控项可以使用区域。其他类型和心跳始终从本部署发起。</li>
+      <li>选择多个区域时，只有<strong>多数应答的区域</strong>都失败才判定为失败，单个区域的线路问题不会产生事件。各区域的结果都会保留，监控详情页按区域显示可用率和延迟。</li>
+      <li>探针无法连通不算检测失败：它不参与表决；所有探针都没有应答时，改为从本部署发起检测，因此探针故障不会让监控失明。</li>
+      <li>每个区域各计一次检查额度。也可以在监控详情页（或 <code>POST /api/monitors/:id/check</code> 并传 <code>region</code>）从某一个区域单次发起请求；该请求不会被记录，也不会改变监控状态。</li>
+      <li>探针只接受签名请求（对时间戳与请求体做 HMAC-SHA256，允许 60 秒偏差），并且无论签名是否有效，都会拒绝私有、回环和链路本地地址（除非该探针的运维者自己打开 <code>ALLOW_PRIVATE_TARGETS</code>），因此不会变成开放代理。</li>
+    </ul>
+
+    <h2 id="github-zh">GitHub 登录</h2>
+    <p>“使用 GitHub 继续”是可选功能，配置 GitHub OAuth App 后才会启用。未配置时，网页和移动应用都不会显示 GitHub 按钮，邮箱登录照常使用。</p>
+    <h3>1. 创建 OAuth App</h3>
+    <p>在 GitHub 打开 <strong>Settings → Developer settings → OAuth Apps → New OAuth App</strong>（组织账号在其对应页面）。填写：</p>
+    <ul>
+      <li><strong>Homepage URL</strong>：你的公网地址，例如 <code>https://status.example.com</code>。</li>
+      <li><strong>Authorization callback URL</strong>：必须精确为 <code>&lt;BETTER_AUTH_URL&gt;/api/auth/callback/github</code>。Docker 中 <code>BETTER_AUTH_URL</code> 即 <code>PUBLIC_URL</code>；Cloudflare 上是 API Worker 的 <code>BETTER_AUTH_URL</code> 变量，即站点公网地址（API 在同一域名的 <code>/api</code> 下）。例如 <code>https://status.example.com/api/auth/callback/github</code>。</li>
+    </ul>
+    <p>创建 Client secret，并保存这两个值。</p>
+    <h3>2. 设置两个变量</h3>
+    <ul>
+      <li><strong>Docker</strong>：把 <code>GITHUB_CLIENT_ID</code> 和 <code>GITHUB_CLIENT_SECRET</code> 写入 <code>.env</code>，然后执行 <code>docker compose up -d</code>。</li>
+      <li><strong>Cloudflare</strong>：在 <code>apps/api</code> 中执行 <code>pnpm exec wrangler secret put GITHUB_CLIENT_ID</code> 和 <code>pnpm exec wrangler secret put GITHUB_CLIENT_SECRET</code>，然后重新部署 API Worker。</li>
+    </ul>
+    <h3>3. 验证</h3>
+    <pre><code is:raw>curl https://status.example.com/api/config
+# "auth": { ..., "github": true, ... }</code></pre>
+    <p>两个变量必须同时设置，只设一个时 <code>github</code> 仍为 <code>false</code>。之后已登录的用户可以在 <strong>账号 → 已关联的账号</strong> 中关联或取消关联 GitHub，GitHub 邮箱可以与账号邮箱不同。只有 GitHub 报告该邮箱已验证时，GitHub 登录才会按邮箱匹配已有账号；账号始终至少保留一种登录方式。<code>DISABLE_SIGNUP</code> 同样适用于首次 GitHub 登录。</p>
+    <p>首次 GitHub 登录会创建账号和个人工作区，此时没有密码。需要密码时，用 GitHub 邮箱走“忘记密码”即可设置（需要已配置发信）。这类账号删除时不需要密码，只要求最近登录过。</p>
+    <p>移动应用使用同一个提供方：它从 <code>/api/config</code> 读取 <code>auth.github</code>，并通过 <code>/api/auth/native/github</code> 走同一个 OAuth App，无需额外注册（见<a href="/docs/api#native-signin-zh">原生登录</a>）。</p>
+    <h3>排错</h3>
+    <ul>
+      <li><strong>“redirect_uri is not associated with this application”</strong>：OAuth App 中的回调地址与 <code>&lt;BETTER_AUTH_URL&gt;/api/auth/callback/github</code> 不一致（协议、主机、端口或路径）。请在 GitHub 中修改。</li>
+      <li><strong>回调跳到了错误的主机</strong>：<code>BETTER_AUTH_URL</code>（Docker 中为 <code>PUBLIC_URL</code>）设置有误，常见是仍为 <code>localhost</code>。改成公网地址并重启。</li>
+      <li><strong>位于反向代理之后</strong>：在代理处终止 HTTPS，并传递原始的 <code>Host</code> 与 <code>X-Forwarded-Proto</code> 请求头。给 GitHub 填写的应是上面配置的公网地址。</li>
+      <li><strong>看不到按钮</strong>：<code>/api/config</code> 显示 <code>github: false</code>，说明变量为空或服务未重启。</li>
+      <li><strong>“Sign-ups are closed”</strong>：已设置 <code>DISABLE_SIGNUP=true</code>；请先邀请对方，或在已有账号中关联 GitHub。</li>
+    </ul>
+    <h2 id="apns-zh">iOS 推送通知（APNs）</h2>
+    <p>OpenUptime iOS 应用可以通过推送接收告警。服务器经由 Apple 的 APNs 发送，因此需要 APNs 凭证。以下四个变量全部设置后才会启用推送；此时 <code>GET /api/config</code> 会返回 <code>push.apns: true</code>，告警页里也会出现 <em>手机 App 推送</em> 渠道类型。</p>
+    <h3>你需要准备</h3>
+    <ul>
+      <li>一个 Apple Developer 账号，以及为应用创建的 App ID（开启 Push Notifications 能力）。</li>
+      <li>在 <strong>Certificates, Identifiers &amp; Profiles → Keys</strong> 中创建的 APNs Auth Key（<code>.p8</code> 文件）及其 <strong>Key ID</strong>。</li>
+      <li>你的 <strong>Team ID</strong> 和应用的 <strong>bundle id</strong>。</li>
+    </ul>
+    <table>
+      <thead><tr><th>变量</th><th>取值</th></tr></thead>
+      <tbody>
+        <tr><td><code>APNS_KEY</code></td><td><code>.p8</code> 文件的内容。可以用字面的 <code>\n</code> 代替换行，写在 <code>.env</code> 里更方便。</td></tr>
+        <tr><td><code>APNS_KEY_ID</code></td><td>密钥的 10 位 id。</td></tr>
+        <tr><td><code>APNS_TEAM_ID</code></td><td>Apple Developer 团队 id。</td></tr>
+        <tr><td><code>APNS_BUNDLE_ID</code></td><td>应用的 bundle id，用作 APNs topic。</td></tr>
+      </tbody>
+    </table>
+    <ul>
+      <li><strong>Docker</strong>：把四个变量写进 <code>.env</code>，然后执行 <code>docker compose up -d</code>。</li>
+      <li><strong>Cloudflare</strong>：在 <code>apps/api</code> 中执行 <code>pnpm exec wrangler secret put APNS_KEY</code>（粘贴整个文件），再对 <code>APNS_KEY_ID</code>、<code>APNS_TEAM_ID</code>、<code>APNS_BUNDLE_ID</code> 做同样操作，然后重新部署 API Worker。</li>
+    </ul>
+    <h3>工作方式</h3>
+    <p>成员在应用里注册自己的手机；<code>push</code> 渠道会通知工作区中所有已注册设备的成员，并按各自的语言显示。所有者或管理员注册手机时，如果工作区还没有该渠道，会自动创建名为 <em>Mobile app</em> 的渠道。Apple 反馈已失效的手机会被自动清除。</p>
+    <p><strong>重要：</strong>APNs 密钥绑定你的 Apple 团队和应用的 bundle id，手机令牌也只对产生它的应用有效。因此官方 OpenUptime 应用只能接收托管服务发出的推送。自托管服务器上，推送适用于你自己用自己的 bundle id 和密钥构建并签名的应用。让官方应用接收自托管服务器推送的中继服务尚未实现。</p>
+    <h2 id="after-zh">安装之后</h2>
+    <ul>
+      <li>创建第一个监控项，再创建<a href="/docs/embed">状态页</a>，需要的话把状态嵌入到你的网站。</li>
+      <li>通过 <a href="/docs/api">API</a> 自动化，或用 <a href="/docs/mcp">MCP</a> 接入 Agent，示例里的域名换成你自己的。</li>
+    </ul>
+  </div>
+</Doc>

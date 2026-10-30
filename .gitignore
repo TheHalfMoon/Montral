@@ -1,0 +1,9 @@
+# No persistent development outputs, credentials or customer data
+.DS_Store
+.env
+/node_modules/
+/dist/
+/.cache/
+*.log
+/.pytest_cache/
+/__pycache__/

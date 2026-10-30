@@ -1,0 +1,21 @@
+name: Montral source integrity
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  preserved-sources:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check exact imported source snapshots
+        run: python3 scripts/verify_sources.py
+      - name: Ensure upstream licenses exist
+        run: |
+          test -s vendor/montral-core/LICENSE
+          test -s vendor/montral-cloud-probes/LICENSE
+          test -s vendor/montral-webhooks-legacy/LICENSE

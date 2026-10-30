@@ -21,7 +21,7 @@
 const VERSION = "__BUILD_ID__";
 const PRECACHE = "__PRECACHE__";
 
-const PREFIX = "ou-shell-";
+const PREFIX = "montral-shell-";
 const CACHE = PREFIX + VERSION;
 const SHELL = "/app";
 const APP_PAGE = /^\/(zh-Hans\/)?app(\/|$)/;

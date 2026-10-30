@@ -40,7 +40,7 @@ export interface Tool {
 const l = (en: string, zh: string): L => ({ en, zh });
 
 /** Facts about Montral shared by every comparison table. Sources: README, docs/reference.md, docs pages, apps/api. */
-export const OU = {
+export const MONTRAL = {
   license: l("MIT license, source on GitHub", "MIT 许可证，源码在 GitHub"),
   hosting: l(
     "Hosted service, or self-host with Docker and Postgres, or on Cloudflare Workers with Postgres",
@@ -71,7 +71,7 @@ export const OU = {
 } as const;
 
 /** What Montral cannot do today. Every item was checked: there is no code path for it. */
-export const OU_GAPS: L[] = [
+export const MONTRAL_GAPS: L[] = [
   l("No TLS certificate expiry monitoring.", "不监控 TLS 证书到期。"),
   l("No ICMP ping monitor; use a TCP or HTTP check instead.", "没有 ICMP ping 监控；可改用 TCP 或 HTTP 检测。"),
   l("No browser-based or multi-step transaction checks, and no real user monitoring.", "没有基于浏览器或多步骤的事务检测，也没有真实用户监控。"),
@@ -143,11 +143,11 @@ export const TOOLS: Tool[] = [
       "UptimeRobot 是闭源的托管监控服务，有免费档和付费套餐，不提供可自行部署的软件。",
     ),
     rows: [
-      { topic: l("License", "许可证"), montral: OU.license, them: l("Closed source", "闭源") },
-      { topic: l("Where it runs", "运行方式"), montral: OU.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
-      { topic: l("Self-hosting", "自托管"), montral: OU.selfHost, them: l("Not offered", "不提供") },
-      { topic: l("Monitor types", "监控类型"), montral: OU.types, them: l("Website, keyword and port style checks; see their site for the full list", "网站、关键字、端口等检测；完整列表见其官网") },
-      { topic: l("Status pages", "状态页"), montral: OU.status, them: l("Offered; check their docs for features per plan", "提供；各套餐的功能请查看其文档") },
+      { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("Closed source", "闭源") },
+      { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
+      { topic: l("Self-hosting", "自托管"), montral: MONTRAL.selfHost, them: l("Not offered", "不提供") },
+      { topic: l("Monitor types", "监控类型"), montral: MONTRAL.types, them: l("Website, keyword and port style checks; see their site for the full list", "网站、关键字、端口等检测；完整列表见其官网") },
+      { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for features per plan", "提供；各套餐的功能请查看其文档") },
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
     ],
     theyHave: [
@@ -188,11 +188,11 @@ export const TOOLS: Tool[] = [
       "Better Stack（包含原名 Better Uptime 的产品）是闭源的托管平台。可用性监控只是其中一部分，此外还有值班与事件管理以及日志管理。",
     ),
     rows: [
-      { topic: l("License", "许可证"), montral: OU.license, them: l("Closed source", "闭源") },
-      { topic: l("Where it runs", "运行方式"), montral: OU.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
+      { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("Closed source", "闭源") },
+      { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
       { topic: l("Scope", "产品范围"), montral: l("Uptime monitoring, incidents, alerts and status pages", "可用性监控、事件、告警与状态页"), them: l("Uptime monitoring plus on-call, incident management and logs", "可用性监控，加上值班、事件管理与日志") },
-      { topic: l("Alerting", "告警"), montral: OU.alerts, them: l("On-call scheduling and phone or SMS alerts are part of the product; check their docs for what each plan includes", "值班排班以及电话、短信告警是产品的一部分；各套餐包含的内容请查看其文档") },
-      { topic: l("Automation", "自动化"), montral: OU.automation, them: l("Has an API; check their docs for coverage", "提供 API；覆盖范围请查看其文档") },
+      { topic: l("Alerting", "告警"), montral: MONTRAL.alerts, them: l("On-call scheduling and phone or SMS alerts are part of the product; check their docs for what each plan includes", "值班排班以及电话、短信告警是产品的一部分；各套餐包含的内容请查看其文档") },
+      { topic: l("Automation", "自动化"), montral: MONTRAL.automation, them: l("Has an API; check their docs for coverage", "提供 API；覆盖范围请查看其文档") },
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Check their current pricing", "请查看其最新价格") },
     ],
     theyHave: [
@@ -245,11 +245,11 @@ export const TOOLS: Tool[] = [
       "Pingdom 是 SolarWinds 旗下的闭源托管产品。除可用性检测外，还提供合成事务监控、真实用户监控和页面速度测量。",
     ),
     rows: [
-      { topic: l("License", "许可证"), montral: OU.license, them: l("Closed source", "闭源") },
-      { topic: l("Where it runs", "运行方式"), montral: OU.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
-      { topic: l("Uptime checks", "可用性检测"), montral: OU.types, them: l("Website and server uptime checks from the vendor's locations", "从厂商的检测节点对网站和服务器做可用性检测") },
+      { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("Closed source", "闭源") },
+      { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
+      { topic: l("Uptime checks", "可用性检测"), montral: MONTRAL.types, them: l("Website and server uptime checks from the vendor's locations", "从厂商的检测节点对网站和服务器做可用性检测") },
       { topic: l("Transaction checks and real user monitoring", "事务检测与真实用户监控"), montral: l("Not available", "不提供"), them: l("Offered as separate products", "作为独立产品提供") },
-      { topic: l("Status pages", "状态页"), montral: OU.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
+      { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Check their current pricing", "请查看其最新价格") },
     ],
     theyHave: [
@@ -302,11 +302,11 @@ export const TOOLS: Tool[] = [
       "StatusCake 是闭源的托管监控服务，有免费档和付费套餐。除可用性检测外，还提供页面速度、SSL 与域名监控。",
     ),
     rows: [
-      { topic: l("License", "许可证"), montral: OU.license, them: l("Closed source", "闭源") },
-      { topic: l("Where it runs", "运行方式"), montral: OU.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
-      { topic: l("Uptime checks", "可用性检测"), montral: OU.types, them: l("Website and server uptime checks; see their site for the full list", "网站与服务器可用性检测；完整列表见其官网") },
+      { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("Closed source", "闭源") },
+      { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
+      { topic: l("Uptime checks", "可用性检测"), montral: MONTRAL.types, them: l("Website and server uptime checks; see their site for the full list", "网站与服务器可用性检测；完整列表见其官网") },
       { topic: l("SSL and domain monitoring", "SSL 与域名监控"), montral: l("Not available. Montral does not watch certificate or domain expiry", "不提供。Montral 不监控证书或域名到期"), them: l("Offered", "提供") },
-      { topic: l("Status pages", "状态页"), montral: OU.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
+      { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
     ],
     theyHave: [
@@ -359,12 +359,12 @@ export const TOOLS: Tool[] = [
       "Uptime Kuma 是开源（MIT）的监控工具，需要你自己安装和运维，以安装简单、监控类型和通知方式丰富著称。",
     ),
     rows: [
-      { topic: l("License", "许可证"), montral: OU.license, them: l("MIT license, source on GitHub", "MIT 许可证，源码在 GitHub") },
-      { topic: l("Where it runs", "运行方式"), montral: OU.hosting, them: l("Self-hosted; the project does not run a hosted service", "自托管；项目本身不提供托管服务") },
-      { topic: l("Checks from several regions", "多区域检测"), montral: OU.regions, them: l("Checks run from the machine where it is installed; for another location you run another instance", "检测在安装它的机器上运行；要换一个位置，需要另外再部署一个实例") },
-      { topic: l("Monitor types", "监控类型"), montral: OU.types, them: l("A wide range, including ping and certificate expiry; see its docs for the current list", "类型丰富，包括 ping 与证书到期；当前列表见其文档") },
-      { topic: l("Alerts", "告警"), montral: OU.alerts, them: l("Many notification integrations; see its docs for the list", "提供大量通知集成；列表见其文档") },
-      { topic: l("Teams and automation", "团队与自动化"), montral: l(`${OU.team.en}; ${OU.automation.en}`, `${OU.team.zh}；${OU.automation.zh}`), them: l("Check its docs for user management and API coverage", "用户管理与 API 覆盖范围请查看其文档") },
+      { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("MIT license, source on GitHub", "MIT 许可证，源码在 GitHub") },
+      { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Self-hosted; the project does not run a hosted service", "自托管；项目本身不提供托管服务") },
+      { topic: l("Checks from several regions", "多区域检测"), montral: MONTRAL.regions, them: l("Checks run from the machine where it is installed; for another location you run another instance", "检测在安装它的机器上运行；要换一个位置，需要另外再部署一个实例") },
+      { topic: l("Monitor types", "监控类型"), montral: MONTRAL.types, them: l("A wide range, including ping and certificate expiry; see its docs for the current list", "类型丰富，包括 ping 与证书到期；当前列表见其文档") },
+      { topic: l("Alerts", "告警"), montral: MONTRAL.alerts, them: l("Many notification integrations; see its docs for the list", "提供大量通知集成；列表见其文档") },
+      { topic: l("Teams and automation", "团队与自动化"), montral: l(`${MONTRAL.team.en}; ${MONTRAL.automation.en}`, `${MONTRAL.team.zh}；${MONTRAL.automation.zh}`), them: l("Check its docs for user management and API coverage", "用户管理与 API 覆盖范围请查看其文档") },
     ],
     theyHave: [
       l("More monitor types, among them ping and TLS certificate expiry, which Montral lacks.", "更多监控类型，包括 ping 和 TLS 证书到期，这些 Montral 都没有。"),

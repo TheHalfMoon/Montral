@@ -13,7 +13,8 @@ Historical source snapshots under `vendor/`, and legal provenance, original LICE
 - [x] Webhook inboxes and dashboard branded Montral
 - [x] Optional edge probe under Montral package
 - [x] Internal prefix conversion for historical `ou_` and `ou:` storage/API identifiers
-- [ ] End-to-end live staging validation of every translated app surface
+- [x] Local Node/DB integration smoke of health, MCP discovery and web dashboard
+- [ ] End-to-end browser coverage of every translated app surface
 - [ ] Documentation/copy accuracy for hosted product pricing and current feature claims
 - [ ] Payment provider, billing and legal-page branding/accuracy
 - [ ] Mobile application integration: original mobile source not in donor archive; never claim working native Montral app

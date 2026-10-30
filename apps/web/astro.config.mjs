@@ -13,7 +13,7 @@ const NODE = process.env.DEPLOY_TARGET === "node";
 
 // Writes /sw.js after the build: the worker template with this build's file list and id stamped in (src/sw/stamp.mjs).
 const serviceWorker = {
-  name: "ou-service-worker",
+  name: "montral-service-worker",
   hooks: {
     "astro:build:done": ({ dir }) => {
       const root = fileURLToPath(dir);

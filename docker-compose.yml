@@ -52,6 +52,7 @@ services:
       PRODUCT_URL: ${PRODUCT_URL:-https://montral.invalid}
       # max connections of the shared Postgres pool (default 10)
       DB_POOL_MAX: ${DB_POOL_MAX:-}
+      BIND_HOST: ${BIND_HOST:-}
       # optional: Plausible analytics (PLAUSIBLE_SRC defaults to https://plausible.io/js/script.js)
       PLAUSIBLE_DOMAIN: ${PLAUSIBLE_DOMAIN:-}
       PLAUSIBLE_SRC: ${PLAUSIBLE_SRC:-}

@@ -29,6 +29,9 @@ pnpm --filter @montral/probe test
 pnpm --filter @montral/web build
 pnpm --filter @montral/api build:node
 pnpm --filter @montral/probe build:edge
+DEPLOY_TARGET=node pnpm --filter @montral/web build
+# Requires a disposable TEST_DATABASE_URL that can be destroyed after testing:
+TEST_DATABASE_URL=postgres://... node scripts/smoke-node.mjs
 python3 scripts/verify_sources.py
 ```
 
@@ -49,6 +52,6 @@ Original license files and copyright are retained as required, and exact SHAs an
 
 ## Before launch
 
-**There is no customer billing, live cloud service, privacy/terms approvals or passed end-to-end PostgreSQL qualification.** The private MVP still needs payment-provider onboarding, subscription entitlements, PostgreSQL full E2E, hardening, cost/load testing, backup/restore, incident drills and final commercial/legal checks. See `docs/RELEASE-GATES.md`.
+**There is no customer billing, live cloud service or privacy/terms approvals. Local isolated PostgreSQL E2E passes, but real OAuth webhook-client verification, cloud qualification and browser end-to-end release checks remain.** The private MVP still needs payment-provider onboarding, subscription entitlements, PostgreSQL full E2E, hardening, cost/load testing, backup/restore, incident drills and final commercial/legal checks. See `docs/RELEASE-GATES.md`.
 
 GitHub is the canonical source. Mac copies are disposable and must be removed after remote verification. Never commit customer data or secrets.

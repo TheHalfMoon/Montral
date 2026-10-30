@@ -10,10 +10,10 @@ function fixture() {
   let projectId = "project-a";
   const db = {
     query: async (sql: string, args: unknown[] = []): Promise<Record<string, unknown>[]> => {
-      if (sql.includes("COUNT(*)")) return [{ count: String(inboxes.filter((i) => i.organization_id === args[0] && i.project_id === args[1]).length) }];
-      if (sql.startsWith("INSERT INTO montral_hook_inbox")) {
+      if (sql.includes("montral_create_hook_inbox")) {
+        if (inboxes.filter(i => i.organization_id === args[1] && i.project_id === args[2]).length >= 10) return [{ id: null }];
         inboxes.push({ id: String(args[0]), organization_id: String(args[1]), project_id: String(args[2]), name: String(args[3]), token_hash: String(args[4]) });
-        return [];
+        return [{ id: String(args[0]) }];
       }
       if (sql.startsWith("SELECT id,name,created_at")) return inboxes.filter((i) => i.organization_id === args[0] && i.project_id === args[1]).map((i) => ({ id: i.id, name: i.name, created_at: new Date() }));
       if (sql.startsWith("SELECT id FROM montral_hook_inbox")) return inboxes.filter((i) => i.id === args[0] && i.organization_id === args[1] && i.project_id === args[2]).map((i) => ({ id: i.id }));
@@ -86,10 +86,12 @@ describe("Montral webhook security", () => {
     const list = await f.app.request("/api/hooks/inboxes");
     expect(await list.json()).toEqual({ inboxes: [] });
   });
-  it("requires workspace manager for inbox creation and deletion", async () => {
+  it("requires workspace manager for inbox creation and reading sensitive event bodies", async () => {
     const f = fixture();
     f.setMember("member");
     const res = await f.app.request("/api/hooks/inboxes", { method: "POST", headers: { "content-type": "application/json" }, body: '{"name":"unauthorized"}' });
     expect(res.status).toBe(403);
+    const eventRead = await f.app.request("/api/hooks/inboxes/00000000-0000-4000-8000-000000000000/events");
+    expect(eventRead.status).toBe(403);
   });
 });

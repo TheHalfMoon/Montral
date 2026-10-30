@@ -13,6 +13,7 @@ import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
+import { pruneExpiredHookEvents } from "./montral-hooks";
 import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks, type CheckMessage, type CheckQueue } from "./scheduler";
 
@@ -140,18 +141,25 @@ for (let attempt = 1; ; attempt++) {
   }
 }
 
-server.listen(port, () => console.log(`montral → ${env.WEB_ORIGIN} (listening on :${port})`));
+server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral → ${env.WEB_ORIGIN} (listening on :${port})`));
 
 // A tick normally takes well under a second, and a failing one (database down) ends quickly with an error. One that
 // never ends is a hung database call: it would block every later tick while /health keeps answering. Nothing else can
 // recover that, so exit and let the container's restart policy bring the process back. State lives in Postgres.
 const TICK_STUCK_MS = 5 * 60_000;
 let tickStartedAt = 0; // 0 = no tick running
+let lastHookPruneAt = 0;
 const tick = setInterval(async () => {
   if (tickStartedAt) return; // a long tick must not overlap the next one
   tickStartedAt = Date.now();
   try {
     await runDueChecks(database.repo, queue, entitlements);
+    // Runs even if no new webhook arrives. One timer for the whole service, not one
+    // cleanup per inbox or a competing scheduler. Retry after errors.
+    if (Date.now() - lastHookPruneAt >= 5 * 60_000) {
+      await pruneExpiredHookEvents(database);
+      lastHookPruneAt = Date.now();
+    }
   } catch (e) {
     console.error("scheduler", e);
   } finally {

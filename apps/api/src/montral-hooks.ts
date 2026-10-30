@@ -81,7 +81,51 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
   )`);
   await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_recent
     ON montral_hook_event (inbox_id, created_at DESC)`);
-  return ["montral_hooks_v1"];
+  await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_expiry
+    ON montral_hook_event (created_at)`);
+  // PL/pgSQL executes the count as a separate statement AFTER taking the advisory
+  // transaction lock. A CTE count in a caller statement sees its pre-lock snapshot,
+  // so competing requests can otherwise overrun the quota.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_create_hook_inbox(
+      p_id uuid, p_org text, p_project text, p_name text, p_hash text
+    ) RETURNS uuid LANGUAGE plpgsql AS $montral$
+    DECLARE existing_count integer;
+    BEGIN
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_project, 0));
+      SELECT COUNT(*) INTO existing_count FROM montral_hook_inbox
+        WHERE organization_id = p_org AND project_id = p_project;
+      IF existing_count >= 10 THEN RETURN NULL; END IF;
+      INSERT INTO montral_hook_inbox(id,organization_id,project_id,name,token_hash)
+      VALUES (p_id,p_org,p_project,p_name,p_hash);
+      RETURN p_id;
+    END;
+    $montral$
+  `);
+  return ["montral_hooks_v2"];
+}
+
+/** Server-driven expiry, including idle inboxes; no user interaction is needed to evict old events. */
+export async function pruneExpiredHookEvents(db: Database): Promise<number> {
+  // Cleanup covers project/workspace removal, where the original domain tables have
+  // a different key type from the webhook inbox's legacy textual project id.
+  // Deleting the inbox cascades to its events. A deleted workspace cannot retain
+  // webhook payloads indefinitely.
+  await db.query(`
+    DELETE FROM montral_hook_inbox AS i
+    WHERE NOT EXISTS (SELECT 1 FROM organization AS o WHERE o.id = i.organization_id)
+       OR NOT EXISTS (SELECT 1 FROM project AS p WHERE p.id::text = i.project_id
+                      AND p.organization_id = i.organization_id)
+  `);
+  // Aggregate in SQL instead of returning every deleted event into Worker memory.
+  const rows = await db.query<{ removed: string }>(`
+    WITH expired AS (
+      DELETE FROM montral_hook_event
+      WHERE created_at < NOW() - INTERVAL '7 days'
+      RETURNING 1
+    ) SELECT COUNT(*)::text AS removed FROM expired
+  `);
+  return Number(rows[0]?.removed ?? 0);
 }
 
 export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: Hono<AppEnv> }) {
@@ -99,20 +143,20 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     if (!parsed.success) return c.json({ error: "Invalid inbox name" }, 400);
     const db = c.get("database");
     const scope = [c.get("orgId"), c.get("projectId")];
-    const [{ count }] = await db.query<{ count: string }>(
-      "SELECT COUNT(*)::text AS count FROM montral_hook_inbox WHERE organization_id=$1 AND project_id=$2", scope,
-    );
-    if (Number(count) >= MAX_INBOXES) return c.json({ error: "Inbox limit reached" }, 402);
     const id = crypto.randomUUID();
     const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, "0")).join("");
-    await db.query(
-      "INSERT INTO montral_hook_inbox(id,organization_id,project_id,name,token_hash) VALUES($1,$2,$3,$4,$5)",
+    // The database function acquires its lock THEN counts under a fresh statement
+    // snapshot in the same transaction; this is safe with multiple Workers/Node
+    // instances using independent PostgreSQL connections.
+    const created = await db.query<{ id: string | null }>(
+      "SELECT montral_create_hook_inbox($1::uuid,$2::text,$3::text,$4::text,$5::text) AS id",
       [id, ...scope, parsed.data.name, await fingerprint(token)],
     );
+    if (!created[0]?.id) return c.json({ error: "Inbox limit reached" }, 409);
     c.header("cache-control", "no-store");
     return c.json({ id, name: parsed.data.name, path: `/api/hooks/receive/${id}/${token}`, warning: "This secret URL is shown only once. Treat it like a password." }, 201);
   });
-  privateHooks.get("/inboxes/:id/events", uuidParams, async (c) => {
+  privateHooks.get("/inboxes/:id/events", uuidParams, requireManager, async (c) => {
     const scope = [c.req.param("id"), c.get("orgId"), c.get("projectId")];
     const db = c.get("database");
     const inbox = await db.query<{ id:string }>(

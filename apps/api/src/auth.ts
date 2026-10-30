@@ -136,7 +136,7 @@ export function createAuth(database: Database, env: Bindings) {
         const mail = actionEmail({
           title: tr(lang, "Verify your email address"),
           body: tr(lang, "Confirm this address so we can reach you about your Montral account and recover it if you lose access."),
-          footer: tr(lang, "Didn't create an Montral account? Ignore this email."),
+          footer: tr(lang, "Didn't create a Montral account? Ignore this email."),
           cta: tr(lang, "Verify email"),
           url,
           lang,

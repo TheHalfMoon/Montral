@@ -1,6 +1,6 @@
 ---
 import SeoShell from "../../components/SeoShell.astro";
-import { OU_GAPS, TOOLS, type Tool } from "../../lib/seo-pages";
+import { MONTRAL_GAPS, TOOLS, type Tool } from "../../lib/seo-pages";
 
 export function getStaticPaths() {
   return TOOLS.map((tool) => ({ params: { tool: tool.slug }, props: { tool } }));
@@ -44,7 +44,7 @@ const ui = {
       </table>
       <h2 id={`gaps${k === "zh" ? "-zh" : ""}`}>{ui[k].gaps}</h2>
       <p>{ui[k].gapsIntro}</p>
-      <ul>{OU_GAPS.map((g) => (<li>{g[k]}</li>))}</ul>
+      <ul>{MONTRAL_GAPS.map((g) => (<li>{g[k]}</li>))}</ul>
       {tool.theyHave.length > 0 && (<><h3>{ui[k].known}</h3><ul>{tool.theyHave.map((g) => (<li>{g[k]}</li>))}</ul></>)}
       <h2 id={`who${k === "zh" ? "-zh" : ""}`}>{ui[k].who}</h2>
       <div class="two">

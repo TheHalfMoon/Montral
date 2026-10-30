@@ -9,6 +9,22 @@ jobs:
     name: Typecheck, tests and production builds
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      TEST_DATABASE_URL: postgres://montral:montral-local-test@127.0.0.1:5432/montral_ci
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: montral_ci
+          POSTGRES_USER: montral
+          POSTGRES_PASSWORD: montral-local-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U montral -d montral_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -24,14 +40,16 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typescript and Astro checks
         run: pnpm -r typecheck
-      - name: All API, web and probe tests
+      - name: PostgreSQL E2E, API, web and probe tests
         run: pnpm --filter @montral/api test && pnpm --filter @montral/web test && pnpm --filter @montral/probe test
       - name: Build Node API
         run: pnpm --filter @montral/api build:node
       - name: Build edge probe
         run: pnpm --filter @montral/probe build:edge
-      - name: Build web
-        run: pnpm --filter @montral/web build
+      - name: Build self-hosted Node web
+        run: DEPLOY_TARGET=node pnpm --filter @montral/web build
+      - name: Smoke-test running Node API and web against PostgreSQL
+        run: node scripts/smoke-node.mjs
       - name: No source brand leaks in active code
         run: |
           if grep -R -i -E 'openuptime|uptimeflare|webhook.site' apps packages --include='*.ts' --include='*.tsx' --include='*.astro' --include='*.json' --exclude-dir=dist --exclude-dir=.astro --exclude-dir=node_modules | head -n 1; then

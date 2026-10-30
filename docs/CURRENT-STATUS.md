@@ -1,33 +1,26 @@
 # Montral Engineering Status — 2026-10-30
 
-## What is actually implemented
+## Completed in this private engineering wave
 
-- Private repo `TheHalfMoon/Montral` with 3 immutable donor-source snapshots, 638 files and SHA-256 manifest.
-- Active Montral TypeScript workspace copied/renamed from monitored core; generated brand assets replaced, inactive snapshots retain original copyright.
-- Working core HTTP monitoring API and OAuth REST/MCP implementation taken from the MIT source; upstream logic is reused (not reconstructed).
-- New Montral webhook inbox SQL migration attached to Edition; project isolation, one-time token receiver, safe HTTP header allowlist, 32KiB payload cap, 250 events maximum/inbox and 7-day age on ingestion; 4 MCP tools; dashboard UI.
-- Optional signed HMAC Cloudflare HTTP probe with explicit host allowlist, status/keyword checks, no separate scheduler.
-- CI workflow configured but does NOT deploy, purchase infrastructure, create a DB or accept customer payments.
+- Three immutable donor snapshots remain intact, with 638 source files verified by hash.
+- Unified Montral monitoring, PostgreSQL API and OAuth REST/MCP with no separate scheduler.
+- Montral-managed webhook inboxes, inbox creation/read/delete and sensitive payload viewer restricted to workspace managers. Secret receiver URL shown once; only hash persisted.
+- Authorized, per-project webhook capture with 32 KiB bounded body and safe header allowlist; lazy per-inbox cap and scheduled expiry.
+- **Real PostgreSQL correction**: PL/pgSQL transactional advisory lock + fresh count statement enforces concurrent 10-inbox limit. Verified 16 parallel creates in five repeated runs; earlier CTE design incorrectly allowed 12.
+- Housekeeping on Node and Cloudflare scheduler ticks: remove expired webhook events after 7 days, and inboxes orphaned by deleted projects/workspaces. Direct real Postgres pruning tests passed.
+- Fully Montral-branded active web/API/PWA/cache/service-worker metadata; original source copyright and license retained in immutable `vendor/` snapshots.
+- CI workflow wired to disposable PostgreSQL 17 service, all suites and self-hosted Node smoke, not deployment.
+- Actual isolated PostgreSQL 17.9 run: **535 API tests**, **122 web tests**, **20 probe tests** passed, 0 skipped in these totals. Typechecks, Node/SSR/Cloudflare bundles and Node+PostgreSQL live smoke passed.
+- Exact test commands and claims: [Qualification report](evidence/2026-10-30-local-postgres-qualification.md).
 
-## Engineering evidence at time of implementation
+## Real blockers (do not claim complete)
 
-- API TypeScript typecheck passed; API unit suite 441 passed / 91 skipped (many skip without `TEST_DATABASE_URL`).
-- Frontend typecheck passed; unit suite 121 passed / 1 skipped; Astro production build successful after fixing renamed competitor field.
-- Probe TypeScript passed; 20 tests passed for Node/probe and Montral Cloudflare mode.
-- Exact 638 source snapshot files verified.
-- Full PostgreSQL integration E2E tests, browser E2E, production load tests, SMTP delivery, real Cloudflare probe, billing and external payments: **not performed**.
-- No public deployment and no paid resources configured.
+1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.
+2. Browser E2E and actual Cloudflare Worker probe deployment/region verification still not performed.
+3. Payment provider, free/pro plans, metering and subscription state transitions have NOT been built; no real charges, credentials or deployments attempted.
+4. Hosted operational hardening: backup/restore, incident drills, load tests, data privacy, deliverability, webhooks/PWA security, legal/regulatory requirements.
+5. Request manager roles, project-scoped API keys and OAuth grants must be subjected to dedicated webhook-route E2E. General core OAuth tests exist, but these exact webhook routes still need this qualification.
 
-## Important follow-ups (NOT complete)
+## Operating rules
 
-1. Test `montral_hooks` migration in a disposable PostgreSQL instance and actual multi-tenant requests with sessions, API keys and scoped MCP tokens. Existing request fixture tests are not sufficient.
-2. Real security review including access control, webhook secret management, replay policy, rate-limit scope across Workers, incoming sensitive payload privacy, incident handling and backups.
-3. Ensure webhook retention is enforced by scheduled deletion even after an inbox becomes inactive: current lazy deletion on new event is insufficient.
-4. Scale-proof inbox creation and per-plan quota against concurrent requests; current count/insert is not transactional.
-5. Implement a production billing Edition, verified provider webhooks, metering, downgrade/cancel/refund, and cost-aware plan guards.
-6. Bind the Cloudflare edge probe under `PROBE_REGIONS` in an authorized test deployment; configure allowlist and secret out-of-band. Confirm no duplicate checks.
-7. Publish no domain, app, deployment or payment links until explicit launch qualification.
-
-## Zero persistent Mac files
-
-All code must be committed and verified in PRIVATE GitHub; only temporary build paths may be used on Mac and must be removed after GitHub verification. Never use Windows for Montral.
+Only user-authorized Mac and GitHub. No Windows. Private repository only. No public release, paid infrastructure, customer data or production payment handling. Maintain historical licenses and provenance. Keep all deliverables in GitHub, remove temporary local clones and disposable databases when remote commit is verified.

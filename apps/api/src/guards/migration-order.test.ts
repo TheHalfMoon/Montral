@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { ROOT } from "./helpers";
 
 function runGenerator(entries: { idx: number; when: number; tag: string }[], prevOf: (i: number) => string = (i) => (i === 0 ? "00000000-0000-0000-0000-000000000000" : `s${i - 1}`)) {
-  const root = mkdtempSync(join(tmpdir(), "ou-migration-order-"));
+  const root = mkdtempSync(join(tmpdir(), "montral-migration-order-"));
   try {
     mkdirSync(join(root, "scripts"));
     mkdirSync(join(root, "packages/db-pg/drizzle/meta"), { recursive: true });
@@ -38,7 +38,7 @@ describe("migration generator accepts valid journals", () => {
 
 describe("migration generator rejects unsafe merge artifacts", () => {
   it.each(["timestamp", "index", "snapshot"])("rejects a broken %s sequence", (kind) => {
-    const root = mkdtempSync(join(tmpdir(), "ou-migration-order-"));
+    const root = mkdtempSync(join(tmpdir(), "montral-migration-order-"));
     try {
       mkdirSync(join(root, "scripts"));
       mkdirSync(join(root, "packages/db-pg/drizzle/meta"), { recursive: true });

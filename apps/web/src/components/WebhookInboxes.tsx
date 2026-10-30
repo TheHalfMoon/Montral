@@ -20,7 +20,7 @@ export default function WebhookInboxes() {
     api.hookEvents(selected).then((d) => setEvents(d.events)).catch((e) => setError((e as Error).message));
   }, [selected]);
   const refreshEvents = async () => { if (selected) setEvents((await api.hookEvents(selected)).events); };
-  const create = async (e: React.FormEvent) => {
+  const create = async (e: React.SyntheticEvent) => {
     e.preventDefault(); setBusy(true); setError(""); setFresh("");
     try {
       const r = await api.createHookInbox(name.trim());

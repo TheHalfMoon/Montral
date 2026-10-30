@@ -41,7 +41,7 @@ const zh: Record<string, string> = {
   "Nobody acknowledged this incident in time, so it was escalated to this channel.": "这个事件没有及时被确认，因此升级通知到了此渠道。",
   "Verify your email address": "验证你的邮箱地址",
   "Confirm this address so we can reach you about your Montral account and recover it if you lose access.": "确认此邮箱后，我们才能就你的 Montral 账号联系你，并在你无法登录时帮你找回账号。",
-  "Didn't create an Montral account? Ignore this email.": "没有注册过 Montral？忽略这封邮件即可。",
+  "Didn't create a Montral account? Ignore this email.": "没有注册过 Montral？忽略这封邮件即可。",
   "Verify email": "验证邮箱",
   "Verify your Montral email": "验证你的 Montral 邮箱",
   "{name} is responding slowly": "{name} 响应变慢",

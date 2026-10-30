@@ -18,7 +18,7 @@ let base = "";
 let tcpPort = 0;
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), "ou-probe-"));
+  dir = await mkdtemp(join(tmpdir(), "montral-probe-"));
   const outfile = join(dir, "server.mjs");
   await build({
     entryPoints: [fileURLToPath(new URL("./server.ts", import.meta.url))],

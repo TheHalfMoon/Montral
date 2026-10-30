@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { listPrecache, MAX_PRECACHE_BYTES, stampWorker } from "./stamp.mjs";
 
 function client(files: Record<string, string>) {
-  const dir = mkdtempSync(join(tmpdir(), "ou-sw-"));
+  const dir = mkdtempSync(join(tmpdir(), "montral-sw-"));
   mkdirSync(join(dir, "_astro"));
   writeFileSync(join(dir, "app.html"), "<html>shell</html>");
   for (const [name, body] of Object.entries(files)) writeFileSync(join(dir, name), body);
@@ -29,7 +29,7 @@ describe("listPrecache", () => {
     expect(a.version).toMatch(/^[0-9a-f]{12}$/);
   });
   it("fails the build when the shell is missing or the list is oversized", () => {
-    const empty = mkdtempSync(join(tmpdir(), "ou-sw-"));
+    const empty = mkdtempSync(join(tmpdir(), "montral-sw-"));
     expect(() => listPrecache(empty)).toThrow();
     const big = client({ "_astro/big.js": "x".repeat(MAX_PRECACHE_BYTES + 1) });
     expect(() => listPrecache(big)).toThrow(/cap/);

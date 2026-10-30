@@ -183,8 +183,8 @@ describe("install and activate", () => {
   it("downloads the list fresh from the server into a cache named after the build", async () => {
     const sw = load();
     await sw.lifecycle("install");
-    expect([...sw.store.keys()]).toEqual([`ou-shell-${VERSION}`]);
-    expect([...sw.store.get(`ou-shell-${VERSION}`)!.keys()].sort()).toEqual([...FILES].sort());
+    expect([...sw.store.keys()]).toEqual([`montral-shell-${VERSION}`]);
+    expect([...sw.store.get(`montral-shell-${VERSION}`)!.keys()].sort()).toEqual([...FILES].sort());
     expect(sw.log.network.sort()).toEqual(FILES.map((f) => `${f}#reload`).sort());
   });
 
@@ -202,10 +202,10 @@ describe("install and activate", () => {
   });
 
   it("on activate removes earlier builds' caches and nothing else", async () => {
-    const sw = load({ existingCaches: { "ou-shell-old1": {}, "ou-shell-old2": {}, [`ou-shell-${VERSION}`]: {}, "someone-elses": {} } });
+    const sw = load({ existingCaches: { "montral-shell-old1": {}, "montral-shell-old2": {}, [`montral-shell-${VERSION}`]: {}, "someone-elses": {} } });
     await sw.lifecycle("activate");
-    expect(sw.log.deleted.sort()).toEqual(["ou-shell-old1", "ou-shell-old2"]);
-    expect([...sw.store.keys()].sort()).toEqual([`ou-shell-${VERSION}`, "someone-elses"].sort());
+    expect(sw.log.deleted.sort()).toEqual(["montral-shell-old1", "montral-shell-old2"]);
+    expect([...sw.store.keys()].sort()).toEqual([`montral-shell-${VERSION}`, "someone-elses"].sort());
   });
 
   it("waits to take over until the page asks", () => {

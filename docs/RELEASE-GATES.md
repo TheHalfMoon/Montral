@@ -1,17 +1,28 @@
-# Montral production release gates — ALL must pass before public deployment
+# Montral production release gates — no public deployment without passing all
 
-- [x] Exact copies of three donors pinned, license notices preserved, source integrity verified locally
-- [x] Montral active core compiled and API/frontend/probe unit suites passed locally
-- [x] Webhook API / UI / four additional MCP tools implemented
-- [x] Optional on-demand Cloudflare probe source added; no duplicate scheduler by design
-- [ ] PostgreSQL end-to-end tenant isolation, auth, migrations and webhook capture tested
-- [ ] Browser end-to-end workflow: login, add monitor, create inbox, capture request, inspect event, MCP read/write scoped tokens
-- [ ] Edge probe tested on Cloudflare Workers and verified quotas, secrets, private network restrictions
-- [ ] Actual 7-day retention even when no new events arrive
-- [ ] Atomic concurrent creation quota and full commercial entitlement checks
-- [ ] Stored webhook data sensitive-field redaction/retention/privacy, encryption and abuse response
-- [ ] Resource limits, load tests, monitoring reliability and disaster recovery
-- [ ] Customer plans, billing webhooks and payment-provider settlement tested in sandbox
-- [ ] Production domain, email/SMS alert deliverability, privacy/terms, business and tax requirements
-- [ ] Complete identity/content and non-attribution legal compliance audit
-- [ ] User-controlled final GO for public release. No live launch until then.
+## Completed and locally verified
+- [x] Three exact source snapshots and original license notices preserved (638 hashed files)
+- [x] Montral active brand, source packages and unified auth/API/MCP runtime
+- [x] Montral inboxes, one-time token, event inspector, manager-only sensitive body reads
+- [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E
+- [x] PostgreSQL concurrent limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
+- [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
+- [x] API **535**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
+- [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
+- [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
+
+## Unresolved production blockers
+- [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning)
+- [ ] Full browser E2E of account, monitoring, Webhooks UI and privileged events
+- [ ] Dedicated scoped API key/OAuth MCP grant access-control tests for Montral webhook tools
+- [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks
+- [ ] Long-running scheduled pruning and orphan deletion behavior, crashes and retries
+- [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
+- [ ] Backup, restore, resilience, incident drill and sustained load tests
+- [ ] Commercial billing/plan entitlements, payment-provider sandbox reconciliation, refunds, cancel/downgrade handling
+- [ ] Domain, customer email deliverability, cost budgets and capacity plan
+- [ ] Privacy, terms, accessibility and commercial/legal readiness review
+- [ ] Explicit user decision to publish the SaaS. Until then, keep repo private and **do not deploy**
+
+Latest local evidence: [2026-10-30 report](evidence/2026-10-30-local-postgres-qualification.md).

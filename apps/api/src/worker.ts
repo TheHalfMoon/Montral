@@ -7,6 +7,7 @@ import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
+import { pruneExpiredHookEvents } from "./montral-hooks";
 import { connectionString, type Bindings } from "./env";
 import { cloudflareEdgeCache, useEdgeCache } from "./sharedcache";
 import { processCheckMessage, runDueChecks, type CheckMessage } from "./scheduler";
@@ -29,7 +30,17 @@ export function createWorker(edition: Edition = montralEdition) {
       configureProbes(env);
       configureApns(env);
       const database = open(connectionString(env), { max: 2 });
-      ctx.waitUntil(runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env })).finally(() => database.close(5)));
+      ctx.waitUntil((async () => {
+        try {
+          await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }));
+          // Every 5 minutes on the normal scheduler's cron, including idle inboxes.
+          if (edition.id === "montral" && Math.floor(Date.now() / 60_000) % 5 === 0) {
+            await pruneExpiredHookEvents(database);
+          }
+        } finally {
+          await database.close(5);
+        }
+      })());
     },
 
     // Queue consumer: each message is a pack of monitor ids, handled in its own invocation.

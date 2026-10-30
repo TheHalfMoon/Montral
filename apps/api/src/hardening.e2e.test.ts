@@ -50,6 +50,19 @@ describe.skipIf(!url)("request hardening", () => {
     expect((await call("GET", `/monitors/${hb.id}`)).body.status).toBe("paused");
   });
 
+  it("limits repeated signups for one email even without a trusted client address", async () => {
+    const email = `signup-throttle-${crypto.randomUUID()}@example.test`;
+    const attempt = () => raw("/api/auth/sign-up/email", { method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "9.9.9.9",
+        "cf-connecting-ip": "8.8.8.8" },
+      body: JSON.stringify({ email, name: "Synthetic QA", password: "invalid" }),
+    });
+    const codes = [];
+    for (let n = 0; n < 4; n++) codes.push((await attempt()).status);
+    expect(codes.slice(0, 3)).not.toContain(429);
+    expect(codes[3]).toBe(429);
+  });
+
   it("shows an owner the channel credentials, accepts them back unchanged, and rate limits sign-in per address", async () => {
     const email = `hard2-${Date.now()}@example.com`;
     const su = await raw("/api/auth/sign-up/email", {

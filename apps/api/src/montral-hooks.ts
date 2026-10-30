@@ -41,6 +41,11 @@ export function capturedHeaders(headers: Headers): Record<string, string> {
   }
   return out;
 }
+/** A body cannot be stored faithfully as PostgreSQL text (invalid UTF-8 or NUL). */
+export class InvalidWebhookPayloadError extends Error {
+  constructor() { super("Webhook payload must be valid UTF-8 text without NUL bytes"); }
+}
+
 /** Bounded streamed read: does not allocate unbounded data from an arbitrary webhook sender. */
 export async function readPayload(request: Request): Promise<string | null> {
   const size = Number(request.headers.get("content-length"));
@@ -63,7 +68,15 @@ export async function readPayload(request: Request): Promise<string | null> {
   const bytes = new Uint8Array(length);
   let at = 0;
   for (const chunk of chunks) { bytes.set(chunk, at); at += chunk.length; }
-  return new TextDecoder().decode(bytes);
+  // PostgreSQL text rejects U+0000. The default TextDecoder silently replaces
+  // malformed UTF-8 with U+FFFD, corrupting forensic webhook captures.
+  // Reject both explicitly: the caller gets a stable client error, not SQL 500.
+  if (bytes.includes(0)) throw new InvalidWebhookPayloadError();
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new InvalidWebhookPayloadError();
+  }
 }
 export async function migrateMontralHooks(db: Database): Promise<string[]> {
   await db.query(`CREATE TABLE IF NOT EXISTS montral_hook_inbox (
@@ -227,7 +240,13 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const inbox = found[0];
     if (!inbox || !sameHash(await fingerprint(token), inbox.token_hash)) return c.json({ error: "Not found" }, 404);
     if (!(await allow(c.get("repo"), `montral:hook:${id}`, 120, 60))) return c.json({ error: "Too many events" }, 429);
-    const payload = await readPayload(c.req.raw);
+    let payload: string | null;
+    try {
+      payload = await readPayload(c.req.raw);
+    } catch (error) {
+      if (error instanceof InvalidWebhookPayloadError) return c.json({ error: error.message }, 422);
+      throw error;
+    }
     if (payload === null) return c.json({ error: "Payload too large (32 KiB)" }, 413);
     // Re-check the secret and inbox under a row lock in the same transaction as
     // the INSERT and retention pruning. If it was deleted while we streamed the

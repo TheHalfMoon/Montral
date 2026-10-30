@@ -68,6 +68,15 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     expect(out.body.events[0].headers.authorization).toBeUndefined();
     expect(out.body.events[0].headers["x-event-type"]).toBe("test");
     expect((await submit(path, "x".repeat(33 * 1024))).status).toBe(413);
+    for (const bytes of [new Uint8Array([65, 0, 66]), new Uint8Array([0xc3, 0x28])]) {
+      const invalid = await app.fetch(new Request(origin + path, {
+        method: "POST", headers: { "content-type": "application/octet-stream" }, body: bytes as BodyInit,
+      }), env as never);
+      expect(invalid.status).toBe(422);
+    }
+    // A refused binary event must not corrupt the existing, valid text row.
+    const afterInvalid = await a("GET", "/inboxes/" + id + "/events");
+    expect(afterInvalid.body.events).toHaveLength(1);
     expect((await a("DELETE", "/inboxes/" + id)).status).toBe(204);
     expect((await submit(path, '{"event":"gone"}')).status).toBe(404);
     const remains = await database!.query<{ id: string }>("SELECT id FROM montral_hook_event WHERE inbox_id=$1", [id]);

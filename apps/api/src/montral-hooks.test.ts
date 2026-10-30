@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { capturedHeaders, fingerprint, mountMontralHooks, readPayload, sameHash } from "./montral-hooks";
+import { capturedHeaders, fingerprint, mountMontralHooks, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
 function fixture() {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string }> = [];
@@ -73,6 +73,26 @@ describe("Montral webhook security", () => {
     expect(await readPayload(new Request("https://example.invalid", { method: "POST", body: "a".repeat(33 * 1024) }))).toBeNull();
     expect(await readPayload(new Request("https://example.invalid", { method: "POST", body: "ok" }))).toBe("ok");
   });
+  it("rejects raw NUL and invalid UTF-8 before PostgreSQL can reject or corrupt a capture", async () => {
+    const raw = (bytes: Uint8Array) => new Request("https://example.invalid", {
+      method: "POST", body: new Blob([bytes as BlobPart]),
+    });
+    for (const data of [new Uint8Array([65, 0, 66]), new Uint8Array([0xc3, 0x28])]) {
+      await expect(readPayload(raw(data))).rejects.toBeInstanceOf(InvalidWebhookPayloadError);
+    }
+    expect(await readPayload(raw(new TextEncoder().encode('{"emoji":"🛠"}')))).toBe('{"emoji":"🛠"}');
+    const f = fixture();
+    const create = await f.app.request("/api/hooks/inboxes", { method: "POST",
+      headers: { "content-type": "application/json" }, body: '{"name":"UTF8 check"}' });
+    const { path } = await create.json() as { path: string };
+    for (const data of [new Uint8Array([65, 0, 66]), new Uint8Array([0xc3, 0x28])]) {
+      const res = await f.app.request(path, { method: "POST", body: data as BodyInit });
+      expect(res.status).toBe(422);
+      expect(res.headers.get("content-type")).toContain("application/json");
+    }
+    expect(f.events).toHaveLength(0);
+  });
+
   it("creates a scoped inbox, captures a signed event, and denies other project access", async () => {
     const f = fixture();
     const create = await f.app.request("/api/hooks/inboxes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Billing" }) });

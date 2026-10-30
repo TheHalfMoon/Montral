@@ -9,7 +9,7 @@
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
 - [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
-- [x] API **562**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **564**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
@@ -28,6 +28,9 @@
 - [ ] Hosted reverse-proxy configuration and rate-limit abuse testing (correct append-only X-Forwarded-For and backend network isolation still unverified)
 - [x] PostgreSQL edition DDL migrations serialized per database via transactional advisory lock; 4 independent 1-connection pools on a fresh test DB and atomic rollback verified
 - [ ] Hosted multi-replica migrations, Cloudflare Hyperdrive limits, managed PostgreSQL privilege and failover qualification (local 4-replica concurrency test PASS)
+- [x] Webhook text ingress rejects malformed UTF-8 and raw NUL before SQL (HTTP 422) with real PostgreSQL E2E coverage
+- [x] Missing-client-IP auth fallback rate buckets and per-email signup quota (3/hour), including forged forwarding-header regression
+- [ ] Hosted unknown-IP shared-quota usability, CAPTCHA/bot defenses, credential-guessing load and reverse-proxy abuse testing
 - [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
@@ -63,3 +66,5 @@ Atomic checkout reservation/legacy intent compatibility: [2026-10-30 checkout qu
 Trusted reverse-proxy IP attribution: [2026-10-30 local qualification](evidence/2026-10-30-trusted-proxy-ip-qualification.md).
 
 Local multi-replica migration/rollback evidence: [2026-10-30 qualification](evidence/2026-10-30-multireplica-migrations-qualification.md).
+
+Text webhook input and no-IP auth rate-limit evidence: [2026-10-30 qualification](evidence/2026-10-30-webhook-auth-input-qualification.md).

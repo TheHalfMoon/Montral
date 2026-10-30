@@ -64,6 +64,8 @@ Test-mode checkout creation uses a PostgreSQL workspace advisory lock to prevent
 
 The PostgreSQL backend now serializes edition schema changes with a transaction-scoped advisory lock across multiple Node/Worker instances, including single-connection workers. [The local four-replica qualification](docs/evidence/2026-10-30-multireplica-migrations-qualification.md) verifies first-install DDL and crash rollback; it is not a hosted cloud release qualification.
 
+Webhook inbox capture is text-only (strict UTF-8, no NUL) and rejects invalid data with HTTP 422; unidentified client addresses use bounded authentication fallback quotas rather than silently bypassing limits. See [local input and auth qualification](docs/evidence/2026-10-30-webhook-auth-input-qualification.md). Neither measure replaces production reverse-proxy, CAPTCHA or customer privacy review.
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

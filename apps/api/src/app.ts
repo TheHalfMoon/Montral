@@ -96,7 +96,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // in the body always counts, so one account cannot be hammered from many addresses either.
   const AUTH_LIMITS: Record<string, { limit: number; windowSec: number; perEmail?: number }> = {
     "/api/auth/sign-in/email": { limit: 30, windowSec: 600, perEmail: 15 },
-    "/api/auth/sign-up/email": { limit: 10, windowSec: 3600 },
+    "/api/auth/sign-up/email": { limit: 10, windowSec: 3600, perEmail: 3 },
     "/api/auth/two-factor/verify-totp": { limit: 30, windowSec: 600 },
     "/api/auth/two-factor/verify-backup-code": { limit: 30, windowSec: 600 },
     "/api/auth/request-password-reset": { limit: 5, windowSec: 3600, perEmail: 3 },
@@ -111,10 +111,21 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     if (rule) {
       const repo = c.get("repo");
       const ip = clientIp(c);
-      let ok = !ip || (await allow(repo, `auth:ip:${ip}:${c.req.path}`, rule.limit, rule.windowSec));
+      // A Node backend without a configured trusted proxy cannot reliably
+      // identify the peer IP. Never skip all limits in that case: use a
+      // conservative shared quota, plus the tighter per-account/email limit.
+      // Production deployments should still supply a trusted IP at ingress.
+      const limitKey = ip ? `auth:ip:${ip}:${c.req.path}` : `auth:unknown:${c.req.path}`;
+      const cap = ip ? rule.limit : Math.max(300, rule.limit * 15);
+      let ok = await allow(repo, limitKey, cap, rule.windowSec);
       if (ok && rule.perEmail) {
         const email = ((await c.req.raw.clone().json().catch(() => null)) as { email?: unknown } | null)?.email;
-        if (typeof email === "string" && email) ok = await allow(repo, `auth:mail:${email.trim().toLowerCase()}:${c.req.path}`, rule.perEmail, rule.windowSec);
+        if (typeof email === "string" && email) {
+          const normalized = email.trim().toLowerCase();
+          // Never store attacker-controlled megabyte-long rate-limit keys.
+          if (normalized.length > 254) return c.json({ error: "Invalid email" }, 400);
+          ok = await allow(repo, `auth:mail:${normalized}:${c.req.path}`, rule.perEmail, rule.windowSec);
+        }
       }
       if (!ok) return c.json({ error: "Too many attempts, try again later" }, 429);
     }
@@ -126,7 +137,11 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   app.get("/api/auth/native/github", async (c) => {
     if (!(c.env.GITHUB_CLIENT_ID && c.env.GITHUB_CLIENT_SECRET)) return c.json({ error: "GitHub sign-in is not configured" }, 404);
     const ip = clientIp(c);
-    if (ip && !(await allow(c.get("repo"), `auth:ip:${ip}:/api/auth/native/github`, 30, 600))) return c.json({ error: "Too many attempts, try again later" }, 429);
+    if (!(await allow(c.get("repo"), ip
+      ? `auth:ip:${ip}:/api/auth/native/github`
+      : "auth:unknown:/api/auth/native/github", ip ? 30 : 450, 600))) {
+      return c.json({ error: "Too many attempts, try again later" }, 429);
+    }
     const res = await c.get("auth").api.signInSocial({ body: { provider: "github", callbackURL: NATIVE_CALLBACK, errorCallbackURL: NATIVE_CALLBACK, disableRedirect: true }, headers: c.req.raw.headers, asResponse: true });
     const url = ((await res.json().catch(() => null)) as { url?: string } | null)?.url;
     if (!res.ok || !url) return c.json({ error: "Could not start GitHub sign-in" }, 502);

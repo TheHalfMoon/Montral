@@ -56,6 +56,8 @@ Original license files and copyright are retained as required, and exact SHAs an
 
 **Montral is not yet qualified for customers or real money.** The private preview includes OAuth/MCP webhook-access E2E, test-mode-only provider billing and optional usage metering and bounded cancellation deadlines, but there is no public host, live merchant integration, actual payment-provider sandbox account, or approved commercial terms. The remaining blockers are listed in [release gates](docs/RELEASE-GATES.md). All revenue-related code is disabled by default; no live charges are supported.
 
+Webhook capture uses a PostgreSQL inbox row lock for atomic token revalidation, insertion, seven-day expiry and 250-event retention, including safe simultaneous inbox deletion. The [atomic webhook test report](docs/evidence/2026-10-30-atomic-webhook-capture-qualification.md) reproduces the 275-parallel-event test.
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

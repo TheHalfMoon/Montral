@@ -47,11 +47,11 @@ try {
   if (tableCount !== restoredTableCount || orgCount !== restoredOrgCount) {
     throw new Error(`Restore differs: tables ${tableCount}/${restoredTableCount}, orgs ${orgCount}/${restoredOrgCount}`);
   }
-  const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_apply_billing_event','montral_spend_usage')");
-  if (Number(functions) !== 3) throw new Error("Expected business-critical Postgres functions missing from restore");
+  const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_capture_hook_event','montral_apply_billing_event','montral_spend_usage')");
+  if (Number(functions) !== 4) throw new Error("Expected business-critical Postgres functions missing from restore");
   const appTables = await sql(restoredUrl.href, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('montral_hook_inbox','montral_hook_event','montral_subscription','montral_billing_event','montral_usage')");
   if (Number(appTables) !== 5) throw new Error("Montral-specific tables missing from restored database");
-  console.log(`RESTORE_DRILL_PASS: ${tableCount} tables, ${orgCount} synthetic organizations, all webhook/billing/usage tables and 3 transactional functions restored`);
+  console.log(`RESTORE_DRILL_PASS: ${tableCount} tables, ${orgCount} synthetic organizations, all webhook/billing/usage tables and 4 transactional functions restored`);
 } finally {
   if (created) {
     try { await tools("dropdb", ["--if-exists", "--", restoreDb]); }

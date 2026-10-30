@@ -18,9 +18,18 @@ function fixture() {
       if (sql.startsWith("SELECT id,name,created_at")) return inboxes.filter((i) => i.organization_id === args[0] && i.project_id === args[1]).map((i) => ({ id: i.id, name: i.name, created_at: new Date() }));
       if (sql.startsWith("SELECT id FROM montral_hook_inbox")) return inboxes.filter((i) => i.id === args[0] && i.organization_id === args[1] && i.project_id === args[2]).map((i) => ({ id: i.id }));
       if (sql.startsWith("SELECT id,organization_id,project_id,token_hash")) return inboxes.filter((i) => i.id === args[0]);
-      if (sql.startsWith("INSERT INTO montral_hook_event")) {
-        events.push({ id: String(args[0]), inbox_id: String(args[1]), organization_id: String(args[2]), project_id: String(args[3]), body: String(args[7]), headers: JSON.parse(String(args[6])) });
-        return [];
+      if (sql.includes("montral_capture_hook_event")) {
+        const inbox = inboxes.find(i => i.id === args[0] && i.token_hash === args[1]);
+        if (!inbox) return [{ accepted: false }];
+        events.push({ id: String(args[2]), inbox_id: inbox.id,
+          organization_id: inbox.organization_id, project_id: inbox.project_id,
+          body: String(args[6]), headers: JSON.parse(String(args[5])) });
+        const matching = events.filter(e => e.inbox_id === inbox.id);
+        if (matching.length > 250) {
+          const excess = new Set(matching.slice(0, matching.length - 250).map(e => e.id));
+          for (let n = events.length - 1; n >= 0; n--) if (excess.has(events[n].id)) events.splice(n, 1);
+        }
+        return [{ accepted: true }];
       }
       if (sql.startsWith("SELECT id,method,content_type,headers,body,created_at")) return events.filter((e) => e.inbox_id === args[0] && e.organization_id === args[1] && e.project_id === args[2]).map((e) => ({ ...e, method: "POST", content_type: "application/json", created_at: new Date() }));
       if (sql.startsWith("DELETE FROM montral_hook_inbox")) {

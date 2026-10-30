@@ -5,13 +5,14 @@
 - [x] Montral active brand, source packages and unified auth/API/MCP runtime
 - [x] Montral inboxes, one-time token, event inspector, manager-only sensitive body reads; `private, no-store` and `nosniff` for all authenticated inbox routes
 - [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E
-- [x] PostgreSQL concurrent limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
+- [x] PostgreSQL concurrent inbox limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
+- [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
-- [x] API **551**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **553**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
-- [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 2 synthetic organizations and 3 transactional functions restored; source preserved
+- [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 109 synthetic organizations and 4 transactional functions restored; source preserved
 - [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
 
 ## Unresolved production blockers
@@ -44,3 +45,5 @@ Local browser + restore details: [qualification report](evidence/2026-10-30-brow
 Local Cloudflare-runtime evidence: [Edge workerd qualification](evidence/2026-10-30-edge-workerd-qualification.md).
 
 Billing lifecycle and backward-compatibility evidence: [2026-10-30 qualification](evidence/2026-10-30-billing-lifecycle-qualification.md).
+
+Webhook burst and deletion-race details: [2026-10-30 atomic capture report](evidence/2026-10-30-atomic-webhook-capture-qualification.md).

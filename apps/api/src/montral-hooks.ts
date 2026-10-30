@@ -102,7 +102,39 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_hooks_v2"];
+  // The inbox row lock serializes simultaneous receipts for this inbox,
+  // including concurrent delete, without locking unrelated tenants/inboxes.
+  // Insert + retention take effect atomically; no burst can leave >250 events.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_capture_hook_event(
+      p_inbox uuid, p_hash text, p_event uuid, p_method text,
+      p_content_type text, p_headers jsonb, p_body text
+    ) RETURNS boolean LANGUAGE plpgsql AS $montral$
+    DECLARE current_inbox record;
+    BEGIN
+      SELECT organization_id,project_id INTO current_inbox
+      FROM montral_hook_inbox
+      WHERE id=p_inbox AND token_hash=p_hash FOR UPDATE;
+      IF NOT FOUND THEN RETURN false; END IF;
+      INSERT INTO montral_hook_event(
+        id,inbox_id,organization_id,project_id,method,content_type,headers,body
+      ) VALUES (
+        p_event,p_inbox,current_inbox.organization_id,current_inbox.project_id,
+        p_method,p_content_type,p_headers,p_body
+      );
+      DELETE FROM montral_hook_event
+      WHERE inbox_id=p_inbox AND (
+        created_at < NOW() - INTERVAL '7 days'
+        OR id IN (
+          SELECT id FROM montral_hook_event
+          WHERE inbox_id=p_inbox ORDER BY created_at DESC,id DESC OFFSET 250
+        )
+      );
+      RETURN true;
+    END;
+    $montral$
+  `);
+  return ["montral_hooks_v3"];
 }
 
 /** Server-driven expiry, including idle inboxes; no user interaction is needed to evict old events. */
@@ -197,16 +229,16 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     if (!(await allow(c.get("repo"), `montral:hook:${id}`, 120, 60))) return c.json({ error: "Too many events" }, 429);
     const payload = await readPayload(c.req.raw);
     if (payload === null) return c.json({ error: "Payload too large (32 KiB)" }, 413);
-    await db.query(
-      "INSERT INTO montral_hook_event(id,inbox_id,organization_id,project_id,method,content_type,headers,body) VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8)",
-      [crypto.randomUUID(), id, inbox.organization_id, inbox.project_id, c.req.method,
+    // Re-check the secret and inbox under a row lock in the same transaction as
+    // the INSERT and retention pruning. If it was deleted while we streamed the
+    // body, return 404 instead of raising a foreign-key error or leaking data.
+    const captured = await db.query<{ accepted: boolean }>(
+      "SELECT montral_capture_hook_event($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS accepted",
+      [id, await fingerprint(token), crypto.randomUUID(), c.req.method,
         (c.req.header("content-type") ?? "").slice(0, 256) || null,
         JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
     );
-    // Retain a bounded recent window and discard expired events without a second scheduler.
-    await db.query(
-      "DELETE FROM montral_hook_event WHERE inbox_id=$1 AND (created_at < NOW() - INTERVAL '7 days' OR id IN (SELECT id FROM montral_hook_event WHERE inbox_id=$1 ORDER BY created_at DESC OFFSET 250))", [id],
-    );
+    if (!captured[0]?.accepted) return c.json({ error: "Not found" }, 404);
     c.header("cache-control", "no-store");
     return c.json({ received: true }, 202);
   });

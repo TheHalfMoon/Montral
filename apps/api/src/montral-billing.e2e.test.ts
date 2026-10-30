@@ -122,6 +122,116 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
       .toMatchObject({ id: "free" });
   });
 
+  it("allows only one pending checkout across concurrent requests and database connections", async () => {
+    const { cookie, org } = await signup();
+    const originalFetch = globalThis.fetch;
+    let providerCalls = 0;
+    try {
+      vi.stubGlobal("fetch", async (url: string, options: RequestInit) => {
+        expect(url).toBe("https://api.lemonsqueezy.com/v1/checkouts");
+        expect(options.redirect).toBe("error");
+        const payload = JSON.parse(String(options.body));
+        const id = payload.data.attributes.checkout_data.custom.montral_intent as string;
+        expect((await db!.query(
+          "SELECT id FROM montral_billing_intent WHERE id=$1 AND organization_id=$2", [id, org],
+        ))).toHaveLength(1);
+        providerCalls++;
+        // Concurrent checkout requests are still running when the first
+        // provider response returns. The DB lock must prevent duplicates.
+        await new Promise(resolve => setTimeout(resolve, 50));
+        return new Response(JSON.stringify({ data: {
+          attributes: { test_mode: true, url: "https://test.lemonsqueezy.com/checkout/custom/synthetic" },
+        } }), { status: 201, headers: { "content-type": "application/json" } });
+      });
+      const responses = await Promise.all(Array.from({ length: 8 }, () =>
+        app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+          method: "POST", headers: { cookie, "content-type": "application/json" },
+          body: JSON.stringify({ plan: "pro" }),
+        }), config as never),
+      ));
+      expect(responses.filter(x => x.status === 201)).toHaveLength(1);
+      expect(responses.filter(x => x.status === 409)).toHaveLength(7);
+      expect(providerCalls).toBe(1);
+      expect(await db!.query(
+        "SELECT id FROM montral_billing_intent WHERE organization_id=$1 AND consumed_at IS NULL AND expires_at>NOW()", [org],
+      )).toHaveLength(1);
+      const subsequent = await app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+        method: "POST", headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ plan: "business" }),
+      }), config as never);
+      expect(subsequent.status).toBe(409);
+      expect(providerCalls).toBe(1);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("permits another checkout after expiry and blocks one after a verified active subscription", async () => {
+    const { cookie, org, userId } = await signup();
+    const fetchBefore = globalThis.fetch;
+    let calls = 0;
+    try {
+      vi.stubGlobal("fetch", async () => {
+        calls++;
+        return new Response(JSON.stringify({ data: {
+          attributes: { test_mode: true, url: "https://test.lemonsqueezy.com/checkout/custom/synthetic" },
+        } }), { status: 201 });
+      });
+      // First pending checkout is expired, so replacement is allowed.
+      await db!.query(
+        "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'pro','101',NOW()-INTERVAL '1 minute')",
+        [crypto.randomUUID(), org, userId],
+      );
+      const checkout = () => app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+        method: "POST", headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ plan: "pro" }),
+      }), config as never);
+      expect((await checkout()).status).toBe(201);
+      expect(calls).toBe(1);
+      // Even if an obsolete pending checkout disappears, an active
+      // subscription prevents a second purchase.
+      await db!.query("UPDATE montral_billing_intent SET expires_at=NOW()-INTERVAL '1 minute' WHERE organization_id=$1", [org]);
+      await db!.query(
+        "INSERT INTO montral_subscription(organization_id,provider_id,variant_id,plan,status,test_mode,provider_updated_at) VALUES($1,$2,'101','pro','active',true,NOW())",
+        [org, String(Math.floor(Math.random()*1000000 + 20000000))],
+      );
+      expect((await checkout()).status).toBe(409);
+      expect(calls).toBe(1);
+    } finally {
+      vi.stubGlobal("fetch", fetchBefore);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("does not allow a legacy second checkout intent to replace an existing active provider", async () => {
+    const { org, userId } = await signup();
+    const firstIntent = crypto.randomUUID();
+    const secondIntent = crypto.randomUUID();
+    const originalProvider = String(Math.floor(Math.random() * 10000000 + 20000000));
+    const otherProvider = String(Number(originalProvider) + 1);
+    for (const id of [firstIntent, secondIntent]) {
+      await db!.query(
+        "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'pro','101',NOW()+INTERVAL '30 minutes')",
+        [id, org, userId],
+      );
+    }
+    const start = new Date(Date.now()-10_000).toISOString();
+    const later = new Date().toISOString();
+    expect((await fire(event(originalProvider, firstIntent, "subscription_created", "active", start))).status).toBe(200);
+    const replacement = await fire(event(otherProvider, secondIntent, "subscription_created", "active", later));
+    expect(replacement.status).toBe(409);
+    const existing = await db!.query<{ provider_id: string }>(
+      "SELECT provider_id FROM montral_subscription WHERE organization_id=$1", [org],
+    );
+    expect(existing).toMatchObject([{ provider_id: originalProvider }]);
+    expect(await db!.query(
+      "SELECT id FROM montral_billing_intent WHERE id=$1 AND consumed_at IS NULL", [secondIntent],
+    )).toHaveLength(1);
+    // Later events can no longer mutate or masquerade as the abandoned provider.
+    expect((await fire(event(otherProvider, null, "subscription_updated", "active", new Date(Date.now()+10_000).toISOString()))).status).toBe(409);
+  });
+
   it("persists the checkout nonce before provider calls and discards failed attempts", async () => {
     const { cookie, org } = await signup();
     const intentsBefore = await db!.query("SELECT id FROM montral_billing_intent WHERE organization_id=$1", [org]);

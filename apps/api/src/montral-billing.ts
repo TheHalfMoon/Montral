@@ -43,6 +43,35 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
     created_at timestamptz NOT NULL DEFAULT NOW(), consumed_at timestamptz
   )`);
   await db.query("ALTER TABLE montral_billing_intent ADD COLUMN IF NOT EXISTS consumed_at timestamptz");
+  await db.query(`CREATE INDEX IF NOT EXISTS montral_billing_intent_pending
+    ON montral_billing_intent (organization_id,expires_at) WHERE consumed_at IS NULL`);
+  // Atomically reserve a single unexpired checkout per workspace. This lock is
+  // scoped to the workspace, so independent customers are never serialized.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_reserve_billing_intent(
+      p_id uuid, p_org text, p_creator text, p_plan text, p_variant text
+    ) RETURNS boolean LANGUAGE plpgsql AS $montral$
+    BEGIN
+      IF p_plan NOT IN ('pro','business') THEN
+        RAISE EXCEPTION 'invalid billing plan';
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended('montral:checkout:' || p_org, 0));
+      IF EXISTS (
+        SELECT 1 FROM montral_subscription
+        WHERE organization_id=p_org AND status <> 'expired'
+      ) OR EXISTS (
+        SELECT 1 FROM montral_billing_intent
+        WHERE organization_id=p_org AND consumed_at IS NULL AND expires_at > NOW()
+      ) THEN
+        RETURN false;
+      END IF;
+      INSERT INTO montral_billing_intent(
+        id,organization_id,created_by,plan,variant_id,expires_at
+      ) VALUES (p_id,p_org,p_creator,p_plan,p_variant,NOW()+INTERVAL '30 minutes');
+      RETURN true;
+    END;
+    $montral$
+  `);
   await db.query(`CREATE TABLE IF NOT EXISTS montral_subscription (
     organization_id text PRIMARY KEY REFERENCES organization(id) ON DELETE CASCADE,
     provider_id text NOT NULL UNIQUE, variant_id text NOT NULL, plan text NOT NULL,
@@ -77,6 +106,16 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
           FROM montral_billing_intent
           WHERE id=p_intent AND expires_at > NOW() AND consumed_at IS NULL FOR UPDATE;
         IF target_org IS NULL OR expected_variant <> p_variant THEN RETURN 'unmatched'; END IF;
+        -- Multiple intents may exist from older preview versions. A second
+        -- provider must not replace an active subscription. Serialize with
+        -- the checkout reservation lock, then reread after locking.
+        PERFORM pg_advisory_xact_lock(hashtextextended('montral:checkout:' || target_org, 0));
+        IF EXISTS (
+          SELECT 1 FROM montral_subscription
+          WHERE organization_id=target_org AND provider_id<>p_provider AND status<>'expired'
+        ) THEN
+          RETURN 'unmatched';
+        END IF;
       ELSE
         SELECT organization_id, plan, variant_id
           INTO target_org, target_plan, expected_variant
@@ -95,7 +134,9 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
           provider_id=EXCLUDED.provider_id, variant_id=EXCLUDED.variant_id,
           plan=EXCLUDED.plan,status=EXCLUDED.status,provider_updated_at=EXCLUDED.provider_updated_at,
           ends_at=EXCLUDED.ends_at,updated_at=NOW()
-        WHERE montral_subscription.provider_updated_at <= EXCLUDED.provider_updated_at;
+        WHERE montral_subscription.provider_updated_at <= EXCLUDED.provider_updated_at
+          AND (montral_subscription.provider_id = EXCLUDED.provider_id
+               OR montral_subscription.status = 'expired');
       ELSE
         UPDATE montral_subscription SET status=p_status,provider_updated_at=p_updated,ends_at=p_ends,updated_at=NOW()
           WHERE provider_id=p_provider AND provider_updated_at <= p_updated;
@@ -207,6 +248,7 @@ export async function createLemonTestCheckout(
         relationships: { store: { data: { type: "stores", id: env.LEMONSQUEEZY_STORE_ID } },
           variant: { data: { type: "variants", id: variant } } },
       } }),
+      redirect: "error",
       signal: AbortSignal.timeout(12_000),
     }).catch(() => null);
 
@@ -259,21 +301,18 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
     if (!billingReady(c.env)) return c.json({ error: "Billing is unavailable" }, 503);
     const result = inputPlan.safeParse(await c.req.json().catch(() => null));
     if (!result.success) return c.json({ error: "Invalid plan" }, 400);
-    // No second subscription purchase while the workspace already has an active
-    // contract. Plan changes must later go through the provider portal.
-    const existing = await c.get("database").query<{ status: string }>(
-      "SELECT status FROM montral_subscription WHERE organization_id=$1 AND status <> 'expired'",
-      [c.get("orgId")],
-    );
-    if (existing.length) return c.json({ error: "An existing subscription must be managed before purchasing another" }, 409);
     const variant = result.data.plan === "pro" ? c.env.LEMONSQUEEZY_VARIANT_PRO! : c.env.LEMONSQUEEZY_VARIANT_BUSINESS!;
     const id = crypto.randomUUID();
-    // Persist the checkout correlation nonce BEFORE contacting the provider:
-    // webhooks can arrive asynchronously as soon as the checkout is created.
-    await c.get("database").query(
-      "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,$4,$5,NOW()+INTERVAL '30 minutes')",
+    // Advisory-locked SQL reservation makes a single pending test checkout per
+    // workspace, even across different Node/Worker processes and connections.
+    // The intent is committed before contacting the provider for callback safety.
+    const reservation = await c.get("database").query<{ reserved: boolean }>(
+      "SELECT montral_reserve_billing_intent($1::uuid,$2::text,$3::text,$4::text,$5::text) AS reserved",
       [id, c.get("orgId"), c.get("userId"), result.data.plan, variant],
     );
+    if (!reservation[0]?.reserved) return c.json({
+      error: "An active subscription or unexpired checkout already exists for this workspace",
+    }, 409);
     const checkout = await createLemonTestCheckout(c.env, variant, id);
     if (!checkout) {
       await c.get("database").query(

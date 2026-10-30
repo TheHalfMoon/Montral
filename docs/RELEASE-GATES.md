@@ -9,11 +9,11 @@
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
 - [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
-- [x] API **557**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **560**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
-- [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 109 synthetic organizations and 4 transactional functions restored; source preserved
+- [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 122 synthetic organizations and 5 transactional functions restored; source preserved
 - [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
 
 ## Unresolved production blockers
@@ -26,6 +26,8 @@
 - [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
+- [x] Single pending sandbox checkout per workspace via PostgreSQL advisory-locked reservation; eight simultaneous authenticated attempts produce exactly one checkout
+- [x] Old duplicate intents cannot replace an active subscription from a different provider, with signed provider ID validation under the same lock
 - [x] Cancellation paid-access deadline enforced directly from the signed provider `ends_at`, even without a subsequent expiry callback; absent/expired deadline immediately revokes preview paid access
 - [x] Test-mode-only entitlement assertions, checkout-intent-before-provider race regression, and failed checkout cleanup checked on real PostgreSQL
 - [x] Migration upgrade from earlier preview SQL function to eight-argument deadline-aware function tested on a disposable legacy-schema clone
@@ -50,3 +52,5 @@ Billing lifecycle and backward-compatibility evidence: [2026-10-30 qualification
 Webhook burst and deletion-race details: [2026-10-30 atomic capture report](evidence/2026-10-30-atomic-webhook-capture-qualification.md).
 
 Scheduler failure isolation and sandbox nonce cleanup: [2026-10-30 maintenance evidence](evidence/2026-10-30-maintenance-isolation-qualification.md).
+
+Atomic checkout reservation/legacy intent compatibility: [2026-10-30 checkout qualification](evidence/2026-10-30-checkout-race-qualification.md).

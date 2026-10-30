@@ -130,6 +130,13 @@ export async function pruneExpiredHookEvents(db: Database): Promise<number> {
 
 export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: Hono<AppEnv> }) {
   const privateHooks = new Hono<AppEnv>();
+  // Inbox names and captured request bodies are never safe for shared/proxy caches.
+  // Set the policy for both reads and refusals before any route-specific handler.
+  privateHooks.use("*", async (c, next) => {
+    c.header("cache-control", "private, no-store");
+    c.header("x-content-type-options", "nosniff");
+    await next();
+  });
   privateHooks.use("*", rejectInAllProjects);
   privateHooks.get("/inboxes", async (c) => {
     const rows = await c.get("database").query<Pick<HookInbox, "id"|"name"|"created_at">>(

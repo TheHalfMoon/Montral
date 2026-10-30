@@ -77,6 +77,8 @@ describe("Montral webhook security", () => {
     expect(received.status).toBe(202);
     const response = await f.app.request(`/api/hooks/inboxes/${value.id}/events`);
     expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
     const payload = await response.json() as { events: Array<{ body: string; headers: Record<string, string> }> };
     expect(payload.events[0].body).toBe('{"hello":"world"}');
     expect(payload.events[0].headers.authorization).toBeUndefined();
@@ -84,6 +86,7 @@ describe("Montral webhook security", () => {
     const denied = await f.app.request(`/api/hooks/inboxes/${value.id}/events`);
     expect(denied.status).toBe(404);
     const list = await f.app.request("/api/hooks/inboxes");
+    expect(list.headers.get("cache-control")).toBe("private, no-store");
     expect(await list.json()).toEqual({ inboxes: [] });
   });
   it("requires workspace manager for inbox creation and reading sensitive event bodies", async () => {

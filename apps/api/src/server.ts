@@ -14,6 +14,7 @@ import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
 import { runMontralMaintenance } from "./montral-maintenance";
+import { migrateMontralSchema } from "./schema-migrate";
 import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks, type CheckMessage, type CheckQueue } from "./scheduler";
 
@@ -131,7 +132,7 @@ const server = createServer((req, res) => {
 // retry: on a fresh `docker compose up` Postgres may still be starting
 for (let attempt = 1; ; attempt++) {
   try {
-    const applied = [...(await database.migrate()), ...((await edition.migrate?.(database)) ?? [])];
+    const applied = await migrateMontralSchema(database, edition);
     if (applied.length) console.log(`migrations applied: ${applied.join(", ")}`);
     break;
   } catch (e) {

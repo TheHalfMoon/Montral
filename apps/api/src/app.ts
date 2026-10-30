@@ -21,6 +21,7 @@ import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
 import { community, type Edition } from "./edition";
+import { migrateMontralSchema } from "./schema-migrate";
 import { availableRegions } from "./probes";
 import { PROBE_TYPES } from "./regions";
 import { completeRecovery, runDueChecks } from "./scheduler";
@@ -165,7 +166,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   app.post("/internal/migrate", async (c) => {
     if (!c.env.CRON_SECRET || !safeEqual(c.req.header("x-cron-secret"), c.env.CRON_SECRET)) return c.json({ error: "Forbidden" }, 403);
     const database = c.get("database");
-    return c.json({ applied: [...(await database.migrate()), ...((await edition.migrate?.(database)) ?? [])] });
+    return c.json({ applied: await migrateMontralSchema(database, edition) });
   });
 
   mountMcp(app, edition.mcpTools);

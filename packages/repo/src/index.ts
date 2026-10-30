@@ -686,6 +686,12 @@ export interface Database {
   /** Apply the embedded schema migrations; returns the tags applied. */
   migrate(): Promise<string[]>;
   /**
+   * Run edition-specific SQL migrations within a single, advisory-locked
+   * database transaction. Optional for test/in-memory backends.
+   * The scoped Database exposes a transaction-bound query function.
+   */
+  migrateEdition?<T>(apply: (db: Database) => Promise<T>): Promise<T>;
+  /**
    * Run a parameterised SQL statement ($1, $2, …) and return its rows. For editions that keep their own tables next to
    * ours (the hosted edition's subscriptions and usage) so they need neither a second connection nor changes to `Repo`.
    */

@@ -62,6 +62,8 @@ Private-preview housekeeping is performed within the existing Node/Worker schedu
 
 Test-mode checkout creation uses a PostgreSQL workspace advisory lock to prevent duplicate pending links; a second legacy provider cannot replace a verified active subscription. See [checkout race qualification](docs/evidence/2026-10-30-checkout-race-qualification.md).
 
+The PostgreSQL backend now serializes edition schema changes with a transaction-scoped advisory lock across multiple Node/Worker instances, including single-connection workers. [The local four-replica qualification](docs/evidence/2026-10-30-multireplica-migrations-qualification.md) verifies first-install DDL and crash rollback; it is not a hosted cloud release qualification.
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

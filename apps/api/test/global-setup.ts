@@ -1,5 +1,6 @@
 import { openDatabase } from "@montral/db-pg";
 import { montralEdition } from "../src/montral-edition";
+import { migrateMontralSchema } from "../src/schema-migrate";
 
 /**
  * The complete API E2E suite shares one disposable PostgreSQL database.
@@ -18,8 +19,7 @@ export default async function setup() {
   }
   const db = openDatabase(connection, { max: 3 });
   try {
-    await db.migrate();
-    await montralEdition.migrate?.(db);
+    await migrateMontralSchema(db, montralEdition);
   } finally {
     await db.close(3);
   }

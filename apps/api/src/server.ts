@@ -13,7 +13,7 @@ import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
-import { pruneExpiredHookEvents } from "./montral-hooks";
+import { runMontralMaintenance } from "./montral-maintenance";
 import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks, type CheckMessage, type CheckQueue } from "./scheduler";
 
@@ -148,20 +148,27 @@ server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral → $
 // recover that, so exit and let the container's restart policy bring the process back. State lives in Postgres.
 const TICK_STUCK_MS = 5 * 60_000;
 let tickStartedAt = 0; // 0 = no tick running
-let lastHookPruneAt = 0;
+let lastHookPruneAt = 0; // successful Montral maintenance completion only
 const tick = setInterval(async () => {
   if (tickStartedAt) return; // a long tick must not overlap the next one
   tickStartedAt = Date.now();
   try {
-    await runDueChecks(database.repo, queue, entitlements);
-    // Runs even if no new webhook arrives. One timer for the whole service, not one
-    // cleanup per inbox or a competing scheduler. Retry after errors.
-    if (Date.now() - lastHookPruneAt >= 5 * 60_000) {
-      await pruneExpiredHookEvents(database);
-      lastHookPruneAt = Date.now();
+    try {
+      await runDueChecks(database.repo, queue, entitlements);
+    } catch (e) {
+      console.error("monitor scheduler", e);
     }
-  } catch (e) {
-    console.error("scheduler", e);
+    // Cleanup is independent of monitor checks: a broken monitor job may not
+    // delay seven-day webhook expiry or orphaned sandbox checkout nonce cleanup.
+    if (Date.now() - lastHookPruneAt >= 5 * 60_000) {
+      try {
+        await runMontralMaintenance(database);
+        lastHookPruneAt = Date.now();
+      } catch (e) {
+        console.error("montral maintenance", e);
+        // No timestamp update: try again on the next scheduled tick.
+      }
+    }
   } finally {
     tickStartedAt = 0;
   }

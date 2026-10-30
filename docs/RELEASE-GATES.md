@@ -8,7 +8,8 @@
 - [x] PostgreSQL concurrent inbox limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
-- [x] API **553**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
+- [x] API **557**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
@@ -21,7 +22,7 @@
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
 - [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested
 - [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
-- [ ] Long-running scheduled pruning and orphan deletion behavior, crashes and retries
+- [ ] Hosted long-running scheduled pruning and orphan deletion behavior, crashes and retry reliability (local failure isolation and database tests PASS)
 - [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
@@ -47,3 +48,5 @@ Local Cloudflare-runtime evidence: [Edge workerd qualification](evidence/2026-10
 Billing lifecycle and backward-compatibility evidence: [2026-10-30 qualification](evidence/2026-10-30-billing-lifecycle-qualification.md).
 
 Webhook burst and deletion-race details: [2026-10-30 atomic capture report](evidence/2026-10-30-atomic-webhook-capture-qualification.md).
+
+Scheduler failure isolation and sandbox nonce cleanup: [2026-10-30 maintenance evidence](evidence/2026-10-30-maintenance-isolation-qualification.md).

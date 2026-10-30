@@ -58,6 +58,8 @@ Original license files and copyright are retained as required, and exact SHAs an
 
 Webhook capture uses a PostgreSQL inbox row lock for atomic token revalidation, insertion, seven-day expiry and 250-event retention, including safe simultaneous inbox deletion. The [atomic webhook test report](docs/evidence/2026-10-30-atomic-webhook-capture-qualification.md) reproduces the 275-parallel-event test.
 
+Private-preview housekeeping is performed within the existing Node/Worker scheduler, separately from monitor-check success. It prunes seven-day-expired webhook data and removes sandbox checkout intents only seven days after their deadline, preserving the subscription/event ledger. See [maintenance qualification](docs/evidence/2026-10-30-maintenance-isolation-qualification.md).
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

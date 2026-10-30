@@ -107,6 +107,23 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
   return ["montral_billing_test_preview_v1"];
 }
 
+/**
+ * Remove ONLY expired sandbox checkout-correlation nonces. Keep them for seven
+ * extra days to tolerate delayed provider retries. Subscription records and
+ * signed event digests are deliberately untouched: deleting either can impair
+ * replay protection or the audit trail.
+ */
+export async function pruneExpiredBillingIntents(db: Database): Promise<number> {
+  const rows = await db.query<{ removed: string }>(`
+    WITH old_intents AS (
+      DELETE FROM montral_billing_intent
+      WHERE expires_at < NOW() - INTERVAL '7 days'
+      RETURNING 1
+    ) SELECT COUNT(*)::text AS removed FROM old_intents
+  `);
+  return Number(rows[0]?.removed ?? 0);
+}
+
 type SubscriptionPayload = {
   meta?: { event_name?: unknown; custom_data?: { montral_intent?: unknown } };
   data?: { type?: unknown; id?: unknown; attributes?: {

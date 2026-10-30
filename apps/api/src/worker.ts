@@ -7,7 +7,7 @@ import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
-import { pruneExpiredHookEvents } from "./montral-hooks";
+import { runMontralMaintenance } from "./montral-maintenance";
 import { connectionString, type Bindings } from "./env";
 import { cloudflareEdgeCache, useEdgeCache } from "./sharedcache";
 import { processCheckMessage, runDueChecks, type CheckMessage } from "./scheduler";
@@ -32,11 +32,24 @@ export function createWorker(edition: Edition = montralEdition) {
       const database = open(connectionString(env), { max: 2 });
       ctx.waitUntil((async () => {
         try {
-          await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }));
-          // Every 5 minutes on the normal scheduler's cron, including idle inboxes.
-          if (edition.id === "montral" && Math.floor(Date.now() / 60_000) % 5 === 0) {
-            await pruneExpiredHookEvents(database);
+          let schedulerError: unknown = null;
+          try {
+            await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }));
+          } catch (e) {
+            schedulerError = e;
+            console.error("monitor scheduler", e);
           }
+          // A monitor scheduler exception must never suppress data retention.
+          // Cron triggers this each five minutes, including idle inboxes.
+          if (edition.id === "montral" && Math.floor(Date.now() / 60_000) % 5 === 0) {
+            try {
+              await runMontralMaintenance(database);
+            } catch (e) {
+              console.error("montral maintenance", e);
+              if (!schedulerError) schedulerError = e;
+            }
+          }
+          if (schedulerError) throw schedulerError;
         } finally {
           await database.close(5);
         }

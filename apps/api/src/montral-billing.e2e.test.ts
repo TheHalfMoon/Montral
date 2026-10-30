@@ -3,6 +3,7 @@ import { openDatabase } from "@montral/db-pg";
 import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
 import { calendarMonthUtc, createMontralEntitlements } from "./montral-metering";
+import { runMontralMaintenance } from "./montral-maintenance";
 import type { Bindings } from "./env";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -147,6 +148,40 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
       vi.stubGlobal("fetch", originalFetch);
       vi.unstubAllGlobals();
     }
+  });
+
+  it("prunes expired sandbox checkout nonces without deleting recent intents or financial event digests", async () => {
+    const { org, userId } = await signup();
+    const old = crypto.randomUUID();
+    const recent = crypto.randomUUID();
+    const active = crypto.randomUUID();
+    const oldConsumed = crypto.randomUUID();
+    for (const [id, expiration, consumed] of [
+      [old, "NOW()-INTERVAL '9 days'", "NULL"],
+      [recent, "NOW()-INTERVAL '1 day'", "NULL"],
+      [active, "NOW()+INTERVAL '30 minutes'", "NULL"],
+      [oldConsumed, "NOW()-INTERVAL '8 days'", "NOW()-INTERVAL '9 days'"],
+    ]) {
+      await db!.query(
+        `INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at,consumed_at)
+         VALUES($1,$2,$3,'pro','101',${expiration},${consumed})`,
+        [id, org, userId],
+      );
+    }
+    const countBefore = await db!.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM montral_billing_event",
+    );
+    const result = await runMontralMaintenance(db!);
+    expect(result.expiredIntents).toBeGreaterThanOrEqual(2);
+    const remain = await db!.query<{ id: string }>(
+      "SELECT id FROM montral_billing_intent WHERE organization_id=$1", [org],
+    );
+    expect(remain.map(v => v.id).sort()).toEqual([recent, active].sort());
+    const countAfter = await db!.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM montral_billing_event",
+    );
+    expect(countAfter).toEqual(countBefore);
+    expect((await runMontralMaintenance(db!)).expiredIntents).toBe(0);
   });
 
   it("fails closed until explicitly configured", async () => {

@@ -74,3 +74,7 @@ No merchant connection, test order or checkout with Lemon Squeezy's real test st
 - No public infrastructure, backups/restore drill, commercial/legal review, or successful GitHub hosted CI. **Do not publish or charge**.
 
 Local cancellation/intent race and old-schema upgrade evidence: [2026-10-30 lifecycle qualification](evidence/2026-10-30-billing-lifecycle-qualification.md).
+
+## Local sandbox metadata retention
+
+The private Montral maintenance tick removes **checkout-intent correlation records only after they have been expired for more than seven days**. Both Node and Worker invoke this maintenance independently from monitor-scheduler success, and failures in webhook cleanup do not suppress intent cleanup (or vice versa). The **subscription table and signed billing event ledger are not automatically deleted**, because their contents are necessary for replay prevention and may have future legal/audit retention requirements. This is an implementation default for the disabled-by-default sandbox preview, **not** an approved legal or accounting retention policy. See [local maintenance qualification](evidence/2026-10-30-maintenance-isolation-qualification.md).

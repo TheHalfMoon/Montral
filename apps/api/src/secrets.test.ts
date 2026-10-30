@@ -42,6 +42,15 @@ describe("client address", () => {
   it("ignores forwarding headers unless a proxy is trusted", () => {
     expect(clientIp(ctx({ "x-forwarded-for": "1.2.3.4", "cf-connecting-ip": "5.6.7.8" }))).toBeNull();
     expect(clientIp(ctx({ "x-forwarded-for": "9.9.9.9, 1.2.3.4" }), { TRUST_PROXY: "true" })).toBe("1.2.3.4");
+    expect(clientIp(ctx({ "cf-connecting-ip": "8.8.8.8", "x-forwarded-for": "9.9.9.9, 1.2.3.4" }), { TRUST_PROXY: "true" })).toBe("1.2.3.4");
+    expect(clientIp(ctx({ "cf-connecting-ip": "8.8.8.8" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "abcd:12::5" }), { TRUST_PROXY: "true" })).toBe("abcd:12::5");
+    expect(clientIp(ctx({ "x-forwarded-for": "spoofed-user" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "1.2.3.4, invalid.user" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "999.999.999.999" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "deadbeef" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "1:2:3:4:5:6:7:8:9" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "2001:db8::1" }), { TRUST_PROXY: "true" })).toBe("2001:db8::1");
   });
 });
 

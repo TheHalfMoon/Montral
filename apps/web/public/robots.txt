@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /app
+Disallow: /zh-Hans/app
+Disallow: /api/
+Allow: /

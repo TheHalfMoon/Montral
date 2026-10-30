@@ -1,34 +1,54 @@
 # Montral
 
-**Montral — monitoring, webhooks, APIs and MCP in one developer platform.**
+**Monitoring · Webhooks · API · MCP** — one developer operations platform.
 
-Status: **private, pre-release integration workspace**. No public service, customer data, payments or live monitoring has been enabled.
+[![Montral CI](https://github.com/TheHalfMoon/Montral/actions/workflows/montral-ci.yml/badge.svg)](https://github.com/TheHalfMoon/Montral/actions/workflows/montral-ci.yml)
 
-## Product shape
+> **Private engineering preview — NOT deployed, NOT taking payments, NOT production-qualified.**
 
-Montral combines a multi-tenant monitoring core, Cloudflare-based optional probes, and a modern webhook testing service, exposed through one product identity, dashboard, REST API and MCP endpoint.
+Montral is an independently branded project built on three preserved code sources, with a single active runtime and authentication model. It monitors websites, APIs and services; creates incident and status pages; accepts test webhooks; and exposes private operations over REST and OAuth-enabled MCP.
 
-## Source snapshots
+## Current integrated product
 
-Three full tracked-source snapshots are preserved under `vendor/`:
-- `vendor/montral-core/` — authentication, monitoring, incidents, status pages, REST and MCP.
-- `vendor/montral-cloud-probes/` — Cloudflare worker-based monitoring, D1 utilities and UI references.
-- `vendor/montral-webhooks-legacy/` — legacy webhook receiver and inspector; **never run this legacy PHP application in production**.
+- **Monitoring**: Montral API, PostgreSQL repository, scheduler, incidents, notifications, status pages, API keys and MCP tools
+- **Webhooks**: Montral-native PostgreSQL inboxes, signed secret receiver URL, capped HTTP event ingestion, per-project access, 7-day retention and web event inspector
+- **MCP**: one `/api/mcp` endpoint with monitoring, incident and webhook inbox/event tools; OAuth scopes are enforced through the shared API auth layer
+- **Edge monitoring**: optional *on-demand*, HMAC-signed Cloudflare HTTP probe with explicit allowed-host list and no second scheduler
+- **Frontend**: unified Montral dashboard with `/app/hooks` and original operational screens
 
-These are historical source mirrors for an integration build, **not three production apps**. Source copyright/license records and original attribution remain unmodified. See `docs/SOURCES.md`.
+## Local development (temporary environment only)
 
-## Integration approach
+Requirements: Node.js **24.22.1** (or compatible 22.23.4+ / 26.12.1+), pnpm 10.0.0 and a disposable PostgreSQL instance.
 
-- Core: adapt the first source into `apps/montral-api` and `apps/montral-web`; preserve auth and workspace scope.
-- Probes: transplant the second source's useful check semantics into a versioned Montral probe interface; do not run duplicate schedulers.
-- Webhooks: use the third source's request-inspector product behavior and test fixtures to build a secure modern receiver; do not expose unmaintained Laravel 5.4/PHP 7.1.
-- Commercial: develop Montral-native billing and entitlements as a separate module; upstream hosted billing is not part of the MIT snapshot.
+```bash
+pnpm install --frozen-lockfile
+pnpm -r typecheck
+pnpm --filter @montral/api test
+pnpm --filter @montral/web test
+pnpm --filter @montral/probe test
+pnpm --filter @montral/web build
+pnpm --filter @montral/api build:node
+pnpm --filter @montral/probe build:edge
+python3 scripts/verify_sources.py
+```
 
-**Branding requirement:** every newly developed end-user surface and active package must say Montral. Historical source snapshots, original copyright, licenses and source register may keep original source names for provenance. No credit removal or false authorship.
+For a **local disposable environment only**, configure `DATABASE_URL` and `BETTER_AUTH_SECRET` (see `.env.example`), then run `pnpm db:migrate`. The Montral webhook schema extension is applied by the Montral Node server during startup or via the protected `POST /internal/migrate` endpoint. Do not expose development credentials.
 
-## Safety and release policy
+### Optional Cloudflare probe
 
-- Private GitHub is the canonical source; Mac is temporary staging only and is cleaned after verification.
-- No production deploy, paid resources, production webhooks, customer payments or public release yet.
-- No secrets, tokens, payment data, personal data or backups committed.
-- See `docs/ARCHITECTURE.md`, `docs/IMPLEMENTATION-PLAN.md` and `docs/RELEASE-GATES.md`.
+The Worker source is `apps/probe/src/edge.ts`, built with `pnpm --filter @montral/probe build:edge`; the example config is `apps/probe/wrangler.edge.jsonc`. **No Worker is deployed by CI.** To enable one, privately provision its `PROBE_SECRET` and explicit `ALLOWED_HOSTS`, build/deploy it separately, and configure `PROBE_REGIONS` on the scheduler with the shared secret. It runs only signed on-demand HTTP checks; the single Montral scheduler retains ownership of monitoring state.
+
+## Upstream source preservation and identity
+
+Three complete git-tracked snapshots remain **unchanged** under `vendor/`:
+- `vendor/montral-core/` (monitoring/MCP architecture, MIT)
+- `vendor/montral-cloud-probes/` (Cloudflare monitoring donor, Apache-2.0)
+- `vendor/montral-webhooks-legacy/` (webhook behavior donor, MIT; insecure obsolete PHP stack **never served in production**)
+
+Original license files and copyright are retained as required, and exact SHAs and every source-file hash are recorded in `docs/SOURCES.md` and `docs/source-manifest.json`. Customer-facing code is Montral-branded; preserving historical names inside legal source evidence is intentional.
+
+## Before launch
+
+**There is no customer billing, live cloud service, privacy/terms approvals or passed end-to-end PostgreSQL qualification.** The private MVP still needs payment-provider onboarding, subscription entitlements, PostgreSQL full E2E, hardening, cost/load testing, backup/restore, incident drills and final commercial/legal checks. See `docs/RELEASE-GATES.md`.
+
+GitHub is the canonical source. Mac copies are disposable and must be removed after remote verification. Never commit customer data or secrets.

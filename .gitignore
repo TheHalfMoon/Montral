@@ -1,9 +1,23 @@
-# No persistent development outputs, credentials or customer data
+# Montral - private repository; never commit runtime secrets or generated files
 .DS_Store
-.env
-/node_modules/
-/dist/
-/.cache/
-*.log
-/.pytest_cache/
-/__pycache__/
+**/node_modules/
+**/dist/
+**/.astro/
+**/.wrangler/
+**/.cache/
+**/.pytest_cache/
+**/__pycache__/
+**/*.tsbuildinfo
+**/*.log
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.docker.example
+!**/.env.production.example
+*.pem
+*.key
+*.p12
+*.pfx
+coverage/
+test-results/
+playwright-report/

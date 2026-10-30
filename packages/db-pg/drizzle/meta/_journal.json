@@ -1,0 +1,293 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1791606125693,
+      "tag": "0000_square_jocasta",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791648601239,
+      "tag": "0001_smart_lord_hawal",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791649850871,
+      "tag": "0002_misty_lucky_pierre",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1791650722807,
+      "tag": "0003_special_big_bertha",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1791676437070,
+      "tag": "0004_projects",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1791681920722,
+      "tag": "0005_alert_delivery",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1791685465540,
+      "tag": "0006_user_locale",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1791686251300,
+      "tag": "0007_monitor_db_types",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1791687275726,
+      "tag": "0008_monitor_tags_rollup_2fa",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1791689311120,
+      "tag": "0009_two_factor_lockout",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1791724954888,
+      "tag": "0010_oauth_provider",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791732664237,
+      "tag": "0011_channel_lark",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1791735767647,
+      "tag": "0012_alert_delivery_retry",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791736665108,
+      "tag": "0013_status_page_external_url",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1791739503431,
+      "tag": "0014_alert_channel_auto_enable",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1791740960869,
+      "tag": "0015_monitor_run_token",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1791766905104,
+      "tag": "0016_incident_open_auto_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1791849304528,
+      "tag": "0017_status_page_hide_branding",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1791998395225,
+      "tag": "0018_careless_tomorrow_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1792281274599,
+      "tag": "0019_flat_molten_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1792281783238,
+      "tag": "0020_even_supernaut",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1792281933814,
+      "tag": "0021_salty_black_cat",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1792282025671,
+      "tag": "0022_spotty_solo",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1792282260548,
+      "tag": "0023_lucky_cloak",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1792282747914,
+      "tag": "0024_smooth_spiral",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1792289182397,
+      "tag": "0025_striped_king_bedlam",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1792289981595,
+      "tag": "0026_deep_dormammu",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1792762532167,
+      "tag": "0027_optimal_golden_guardian",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1792776858624,
+      "tag": "0028_left_pepper_potts",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1793160668461,
+      "tag": "0029_monitor_websocket",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1793293771087,
+      "tag": "0030_mean_lady_mastermind",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1793293879992,
+      "tag": "0031_pale_ben_parker",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1793294006831,
+      "tag": "0032_careless_oracle",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1793294166579,
+      "tag": "0033_brief_kulan_gath",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793294433764,
+      "tag": "0034_wild_giant_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1793294603831,
+      "tag": "0035_windy_stepford_cuckoos",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1793294902494,
+      "tag": "0036_sparkling_thunderball",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1793295208348,
+      "tag": "0037_secret_roxanne_simpson",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1793295556040,
+      "tag": "0038_living_calypso",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1793295779944,
+      "tag": "0039_loving_dakota_north",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1793296005371,
+      "tag": "0040_gray_ultimates",
+      "breakpoints": true
+    }
+  ]
+}

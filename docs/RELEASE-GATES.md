@@ -1,17 +1,17 @@
-# Montral release gates
+# Montral production release gates — ALL must pass before public deployment
 
-The private repository and donor snapshots do not imply a deployable SaaS.
-
-- [ ] Real Montral-branded API and dashboard builds pass unit, integration and full E2E tests
-- [ ] Monitoring scheduler operates once per monitor; probe results correct under retries/timeouts
-- [ ] No legacy webhook PHP service exposed to the internet; modern receiver passed security review
-- [ ] Cross-tenant isolation, OAuth MCP scopes, replay authorization and token redaction verified
-- [ ] SSRF protection, rate limiting, payload size/retention, abuse prevention and input validation verified
-- [ ] Plan entitlements and metering validated for each product/API/MCP route
-- [ ] Payment lifecycle verified with provider's sandbox webhooks (signature, deduplication, failure, cancellation, refund)
-- [ ] Backup, restore, schema migration and rollback drill completed
-- [ ] Secrets excluded from git, supply-chain scan and pinned build artifact generation completed
-- [ ] Cost load-test confirms resource quotas on free and paid infrastructure
-- [ ] License and third-party asset provenance and required notices retained
-- [ ] Business, privacy, terms, support, customer onboarding and notification sending verified
-- [ ] No public launch or paid infrastructure until explicit release decision
+- [x] Exact copies of three donors pinned, license notices preserved, source integrity verified locally
+- [x] Montral active core compiled and API/frontend/probe unit suites passed locally
+- [x] Webhook API / UI / four additional MCP tools implemented
+- [x] Optional on-demand Cloudflare probe source added; no duplicate scheduler by design
+- [ ] PostgreSQL end-to-end tenant isolation, auth, migrations and webhook capture tested
+- [ ] Browser end-to-end workflow: login, add monitor, create inbox, capture request, inspect event, MCP read/write scoped tokens
+- [ ] Edge probe tested on Cloudflare Workers and verified quotas, secrets, private network restrictions
+- [ ] Actual 7-day retention even when no new events arrive
+- [ ] Atomic concurrent creation quota and full commercial entitlement checks
+- [ ] Stored webhook data sensitive-field redaction/retention/privacy, encryption and abuse response
+- [ ] Resource limits, load tests, monitoring reliability and disaster recovery
+- [ ] Customer plans, billing webhooks and payment-provider settlement tested in sandbox
+- [ ] Production domain, email/SMS alert deliverability, privacy/terms, business and tax requirements
+- [ ] Complete identity/content and non-attribution legal compliance audit
+- [ ] User-controlled final GO for public release. No live launch until then.

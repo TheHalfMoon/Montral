@@ -839,14 +839,14 @@ export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
     id: "mcp-registry",
     date: "2026-10-15",
     edition: "community",
-    title: { en: "Listed in the MCP Registry", zh: "收录到 MCP Registry" },
+    title: { en: "MCP documentation and local integration", zh: "MCP 文档与本地集成" },
     summary: {
-      en: "The Montral MCP server can now be found in the official MCP Registry as app.montral/mcp.",
-      zh: "Montral 的 MCP 服务现在可以在官方 MCP Registry 中以 app.montral/mcp 找到。",
+      en: "Montral documents OAuth-enabled MCP on a self-hosted private instance; no public listing is claimed.",
+      zh: "Montral 提供私有自托管 MCP 的 OAuth 接入说明，尚未发布公开条目。",
     },
     points: [
       { en: "The MCP docs gain example prompts and a troubleshooting section for authorization and scope problems.", zh: "MCP 文档新增示例提示词，以及授权和范围问题的排错说明。" },
-      { en: "An agent skill for the common workflows installs with npx skills add becoolme/montral.", zh: "常见流程的 Agent 技能可用 npx skills add becoolme/montral 安装。" },
+      { en: "MCP clients connect directly to the private deployment at /api/mcp; no skill package is published.", zh: "MCP 客户端直接连接到私有实例的 /api/mcp，尚未发布技能包。" },
       { en: "The repository ships a server.json describing the server, and the README explains how to connect.", zh: "仓库新增描述该服务的 server.json，README 也补充了接入方式。" },
     ],
     link: { href: "/docs/mcp", label: { en: "Read the MCP docs", zh: "阅读 MCP 文档" } },

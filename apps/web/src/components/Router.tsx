@@ -13,6 +13,7 @@ import StatusPages, { StatusPageEditor } from "./StatusPages";
 import Alerting from "./Alerting";
 import Maintenance from "./Maintenance";
 import WebhookInboxes from "./WebhookInboxes";
+import Billing from "./Billing";
 import Team from "./Team";
 import Account from "./Account";
 import ApiKeys from "./ApiKeys";
@@ -28,7 +29,7 @@ function syncShell(pathname: string) {
   const hit = resolveRoute(pathname);
   const key = hit?.route.key ?? "";
   document.querySelectorAll<HTMLElement>("[data-nav]").forEach((el) => el.classList.toggle("on", el.dataset.nav === key));
-  document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "usage"].includes(key));
+  document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "usage", "billing"].includes(key));
   const label = hit ? t(NAV_LABEL[hit.route.key]) : t("Not found");
   const crumb = document.querySelector(".crumb b");
   if (crumb) crumb.textContent = label;
@@ -59,6 +60,7 @@ function View({ name, params, title }: { name: string; params: string[]; title: 
     case "Alerting": return <Alerting />;
     case "Maintenance": return <Maintenance />;
     case "WebhookInboxes": return <WebhookInboxes />;
+    case "Billing": return <Billing />;
     case "Team": return <Team />;
     case "Account": return <Account />;
     case "ApiKeys": return <ApiKeys />;

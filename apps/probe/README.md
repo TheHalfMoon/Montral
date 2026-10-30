@@ -31,7 +31,7 @@ docker run -d --restart unless-stopped -p 8787:8787 \
 curl http://localhost:8787/          # {"ok":true,"region":"sao-paulo"}
 ```
 
-Tagged releases are meant to publish `ghcr.io/becoolme/montral-probe` (linux/amd64 and arm64) through `.github/workflows/docker.yml`; until a release made after the probe was added exists, build the image as above.
+No Montral probe image or GitHub release has been published. Build the image from this private repository as shown above; do not pull an unrelated registry image.
 
 `docker-compose.yml` in this folder does the same with sensible defaults (loopback-only port, read-only filesystem, no
 capabilities) and can terminate HTTPS itself with Caddy:

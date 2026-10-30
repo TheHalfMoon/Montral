@@ -16,18 +16,11 @@ import Doc from "../../layouts/Doc.astro";
     <h3>Requirements</h3>
     <ul><li>Docker with Compose v2</li><li>A machine that can reach the services you want to monitor</li></ul>
     <h3>Start it</h3>
-    <p><strong>Option A: published image.</strong> Tagged releases are published to <code>ghcr.io/becoolme/montral</code> (<code>linux/amd64</code> and <code>linux/arm64</code>); nothing to clone or build.</p>
-    <pre><code is:raw>mkdir montral && cd montral
-curl -fsSLO https://raw.githubusercontent.com/becoolme/montral/main/docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/becoolme/montral/main/.env.docker.example -o .env
-# edit .env: set POSTGRES_PASSWORD and BETTER_AUTH_SECRET (openssl rand -hex 32),
-# and uncomment MONTRAL_IMAGE (pin ghcr.io/becoolme/montral:0.1.0 or follow :latest)
-docker compose pull && docker compose up -d</code></pre>
-    <p><strong>Option B: build from source.</strong></p>
+    <p><strong>Private source build.</strong> No Montral container image or release has been published. Access to the private GitHub repository is required.</p>
     <pre><code is:raw>git clone https://github.com/TheHalfMoon/Montral.git
-cd montral
+cd Montral
 cp .env.docker.example .env
-# edit .env: set POSTGRES_PASSWORD and BETTER_AUTH_SECRET (openssl rand -hex 32)
+# Set POSTGRES_PASSWORD and BETTER_AUTH_SECRET in .env (openssl rand -hex 32)
 docker compose up -d --build</code></pre>
     <p>Open <code>http://localhost:8080</code> and sign up. The schema is migrated automatically on every start and the data lives in the <code>pgdata</code> volume.</p>
     <h3>Put it on a domain</h3>
@@ -56,7 +49,7 @@ docker compose up -d --build</code></pre>
     </table>
     <h3>Operate</h3>
     <ul>
-      <li><strong>Upgrade</strong>: with the published image, change the tag in <code>MONTRAL_IMAGE</code> if you pinned one, then <code>docker compose pull &amp;&amp; docker compose up -d</code>. Built from source: pull the new code, then <code>docker compose up -d --build</code>. Migrations run on start.</li>
+      <li><strong>Upgrade</strong>: pull the latest private source commit, then <code>docker compose up -d --build</code>. Migrations run on start.</li>
       <li><strong>Backup</strong>: <code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>. Restore steps are in <a href="/docs/backup">Backup and restore</a>.</li>
       <li><strong>Several containers</strong>: checks are leased with <code>FOR UPDATE SKIP LOCKED</code>, so more containers can share one database without duplicating checks.</li>
       <li><strong>Logs</strong>: <code>docker compose logs -f montral</code>. A health endpoint is at <code>/health</code>.</li>
@@ -143,7 +136,7 @@ cd ../web &amp;&amp; pnpm build &amp;&amp; pnpm exec wrangler deploy</code></pre
 docker run -d --restart unless-stopped -p 8787:8787 \
   -e PROBE_SECRET=&lt;a long random string&gt; -e PROBE_REGION=sao-paulo \
   montral-probe</code></pre>
-    <p><code>apps/probe/docker-compose.yml</code> wraps it (it builds the image from this repository, or pulls <code>ghcr.io/becoolme/montral-probe</code> once one is published) and can add HTTPS with Caddy: <code is:raw>PROBE_DOMAIN=probe-sao.example.com docker compose --profile tls up -d</code>. Without Docker, run <code>pnpm --filter @montral/probe build:node</code> and then <code>PROBE_SECRET=… node apps/probe/dist/server.mjs</code> (Node 22). The API needs an <code>https</code> URL, so put the probe behind a reverse proxy or the bundled Caddy. Docker and Node probes answer <code>GET /</code> with <code is:raw>{"ok":true,"region":"…"}</code> for health checks; on Vercel the same answer is at <code>/api/probe/&lt;id&gt;</code> and the root path is a 404.</p>
+    <p><code>apps/probe/docker-compose.yml</code> wraps it (builds from this private repository; no public probe image exists) and can add HTTPS with Caddy: <code is:raw>PROBE_DOMAIN=probe-sao.example.com docker compose --profile tls up -d</code>. Without Docker, run <code>pnpm --filter @montral/probe build:node</code> and then <code>PROBE_SECRET=… node apps/probe/dist/server.mjs</code> (Node 22). The API needs an <code>https</code> URL, so put the probe behind a reverse proxy or the bundled Caddy. Docker and Node probes answer <code>GET /</code> with <code is:raw>{"ok":true,"region":"…"}</code> for health checks; on Vercel the same answer is at <code>/api/probe/&lt;id&gt;</code> and the root path is a 404.</p>
     <p>Settings: <code>PROBE_SECRET</code> (required), <code>PROBE_REGION</code> (a label), <code>PORT</code> (default 8787), <code>HOST</code> (default 0.0.0.0), <code>CHECK_USER_AGENT</code> (same as on the API). Private and internal targets are refused unless you set <code>ALLOW_PRIVATE_TARGETS=true</code> on that probe, which is what lets a probe inside your office or home network check internal services. Only do it for a probe that lives in the network you want to watch.</p>
     <h3>Option B: Vercel, several regions at once</h3>
     <p>The bundled build creates one function per region (<code>apps/probe/regions.json</code>, default: Virginia, San Francisco, Frankfurt, Singapore, Tokyo). Set <code>PROBE_SECRET</code> on the Vercel project, run <code>pnpm build:vercel</code> in <code>apps/probe</code>, then <code>vercel deploy --prebuilt --prod</code>. Running a function in several regions needs a Vercel plan that allows it.</p>
@@ -235,18 +228,11 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
     <h3>环境要求</h3>
     <ul><li>Docker 和 Compose v2</li><li>能访问被监控服务的机器</li></ul>
     <h3>启动</h3>
-    <p><strong>方式 A：直接使用发布的镜像。</strong>发布版本会推送到 <code>ghcr.io/becoolme/montral</code>（支持 <code>linux/amd64</code> 和 <code>linux/arm64</code>），无需克隆代码，也无需构建。</p>
-    <pre><code is:raw>mkdir montral && cd montral
-curl -fsSLO https://raw.githubusercontent.com/becoolme/montral/main/docker-compose.yml
-curl -fsSL https://raw.githubusercontent.com/becoolme/montral/main/.env.docker.example -o .env
-# 编辑 .env：设置 POSTGRES_PASSWORD 和 BETTER_AUTH_SECRET（openssl rand -hex 32），
-# 并取消 MONTRAL_IMAGE 的注释（固定版本 ghcr.io/becoolme/montral:0.1.0，或跟随 :latest）
-docker compose pull && docker compose up -d</code></pre>
-    <p><strong>方式 B：从源码构建。</strong></p>
+    <p><strong>从私有源码构建。</strong>Montral 尚未发布可下载的容器镜像或正式版本，需要先拥有私有 GitHub 仓库的访问权限。</p>
     <pre><code is:raw>git clone https://github.com/TheHalfMoon/Montral.git
-cd montral
+cd Montral
 cp .env.docker.example .env
-# 编辑 .env：设置 POSTGRES_PASSWORD 和 BETTER_AUTH_SECRET（openssl rand -hex 32）
+# 在 .env 中设置 POSTGRES_PASSWORD 和 BETTER_AUTH_SECRET
 docker compose up -d --build</code></pre>
     <p>打开 <code>http://localhost:8080</code> 注册即可。数据库结构在每次启动时自动迁移，数据保存在 <code>pgdata</code> 卷中。</p>
     <h3>绑定域名</h3>
@@ -275,7 +261,7 @@ docker compose up -d --build</code></pre>
     </table>
     <h3>运维</h3>
     <ul>
-      <li><strong>升级</strong>：使用发布镜像时，若固定了版本就修改 <code>MONTRAL_IMAGE</code> 的标签，再执行 <code>docker compose pull &amp;&amp; docker compose up -d</code>；从源码构建时拉取新代码后执行 <code>docker compose up -d --build</code>。迁移在启动时自动运行。</li>
+      <li><strong>升级</strong>：目前无公开镜像；从私有源码更新时拉取新代码后执行 <code>docker compose up -d --build</code>。迁移在启动时自动运行。</li>
       <li><strong>备份</strong>：<code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>。恢复步骤见<a href="/docs/backup">备份与恢复</a>。</li>
       <li><strong>多个容器</strong>：检测通过 <code>FOR UPDATE SKIP LOCKED</code> 加租约，多个容器共用一个数据库也不会重复检测。</li>
       <li><strong>日志</strong>：<code>docker compose logs -f montral</code>。健康检查接口为 <code>/health</code>。</li>
@@ -362,7 +348,7 @@ cd ../web &amp;&amp; pnpm build &amp;&amp; pnpm exec wrangler deploy</code></pre
 docker run -d --restart unless-stopped -p 8787:8787 \
   -e PROBE_SECRET=&lt;一段足够长的随机字符串&gt; -e PROBE_REGION=sao-paulo \
   montral-probe</code></pre>
-    <p><code>apps/probe/docker-compose.yml</code> 对它做了封装（会用本仓库构建镜像；一旦发布了 <code>ghcr.io/becoolme/montral-probe</code>，则直接拉取），并可用 Caddy 自动加上 HTTPS：<code is:raw>PROBE_DOMAIN=probe-sao.example.com docker compose --profile tls up -d</code>。不用 Docker 时，运行 <code>pnpm --filter @montral/probe build:node</code>，再 <code>PROBE_SECRET=… node apps/probe/dist/server.mjs</code>（Node 22）。API 需要 <code>https</code> 地址，所以请把探针放在反向代理或自带的 Caddy 后面。Docker 和 Node 探针对 <code>GET /</code> 返回 <code is:raw>{"ok":true,"region":"…"}</code>，可用于健康检查；Vercel 上同样的响应在 <code>/api/probe/&lt;id&gt;</code>，根路径是 404。</p>
+    <p><code>apps/probe/docker-compose.yml</code> 对它做了封装（当前仅从私有仓库构建镜像，未发布公共镜像），并可用 Caddy 自动加上 HTTPS：<code is:raw>PROBE_DOMAIN=probe-sao.example.com docker compose --profile tls up -d</code>。不用 Docker 时，运行 <code>pnpm --filter @montral/probe build:node</code>，再 <code>PROBE_SECRET=… node apps/probe/dist/server.mjs</code>（Node 22）。API 需要 <code>https</code> 地址，所以请把探针放在反向代理或自带的 Caddy 后面。Docker 和 Node 探针对 <code>GET /</code> 返回 <code is:raw>{"ok":true,"region":"…"}</code>，可用于健康检查；Vercel 上同样的响应在 <code>/api/probe/&lt;id&gt;</code>，根路径是 404。</p>
     <p>配置项：<code>PROBE_SECRET</code>（必填）、<code>PROBE_REGION</code>（标签）、<code>PORT</code>（默认 8787）、<code>HOST</code>（默认 0.0.0.0）、<code>CHECK_USER_AGENT</code>（与 API 上的含义相同）。默认拒绝私有和内部地址；只有在该探针上设置 <code>ALLOW_PRIVATE_TARGETS=true</code> 才允许，这样就可以把探针放在办公室或家里的内网中，检测内部服务。请只对确实位于被监控网络内的探针这样做。</p>
     <h3>方式 B：Vercel，一次部署多个区域</h3>
     <p>自带的构建会为每个区域生成一个函数（<code>apps/probe/regions.json</code>，默认：弗吉尼亚、旧金山、法兰克福、新加坡、东京）。在 Vercel 项目上设置 <code>PROBE_SECRET</code>，在 <code>apps/probe</code> 中运行 <code>pnpm build:vercel</code>，再 <code>vercel deploy --prebuilt --prod</code>。让函数在多个区域运行，需要允许这一点的 Vercel 套餐。</p>

@@ -122,11 +122,8 @@ url = "https://montral.invalid/api/mcp"</code></pre>
       <li><strong>Self-hosted and the client rejects the token</strong>: tokens are issued for <code>&lt;BETTER_AUTH_URL&gt;/api/mcp</code>. The URL you give the client must match <code>BETTER_AUTH_URL</code> exactly, including the scheme.</li>
       <li><strong>Client only supports stdio</strong>: use <code>npx mcp-remote</code> as shown above.</li>
     </ul>
-    <h2 id="skill">Agent skill</h2>
-    <p>Install the Montral skill so your coding agent knows the usual workflows (adding monitors, handling incidents, pausing for maintenance, building status pages):</p>
-    <pre><code>npx skills add becoolme/montral</code></pre>
-    <h2 id="registry">MCP Registry</h2>
-    <p>The hosted server is listed in the official MCP Registry as <code>app.montral/mcp</code>. Self-hosted servers use the same tools; point the client at your own <code>/api/mcp</code> URL.</p>
+    <h2 id="skill">Private-preview integrations</h2>
+    <p>Connect your MCP client directly to the <code>/api/mcp</code> route on your own Montral installation. No public Montral skill package, hosted MCP endpoint, or official MCP Registry listing has been verified for this private project.</p>
   </div>
   <div lang="zh-CN">
     <h1>MCP 服务</h1>
@@ -217,10 +214,7 @@ url = "https://montral.invalid/api/mcp"</code></pre>
       <li><strong>自托管时客户端拒绝令牌</strong>：令牌签发给 <code>&lt;BETTER_AUTH_URL&gt;/api/mcp</code>，填给客户端的地址必须与 <code>BETTER_AUTH_URL</code> 完全一致，包括协议。</li>
       <li><strong>客户端只支持 stdio</strong>：按上文用 <code>npx mcp-remote</code> 中转。</li>
     </ul>
-    <h2 id="skill-zh">Agent 技能</h2>
-    <p>安装 Montral 技能，让编码 Agent 熟悉常见流程（添加监控、处理事件、维护期暂停、创建状态页）：</p>
-    <pre><code>npx skills add becoolme/montral</code></pre>
-    <h2 id="registry-zh">MCP Registry</h2>
-    <p>托管服务已收录在官方 MCP Registry，名称为 <code>app.montral/mcp</code>。自托管服务的工具相同，把客户端指向你自己的 <code>/api/mcp</code> 地址即可。</p>
+    <h2 id="skill-zh">私有预览版接入</h2>
+    <p>将 MCP 客户端直接连接到你自己部署的 Montral <code>/api/mcp</code>。当前私有项目尚未验证有公开技能包、托管 MCP 服务或官方 Registry 条目。</p>
   </div>
 </Doc>

@@ -1,8 +1,10 @@
 import type { Edition } from "./edition";
 import type { Tool } from "@montral/mcp-rest";
 import { z } from "zod";
-import { unmetered } from "./entitlements";
+
 import { migrateMontralHooks, mountMontralHooks } from "./montral-hooks";
+import { migrateMontralBilling, mountMontralBilling } from "./montral-billing";
+import { createMontralEntitlements, migrateMontralMetering } from "./montral-metering";
 
 const id = z.string().uuid().describe("Montral webhook inbox UUID.");
 export const MONTRAL_TOOLS: Tool[] = [
@@ -39,8 +41,11 @@ export const MONTRAL_TOOLS: Tool[] = [
 /** Montral's active runtime edition. No billing is enabled; core monitoring stays unmetered in private preview. */
 export const montralEdition: Edition = {
   id: "montral",
-  entitlements: () => unmetered,
-  mount: mountMontralHooks,
-  migrate: migrateMontralHooks,
+  entitlements: ({ database, env }) => createMontralEntitlements(database, env),
+  mount: ({ app, authed }) => {
+    mountMontralHooks({ app, authed });
+    mountMontralBilling({ app, authed });
+  },
+  migrate: async (db) => [...(await migrateMontralHooks(db)), ...(await migrateMontralBilling(db)), ...(await migrateMontralMetering(db))],
   mcpTools: MONTRAL_TOOLS,
 };

@@ -53,6 +53,15 @@ services:
       # max connections of the shared Postgres pool (default 10)
       DB_POOL_MAX: ${DB_POOL_MAX:-}
       BIND_HOST: ${BIND_HOST:-}
+      # Explicitly opt in to provider TEST-MODE only; leave blank for the default OFF.
+      MONTRAL_METERING_ENABLED: ${MONTRAL_METERING_ENABLED:-}
+      MONTRAL_BILLING_ENABLED: ${MONTRAL_BILLING_ENABLED:-}
+      MONTRAL_BILLING_MODE: ${MONTRAL_BILLING_MODE:-}
+      LEMONSQUEEZY_API_KEY: ${LEMONSQUEEZY_API_KEY:-}
+      LEMONSQUEEZY_WEBHOOK_SECRET: ${LEMONSQUEEZY_WEBHOOK_SECRET:-}
+      LEMONSQUEEZY_STORE_ID: ${LEMONSQUEEZY_STORE_ID:-}
+      LEMONSQUEEZY_VARIANT_PRO: ${LEMONSQUEEZY_VARIANT_PRO:-}
+      LEMONSQUEEZY_VARIANT_BUSINESS: ${LEMONSQUEEZY_VARIANT_BUSINESS:-}
       # optional: Plausible analytics (PLAUSIBLE_SRC defaults to https://plausible.io/js/script.js)
       PLAUSIBLE_DOMAIN: ${PLAUSIBLE_DOMAIN:-}
       PLAUSIBLE_SRC: ${PLAUSIBLE_SRC:-}

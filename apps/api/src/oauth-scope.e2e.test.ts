@@ -2,7 +2,7 @@ import { openDatabase } from "@montral/db-pg";
 import { createHash, randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app";
-import { community } from "./edition";
+import { montralEdition } from "./montral-edition";
 import type { RequestPrincipal } from "./env";
 
 // An authorized agent (MCP over OAuth) sees only the workspaces and projects the user ticked in the picker, and
@@ -14,7 +14,7 @@ const JSON_HEADERS = { "content-type": "application/json" };
 
 describe.skipIf(!url)("an agent sees only what the user authorized", () => {
   const observed: { path: string; principal?: RequestPrincipal }[] = [];
-  const app = createApp(openDatabase, { edition: { ...community, requestMiddleware: async (c, next) => {
+  const app = createApp(openDatabase, { edition: { ...montralEdition, requestMiddleware: async (c, next) => {
     await next(); observed.push({ path: c.req.path, principal: c.get("requestPrincipal") });
   } } });
   const req = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
@@ -101,7 +101,24 @@ describe.skipIf(!url)("an agent sees only what the user authorized", () => {
       expect(tok.status).toBe(200);
       return ((await tok.json()) as any).access_token as string;
     };
+    // Real Montral webhook endpoints use the SAME OAuth workspace/project grants.
+    const alphaInbox = await ada("POST", "/hooks/inboxes", { name: "Alpha secret events" }, { "x-project-id": alpha });
+    const betaInbox = await ada("POST", "/hooks/inboxes", { name: "Beta secret events" }, { "x-project-id": beta });
+    expect(alphaInbox.status).toBe(201);
+    expect(betaInbox.status).toBe(201);
+    const alphaHookId = alphaInbox.body.id as string;
+    const betaHookId = betaInbox.body.id as string;
     const readToken = await authorize(`${home.id}|${alpha}`, false, "mcp:read");
+    const readGrant = async (method: string, path: string, body?: unknown, headers: Record<string,string> = {}) =>
+      req(`/api${path}`, { method, headers: { ...JSON_HEADERS, authorization: `Bearer ${readToken}`, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+    const alphaList = await readGrant("GET", "/hooks/inboxes");
+    expect(alphaList.status).toBe(200);
+    expect((await alphaList.json() as any).inboxes.map((i: any) => i.id)).toEqual([alphaHookId]);
+    expect((await readGrant("GET", `/hooks/inboxes/${alphaHookId}/events`)).status).toBe(200);
+    expect((await readGrant("GET", `/hooks/inboxes/${betaHookId}/events`)).status).toBe(404);
+    expect((await readGrant("GET", "/hooks/inboxes", undefined, { "x-project-id": beta })).status).toBe(403);
+    expect((await readGrant("POST", "/hooks/inboxes", { name: "Read-only grant cannot create" })).status).toBe(403);
+
     const importData = { source: "oauth-test", monitors: [{ sourceId: "1", name: "Preview only", target: "https://1.1.1.1/" }] };
     const preview = await req("/api/monitors/import/preview", { method: "POST", headers: { ...JSON_HEADERS, authorization: `Bearer ${readToken}` }, body: JSON.stringify(importData) });
     expect(preview.status).toBe(200);
@@ -114,6 +131,24 @@ describe.skipIf(!url)("an agent sees only what the user authorized", () => {
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
     };
 
+    expect((await agent("GET", "/hooks/inboxes")).body.inboxes.map((i: any) => i.id)).toEqual([alphaHookId]);
+    expect((await agent("GET", `/hooks/inboxes/${betaHookId}/events`)).status).toBe(404);
+    expect((await agent("POST", "/hooks/inboxes", { name: "Wrong project" }, { "x-project-id": beta })).status).toBe(403);
+    // API keys are independently scoped to the same selected project; metadata supplied by
+    // a client must never expand the org/project access that the server resolves.
+    const keyResponse = await req("/api/auth/api-key/create", {
+      method: "POST", headers: { ...JSON_HEADERS, cookie: adaCookie },
+      body: JSON.stringify({ name: "Alpha Webhooks", metadata: { organizationId: home.id, projectIds: [alpha] } }),
+    });
+    expect(keyResponse.status).toBe(200);
+    const alphaKey = (await keyResponse.json() as any).key as string;
+    const viaKey = async (path: string, headers: Record<string,string> = {}) => req(`/api${path}`, { headers: { "x-api-key": alphaKey, ...headers } });
+    const keyList = await viaKey("/hooks/inboxes");
+    expect(keyList.status).toBe(200);
+    expect((await keyList.json() as any).inboxes.map((i: any) => i.id)).toEqual([alphaHookId]);
+    expect((await viaKey(`/hooks/inboxes/${betaHookId}/events`)).status).toBe(404);
+    expect((await viaKey("/hooks/inboxes", { "x-project-id": beta })).status).toBe(403);
+    expect((await viaKey("/hooks/inboxes", { "x-workspace-id": bobHome.id })).status).toBe(200);
     // what it is shown: the one workspace, the one project
     const seen = (await agent("GET", "/workspaces")).body;
     expect(seen.workspaces).toEqual([{ id: home.id, name: expect.any(String), projects: [{ id: alpha, name: expect.any(String) }] }]);
@@ -156,6 +191,16 @@ describe.skipIf(!url)("an agent sees only what the user authorized", () => {
       const r = await req("/api/mcp", { method: "POST", headers: { ...JSON_HEADERS, authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
       return ((await r.json()) as any).result as { isError: boolean; content: { text: string }[] };
     };
+    const hookList = await call("list_webhook_inboxes");
+    expect(hookList.isError).toBe(false);
+    expect(hookList.content[0].text).toContain(alphaHookId);
+    expect(hookList.content[0].text).not.toContain(betaHookId);
+    const hookEvents = await call("list_webhook_events", { id: betaHookId });
+    expect(hookEvents.isError).toBe(true);
+    const createdViaMcp = await call("create_webhook_inbox", { name: "MCP integration" });
+    expect(createdViaMcp.isError).toBe(false);
+    const afterMcp = (await agent("GET", "/hooks/inboxes")).body.inboxes;
+    expect(afterMcp.some((i: any) => i.name === "MCP integration")).toBe(true);
     const lw = await call("list_workspaces");
     expect(lw.isError).toBe(false);
     const lwText = lw.content[0].text;

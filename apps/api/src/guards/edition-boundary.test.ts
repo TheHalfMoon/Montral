@@ -63,12 +63,15 @@ describe.skipIf(hosted)("community build", () => {
     expect(read("apps/web/src/lib/changelog-cloud.ts")).toMatch(/CLOUD_ENTRIES: ChangelogEntry\[\] = \[\];/);
   });
 
-  it("uses the Montral edition without importing proprietary hosted billing", () => {
+  it("uses the Montral edition with only fail-closed first-party test billing", () => {
     expect(read("apps/api/src/server.ts")).toMatch(/const edition: Edition = montralEdition;/);
     expect(read("apps/api/src/worker.ts")).toMatch(/edition: Edition = montralEdition/);
-    expect(read("apps/api/src/montral-edition.ts")).toMatch(/entitlements: \(\) => unmetered/);
-    expect(read("apps/api/src/montral-edition.ts")).toMatch(/mount: mountMontralHooks/);
-    expect(read("apps/api/src/montral-edition.ts")).not.toMatch(/stripe|lemonsqueezy|proprietary hosted billing/i);
+    expect(read("apps/api/src/montral-edition.ts")).toMatch(/createMontralEntitlements\(database, env\)/);
+    expect(read("apps/api/src/montral-metering.ts")).toMatch(/MONTRAL_METERING_ENABLED === "true"/);
+    expect(read("apps/api/src/montral-edition.ts")).toMatch(/mountMontralHooks\(\{ app, authed \}\)/);
+    expect(read("apps/api/src/montral-edition.ts")).toMatch(/mountMontralBilling\(\{ app, authed \}\)/);
+    expect(read("apps/api/src/montral-billing.ts")).toMatch(/MONTRAL_BILLING_MODE === "test"/);
+    expect(read("apps/api/src/montral-billing.ts")).not.toMatch(/MONTRAL_BILLING_MODE === "live"/);
   });
 
   it("builds the Docker image from the node entry point only", () => {

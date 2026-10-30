@@ -21,6 +21,7 @@ export type Monitor = {
   /** several regions: how many must fail before it goes down; 0 = a majority of those that answered */
   minRegionsFailing?: number;
 };
+export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null };
 export type HookInbox = { id: string; name: string; created_at: string };
 export type HookEvent = { id: string; method: string; content_type: string | null; headers: Record<string,string>; body: string; created_at: string };
 export type Project = { id: string; name: string };
@@ -195,6 +196,8 @@ export type TimeCoverage = {
 };
 
 export const api = {
+  billingStatus: () => req<BillingStatus>("/billing"),
+  billingCheckout: (plan: "pro" | "business") => req<{ url: string; testMode: true }>("/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
   hookInboxes: () => req<{ inboxes: HookInbox[] }>("/hooks/inboxes"),
   createHookInbox: (name: string) => req<{ id: string; name: string; path: string }>("/hooks/inboxes", { method: "POST", body: JSON.stringify({ name }) }),
   hookEvents: (id: string) => req<{ events: HookEvent[] }>(`/hooks/inboxes/${id}/events`),

@@ -12,7 +12,7 @@
 services:
   probe:
     # the published image when there is one; otherwise `docker compose up` builds it from this repository
-    image: ${PROBE_IMAGE:-ghcr.io/becoolme/montral-probe:latest}
+    image: ${PROBE_IMAGE:-montral-probe:local}
     build:
       context: ../..
       dockerfile: apps/probe/Dockerfile

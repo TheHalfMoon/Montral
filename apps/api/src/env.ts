@@ -14,6 +14,15 @@ export type Bindings = {
   WEB_ORIGIN: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  /** All billing is fail-closed and restricted to provider TEST MODE in the private preview. */
+  MONTRAL_METERING_ENABLED?: string;
+  MONTRAL_BILLING_ENABLED?: string;
+  MONTRAL_BILLING_MODE?: string;
+  LEMONSQUEEZY_API_KEY?: string;
+  LEMONSQUEEZY_WEBHOOK_SECRET?: string;
+  LEMONSQUEEZY_STORE_ID?: string;
+  LEMONSQUEEZY_VARIANT_PRO?: string;
+  LEMONSQUEEZY_VARIANT_BUSINESS?: string;
   /** Cloudflare Queue the cron fans checks out to. Unset locally: checks then run inline. */
   CHECK_QUEUE?: CheckQueue;
   /** Cloudflare Email Service `send_email` binding. Unset (local dev): emails are logged instead of sent. */

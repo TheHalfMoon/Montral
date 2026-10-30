@@ -14,7 +14,9 @@ Montral is an independently branded project built on three preserved code source
 - **Webhooks**: Montral-native PostgreSQL inboxes, signed secret receiver URL, capped HTTP event ingestion, per-project access, 7-day retention and web event inspector
 - **MCP**: one `/api/mcp` endpoint with monitoring, incident and webhook inbox/event tools; OAuth scopes are enforced through the shared API auth layer
 - **Edge monitoring**: optional *on-demand*, HMAC-signed Cloudflare HTTP probe with explicit allowed-host list and no second scheduler
-- **Frontend**: unified Montral dashboard with `/app/hooks` and original operational screens
+- **Frontend**: unified Montral dashboard with `/app/hooks`, `/app/billing`, and original operational screens
+- **Test billing**: optional Lemon Squeezy TEST checkout, signed callbacks and SQL subscription-state ledger (off by default)
+- **Optional metering**: DB-atomic monthly check/email credits with Free/Pro/Business preview limits (off by default)
 
 ## Local development (temporary environment only)
 
@@ -52,6 +54,6 @@ Original license files and copyright are retained as required, and exact SHAs an
 
 ## Before launch
 
-**There is no customer billing, live cloud service or privacy/terms approvals. Local isolated PostgreSQL E2E passes, but real OAuth webhook-client verification, cloud qualification and browser end-to-end release checks remain.** The private MVP still needs payment-provider onboarding, subscription entitlements, PostgreSQL full E2E, hardening, cost/load testing, backup/restore, incident drills and final commercial/legal checks. See `docs/RELEASE-GATES.md`.
+**Montral is not yet qualified for customers or real money.** The private preview includes OAuth/MCP webhook-access E2E, test-mode-only provider billing and optional usage metering, but there is no public host, live merchant integration, actual payment-provider sandbox account, or approved commercial terms. The remaining blockers are listed in [release gates](docs/RELEASE-GATES.md). All revenue-related code is disabled by default; no live charges are supported.
 
 GitHub is the canonical source. Mac copies are disposable and must be removed after remote verification. Never commit customer data or secrets.

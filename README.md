@@ -13,7 +13,7 @@ Montral is an independently branded project built on three preserved code source
 - **Monitoring**: Montral API, PostgreSQL repository, scheduler, incidents, notifications, status pages, API keys and MCP tools
 - **Webhooks**: Montral-native PostgreSQL inboxes, signed secret receiver URL, capped HTTP event ingestion, per-project access, 7-day retention and web event inspector
 - **MCP**: one `/api/mcp` endpoint with monitoring, incident and webhook inbox/event tools; OAuth scopes are enforced through the shared API auth layer
-- **Edge monitoring**: optional *on-demand*, HMAC-signed Cloudflare HTTP probe with explicit allowed-host list and no second scheduler
+- **Edge monitoring**: optional *on-demand*, HMAC-signed Cloudflare HTTP probe with explicit allowed-host list and no second scheduler; scheduler→workerd contract validated locally with mocked outbound requests (not publicly deployed)
 - **Frontend**: unified Montral dashboard with `/app/hooks`, `/app/billing`, and original operational screens
 - **Test billing**: optional Lemon Squeezy TEST checkout, signed callbacks and SQL subscription-state ledger (off by default)
 - **Optional metering**: DB-atomic monthly check/email credits with Free/Pro/Business preview limits (off by default)

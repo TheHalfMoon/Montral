@@ -2,7 +2,7 @@
   // Optional Montral on-demand Cloudflare probe — NOT a separate scheduler.
   "name": "montral-edge-probe",
   "main": "dist/edge.mjs",
-  "compatibility_date": "2026-10-30",
+  "compatibility_date": "2026-10-13",
   "workers_dev": false,
   "vars": {
     "REGION": "cloudflare",

@@ -7,7 +7,7 @@
 - [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E
 - [x] PostgreSQL concurrent limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
-- [x] API **544**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **549**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
@@ -15,10 +15,11 @@
 - [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
 
 ## Unresolved production blockers
-- [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning)
+- [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning), including tests on a declared-supported Node version
 - [ ] Complete browser E2E matrix (account recovery, monitor/incident workflows, alerts, privileged/non-manager events, cross-browser and accessibility); narrow Chromium smoke PASSED
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
-- [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks
+- [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested
+- [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
 - [ ] Long-running scheduled pruning and orphan deletion behavior, crashes and retries
 - [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
@@ -36,3 +37,5 @@ Latest local evidence: [Billing/scope qualification](evidence/2026-10-30-billing
 Billing preview contract and detailed limits: [Billing sandbox](BILLING-SANDBOX.md).
 
 Local browser + restore details: [qualification report](evidence/2026-10-30-browser-backup-qualification.md).
+
+Local Cloudflare-runtime evidence: [Edge workerd qualification](evidence/2026-10-30-edge-workerd-qualification.md).

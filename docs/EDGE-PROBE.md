@@ -9,8 +9,8 @@ Files:
 - `pnpm --filter @montral/probe build:edge`: bundle to untracked `apps/probe/dist/edge.mjs`
 
 Deliberate restrictions (more restrictive than the Node probe):
-- Only HTTPS requests to exact hostnames in `ALLOWED_HOSTS`, set privately in Worker variables. Default empty allowlist = 503 until configured.
-- No IP literals, internal suffixes, unknown hosts or redirects. No arbitrary proxy/auth/cookie/host headers.
+- Only HTTPS requests to exact hostnames in `ALLOWED_HOSTS`, set privately in Worker variables. Nonstandard HTTPS ports are denied. Default empty allowlist = 503 until configured.
+- No IP literals, malformed DNS names, internal suffixes, unknown hosts or redirects. Hop-by-hop, client-identity proxy, Montral signature, arbitrary auth/cookie/host and content-length override headers are denied.
 - Only HTTP checks, not TCP or WebSocket from this Edge Worker. Other types still use the existing Montral Node probe.
 - HMAC timestamp/signature proof with `PROBE_SECRET` (at least 16 chars), matching Montral core protocol.
 - At most 64 KiB signed requests / 128 KiB response inspection; status and keyword checks yield familiar Montral results.
@@ -20,3 +20,16 @@ The existing backend already supports remote regions through `PROBE_REGIONS` and
 **Security caveat:** Hostname allowlists are necessary but not sufficient against DNS rebinding, unexpected corporate routing or compromised infrastructure; never expose an Edge Worker to arbitrary user-supplied target hostnames or treat it as a general-purpose web proxy. Keep Worker private until external security qualification. Cloudflare runtime may have egress/TCP/response limits; validate against real Worker before enabling.
 
 No Cloudflare credentials have been requested or changed and no Worker has been deployed.
+
+## Workerd qualification (local, not deployed)
+
+The Montral Worker handler and the existing scheduler regional-probe client passed **5 new tests inside real local Cloudflare `workerd`** via Miniflare. These tests use a fake outbound fetch to avoid external traffic. The complete evidence, security restrictions, compatibility-date pin, and limitations are in [2026-10-30 workerd qualification](evidence/2026-10-30-edge-workerd-qualification.md).
+
+Re-run:
+```sh
+pnpm --filter @montral/api exec vitest run src/edge-cloudflare.workers.test.ts
+pnpm --filter @montral/probe test
+pnpm --filter @montral/probe build:edge
+```
+
+The example `wrangler.edge.jsonc` uses compatibility date `2026-10-13`, the newest supported date in the **pinned** local Miniflare runtime. Do not claim Cloudflare production egress, DNS, quota, pricing or cross-region reliability without a separately authorized deployment.

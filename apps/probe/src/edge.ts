@@ -17,8 +17,12 @@ const MAX_RESPONSE = 128 * 1024;
 export function safeTarget(raw: string, allowedHosts: string): URL | null {
   let url: URL;
   try { url = new URL(raw); } catch { return null; }
-  if (url.protocol !== "https:" || url.username || url.password) return null;
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return null;
   if (!url.hostname || url.hostname.includes(":") || /^\d+(\.\d+){3}$/.test(url.hostname)) return null;
+  // Only normalized DNS hostnames from an operator's explicit list; refuse
+  // numeric and malformed hosts or trailing-dot variants.
+  if (!/^[a-z0-9.-]+$/i.test(url.hostname) || !url.hostname.includes(".") ||
+      url.hostname.endsWith(".") || url.hostname.split(".").some(label => !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(label))) return null;
   if (url.hostname === "localhost" || /\.(local|internal|localhost|test|invalid)$/.test(url.hostname)) return null;
   const allow = allowedHosts.split(",").map((h) => h.trim().toLowerCase()).filter(Boolean);
   if (!allow.includes(url.hostname.toLowerCase())) return null;
@@ -81,8 +85,10 @@ export async function handleEdgeProbe(request: Request, env: EdgeEnv, fetcher: t
   const headers = value.headers ?? {};
   if (!headers || typeof headers !== "object" || Array.isArray(headers)) return json(400, { error: "Invalid headers" });
   const entries = Object.entries(headers as Record<string, unknown>);
-  if (entries.length > 25 || entries.some(([k,v]) => !/^[a-z0-9-]{1,80}$/i.test(k) || typeof v !== "string" || v.length > 512 || /^(host|cookie|authorization|proxy-authorization)$/i.test(k))) {
-    // Sensitive headers or host overrides should use the Node probe, never the constrained public edge.
+  const restricted = /^(?:host|cookie|authorization|proxy-authorization|proxy-authenticate|proxy-connection|connection|keep-alive|transfer-encoding|te|trailer|upgrade|content-length|forwarded|x-forwarded-(?:for|host|proto|port|client-cert)|x-real-ip|cf-connecting-ip|true-client-ip|cf-ipcountry|x-montral-signature|x-montral-timestamp)$/i;
+  if (entries.length > 25 || entries.some(([k,v]) => !/^[a-z0-9-]{1,80}$/i.test(k) || typeof v !== "string" || v.length > 512 || restricted.test(k))) {
+    // Prevent signing or forwarding spoofed edge/client identity and hop-by-hop
+    // headers. The Node probe supports trusted internal monitor scenarios.
     return json(400, { error: "Unsupported headers on the public edge probe" });
   }
   const keyword = value.keyword;

@@ -25,6 +25,9 @@ describe("Montral Cloudflare edge probe", () => {
     expect(safeTarget("https://169.254.169.254/", "169.254.169.254")).toBeNull();
     expect(safeTarget("https://internal.example.com/", env.ALLOWED_HOSTS!)).toBeNull();
     expect(safeTarget("https://example.com/", env.ALLOWED_HOSTS!)).not.toBeNull();
+    expect(safeTarget("https://example.com:8443/", env.ALLOWED_HOSTS!)).toBeNull();
+    expect(safeTarget("https://example.com./", "example.com.")).toBeNull();
+    expect(safeTarget("https://example.com:443/", env.ALLOWED_HOSTS!)).not.toBeNull();
     expect(safeTarget("https://example.com@127.0.0.1/", env.ALLOWED_HOSTS!)).toBeNull();
   });
   it("never becomes a public proxy when unsigned, wrongly signed or unconfigured", async () => {
@@ -51,6 +54,9 @@ describe("Montral Cloudflare edge probe", () => {
     const notHttp = await handleEdgeProbe(await signed({ ...payload, type: "tcp" }), env, okFetch as never);
     expect(notHttp.status).toBe(400);
     expect((await handleEdgeProbe(await signed({ ...payload, headers: { authorization: "secret" } }), env, okFetch as never)).status).toBe(400);
+    for (const header of ["x-forwarded-for", "cf-connecting-ip", "transfer-encoding", "host", "x-montral-signature", "content-length", "forwarded"]) {
+      expect((await handleEdgeProbe(await signed({ ...payload, headers: { [header]: "spoofed" } }), env, okFetch as never)).status).toBe(400);
+    }
     expect((await handleEdgeProbe(await signed({ ...payload, target: "http://169.254.169.254" }), env, okFetch as never)).status).toBe(400);
     const oversized = new Request("https://edge.example.invalid", { method: "POST", body: "a".repeat(65 * 1024) });
     expect((await handleEdgeProbe(oversized, env)).status).toBe(413);

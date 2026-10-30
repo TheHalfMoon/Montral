@@ -54,7 +54,7 @@ Original license files and copyright are retained as required, and exact SHAs an
 
 ## Before launch
 
-**Montral is not yet qualified for customers or real money.** The private preview includes OAuth/MCP webhook-access E2E, test-mode-only provider billing and optional usage metering, but there is no public host, live merchant integration, actual payment-provider sandbox account, or approved commercial terms. The remaining blockers are listed in [release gates](docs/RELEASE-GATES.md). All revenue-related code is disabled by default; no live charges are supported.
+**Montral is not yet qualified for customers or real money.** The private preview includes OAuth/MCP webhook-access E2E, test-mode-only provider billing and optional usage metering and bounded cancellation deadlines, but there is no public host, live merchant integration, actual payment-provider sandbox account, or approved commercial terms. The remaining blockers are listed in [release gates](docs/RELEASE-GATES.md). All revenue-related code is disabled by default; no live charges are supported.
 
 ## Private local qualification
 

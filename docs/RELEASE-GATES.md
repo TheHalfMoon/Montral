@@ -7,7 +7,7 @@
 - [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E
 - [x] PostgreSQL concurrent limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
-- [x] API **549**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **551**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
@@ -24,6 +24,9 @@
 - [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
+- [x] Cancellation paid-access deadline enforced directly from the signed provider `ends_at`, even without a subsequent expiry callback; absent/expired deadline immediately revokes preview paid access
+- [x] Test-mode-only entitlement assertions, checkout-intent-before-provider race regression, and failed checkout cleanup checked on real PostgreSQL
+- [x] Migration upgrade from earlier preview SQL function to eight-argument deadline-aware function tested on a disposable legacy-schema clone
 - [x] Optional PostgreSQL atomic credit/email metering and plan caps under concurrent test requests
 - [ ] Real Lemon Squeezy test-store checkout + authentic provider callbacks (no connected merchant yet)
 - [ ] Production merchant onboarding, settlement validation, real billing, cancellation, refunds, chargebacks and proration
@@ -39,3 +42,5 @@ Billing preview contract and detailed limits: [Billing sandbox](BILLING-SANDBOX.
 Local browser + restore details: [qualification report](evidence/2026-10-30-browser-backup-qualification.md).
 
 Local Cloudflare-runtime evidence: [Edge workerd qualification](evidence/2026-10-30-edge-workerd-qualification.md).
+
+Billing lifecycle and backward-compatibility evidence: [2026-10-30 qualification](evidence/2026-10-30-billing-lifecycle-qualification.md).

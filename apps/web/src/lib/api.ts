@@ -21,7 +21,7 @@ export type Monitor = {
   /** several regions: how many must fail before it goes down; 0 = a majority of those that answered */
   minRegionsFailing?: number;
 };
-export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null };
+export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null; endsAt: string | null };
 export type HookInbox = { id: string; name: string; created_at: string };
 export type HookEvent = { id: string; method: string; content_type: string | null; headers: Record<string,string>; body: string; created_at: string };
 export type Project = { id: string; name: string };

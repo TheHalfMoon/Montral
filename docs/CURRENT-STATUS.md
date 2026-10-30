@@ -10,11 +10,12 @@
 - Housekeeping on Node and Cloudflare scheduler ticks: remove expired webhook events after 7 days, and inboxes orphaned by deleted projects/workspaces. Direct real Postgres pruning tests passed.
 - Montral-branded active web/API/PWA/cache/service-worker metadata and private-only documentation (no fake published images, skills or MCP Registry claims); original source copyright and license retained in immutable `vendor/` snapshots.
 - CI workflow wired to disposable PostgreSQL 17 service, all suites and self-hosted Node smoke, not deployment.
+- Billing cancellation deadlines, test-only subscription entitlements, and checkout-intent-before-provider flow passed 11 focused tests and a simulated legacy-schema upgrade; see [billing lifecycle](evidence/2026-10-30-billing-lifecycle-qualification.md).
 - Local Cloudflare workerd with real scheduler signing and region protocol passed 5 tests; explicit HTTPS host allowlist, port and spoofed-header guards hardened.
 - Real Chrome Headless browser smoke: registration, authenticated webhooks, synthetic event inspector, ephemeral receiver-secret handling, disabled billing, and anonymous denials passed.
 - Real isolated PostgreSQL `pg_dump -Fc` → `pg_restore` drill to newly created scratch database passed; all 42 tables, 2 synthetic orgs and 3 Montral DB functions survived restoration.
-- Actual isolated PostgreSQL 17.9 run: **549 API tests**, **122 web tests**, **20 probe tests** passed including local workerd integration; final web suite 122/122 passed after Cloudflare-target build. Typechecks, Node/SSR/Cloudflare bundles and Node+PostgreSQL live smoke passed.
-- Current local qualification: [Edge workerd](evidence/2026-10-30-edge-workerd-qualification.md), [Browser and backup/restore](evidence/2026-10-30-browser-backup-qualification.md) and [Auth, billing and metering](evidence/2026-10-30-billing-scope-qualification.md). Previous wave: [Monitoring and webhook baseline](evidence/2026-10-30-local-postgres-qualification.md).
+- Actual isolated PostgreSQL 17.9 run: **551 API tests**, **122 web tests**, **20 probe tests** passed including local workerd integration; final web suite 122/122 passed after Cloudflare-target build. Typechecks, Node/SSR/Cloudflare bundles and Node+PostgreSQL live smoke passed.
+- Current local qualification: [Billing lifecycle](evidence/2026-10-30-billing-lifecycle-qualification.md), [Edge workerd](evidence/2026-10-30-edge-workerd-qualification.md), [Browser and backup/restore](evidence/2026-10-30-browser-backup-qualification.md) and [Auth, billing and metering](evidence/2026-10-30-billing-scope-qualification.md). Previous wave: [Monitoring and webhook baseline](evidence/2026-10-30-local-postgres-qualification.md).
 
 ## Real blockers (do not claim complete)
 

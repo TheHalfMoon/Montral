@@ -69,6 +69,9 @@ describe("Montral commercial billing is sandbox-only and signature-bound", () =>
 
   it("enforces store, subscription type, strict test mode and a server intent on creation", () => {
     expect(parseSubscriptionEvent(payload, config)).toMatchObject({ name: "subscription_created", id: "123", variant: "101", status: "active" });
+    expect(parseSubscriptionEvent({ ...payload, data: { ...payload.data, attributes: { ...payload.data.attributes, ends_at: "bad date" } } }, config)).toBeNull();
+    expect(parseSubscriptionEvent({ ...payload, data: { ...payload.data, attributes: { ...payload.data.attributes, ends_at: "2026-11-30T10:00:00Z" } } }, config))
+      .toMatchObject({ endsAt: "2026-11-30T10:00:00.000Z" });
     expect(parseSubscriptionEvent({ ...payload, data: { ...payload.data, attributes: { ...payload.data.attributes, test_mode: false } } }, config)).toBeNull();
     expect(parseSubscriptionEvent({ ...payload, data: { ...payload.data, attributes: { ...payload.data.attributes, store_id: 99 } } }, config)).toBeNull();
     expect(parseSubscriptionEvent({ ...payload, data: { ...payload.data, type: "orders" } }, config)).toBeNull();

@@ -18,9 +18,10 @@ This is a Montral-owned integration; it is NOT part of the historical OpenUptime
 2. **No live checkouts**: Requests always set `test_mode: true`; the provider response must also confirm `test_mode: true`. Any other response fails closed, including production checkout URLs.
 3. **No payment-link trust**: Never grant entitlements because a browser visited a success URL. Subscription creation requires an HMAC-signed, test-mode merchant event, the correct store and variant, and a single-use, unexpired checkout intent that Montral created on behalf of the authenticated workspace manager.
 4. **No PII stored**: Billing event table stores only the payload digest, provider subscription ID and event type. Subscription table holds workspace, plan, status and provider update time. No credit cards, addresses or raw provider payloads are stored.
-5. **Idempotency**: Signature is verified before parsing, payload digest prevents exact redelivery, and a PostgreSQL function links/deduplicates/updates state in one transaction. Earlier events cannot overwrite newer subscription status.
-6. **No extra subscriptions**: A workspace with a non-expired subscription is denied a second new checkout. Plan changes need a separate provider-portal integration, not a second subscription purchase.
-7. **Small ingestion**: POST callback is limited to a 64-KiB raw body. Unknown/unsigned events are rejected. No live provider keys were used during implementation.
+5. **Cancellation safety**: Signed test-mode subscription updates persist `ends_at`; a missing or expired cancellation deadline cannot grant perpetual Pro/Business access. Before contacting the provider to create a checkout, Montral persists the correlating intent; failed provider requests delete unused intents.
+6. **Idempotency**: Signature is verified before parsing, payload digest prevents exact redelivery, and a PostgreSQL function links/deduplicates/updates state in one transaction. Earlier events cannot overwrite newer subscription status.
+7. **No extra subscriptions**: A workspace with a non-expired subscription is denied a second new checkout. Plan changes need a separate provider-portal integration, not a second subscription purchase.
+8. **Small ingestion**: POST callback is limited to a 64-KiB raw body. Unknown/unsigned events are rejected. No live provider keys were used during implementation.
 
 ## Proposed private-preview plan guardrails
 
@@ -34,7 +35,7 @@ These are engineering quota candidates, **not confirmed merchant prices, product
 
 Each monitor can run only while credits remain; a workspace running **all** Business monitors every minute will exhaust its 250,000 credits before the month ends. These are intentionally hard budgets to avoid unexpected hosting costs. Usage periods start at 00:00 UTC on the first of each calendar month in this preview; renewal-aligned accounting and proration remain future work.
 
-A status of `active`, `on_trial` or `cancelled` yields a paid-tier preview. Expired, unpaid, paused and past-due states fall back to Free. Cancellation end dates, real refunds, production reconciliation and signed provider entitlement semantics need additional checks before live billing.
+When both test-mode billing and metering are configured, only an explicitly `test_mode=true` subscription with `active` or `on_trial` status can grant the preview tier without a deadline. A `cancelled` subscription receives preview access **only while the provider-supplied `ends_at` timestamp is in the future**. A missing or expired `ends_at` revokes paid access immediately, even if the `subscription_expired` callback never arrives. Expired, unpaid, paused and past-due status also falls back to Free. Actual merchant reconciliation, real refunds and provider renewal-aligned billing periods remain future work.
 
 ## API surface
 
@@ -71,3 +72,5 @@ No merchant connection, test order or checkout with Lemon Squeezy's real test st
 - No payment-provider test store account/keys have been connected or used. Verify signed callback shape, live event order, subscription status transitions and delayed webhook retries in the real provider sandbox before enabling production.
 - No full customer checkout E2E with actual payment-provider test transaction.
 - No public infrastructure, backups/restore drill, commercial/legal review, or successful GitHub hosted CI. **Do not publish or charge**.
+
+Local cancellation/intent race and old-schema upgrade evidence: [2026-10-30 lifecycle qualification](evidence/2026-10-30-billing-lifecycle-qualification.md).

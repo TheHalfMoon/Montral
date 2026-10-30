@@ -34,6 +34,9 @@ export default function Billing() {
       {state && <>
         <p><strong>{t("Plan")}:</strong> {state.plan.toUpperCase()}</p>
         <p><strong>{t("Status")}:</strong> {state.status}</p>
+        {state.status === "cancelled" && <p className="muted">{state.endsAt && new Date(state.endsAt).getTime() > Date.now()
+          ? `${t("Subscription access ends")}: ${new Date(state.endsAt).toLocaleString()}`
+          : t("Cancelled subscription: paid access is no longer active.")}</p>}
         <p className="muted">{state.billingConfigured
           ? t("Sandbox merchant configured. All checkout links are test-mode only.")
           : t("Checkout is not configured. Montral will not contact a payment provider.")}</p>

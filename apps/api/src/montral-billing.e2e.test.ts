@@ -1,4 +1,4 @@
-import { beforeAll, afterAll, describe, expect, it } from "vitest";
+import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "@montral/db-pg";
 import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
@@ -40,10 +40,10 @@ async function signup() {
   const user = await me.json() as { organization: { id: string }; userId: string };
   return { cookie, org: user.organization.id, userId: user.userId };
 }
-const event = (id: string, intent: string | null, eventName: string, status: string, updated: string, variant = 101) => ({
+const event = (id: string, intent: string | null, eventName: string, status: string, updated: string, variant = 101, endsAt: string | null = null) => ({
   meta: { event_name: eventName, custom_data: { montral_intent: intent } },
   data: { type: "subscriptions", id, attributes: {
-    store_id: 42, variant_id: variant, status, test_mode: true, updated_at: updated,
+    store_id: 42, variant_id: variant, status, test_mode: true, updated_at: updated, ends_at: endsAt,
   } },
 });
 
@@ -86,6 +86,67 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     const preview = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "false" });
     expect(await preview.plan(org)).toBeNull();
     expect(await preview.spendCredits(org, 80000)).toBe(80000);
+  });
+
+  it("does not grant cancelled subscriptions indefinitely, even if expiration webhook never arrives", async () => {
+    const { org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 11000000));
+    await db!.query(
+      "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'pro','101',NOW()+INTERVAL '30 minutes')",
+      [intent, org, userId],
+    );
+    const entitlements = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });
+    const first = event(provider, intent, "subscription_created", "active", new Date(Date.now() - 60_000).toISOString());
+    expect((await fire(first)).status).toBe(200);
+    expect(await entitlements.plan(org)).toMatchObject({ id: "pro" });
+    const future = new Date(Date.now() + 3600_000).toISOString();
+    const cancelled = event(provider, intent, "subscription_cancelled", "cancelled", new Date().toISOString(), 101, future);
+    expect((await fire(cancelled)).status).toBe(200);
+    expect(await entitlements.plan(org)).toMatchObject({ id: "pro" });
+    const stored = await db!.query<{ ends_at: Date }>(
+      "SELECT ends_at FROM montral_subscription WHERE provider_id=$1", [provider],
+    );
+    expect(new Date(stored[0]?.ends_at).toISOString()).toBe(future);
+    // Simulate the expiration deadline with no additional webhook. Plan
+    // computation itself must revoke paid access, without relying on cron.
+    await db!.query("UPDATE montral_subscription SET ends_at=NOW()-INTERVAL '1 minute' WHERE provider_id=$1", [provider]);
+    expect(await entitlements.plan(org)).toMatchObject({ id: "free", maxActiveMonitors: 1 });
+    await db!.query("UPDATE montral_subscription SET ends_at=NULL WHERE provider_id=$1", [provider]);
+    expect(await entitlements.plan(org)).toMatchObject({ id: "free" });
+    await db!.query("UPDATE montral_subscription SET status='active',test_mode=false WHERE provider_id=$1", [provider]);
+    expect(await entitlements.plan(org)).toMatchObject({ id: "free" });
+    await db!.query("UPDATE montral_subscription SET test_mode=true WHERE provider_id=$1", [provider]);
+    expect(await createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true", MONTRAL_BILLING_ENABLED: "false" }).plan(org))
+      .toMatchObject({ id: "free" });
+  });
+
+  it("persists the checkout nonce before provider calls and discards failed attempts", async () => {
+    const { cookie, org } = await signup();
+    const intentsBefore = await db!.query("SELECT id FROM montral_billing_intent WHERE organization_id=$1", [org]);
+    expect(intentsBefore).toHaveLength(0);
+    const originalFetch = globalThis.fetch;
+    let providerCalled = 0;
+    try {
+      vi.stubGlobal("fetch", async (url: string, options: RequestInit) => {
+        expect(url).toBe("https://api.lemonsqueezy.com/v1/checkouts");
+        const body = JSON.parse(String(options.body));
+        const id = body.data.attributes.checkout_data.custom.montral_intent as string;
+        expect((await db!.query("SELECT id FROM montral_billing_intent WHERE id=$1 AND organization_id=$2", [id, org]))).toHaveLength(1);
+        providerCalled++;
+        return new Response("provider unavailable", { status: 503 });
+      });
+      const resp = await app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+        method: "POST", headers: { cookie, "content-type": "application/json" },
+        body: JSON.stringify({ plan: "pro" }),
+      }), config as never);
+      expect(resp.status).toBe(502);
+      expect(providerCalled).toBe(1);
+      expect(await db!.query("SELECT id FROM montral_billing_intent WHERE organization_id=$1", [org])).toHaveLength(0);
+    } finally {
+      vi.stubGlobal("fetch", originalFetch);
+      vi.unstubAllGlobals();
+    }
   });
 
   it("fails closed until explicitly configured", async () => {

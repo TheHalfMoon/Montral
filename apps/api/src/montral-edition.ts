@@ -38,7 +38,7 @@ export const MONTRAL_TOOLS: Tool[] = [
   },
 ];
 
-/** Montral's active runtime edition. No billing is enabled; core monitoring stays unmetered in private preview. */
+/** Montral edition: billing and metering are both disabled by default. Only test merchant integration is supported. */
 export const montralEdition: Edition = {
   id: "montral",
   entitlements: ({ database, env }) => createMontralEntitlements(database, env),

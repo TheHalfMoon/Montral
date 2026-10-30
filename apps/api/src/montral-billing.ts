@@ -47,9 +47,13 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
     organization_id text PRIMARY KEY REFERENCES organization(id) ON DELETE CASCADE,
     provider_id text NOT NULL UNIQUE, variant_id text NOT NULL, plan text NOT NULL,
     status text NOT NULL, test_mode boolean NOT NULL DEFAULT true,
-    provider_updated_at timestamptz NOT NULL,
+    ends_at timestamptz, provider_updated_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT NOW()
   )`);
+  await db.query("ALTER TABLE montral_subscription ADD COLUMN IF NOT EXISTS ends_at timestamptz");
+  // An earlier checkout preview exposed a seven-argument SQL function. Drop
+  // it so existing installations cannot accidentally call the old behavior.
+  await db.query("DROP FUNCTION IF EXISTS montral_apply_billing_event(text,text,text,text,text,timestamptz,uuid)");
   await db.query(`CREATE TABLE IF NOT EXISTS montral_billing_event (
     digest char(64) PRIMARY KEY, provider_id text NOT NULL, name text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW()
@@ -57,7 +61,7 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
   await db.query(`
     CREATE OR REPLACE FUNCTION montral_apply_billing_event(
       p_digest text, p_event text, p_provider text, p_variant text,
-      p_status text, p_updated timestamptz, p_intent uuid
+      p_status text, p_updated timestamptz, p_intent uuid, p_ends timestamptz
     ) RETURNS text LANGUAGE plpgsql AS $montral$
     DECLARE target_org text; target_plan text; expected_variant text;
             inserted_count integer;
@@ -85,15 +89,15 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
       IF inserted_count = 0 THEN RETURN 'duplicate'; END IF;
       IF p_event = 'subscription_created' THEN
         UPDATE montral_billing_intent SET consumed_at=NOW() WHERE id=p_intent;
-        INSERT INTO montral_subscription(organization_id,provider_id,variant_id,plan,status,test_mode,provider_updated_at)
-          VALUES (target_org,p_provider,p_variant,target_plan,p_status,true,p_updated)
+        INSERT INTO montral_subscription(organization_id,provider_id,variant_id,plan,status,test_mode,provider_updated_at,ends_at)
+          VALUES (target_org,p_provider,p_variant,target_plan,p_status,true,p_updated,p_ends)
         ON CONFLICT (organization_id) DO UPDATE SET
           provider_id=EXCLUDED.provider_id, variant_id=EXCLUDED.variant_id,
           plan=EXCLUDED.plan,status=EXCLUDED.status,provider_updated_at=EXCLUDED.provider_updated_at,
-          updated_at=NOW()
+          ends_at=EXCLUDED.ends_at,updated_at=NOW()
         WHERE montral_subscription.provider_updated_at <= EXCLUDED.provider_updated_at;
       ELSE
-        UPDATE montral_subscription SET status=p_status,provider_updated_at=p_updated,updated_at=NOW()
+        UPDATE montral_subscription SET status=p_status,provider_updated_at=p_updated,ends_at=p_ends,updated_at=NOW()
           WHERE provider_id=p_provider AND provider_updated_at <= p_updated;
       END IF;
       RETURN 'applied';
@@ -107,7 +111,7 @@ type SubscriptionPayload = {
   meta?: { event_name?: unknown; custom_data?: { montral_intent?: unknown } };
   data?: { type?: unknown; id?: unknown; attributes?: {
     store_id?: unknown; variant_id?: unknown; status?: unknown; test_mode?: unknown;
-    updated_at?: unknown;
+    updated_at?: unknown; ends_at?: unknown;
   } };
 };
 
@@ -125,12 +129,18 @@ export function parseSubscriptionEvent(raw: unknown, env: Bindings) {
   if (attrs?.test_mode !== true || typeof attrs?.status !== "string" ||
       !/^(on_trial|active|paused|past_due|unpaid|cancelled|expired)$/.test(attrs.status)) return null;
   if (typeof attrs.updated_at !== "string" || !Number.isFinite(Date.parse(attrs.updated_at))) return null;
+  const endValue = attrs.ends_at;
+  // Provider cancellation is only paid through ends_at. Invalid dates cannot
+  // extend benefits; absence means an immediate Free downgrade.
+  if (endValue !== undefined && endValue !== null &&
+      (typeof endValue !== "string" || !Number.isFinite(Date.parse(endValue)))) return null;
+  const endsAt = typeof endValue === "string" ? new Date(endValue).toISOString() : null;
   const intent = payload.meta?.custom_data?.montral_intent;
   if (name === "subscription_created" && (typeof intent !== "string" ||
       !/^[0-9a-f]{8}-[0-9a-f-]{27,}$/.test(intent))) return null;
   return {
     name, id, variant, status: attrs.status,
-    updated: new Date(attrs.updated_at).toISOString(),
+    updated: new Date(attrs.updated_at).toISOString(), endsAt,
     intent: typeof intent === "string" ? intent : null,
   };
 }
@@ -206,9 +216,13 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
     try { payload = JSON.parse(body || "null"); } catch { return c.json({ error: "Invalid JSON" }, 400); }
     const event = parseSubscriptionEvent(payload, c.env);
     if (!event) return c.json({ error: "Unsupported or invalid test subscription event" }, 422);
+    // The provider sends event name in both the signed payload and a header.
+    // Both must agree; this is a protocol consistency check, not authentication.
+    const eventNameHeader = c.req.header("x-event-name");
+    if (eventNameHeader && eventNameHeader !== event.name) return c.json({ error: "Event name mismatch" }, 422);
     const rows = await c.get("database").query<{ outcome: string }>(
-      "SELECT montral_apply_billing_event($1,$2,$3,$4,$5,$6::timestamptz,$7::uuid) AS outcome",
-      [await sha256(body), event.name, event.id, event.variant, event.status, event.updated, event.intent],
+      "SELECT montral_apply_billing_event($1,$2,$3,$4,$5,$6::timestamptz,$7::uuid,$8::timestamptz) AS outcome",
+      [await sha256(body), event.name, event.id, event.variant, event.status, event.updated, event.intent, event.endsAt],
     );
     if (rows[0]?.outcome === "unmatched") return c.json({ error: "Unknown subscription or checkout" }, 409);
     return c.json({ ok: true, result: rows[0]?.outcome ?? "unknown" }, 200);
@@ -217,11 +231,12 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
   const billing = new Router<AppEnv>();
   billing.get("/", requireManager, async (c) => {
     const rows = await c.get("database").query<{
-      plan: string; status: string; provider_updated_at: Date;
-    }>("SELECT plan,status,provider_updated_at FROM montral_subscription WHERE organization_id=$1", [c.get("orgId")]);
+      plan: string; status: string; provider_updated_at: Date; ends_at: Date | null;
+    }>("SELECT plan,status,provider_updated_at,ends_at FROM montral_subscription WHERE organization_id=$1", [c.get("orgId")]);
     c.header("cache-control", "no-store");
     return c.json({ plan: rows[0]?.plan ?? "free", status: rows[0]?.status ?? "none",
-      billingConfigured: billingReady(c.env), providerUpdatedAt: rows[0]?.provider_updated_at ?? null });
+      billingConfigured: billingReady(c.env), providerUpdatedAt: rows[0]?.provider_updated_at ?? null,
+      endsAt: rows[0]?.ends_at ?? null });
   });
   billing.post("/checkout", requireManager, async (c) => {
     if (!billingReady(c.env)) return c.json({ error: "Billing is unavailable" }, 503);
@@ -236,12 +251,20 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
     if (existing.length) return c.json({ error: "An existing subscription must be managed before purchasing another" }, 409);
     const variant = result.data.plan === "pro" ? c.env.LEMONSQUEEZY_VARIANT_PRO! : c.env.LEMONSQUEEZY_VARIANT_BUSINESS!;
     const id = crypto.randomUUID();
-    const checkout = await createLemonTestCheckout(c.env, variant, id);
-    if (!checkout) return c.json({ error: "Checkout provider is unavailable" }, 502);
+    // Persist the checkout correlation nonce BEFORE contacting the provider:
+    // webhooks can arrive asynchronously as soon as the checkout is created.
     await c.get("database").query(
       "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,$4,$5,NOW()+INTERVAL '30 minutes')",
       [id, c.get("orgId"), c.get("userId"), result.data.plan, variant],
     );
+    const checkout = await createLemonTestCheckout(c.env, variant, id);
+    if (!checkout) {
+      await c.get("database").query(
+        "DELETE FROM montral_billing_intent WHERE id=$1 AND organization_id=$2 AND consumed_at IS NULL",
+        [id, c.get("orgId")],
+      );
+      return c.json({ error: "Checkout provider is unavailable" }, 502);
+    }
     c.header("cache-control", "no-store");
     return c.json({ url: checkout, testMode: true }, 201);
   });

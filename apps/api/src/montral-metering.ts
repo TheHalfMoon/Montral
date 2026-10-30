@@ -2,6 +2,7 @@ import type { Database } from "@montral/repo";
 import type { Bindings } from "./env";
 import type { Entitlements, Plan, CreditBalance } from "./entitlements";
 import { unmetered } from "./entitlements";
+import { billingReady } from "./montral-billing";
 
 export type MontralTier = "free" | "pro" | "business";
 const TABLE: Record<MontralTier, {
@@ -59,14 +60,20 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   if (!meteringEnabled(env)) return unmetered;
 
   async function tier(workspaceId: string): Promise<MontralTier> {
-    const rows = await database.query<{ plan: string; status: string }>(
-      "SELECT plan,status FROM montral_subscription WHERE organization_id=$1", [workspaceId],
+    if (!billingReady(env)) return "free";
+    const rows = await database.query<{ plan: string; status: string; test_mode: boolean; ends_at: Date | null }>(
+      "SELECT plan,status,test_mode,ends_at FROM montral_subscription WHERE organization_id=$1", [workspaceId],
     );
     const row = rows[0];
-    // In this preview, never consider a provider status paid when billing failed,
-    // was paused, expired or entered dunning. An active/trial subscription or
-    // cancellation grace period may retain access until the expiration event.
-    if (!row || !["active", "on_trial", "cancelled"].includes(row.status)) return "free";
+    // Fail closed without the test-mode merchant, a test-mode subscription,
+    // or a bounded end date on cancellation. Never grant lifetime paid access
+    // just because the cancellation/expiration webhook is delayed or lost.
+    if (!row || row.test_mode !== true) return "free";
+    if (row.status === "cancelled") {
+      if (!row.ends_at || new Date(row.ends_at).getTime() <= Date.now()) return "free";
+    } else if (!["active", "on_trial"].includes(row.status)) {
+      return "free";
+    }
     if (row.plan === "pro" || row.plan === "business") return row.plan;
     return "free";
   }

@@ -9,9 +9,10 @@
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
 - [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
-- [x] API **565**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **568**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
+- [x] No-provider email fallback cannot expose verification/password reset bearer tokens, message body, recipient or subject to logs; required alert/subscriber/report email now fails closed rather than falsely recording `sent` (dedicated real PostgreSQL 502/failed-ledger E2E, real Chromium log guard)
 - [x] Production Node/Nodemailer actual SMTP protocol to loopback sink: verified account/channel, channel test mail, cron-driven auto-incident down alert, heartbeat recovery alert, exactly one persisted resolved incident; no external mail
 - [x] Real PostgreSQL auto-incident and synthetic email alert lifecycle: heartbeat 2 missed checks → one down incident/email; no duplicate incident on repeat miss; 2 valid pings → one resolved incident/recovery email; alert ledger confirms both; **no external SMTP**
 - [x] Real headless Chromium journey: signup, **monitor creation/detail/pause/resume**, **manual incident declare/acknowledge/internal update/resolve**, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
@@ -45,7 +46,7 @@
 - [ ] Real Lemon Squeezy test-store checkout + authentic provider callbacks (no connected merchant yet)
 - [ ] Production merchant onboarding, settlement validation, real billing, cancellation, refunds, chargebacks and proration
 - [ ] Production usage quota/cost/load validation and period aligned with subscription renewal
-- [ ] Domain, customer email deliverability, cost budgets and capacity plan
+- [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review
 - [ ] Explicit user decision to publish the SaaS. Until then, keep repo private and **do not deploy**
 
@@ -78,3 +79,5 @@ Real Chromium manual incident lifecycle: [2026-10-31 qualification](evidence/202
 Local auto-incident and synthetic email alert lifecycle: [2026-10-31 qualification](evidence/2026-10-31-automatic-incident-alert-lifecycle.md).
 
 Production Node SMTP over loopback and cron-driven automatic down/recovery delivery: [2026-10-31 qualification](evidence/2026-10-31-local-smtp-cron-qualification.md).
+
+Unconfigured email token-privacy and delivery-accounting evidence: [2026-10-31 local qualification](evidence/2026-10-31-email-fallback-privacy-qualification.md).

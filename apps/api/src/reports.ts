@@ -44,7 +44,7 @@ export async function sendMonthlyReports(repo: Repo, now = new Date(), entitleme
         footer: tr(lang, "You get this because the monthly report is turned on for {workspace}. Turn it off in Settings.", { workspace: org.name }),
         lang,
       });
-      await sendEmail({ to: o.email, subject: `${title} · Montral`, fromName: "Montral", ...mail })
+      await sendEmail({ to: o.email, subject: `${title} · Montral`, fromName: "Montral", ...mail }, true)
         .then(() => sent++)
         .catch((e) => console.error("monthly report failed", e));
     }

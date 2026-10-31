@@ -127,6 +127,12 @@ try {
     if (error) throw new Error("Signup error: " + error);
     return false;
   }, 30000);
+  // No SMTP provider is configured for this private browser preview. Signup
+  // must not expose its verification bearer link (or recipient) in Node logs.
+  await pause(120);
+  if (serverLog.includes("Verify email:") || /verify-email\?token=/i.test(serverLog) || serverLog.includes(email)) {
+    throw new Error("Browser signup leaked a verification credential or recipient in Node logs");
+  }
   // Real-browser monitoring journey, using only a synthetic heartbeat. It
   // does not probe any external site, DNS resolver, or third-party service.
   await page("/app");

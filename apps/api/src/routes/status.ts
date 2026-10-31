@@ -365,7 +365,7 @@ export const publicStatus = new Hono<AppEnv>()
       brand: white ? page.title : undefined,
     });
     const subject = tr(lang, "Confirm your subscription to {title}", { title: page.title });
-    await sendEmail({ to: email, subject, fromName: white ? page.title : "Montral", ...mail }).catch((e) => console.error("subscription email failed", e));
+    await sendEmail({ to: email, subject, fromName: white ? page.title : "Montral", ...mail }, true).catch((e) => console.error("subscription email failed", e));
     return c.json({ ok: true });
   })
   // Confirming stays a GET so the link in the mail works in one click; it only ever sets a flag, so repeating it (or a mail

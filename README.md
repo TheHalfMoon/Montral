@@ -70,6 +70,8 @@ The offline real-Chromium smoke now exercises signed-in heartbeat monitor creati
 
 The [local real-SMTP drill](docs/evidence/2026-10-31-local-smtp-cron-qualification.md) launches a disposable PostgreSQL child database, the production Node app, and an isolated loopback SMTP sink. It proves Nodemailer channel tests and cron-triggered automatic down/recovery notifications over the SMTP wire protocol without sending external email. Hosted deliverability is still unqualified.
 
+Email without a configured provider is **not delivered**. Montral never logs verification/password-reset links, email body, subject or recipients in the fallback. Strict notification/report sends now correctly fail and appear as unsent rather than successful deliveries; the local signup preview remains nonblocking but cannot verify an email until an operator configures SMTP/Email. See [email privacy qualification](docs/evidence/2026-10-31-email-fallback-privacy-qualification.md).
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

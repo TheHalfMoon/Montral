@@ -22,16 +22,22 @@ export function configureEmail(env: Bindings) {
 }
 
 /**
- * Sends through the Cloudflare Email Service `send_email` binding. Without the binding or
- * EMAIL_FROM (local dev) the message is logged instead.
+ * Sends via configured SMTP or the Cloudflare Email Service.
+ * With no provider, NEVER emit email body/HTML/subject/recipient to logs:
+ * verification and password-reset links carry bearer secrets.
+ * Authentication preview may still request a nonrequired email for local testing;
+ * alert/subscriber/report callers MUST set required=true so delivery does not
+ * falsely appear successful in the delivery ledger.
  */
-export async function sendEmail(msg: { to: string; subject: string; html: string; text: string; fromName?: string; headers?: Record<string, string> }) {
+export async function sendEmail(msg: { to: string; subject: string; html: string; text: string; fromName?: string; headers?: Record<string, string> }, required = false) {
   if (transport && cfg.from) {
     await transport({ from: cfg.from, fromName: msg.fromName ?? "Montral", to: msg.to, subject: msg.subject, html: msg.html, text: msg.text, headers: msg.headers });
     return;
   }
   if (!cfg.binding || !cfg.from) {
-    console.log(`[email → ${msg.to}] ${msg.subject}\n${msg.text}`);
+    // No address, subject, token-bearing URL, HTML or message body in logs.
+    console.warn("Email provider unavailable; message content suppressed");
+    if (required) throw new Error("Email provider is not configured");
     return;
   }
   // the display name is what inboxes show instead of the bare "alerts" local part

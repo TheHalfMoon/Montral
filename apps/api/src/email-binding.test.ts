@@ -6,6 +6,35 @@ const msg = { to: "a@example.com", subject: "s", html: "<p>x</p>", text: "x", he
 describe("sendEmail through the Cloudflare binding", () => {
   afterEach(() => { setMailTransport(undefined); vi.restoreAllMocks(); });
 
+  it("does not log verification or reset-password bearer links when email delivery is disabled", async () => {
+    setMailTransport(undefined);
+    configureEmail({ WEB_ORIGIN: "http://localhost:8787" } as never);
+    const logged = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warned = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const sensitive = { ...msg, to: "private-address@example.test",
+      subject: "Verify your Montral email",
+      text: "Verify email: http://localhost:8787/api/auth/verify-email?token=top-secret-only-for-the-recipient",
+      html: "<a href='https://example.test/reset-password/bearer-token'>Reset password</a>" };
+    // Development signup previews can remain functional without configured mail,
+    // but must NEVER print tokens, addresses or message content.
+    await expect(sendEmail(sensitive)).resolves.toBeUndefined();
+    await expect(sendEmail(sensitive, true)).rejects.toThrow("Email provider is not configured");
+    const output = [...logged.mock.calls, ...warned.mock.calls].flat().join(" ");
+    expect(output).toContain("Email provider unavailable");
+    for (const fragment of ["top-secret", "bearer-token", "private-address", "verify-email", "reset-password", sensitive.subject]) {
+      expect(output).not.toContain(fragment);
+    }
+  });
+
+  it("required delivery succeeds when the actual transport is configured", async () => {
+    const transport = vi.fn(async (_message: Record<string, unknown>) => ({}));
+    setMailTransport(transport);
+    configureEmail({ EMAIL_FROM: "alerts@example.test", WEB_ORIGIN: "https://example.test" } as never);
+    await expect(sendEmail(msg, true)).resolves.toBeUndefined();
+    expect(transport).toHaveBeenCalledOnce();
+    expect(transport.mock.calls[0][0]).toMatchObject({ to: msg.to, subject: msg.subject });
+  });
+
   it("passes custom headers along", async () => {
     const send = vi.fn(async (_m: Record<string, unknown>) => ({}));
     configureEmail({ EMAIL: { send }, EMAIL_FROM: "alerts@example.com", WEB_ORIGIN: "https://x" } as never);

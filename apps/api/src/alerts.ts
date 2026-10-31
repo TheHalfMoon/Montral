@@ -539,7 +539,7 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
             url: `${appUrl()}/app/alerting`,
             lang,
           });
-          await sendEmail({ to: cfg.to, subject: L("Test alert from Montral"), fromName: "Montral Alerts", ...t });
+          await sendEmail({ to: cfg.to, subject: L("Test alert from Montral"), fromName: "Montral Alerts", ...t }, true);
           break;
         }
         const started = ev.incident.startedAt;
@@ -570,7 +570,7 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
           footerUrl: { text: L("Manage alerting"), url: `${appUrl()}/app/alerting` },
           lang,
         });
-        await sendEmail({ to: cfg.to, subject: `${tag(ev)}${opened ? (ev.slow ? "🟡" : "🔴") : "✅"} ${L(heading, { name: ev.monitor.name })} · Montral`, fromName: "Montral Alerts", ...mail });
+        await sendEmail({ to: cfg.to, subject: `${tag(ev)}${opened ? (ev.slow ? "🟡" : "🔴") : "✅"} ${L(heading, { name: ev.monitor.name })} · Montral`, fromName: "Montral Alerts", ...mail }, true);
       }
       break;
   }
@@ -601,7 +601,7 @@ async function mailSubscribers(
       });
       // one-click unsubscribe (RFC 8058): mail clients show their own button and POST to this address
       const unsubscribe = `${appUrl()}/api/public/status/_/unsubscribe?token=${s.token}`;
-      return sendEmail({ to: s.email, subject: o.subject(s.title, lang), fromName: white ? s.title : `${s.title} via Montral`, headers: { "List-Unsubscribe": `<${unsubscribe}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }, ...mail });
+      return sendEmail({ to: s.email, subject: o.subject(s.title, lang), fromName: white ? s.title : `${s.title} via Montral`, headers: { "List-Unsubscribe": `<${unsubscribe}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }, ...mail }, true);
     }),
   );
   results.forEach((r, i) => r.status === "rejected" && console.error(`subscriber email to ${subs[i].email} failed`, r.reason));

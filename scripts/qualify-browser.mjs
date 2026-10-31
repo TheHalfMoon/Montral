@@ -149,9 +149,46 @@ try {
   await until("monitor resumed in browser", () => js('Array.from(document.querySelectorAll(".ph-actions button")).some(b => b.textContent.trim() === "Pause")'));
   await page("/app/incidents");
   await until("incident page rendered", () => js('document.querySelector("h1")?.textContent?.includes("Incidents")'));
+  // Qualify the actual manual incident lifecycle, including private team notes.
+  // This test account has no configured channels or subscribers, and all
+  // affected monitors/data are local synthetic records.
+  await js('Array.from(document.querySelectorAll(".ph-actions button")).find(b => b.textContent.includes("Declare incident")).click()');
+  await until("incident declaration dialog", () => js('!!document.querySelector(".modal form input[required]")'));
+  await fill(".modal form input[required]", "Synthetic browser incident");
+  await js('document.querySelector(".modal form textarea").value = "Synthetic incident created for local qualification"; document.querySelector(".modal form textarea").dispatchEvent(new Event("input", { bubbles: true }))');
+  await js('Array.from(document.querySelectorAll(".modal form button")).find(b => b.textContent.trim() === "Declare incident").click()');
+  await until("incident detail navigation", () => js('location.pathname.startsWith("/app/incidents/") && !!document.querySelector(".dh h1")'), 25000);
+  const incidentId = await js('location.pathname.split("/").at(-1)');
+  if (!/^[0-9a-f-]{36}$/i.test(incidentId)) throw new Error("Invalid incident id after browser declaration");
+  const opened = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json())`);
+  if (opened.title !== "Synthetic browser incident" || opened.status !== "investigating" || opened.auto) {
+    throw new Error("Manual browser incident not persisted as investigating");
+  }
+  await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Acknowledge").click()');
+  await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
+  // An internal update is never intended for outbound status-page subscribers.
+  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
+  await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
+  await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');
+  await until("internal incident note in timeline", () => js('Array.from(document.querySelectorAll(".tl .ev")).some(e => e.textContent.includes("Synthetic private investigation update"))'));
+  const internalState = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json())`);
+  if (internalState.status !== "identified" || !internalState.acknowledgedAt ||
+      !internalState.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update")) {
+    throw new Error("Incident internal update or acknowledgement not persisted");
+  }
+  await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Resolve").click()');
+  await until("incident resolved in browser", () => js('!!document.querySelector(".dh .pill.resolved")'));
+  const closed = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json())`);
+  if (closed.status !== "resolved" || !closed.resolvedAt ||
+      !closed.updates.some(u => u.status === "resolved" && u.visibility === "public")) {
+    throw new Error("Manual incident resolution was not persisted as a public update");
+  }
+  await page("/app/incidents");
+  await until("resolved incident in list", () => js('document.body.innerText.includes("Synthetic browser incident")'));
   const resumed = await js(`fetch("/api/monitors/${newMonitor.id}", { credentials: "same-origin" }).then(r => r.json())`);
   if (resumed.paused) throw new Error("Monitor remained paused after browser resume");
-  // We have deliberately NOT generated an outage or pushed notifications.
+  // No external outage was generated, and no alert provider was configured.
 
   await page("/app/hooks");
   await until("webhook inbox form", () => js(`!!document.querySelector('form input[maxlength="100"]')`));
@@ -176,7 +213,7 @@ try {
   await until("billing is fail-closed", () => js('document.body.innerText.includes("Checkout is not configured")'));
   const buttonsDisabled = await js('Array.from(document.querySelectorAll("button")).filter(b => b.textContent.includes("Open test checkout")).every(b => b.disabled)');
   if (!buttonsDisabled) throw new Error("Billing checkout unexpectedly enabled");
-  console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic heartbeat monitor create/pause/resume, incidents view, webhook create/receipt/event inspector, disabled billing; anonymous routes denied");
+  console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic heartbeat monitor create/pause/resume, incident declare/ack/internal/resolve, webhook create/receipt/event inspector, disabled billing; anonymous routes denied");
 } finally {
   ws?.close();
   for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGTERM");

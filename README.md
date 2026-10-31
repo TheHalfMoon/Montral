@@ -66,7 +66,7 @@ The PostgreSQL backend now serializes edition schema changes with a transaction-
 
 Webhook inbox capture is text-only (strict UTF-8, no NUL) and rejects invalid data with HTTP 422; unidentified client addresses use bounded authentication fallback quotas rather than silently bypassing limits. See [local input and auth qualification](docs/evidence/2026-10-30-webhook-auth-input-qualification.md). Neither measure replaces production reverse-proxy, CAPTCHA or customer privacy review.
 
-The offline real-Chromium smoke now exercises signed-in heartbeat monitor creation, detail view and pause/resume, incident navigation, webhook ingestion and disabled billing, all with synthetic test data. See [2026-10-31 browser qualification](docs/evidence/2026-10-31-browser-monitor-qualification.md). It does not exercise real alert delivery or an externally hosted browser.
+The offline real-Chromium smoke now exercises signed-in heartbeat monitor creation, detail view and pause/resume; a **manual incident declare/acknowledge/internal update/resolve** flow; webhook ingestion; and disabled billing, all with synthetic data. See [2026-10-31 incident lifecycle qualification](docs/evidence/2026-10-31-browser-incident-lifecycle-qualification.md) and [monitor qualification](docs/evidence/2026-10-31-browser-monitor-qualification.md). It does not exercise real alert-provider delivery, automatically generated incidents, or an externally hosted browser.
 
 ## Private local qualification
 

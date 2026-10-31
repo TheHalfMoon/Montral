@@ -25,7 +25,7 @@
 ## Unresolved production blockers
 - [x] Exact supported Node v24.22.1 + pnpm 10.0.0 Mac qualification: 716 local API/probe/web tests, Node/web/edge builds, Chromium, local SMTP, 638 source hashes and PostgreSQL backup/restore of 128 synthetic organizations; hosted CI still separately blocked
 - [x] Scoped accessibility smoke: keyboard skip links, auth/dashboard main/navigation landmarks and live `aria-current` synchronization verified across monitor, incident and webhook navigation in Chromium (NOT a full WCAG audit)
-- [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning); **local** Node v24.22.1 + pnpm 10.0.0 runs cover supported toolchain but do NOT replace hosted CI
+- [ ] Green GitHub Actions on exact revision: account billing/spending-limit annotation on run 41206285444 prevents any hosted runner (zero executed steps); no paid changes authorized. Local tests are NOT equivalent to hosted CI.
 - [x] Account recovery reset page no-referrer meta, hydrated URL cleanup, and missing-link fallback verified in real Chromium on synthetic input; actual SMTP recovery link remains externally unqualified
 - [x] Real local Node SMTP delivers exactly one synthetic account recovery email; separate PostgreSQL tests verify reset token single-use, old/new password authentication, session invalidation, security notice uniqueness and unknown-account non-enumeration (no external SMTP qualification)
 - [ ] Complete browser E2E matrix (account recovery, real-world external outage/notification and externally hosted SMTP deliverability, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED
@@ -58,7 +58,7 @@
 - [ ] Real Lemon Squeezy test-store checkout + authentic provider callbacks (no connected merchant yet)
 - [ ] Production merchant onboarding, settlement validation, real billing, cancellation, refunds, chargebacks and proration
 - [x] Optional monthly reports fail closed on unavailable/invalid email quota. Pre-send preparation/ledger failures now conditionally release matching PostgreSQL monthly claims for retry during reporting window, with 13 focused tests and real PostgreSQL verification. Ambiguous provider outcomes intentionally never requeue; a durable per-recipient outbox remains unqualified
-- [ ] Production usage quota/cost/load validation and period aligned with subscription renewal
+- [x] Subscriber/critical-alert email quota refuses malformed granted counts (safe integer 0..requested only); nine synthetic focused cases passed on Mac. Emergency usage-ledger exceptions intentionally fail open for alert availability.\n- [ ] Repeat full Mac typecheck + PostgreSQL/API/probe/web suites and builds on latest remote commit (Mac control hit monthly usage cap; final pushed revision not rerun)\n- [ ] Production usage quota/cost/load validation and period aligned with subscription renewal
 - [x] Local Email binding custom-header compatibility retries only explicitly rejected header schemas, not unrelated post-acceptance errors mentioning `header`; synthetic 1-vs-2 mail attempts and token-log regressions verified (real provider remains unqualified)
 - [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review

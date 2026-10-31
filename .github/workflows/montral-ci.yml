@@ -52,6 +52,24 @@ jobs:
         run: pnpm --filter @montral/web test
       - name: Smoke-test running Node API and web against PostgreSQL
         run: node scripts/smoke-node.mjs
+      - name: Qualify full-table PostgreSQL backup and content restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          restore_db="${TEST_DATABASE_URL%/*}/montral_test_restore_ci"
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_restore_ci'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_restore_ci WITH (FORCE)"' EXIT
+          TEST_DATABASE_URL="$restore_db" node scripts/smoke-node.mjs
+          psql "$restore_db" -X -v ON_ERROR_STOP=1 -c "
+            INSERT INTO organization (id,name,slug,created_at)
+              SELECT 'restore-ci-' || i, 'Synthetic CI restore ' || i, 'restore-ci-' || i, now()
+              FROM generate_series(1,8) i;
+            INSERT INTO project (organization_id,name)
+              SELECT id, 'Synthetic CI project' FROM organization;
+            INSERT INTO monitor (organization_id,project_id,name,type,target)
+              SELECT p.organization_id,p.id,'Synthetic CI heartbeat','heartbeat','synthetic-only' FROM project p;
+          "
+          TEST_DATABASE_URL="$restore_db" node scripts/qualify-backup.mjs
       - name: Qualify real Chromium user journeys against disposable PostgreSQL
         shell: bash
         run: |

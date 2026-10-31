@@ -39,6 +39,16 @@ const countSql = "SELECT jsonb_object_agg(table_name, entry_count) FROM (" +
   tableNames.map(t => "SELECT '" + t.replaceAll("'", "''") + "' AS table_name, count(*)::text AS entry_count FROM public." + quoteIdentifier(t)).join(" UNION ALL ") +
   ") AS per_table";
 const rowCounts = async database => JSON.parse(await sql(database, countSql));
+// Order-independent table fingerprints over the full normalized JSONB row values.
+// This detects altered values even when every table's row count still matches.
+// Each individual row and the sorted result use SHA-256, not an additive checksum.
+const digestSql = "SELECT jsonb_object_agg(table_name, fingerprint) FROM (" +
+  tableNames.map(t => "SELECT '" + t.replaceAll("'", "''") + "' AS table_name, (" +
+    "SELECT encode(sha256(convert_to(coalesce(string_agg(row_hash, '' ORDER BY row_hash), ''), 'UTF8')), 'hex')" +
+    " FROM (SELECT encode(sha256(convert_to(to_jsonb(r)::text, 'UTF8')), 'hex') AS row_hash" +
+    " FROM public." + quoteIdentifier(t) + " r) AS fingerprints" +
+  ") AS fingerprint").join(" UNION ALL ") + ") AS per_table";
+const rowDigests = async database => JSON.parse(await sql(database, digestSql));
 const temp = await mkdtemp(join(tmpdir(), "montral-restore-"));
 let created = false;
 let successMessage;
@@ -46,11 +56,13 @@ try {
   const tableCount = await sql(source, "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'");
   const orgCount = await sql(source, "SELECT COUNT(*) FROM organization");
   const sourceCounts = await rowCounts(source);
+  const sourceDigests = await rowDigests(source);
   if (Number(tableCount) < 10) throw new Error("Source database has not been migrated");
   const dump = join(temp, "montral.disposable.dump");
   await tools("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", dump, source]);
   const sourceCountsAfterDump = await rowCounts(source);
-  const concurrentChanges = tableNames.filter(t => sourceCounts[t] !== sourceCountsAfterDump[t]);
+  const sourceDigestsAfterDump = await rowDigests(source);
+  const concurrentChanges = tableNames.filter(t => sourceCounts[t] !== sourceCountsAfterDump[t] || sourceDigests[t] !== sourceDigestsAfterDump[t]);
   if (concurrentChanges.length) throw new Error(`Source changed during disposable backup drill: ${concurrentChanges.join(", ")}`);
   const list = (await tools("pg_restore", ["--list", dump])).stdout;
   if (!list.includes("TABLE DATA") || !list.includes("organization")) throw new Error("Unexpected archive contents");
@@ -68,12 +80,17 @@ try {
   if (Object.keys(restoredCounts).length !== tableNames.length || drift.length) {
     throw new Error(`Restored table row-count mismatch: ${drift.join(", ") || "table set differs"}`);
   }
+  const restoredDigests = await rowDigests(restoredUrl.href);
+  const contentDrift = tableNames.filter(t => sourceDigests[t] !== restoredDigests[t]);
+  if (Object.keys(restoredDigests).length !== tableNames.length || contentDrift.length) {
+    throw new Error(`Restored table contents differ: ${contentDrift.join(", ") || "table set differs"}`);
+  }
   const nonemptyTables = tableNames.filter(t => Number(sourceCounts[t]) > 0).length;
   const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_capture_hook_event','montral_apply_billing_event','montral_spend_usage','montral_reserve_billing_intent')");
   if (Number(functions) !== 5) throw new Error("Expected business-critical Postgres functions missing from restore");
   const appTables = await sql(restoredUrl.href, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('montral_hook_inbox','montral_hook_event','montral_subscription','montral_billing_event','montral_usage')");
   if (Number(appTables) !== 5) throw new Error("Montral-specific tables missing from restored database");
-  successMessage = `RESTORE_DRILL_PASS: ${tableCount} tables (${nonemptyTables} nonempty), ${orgCount} synthetic organizations, every table row count matched; all webhook/billing/usage tables and 5 transactional functions restored`;
+  successMessage = `RESTORE_DRILL_PASS: ${tableCount} tables (${nonemptyTables} nonempty), ${orgCount} synthetic organizations, every table row count and SHA-256 content fingerprint matched; all webhook/billing/usage tables and 5 transactional functions restored`;
 } finally {
   try {
     if (created) await tools("dropdb", ["--if-exists", "--", restoreDb]);

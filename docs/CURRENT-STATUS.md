@@ -41,6 +41,8 @@
 
 - Stronger local restore drill now validates **all 42 table row counts** before/after restore and refuses a source count change during `pg_dump`; a synthetic 128-workspace fixture also populates project, monitor, status page and channel tables (6 nonempty tables). This is not a full byte-for-byte content check or hosted PITR. [Full-table restore evidence](evidence/2026-10-31-full-table-restore-qualification.md).
 
+- Local PostgreSQL restore now checks normalized **SHA-256 fingerprints of all 42 tables** as well as row counts, comparing before/after dump and after restore. Synthetic same-row-count mutation changed the expected digest; a locally replayed GitHub Actions restore step also passed with 8 sample org/project/monitor records. Hosted CI still has no assigned runners. See [SHA-256 restore qualification](evidence/2026-10-31-sha256-restore-qualification.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

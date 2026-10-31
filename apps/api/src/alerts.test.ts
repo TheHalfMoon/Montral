@@ -38,6 +38,36 @@ describe("lark channel", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 19021, msg: "sign match fail" }), { status: 200 })));
     await expect(deliver({ type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/abc" } }, ev, "hi")).rejects.toThrow(/19021/);
   });
+
+  it.each([
+    { label: "empty body", body: "", status: 200 },
+    { label: "HTML body", body: "<html>ok</html>", status: 200 },
+    { label: "missing acknowledgement", body: "{}", status: 200 },
+    { label: "null acknowledgement", body: "null", status: 200 },
+    { label: "numeric-looking string code", body: '{"code":"0"}', status: 200 },
+    { label: "nonzero business code", body: '{"code":9021}', status: 200 },
+    { label: "conflicting acknowledgement", body: '{"code":0,"StatusCode":9021}', status: 200 },
+    { label: "HTTP failure despite zero code", body: '{"code":0}', status: 503 },
+  ])("does not record a false-positive Lark acknowledgement: $label", async ({ body, status }) => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(body, { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(deliver({ type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/synthetic" } }, ev, "test"))
+      .rejects.toThrow(/Lark responded HTTP/);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits provider-supplied text when Lark rejects a message", async () => {
+    const secret = "synthetic-webhook-private-token";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 18001, msg: `refused https://example.test/hook?token=${secret}` }), { status: 200 })));
+    await expect(deliver({ type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/synthetic" } }, ev, "test"))
+      .rejects.toThrow("Lark responded HTTP 200 (provider code 18001)");
+    try {
+      await deliver({ type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/synthetic" } }, ev, "test");
+      throw new Error("expected Lark denial");
+    } catch (e) {
+      expect((e as Error).message).not.toContain(secret);
+    }
+  });
 });
 
 

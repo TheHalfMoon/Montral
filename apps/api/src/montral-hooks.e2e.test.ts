@@ -39,6 +39,12 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       return { status: response.status, body: await response.json().catch(() => null) as any };
     };
   }
+  const privateResponse = (res: Response) => {
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(res.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(res.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(res.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+  };
   const submit = (path: string, payload: string) => app.fetch(
     new Request(origin + path, { method: "POST", headers: {
       "content-type": "application/json",
@@ -59,20 +65,26 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     expect((await b("GET", "/inboxes/" + id + "/events")).status).toBe(404);
     expect((await b("DELETE", "/inboxes/" + id)).status).toBe(404);
     const invalid = path.slice(0, -1) + (path.endsWith("0") ? "1" : "0");
-    expect((await submit(invalid, "wrong")).status).toBe(404);
+    const denied = await submit(invalid, "wrong");
+    expect(denied.status).toBe(404);
+    privateResponse(denied);
     const inbound = await submit(path, '{"event":"test","amount":120}');
     expect(inbound.status).toBe(202);
+    privateResponse(inbound);
     const out = await a("GET", "/inboxes/" + id + "/events");
     expect(out.status).toBe(200);
     expect(out.body.events[0].body).toContain('"amount":120');
     expect(out.body.events[0].headers.authorization).toBeUndefined();
     expect(out.body.events[0].headers["x-event-type"]).toBe("test");
-    expect((await submit(path, "x".repeat(33 * 1024))).status).toBe(413);
+    const tooLarge = await submit(path, "x".repeat(33 * 1024));
+    expect(tooLarge.status).toBe(413);
+    privateResponse(tooLarge);
     for (const bytes of [new Uint8Array([65, 0, 66]), new Uint8Array([0xc3, 0x28])]) {
       const invalid = await app.fetch(new Request(origin + path, {
         method: "POST", headers: { "content-type": "application/octet-stream" }, body: bytes as BodyInit,
       }), env as never);
       expect(invalid.status).toBe(422);
+      privateResponse(invalid);
     }
     // A refused binary event must not corrupt the existing, valid text row.
     const afterInvalid = await a("GET", "/inboxes/" + id + "/events");

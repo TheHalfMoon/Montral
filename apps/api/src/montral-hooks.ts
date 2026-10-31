@@ -175,13 +175,18 @@ export async function pruneExpiredHookEvents(db: Database): Promise<number> {
 
 export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: Hono<AppEnv> }) {
   const privateHooks = new Hono<AppEnv>();
-  // Inbox names and captured request bodies are never safe for shared/proxy caches.
-  // Set the policy for both reads and refusals before any route-specific handler.
-  privateHooks.use("*", async (c, next) => {
+  // One-time secret receiver URLs, inbox names and captured bodies are all
+  // sensitive. Every success AND refusal must have the same privacy headers:
+  // public webhooks may arrive through proxies, and errors are especially
+  // likely to be retained by access-log/preview tooling.
+  const hookPrivacy = async (c: import("hono").Context<AppEnv>, next: () => Promise<void>) => {
     c.header("cache-control", "private, no-store");
+    c.header("referrer-policy", "no-referrer");
     c.header("x-content-type-options", "nosniff");
+    c.header("x-robots-tag", "noindex, nofollow");
     await next();
-  });
+  };
+  privateHooks.use("*", hookPrivacy);
   privateHooks.use("*", rejectInAllProjects);
   privateHooks.get("/inboxes", async (c) => {
     const rows = await c.get("database").query<Pick<HookInbox, "id"|"name"|"created_at">>(
@@ -205,7 +210,6 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       [id, ...scope, parsed.data.name, await fingerprint(token)],
     );
     if (!created[0]?.id) return c.json({ error: "Inbox limit reached" }, 409);
-    c.header("cache-control", "no-store");
     return c.json({ id, name: parsed.data.name, path: `/api/hooks/receive/${id}/${token}`, warning: "This secret URL is shown only once. Treat it like a password." }, 201);
   });
   privateHooks.get("/inboxes/:id/events", uuidParams, requireManager, async (c) => {
@@ -230,6 +234,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
   authed.route("/hooks", privateHooks);
 
   const publicHooks = new Hono<AppEnv>();
+  // The token is a bearer credential in a URL; protect 202, 404, 413, 422
+  // and 429 responses uniformly, not only successful captures.
+  publicHooks.use("*", hookPrivacy);
   publicHooks.on(["POST", "PUT", "PATCH"], "/:id/:token", async (c) => {
     const { id, token } = c.req.param();
     if (!UUID.test(id) || !TOKEN.test(token)) return c.json({ error: "Not found" }, 404);
@@ -258,7 +265,6 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
         JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
     );
     if (!captured[0]?.accepted) return c.json({ error: "Not found" }, 404);
-    c.header("cache-control", "no-store");
     return c.json({ received: true }, 202);
   });
   app.route("/api/hooks/receive", publicHooks);

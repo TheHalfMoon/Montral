@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "./env";
 import { capturedHeaders, fingerprint, mountMontralHooks, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
-function fixture() {
+function fixture(allowReceipt = true) {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string }> = [];
   const events: Array<{ id: string; inbox_id: string; organization_id: string; project_id: string; body: string; headers: unknown }> = [];
   let member = "owner";
@@ -40,7 +40,7 @@ function fixture() {
       throw new Error("Unexpected SQL: " + sql);
     },
   };
-  const repo = { memberRole: async () => member, withinLimit: async () => true };
+  const repo = { memberRole: async () => member, withinLimit: async () => allowReceipt };
   const app = new Hono<AppEnv>();
   app.use("*", async (c, next) => {
     c.set("repo", repo as never);
@@ -55,6 +55,15 @@ function fixture() {
   mountMontralHooks({ app, authed });
   app.route("/api", authed);
   return { app, inboxes, events, setMember: (m: string) => { member = m; }, setProject: (p: string) => { projectId = p; } };
+}
+
+/** Secret receiver paths must never be cacheable, indexable or referrable,
+ * even for invalid tokens or rejected payloads (and private manager views). */
+function expectPrivateHookHeaders(response: Response) {
+  expect(response.headers.get("cache-control")).toBe("private, no-store");
+  expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+  expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
 }
 
 describe("Montral webhook security", () => {
@@ -88,6 +97,7 @@ describe("Montral webhook security", () => {
     for (const data of [new Uint8Array([65, 0, 66]), new Uint8Array([0xc3, 0x28])]) {
       const res = await f.app.request(path, { method: "POST", body: data as BodyInit });
       expect(res.status).toBe(422);
+      expectPrivateHookHeaders(res);
       expect(res.headers.get("content-type")).toContain("application/json");
     }
     expect(f.events).toHaveLength(0);
@@ -102,12 +112,14 @@ describe("Montral webhook security", () => {
     expect(f.inboxes[0].token_hash).not.toBe(value.path.split("/").at(-1));
     const wrong = await f.app.request(value.path.slice(0, -1) + (value.path.endsWith("0") ? "1" : "0"), { method: "POST", body: "bad" });
     expect(wrong.status).toBe(404);
+    expectPrivateHookHeaders(wrong);
     const received = await f.app.request(value.path, { method: "POST", headers: { authorization: "secret", "content-type": "application/json" }, body: '{"hello":"world"}' });
     expect(received.status).toBe(202);
+    expectPrivateHookHeaders(received);
     const response = await f.app.request(`/api/hooks/inboxes/${value.id}/events`);
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expectPrivateHookHeaders(response);
     const payload = await response.json() as { events: Array<{ body: string; headers: Record<string, string> }> };
     expect(payload.events[0].body).toBe('{"hello":"world"}');
     expect(payload.events[0].headers.authorization).toBeUndefined();
@@ -115,9 +127,29 @@ describe("Montral webhook security", () => {
     const denied = await f.app.request(`/api/hooks/inboxes/${value.id}/events`);
     expect(denied.status).toBe(404);
     const list = await f.app.request("/api/hooks/inboxes");
-    expect(list.headers.get("cache-control")).toBe("private, no-store");
+    expectPrivateHookHeaders(list);
     expect(await list.json()).toEqual({ inboxes: [] });
   });
+  it("protects secret receiver paths on 413 and rate-limit 429, not only 202/404/422", async () => {
+    const normal = fixture();
+    const create = await normal.app.request("/api/hooks/inboxes", { method: "POST",
+      headers: { "content-type": "application/json" }, body: '{"name":"Private response"}' });
+    expectPrivateHookHeaders(create);
+    const { path } = await create.json() as { path: string };
+    const oversized = await normal.app.request(path, { method: "POST", body: "x".repeat(33 * 1024) });
+    expect(oversized.status).toBe(413);
+    expectPrivateHookHeaders(oversized);
+
+    const blocked = fixture(false);
+    const setup = await blocked.app.request("/api/hooks/inboxes", { method: "POST",
+      headers: { "content-type": "application/json" }, body: '{"name":"Rate-limited"}' });
+    const { path: blockedPath } = await setup.json() as { path: string };
+    const throttled = await blocked.app.request(blockedPath, { method: "POST", body: "should not be stored" });
+    expect(throttled.status).toBe(429);
+    expectPrivateHookHeaders(throttled);
+    expect(blocked.events).toHaveLength(0);
+  });
+
   it("requires workspace manager for inbox creation and reading sensitive event bodies", async () => {
     const f = fixture();
     f.setMember("member");

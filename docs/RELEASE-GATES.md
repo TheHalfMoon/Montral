@@ -6,10 +6,11 @@
 - [x] Montral inboxes, one-time token, event inspector, manager-only sensitive body reads; `private, no-store` and `nosniff` for all authenticated inbox routes
 - [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E
 - [x] PostgreSQL concurrent inbox limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
+- [x] Public bearer-token webhook receiver, owner-only views and all refusal paths (201/202/200/404/413/422/429) consistently set no-store, no-referrer, nosniff and noindex; unit and real PostgreSQL E2E tests pass
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
 - [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
-- [x] API **568**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **569**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] No-provider email fallback cannot expose verification/password reset bearer tokens, message body, recipient or subject to logs; required alert/subscriber/report email now fails closed rather than falsely recording `sent` (dedicated real PostgreSQL 502/failed-ledger E2E, real Chromium log guard)
@@ -34,7 +35,7 @@
 - [x] Webhook text ingress rejects malformed UTF-8 and raw NUL before SQL (HTTP 422) with real PostgreSQL E2E coverage
 - [x] Missing-client-IP auth fallback rate buckets and per-email signup quota (3/hour), including forged forwarding-header regression
 - [ ] Hosted unknown-IP shared-quota usability, CAPTCHA/bot defenses, credential-guessing load and reverse-proxy abuse testing
-- [ ] Rate-limit/secret redaction/encryption/privacy/abuse review for captured webhook payloads
+- [ ] Hosted reverse-proxy/access-log bearer-token URL scrubbing, at-rest encryption/key rotation, data-export/privacy review and abuse-load evaluation for captured webhook payloads; HTTP privacy headers alone are not a substitute
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
 - [x] Single pending sandbox checkout per workspace via PostgreSQL advisory-locked reservation; eight simultaneous authenticated attempts produce exactly one checkout
@@ -81,3 +82,5 @@ Local auto-incident and synthetic email alert lifecycle: [2026-10-31 qualificati
 Production Node SMTP over loopback and cron-driven automatic down/recovery delivery: [2026-10-31 qualification](evidence/2026-10-31-local-smtp-cron-qualification.md).
 
 Unconfigured email token-privacy and delivery-accounting evidence: [2026-10-31 local qualification](evidence/2026-10-31-email-fallback-privacy-qualification.md).
+
+Bearer webhook receiver HTTP privacy header qualification: [2026-10-31 local evidence](evidence/2026-10-31-webhook-secret-response-privacy-qualification.md).

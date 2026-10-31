@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { sendPush } from "./apns";
 import { sendEmail } from "./email";
+import { unmetered } from "./entitlements";
 import { clearProjectNames, deliver, dispatchAlert, retryDeliveries, sendEscalations, sendReminders, withProject } from "./alerts";
 
 // these tests stub the global fetch and use made-up host names; the pinned connection would bypass the stub and go to the real network
@@ -36,6 +37,61 @@ describe("lark channel", () => {
   it("fails when the hook refuses the message with HTTP 200", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 19021, msg: "sign match fail" }), { status: 200 })));
     await expect(deliver({ type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/abc" } }, ev, "hi")).rejects.toThrow(/19021/);
+  });
+});
+
+
+describe("critical subscriber email quota validation", () => {
+  const event = { kind: "incident.opened" as const, incident: { id: "quota-incident", title: "Down" }, monitor: { id: "quota-monitor", name: "Synthetic API", target: "https://example.test" } };
+  const subs = ["one", "two"].map((n) => ({
+    email: n + "@example.test", slug: "synthetic-status", title: "Synthetic Status", token: "synthetic-" + n + "-token", locale: "en", hideBranding: false,
+  }));
+  const repo = () => {
+    const logged: Record<string, unknown>[] = [];
+    return {
+      logged,
+      instance: {
+        channelsToAlert: async () => [], queueDeliveries: async () => [],
+        subscribersFor: async () => subs,
+        logDeliveries: async (rows: Record<string, unknown>[]) => void logged.push(...rows),
+      },
+    };
+  };
+
+  it.each([NaN, Infinity, -1, 1.5, 3, "2", undefined])("fails closed on malformed quota grant %s without attempting an email", async grant => {
+    const { logged, instance } = repo();
+    const mail = vi.mocked(sendEmail); mail.mockClear();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dispatchAlert(instance as never, "synthetic-org", event, [], { ...unmetered, spendEmails: async () => grant as never });
+      expect(mail).not.toHaveBeenCalled();
+      expect(log).toHaveBeenCalledWith("email allowance invalid");
+      expect(logged).toContainEqual(expect.objectContaining({ status: "skipped", error: expect.stringContaining("2/2 not sent") }));
+      expect(JSON.stringify(logged)).not.toMatch(/NaN|Infinity|undefined/);
+    } finally { log.mockRestore(); }
+  });
+
+  it("honors a valid partial quota grant", async () => {
+    const { logged, instance } = repo();
+    const mail = vi.mocked(sendEmail); mail.mockReset().mockResolvedValue(undefined);
+    await dispatchAlert(instance as never, "synthetic-org", event, [], { ...unmetered, spendEmails: async () => 1 });
+    expect(mail).toHaveBeenCalledTimes(1);
+    expect(mail.mock.calls[0][0].to).toBe(subs[0].email);
+    expect(logged).toContainEqual(expect.objectContaining({ status: "skipped", error: expect.stringContaining("1/2 not sent") }));
+  });
+
+  it("preserves emergency delivery if the usage ledger throws, without logging the exception", async () => {
+    const { logged, instance } = repo();
+    const mail = vi.mocked(sendEmail); mail.mockReset().mockResolvedValue(undefined);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await dispatchAlert(instance as never, "synthetic-org", event, [], {
+        ...unmetered, spendEmails: async () => { throw new Error("secret database password must not be logged"); },
+      });
+      expect(mail).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenCalledWith("email allowance unavailable");
+      expect(JSON.stringify([logged, log.mock.calls])).not.toContain("secret database password");
+    } finally { log.mockRestore(); }
   });
 });
 

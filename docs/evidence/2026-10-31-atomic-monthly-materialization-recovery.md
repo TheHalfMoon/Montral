@@ -21,7 +21,7 @@ Seven new isolated real-PostgreSQL repository tests verify: atomic claim+owner m
 
 Six additional isolated PostgreSQL + synthetic-mail E2E tests exercise: first atomic materialization + provider attempts and no repeat on the next tick; a new database connection recovering an already-committed outbox after a simulated process interruption; safety exclusion of a legacy org-only claim; database trigger failure before commit and successful next-tick recovery, with no credentials logged; five concurrent staged workers sending each owner once and charging quota once; and fail-closed behavior with absent mail transport or opt-out. The dedicated test databases are destroyed after each run, and do not reference production organizations.
 
-**Important limitation:** SQL transaction abort and new-connection restart tests model the crash boundaries. They do not constitute a real OS process-kill or external provider acceptance test. At-most-once SMTP can sacrifice delivery if the worker dies after the durable attempt claim but before calling SMTP; an ambiguous accepted-but-unacknowledged send still needs operator-only reconciliation. Existing legacy months and their past sent messages are intentionally not replayed.
+**Historical scope of this prior evidence (superseded by real process-kill qualification below):** SQL transaction abort and new-connection restart tests model the crash boundaries. They do not constitute a real OS process-kill or external provider acceptance test. At-most-once SMTP can sacrifice delivery if the worker dies after the durable attempt claim but before calling SMTP; an ambiguous accepted-but-unacknowledged send still needs operator-only reconciliation. Existing legacy months and their past sent messages are intentionally not replayed.
 
 ## Further release gates
 
@@ -41,3 +41,5 @@ Results from the full package suite, builds, loopback SMTP, offline Chromium, Po
 - 638 pinned donor-source file hashes verified unchanged; 42 embedded Drizzle migrations in sync. No schema migration was added in this stage.
 
 These are local Mac qualification results only. Hosted GitHub Actions and live-provider release gates remain outstanding.
+
+**Follow-up verified:** the later [real OS SIGKILL evidence](2026-10-31-real-process-kill-monthly-outbox.md) exercises actual process death. External SMTP and deployed failover remain unverified.

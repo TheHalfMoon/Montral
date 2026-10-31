@@ -86,6 +86,8 @@
 
 - **Monthly operator UI + redacted queue — STAGED AND DEFAULT-OFF:** an owner-authorized `GET /api/monthly-reconciliation/pending` lists at most 50 old, unreviewed ambiguous deliveries with opaque user ID/state/attempt timestamp only; a hidden `/app/mail-review` React screen shows counts, row selection and explicit evidence acknowledgment. Server-side feature/session/role restrictions remain authoritative. Mac **941/941** tests, builds, TypeScript, real Chromium disabled-state check, loopback SMTP and 45-table/118-synthetic-workspace SHA-256 restore PASS. No email, raw evidence, resend, SMTP-provider verification or scheduled dispatch. [Evidence](evidence/2026-10-31-staged-mail-review-ui.md).
 
+- **Real OS `SIGKILL` of monthly outbox workers — LOCAL STAGED QUALIFICATION:** dedicated detached Node process groups were forcibly killed during a real PostgreSQL transaction, after a committed recipient snapshot, after a durable quota/attempt and after a synthetic fsynced provider acceptance. Real restart proved rollback or safe recovery without duplicate mail or extra quota; legacy org-only claim remained non-replayable. Independent local-only, never a scheduled production job. **941/941** Mac tests, TypeScript/builds, Chromium/SMTP loopback, five real SIGKILL boundaries and 45-table/118-synthetic-workspace SHA-256 restore PASS. [Evidence](evidence/2026-10-31-real-process-kill-monthly-outbox.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

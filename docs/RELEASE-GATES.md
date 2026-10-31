@@ -12,6 +12,7 @@
 - [x] API **565**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
+- [x] Production Node/Nodemailer actual SMTP protocol to loopback sink: verified account/channel, channel test mail, cron-driven auto-incident down alert, heartbeat recovery alert, exactly one persisted resolved incident; no external mail
 - [x] Real PostgreSQL auto-incident and synthetic email alert lifecycle: heartbeat 2 missed checks → one down incident/email; no duplicate incident on repeat miss; 2 valid pings → one resolved incident/recovery email; alert ledger confirms both; **no external SMTP**
 - [x] Real headless Chromium journey: signup, **monitor creation/detail/pause/resume**, **manual incident declare/acknowledge/internal update/resolve**, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
 - [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 122 synthetic organizations and 5 transactional functions restored; source preserved
@@ -19,7 +20,7 @@
 
 ## Unresolved production blockers
 - [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning), including tests on a declared-supported Node version
-- [ ] Complete browser E2E matrix (account recovery, real-world automatic outage/notification and hosted SMTP delivery, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED
+- [ ] Complete browser E2E matrix (account recovery, real-world external outage/notification and externally hosted SMTP deliverability, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
 - [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested
 - [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
@@ -75,3 +76,5 @@ Expanded real Chromium monitor journey: [2026-10-31 qualification](evidence/2026
 Real Chromium manual incident lifecycle: [2026-10-31 qualification](evidence/2026-10-31-browser-incident-lifecycle-qualification.md).
 
 Local auto-incident and synthetic email alert lifecycle: [2026-10-31 qualification](evidence/2026-10-31-automatic-incident-alert-lifecycle.md).
+
+Production Node SMTP over loopback and cron-driven automatic down/recovery delivery: [2026-10-31 qualification](evidence/2026-10-31-local-smtp-cron-qualification.md).

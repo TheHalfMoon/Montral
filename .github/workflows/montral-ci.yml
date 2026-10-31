@@ -40,16 +40,20 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typescript and Astro checks
         run: pnpm -r typecheck
-      - name: PostgreSQL E2E, API, web and probe tests
-        run: pnpm --filter @montral/api test && pnpm --filter @montral/web test && pnpm --filter @montral/probe test
+      - name: PostgreSQL E2E, API and probe tests
+        run: pnpm --filter @montral/api test && pnpm --filter @montral/probe test
       - name: Build Node API
         run: pnpm --filter @montral/api build:node
       - name: Build edge probe
         run: pnpm --filter @montral/probe build:edge
       - name: Build self-hosted Node web
         run: DEPLOY_TARGET=node pnpm --filter @montral/web build
+      - name: Web tests with built production routes
+        run: pnpm --filter @montral/web test
       - name: Smoke-test running Node API and web against PostgreSQL
         run: node scripts/smoke-node.mjs
+      - name: Qualify automatic incident and SMTP alert delivery to local sink
+        run: node scripts/qualify-smtp.mjs
       - name: No source brand leaks in active code
         run: |
           if grep -R -i -E 'openuptime|uptimeflare|webhook.site' apps packages --include='*.ts' --include='*.tsx' --include='*.astro' --include='*.json' --exclude-dir=dist --exclude-dir=.astro --exclude-dir=node_modules | head -n 1; then

@@ -1,5 +1,5 @@
 import type { Monitor } from "@montral/repo";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { billingPeriod, creditCost, unmetered, type Entitlements } from "./entitlements";
 import { withinCredits } from "./scheduler";
 
@@ -65,6 +65,28 @@ describe("withinCredits", () => {
     // regions only apply to the types a probe can run
     expect(creditCost({ type: "postgres", regions: ["us-east", "eu-central"] })).toBe(1);
   });
+  it.each([NaN, Infinity, -1, 1.5, 3, "2", undefined])("rejects a malformed successful credit grant %s without probing", async (grant) => {
+    const noCost = mon("a", "heartbeat");
+    const paid = [mon("a"), mon("a")];
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const meter: Entitlements = { ...unmetered, spendCredits: async () => grant as number };
+      expect(await withinCredits([paid[0], noCost, paid[1]], meter)).toEqual([noCost]);
+      expect(log).toHaveBeenCalledWith("credit allowance invalid");
+    } finally { log.mockRestore(); }
+  });
+
+  it("logs no secrets from an unavailable credit ledger and still runs checks", async () => {
+    const ms = [mon("a"), mon("a")];
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const meter: Entitlements = { ...unmetered, spendCredits: async () => { throw new Error("synthetic account token and database password"); } };
+      expect(await withinCredits(ms, meter)).toEqual(ms);
+      expect(log).toHaveBeenCalledWith("credits unavailable");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("synthetic account token");
+    } finally { log.mockRestore(); }
+  });
+
   it("keeps monitoring when the ledger fails", async () => {
     const broken: Entitlements = { ...unmetered, spendCredits: async () => { throw new Error("db down"); }, creditBalance: async () => null };
     const ms = [mon("a"), mon("a")];

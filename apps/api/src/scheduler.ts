@@ -135,8 +135,13 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
   await Promise.all([...byWorkspace].map(async ([workspaceId, list]) => {
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
     // a failing ledger must not silence monitoring: the checks run and the gap is only logged
-    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch((e) => (console.error("credits unavailable", e), wanted));
-    let left = granted;
+    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch(() => (console.error("credits unavailable"), wanted));
+    // A malformed successful metering response must not overauthorize paid probes.
+    // Zero-credit heartbeat monitors remain eligible, and an actual ledger outage
+    // retains the existing monitoring-availability fallback above.
+    const valid = Number.isSafeInteger(granted) && granted >= 0 && granted <= wanted;
+    if (!valid) console.error("credit allowance invalid");
+    let left = valid ? granted : 0;
     for (const m of list) {
       const cost = creditCost(m);
       if (cost <= left) {

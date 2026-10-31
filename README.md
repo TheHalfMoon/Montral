@@ -78,6 +78,8 @@ Status-page subscriber confirmation and unsubscribe links carry bearer tokens in
 
 Synthetic signed merchant webhooks are now monotonic even when two **distinct** provider callbacks share an `updated_at`: an equal-time cancellation/expiry cannot be overwritten by a less restrictive paid state. The real PostgreSQL [red-to-green regression evidence](docs/evidence/2026-10-31-billing-equal-timestamp-ordering-qualification.md) also verifies new-provider replacement after expiry. This remains a **disabled-by-default, test-mode-only billing preview**, not an externally merchant-verified integration.
 
+Signed **test-only merchant callbacks** now verify the exact received HTTP bytes for HMAC-SHA256 and replay digests, before strict UTF-8 JSON decoding. Correctly signed malformed UTF-8 is rejected rather than silently replaced. This changes no merchant/live billing availability. See [local raw-byte HMAC qualification](docs/evidence/2026-10-31-billing-raw-byte-hmac-qualification.md).
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

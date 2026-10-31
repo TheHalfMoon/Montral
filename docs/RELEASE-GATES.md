@@ -11,7 +11,7 @@
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
 - [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
-- [x] API **573**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **574**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] No-provider email fallback cannot expose verification/password reset bearer tokens, message body, recipient or subject to logs; required alert/subscriber/report email now fails closed rather than falsely recording `sent` (dedicated real PostgreSQL 502/failed-ledger E2E, real Chromium log guard)
@@ -39,6 +39,7 @@
 - [ ] Hosted reverse-proxy/access-log bearer-token URL scrubbing, at-rest encryption/key rotation, data-export/privacy review and abuse-load evaluation for captured webhook payloads; HTTP privacy headers alone are not a substitute
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
+- [x] Merchant webhook HMAC and billing-event digest use byte-exact streamed request payload; only **after HMAC verification** is strict UTF-8 JSON decoded. Signed malformed UTF-8 rejects HTTP 400, altered bytes with old HMAC reject 401; real PostgreSQL red-to-green E2E
 - [x] Equal provider-timestamp collision cannot reactivate paid entitlements after signed cancellation/expiry, including legacy same-provider `subscription_created` replay; shorter cancellation deadline and genuinely new provider after expiry permitted (real PostgreSQL red-to-green regression)
 - [x] Single pending sandbox checkout per workspace via PostgreSQL advisory-locked reservation; eight simultaneous authenticated attempts produce exactly one checkout
 - [x] Old duplicate intents cannot replace an active subscription from a different provider, with signed provider ID validation under the same lock
@@ -90,3 +91,5 @@ Bearer webhook receiver HTTP privacy header qualification: [2026-10-31 local evi
 Subscription confirmation/unsubscribe token response privacy and supported Node qualification: [2026-10-31 local evidence](evidence/2026-10-31-status-subscription-token-privacy-qualification.md).
 
 Billing signed equal-timestamp replay/paid-access hardening: [2026-10-31 local qualification](evidence/2026-10-31-billing-equal-timestamp-ordering-qualification.md).
+
+Byte-exact signed sandbox merchant webhook qualification: [2026-10-31 local evidence](evidence/2026-10-31-billing-raw-byte-hmac-qualification.md).

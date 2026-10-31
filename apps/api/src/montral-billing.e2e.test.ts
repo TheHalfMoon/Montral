@@ -303,6 +303,48 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(badJson.status).toBe(400);
   });
 
+  it("verifies signed webhook bytes exactly and rejects malformed UTF-8 with valid raw signature", async () => {
+    const payload = {
+      ...event("12345678901234567890", null, "subscription_updated", "active", "2026-10-30T19:00:00.000Z"),
+      ignored_metadata: "non-ASCII replacement � inside signed JSON",
+    };
+    const originalBytes = new TextEncoder().encode(JSON.stringify(payload));
+    const rawSignature = async (bytes: Uint8Array<ArrayBuffer>) => {
+      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(config.LEMONSQUEEZY_WEBHOOK_SECRET!), {
+        name: "HMAC", hash: "SHA-256",
+      }, false, ["sign"]);
+      return Array.from(new Uint8Array(await crypto.subtle.sign("HMAC", key, bytes)),
+        b => b.toString(16).padStart(2, "0")).join("");
+    };
+    const signedRequest = async (bytes: Uint8Array<ArrayBuffer>, signature: string) =>
+      app.fetch(new Request(ORIGIN + "/api/billing/lemon", {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-signature": signature },
+        body: new Blob([bytes]),
+      }), config as never);
+
+    const valid = await signedRequest(originalBytes, await rawSignature(originalBytes));
+    expect(valid.status).toBe(409); // Valid signature and JSON, but unknown subscription identity.
+
+    const replacementPosition = originalBytes.findIndex((b, i) =>
+      b === 0xef && originalBytes[i + 1] === 0xbf && originalBytes[i + 2] === 0xbd);
+    expect(replacementPosition).toBeGreaterThan(0);
+    const altered = originalBytes.slice();
+    altered[replacementPosition] = 0xff; // Invalid UTF-8 in otherwise valid, signed JSON.
+
+    // An attacker cannot reuse a legitimate signature for different bytes.
+    const forged = await signedRequest(altered, await rawSignature(originalBytes));
+    expect(forged.status).toBe(401);
+    // Even the real raw-byte HMAC must not make invalid UTF-8 processable.
+    const signedMalformed = await signedRequest(altered, await rawSignature(altered));
+    expect(signedMalformed.status).toBe(400);
+    expect(await signedMalformed.json()).toMatchObject({ error: "Invalid UTF-8 or JSON" });
+    const unknownEvents = await db!.query(
+      "SELECT digest FROM montral_billing_event WHERE provider_id=$1", ["12345678901234567890"],
+    );
+    expect(unknownEvents).toHaveLength(0);
+  });
+
   it("does not trust signed merchant data unless it matches a server-created unexpired checkout intent", async () => {
     const sub = String(Math.floor(Math.random() * 9000000 + 1000000));
     const attempt = await fire(event(sub, crypto.randomUUID(), "subscription_created", "active", "2026-10-30T19:00:00.000Z"));

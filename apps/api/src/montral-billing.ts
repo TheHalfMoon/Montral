@@ -10,16 +10,22 @@ const PLANS = ["pro", "business"] as const;
 const inputPlan = z.object({ plan: z.enum(PLANS) }).strict();
 const SUB_EVENTS = new Set(["subscription_created", "subscription_updated", "subscription_cancelled",
   "subscription_resumed", "subscription_expired", "subscription_paused", "subscription_unpaused"]);
-const sha256 = async (s: string) => Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))),
-  b => b.toString(16).padStart(2, "0")).join("");
+// Signed provider callbacks must be authenticated and deduplicated using the
+// exact HTTP bytes, never a lossy replacement-decoded Unicode string.
+const asBytes = (source: string | Uint8Array) => typeof source === "string"
+  ? new TextEncoder().encode(source) : new Uint8Array(source);
+const sha256 = async (source: Uint8Array) => Array.from(
+  new Uint8Array(await crypto.subtle.digest("SHA-256", asBytes(source))),
+  b => b.toString(16).padStart(2, "0"),
+).join("");
 const stringId = (v: unknown) => (typeof v === "string" && /^[0-9]{1,24}$/.test(v)) ? v :
   (typeof v === "number" && Number.isSafeInteger(v) && v > 0) ? String(v) : null;
 
 /** Use WebCrypto instead of Node crypto so the same signing code works on Cloudflare Workers. */
-export async function verifyLemonSignature(body: string, header: string | undefined, secret: string): Promise<boolean> {
+export async function verifyLemonSignature(body: string | Uint8Array, header: string | undefined, secret: string): Promise<boolean> {
   if (!secret || !header || !/^[0-9a-f]{64}$/i.test(header)) return false;
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
+  const digest = new Uint8Array(await crypto.subtle.sign("HMAC", key, asBytes(body)));
   const expected = Uint8Array.from(header.match(/../g)!, byte => parseInt(byte, 16));
   let result = 0;
   for (let i = 0; i < digest.length; i++) result |= digest[i] ^ expected[i];
@@ -231,9 +237,9 @@ export function parseSubscriptionEvent(raw: unknown, env: Bindings) {
   };
 }
 
-async function limitedBody(req: Request): Promise<string | null> {
+async function limitedBody(req: Request): Promise<Uint8Array | null> {
   if (Number(req.headers.get("content-length")) > BODY_LIMIT) return null;
-  if (!req.body) return "";
+  if (!req.body) return new Uint8Array(0);
   const reader = req.body.getReader();
   let bytes = 0; const chunks: Uint8Array[] = [];
   try {
@@ -250,7 +256,7 @@ async function limitedBody(req: Request): Promise<string | null> {
   const joined = new Uint8Array(bytes);
   let position = 0;
   for (const chunk of chunks) { joined.set(chunk, position); position += chunk.length; }
-  return new TextDecoder().decode(joined);
+  return joined;
 }
 
 /**
@@ -300,7 +306,12 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
       return c.json({ error: "Invalid signature" }, 401);
     }
     let payload: unknown;
-    try { payload = JSON.parse(body || "null"); } catch { return c.json({ error: "Invalid JSON" }, 400); }
+    try {
+      // Reject ill-formed UTF-8, rather than replacing bytes with U+FFFD:
+      // the signed raw-body sequence must have one unambiguous JSON decoding.
+      const text = new TextDecoder("utf-8", { fatal: true }).decode(body);
+      payload = JSON.parse(text || "null");
+    } catch { return c.json({ error: "Invalid UTF-8 or JSON" }, 400); }
     const event = parseSubscriptionEvent(payload, c.env);
     if (!event) return c.json({ error: "Unsupported or invalid test subscription event" }, 422);
     // The provider sends event name in both the signed payload and a header.

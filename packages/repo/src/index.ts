@@ -675,6 +675,19 @@ export interface Repo {
    * are recoverable. Excludes legacy claimed months and months with any prior
    * outbox records to prevent replay. Does NOT send any mail. */
   claimMonthlyReportsWithRecipients(month: string, limit: number): Promise<string[]>;
+  /** STAGED ONLY: read the *same* once-frozen workspace/month report on any
+   * restart. Data contains confidential workspace and monitor names; never
+   * expose it through public/owner HTTP or logs. */
+  monthlyReportFrozenContent(orgId: string, month: string): Promise<{
+    workspaceName: string; components: MonthlyComponent[];
+  } | null>;
+  /** STAGED ONLY: atomically insert a frozen report before the first provider
+   * attempt, if an actual prepared outbox/claim exists and none of its rows
+   * have been attempted. Return previously frozen content on a concurrent win.
+   * NEVER replace a frozen version or backfill after any attempt. */
+  freezeMonthlyReportContent(orgId: string, month: string, content: {
+    workspaceName: string; components: MonthlyComponent[];
+  }): Promise<{ workspaceName: string; components: MonthlyComponent[] } | null>;
   /** STAGED ONLY: discover already committed, still-prepared recipient work
    * from an existing opted-in outbox. Never infer work from legacy org-only
    * claims with no outbox rows; no recipient addresses leave this method. */

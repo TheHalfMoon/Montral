@@ -129,9 +129,12 @@ async function status(fixture: { org: string; owner: string }) {
   const reservations = await db!.query<{ n: number }>(
     "SELECT count(*)::int AS n FROM montral_usage_reservation WHERE organization_id=$1", [fixture.org],
   );
+  const [snapshot] = await db!.query<{ n: number }>(
+    "SELECT count(*)::int AS n FROM monthly_report_content WHERE organization_id=$1 AND report_month=$2", [fixture.org, month],
+  );
   return { claimedMonth: workspace?.last_report_month ?? null, state: recipient?.state ?? null,
     attemptedAt: recipient?.attempted_at ?? null, debited: usage.reduce((total, v) => total + Number(v.used), 0),
-    reservations: Number(reservations[0]?.n ?? 0) };
+    reservations: Number(reservations[0]?.n ?? 0), frozen: Number(snapshot?.n ?? 0) };
 }
 function sinkCount() {
   const content = readFileSync(sink, "utf8");
@@ -178,19 +181,19 @@ try {
     await db.query("DROP FUNCTION IF EXISTS synthetic_kill_wait()");
   }
   let check = await status(transaction);
-  assert(check.claimedMonth === null && check.state === null && check.debited === 0 && check.reservations === 0,
+  assert(check.claimedMonth === null && check.state === null && check.debited === 0 && check.reservations === 0 && check.frozen === 0,
     "SIGKILL before commit left an orphaned month, recipient or debit");
   console.log("KILL_PRECOMMIT_ROLLBACK_PASS");
 
   // Case 2: a committed snapshot is recoverable after killing its process.
   await killAfterStage("snapshot", transaction, "SNAPSHOT_COMMITTED");
   check = await status(transaction);
-  assert(check.claimedMonth === month && check.state === "prepared" && check.debited === 0,
+  assert(check.claimedMonth === month && check.state === "prepared" && check.debited === 0 && check.frozen === 0,
     "committed recipient snapshot was not prepared after SIGKILL");
   let dispatched = await completed("dispatch", transaction);
   assert(dispatched.accepted === 1 && dispatched.claimed === 1, "committed pre-SMTP snapshot did not recover");
   check = await status(transaction);
-  assert(check.state === "accepted" && check.debited === 1 && check.reservations === 1 && sinkCount() === 1,
+  assert(check.state === "accepted" && check.debited === 1 && check.reservations === 1 && check.frozen === 1 && sinkCount() === 1,
     "recovered snapshot sent, debited or reserved more than once");
   dispatched = await completed("dispatch", transaction);
   assert(dispatched.accepted === 0 && sinkCount() === 1, "recovered accepted delivery replayed");
@@ -201,7 +204,7 @@ try {
   await killAfterStage("snapshot", preSmtp, "SNAPSHOT_COMMITTED");
   await killAfterStage("attempt", preSmtp, "ATTEMPT_COMMITTED");
   check = await status(preSmtp);
-  assert(check.state === "attempted" && check.debited === 1 && check.reservations === 1,
+  assert(check.state === "attempted" && check.debited === 1 && check.reservations === 1 && check.frozen === 0,
     "post-attempt SIGKILL did not leave one durable attempt and quota");
   dispatched = await completed("dispatch", preSmtp);
   assert(dispatched.accepted === 0 && (await status(preSmtp)).state === "attempted" && sinkCount() === 1,
@@ -214,7 +217,7 @@ try {
   await killAfterStage("snapshot", afterAccept, "SNAPSHOT_COMMITTED");
   await killAfterStage("accept-hang", afterAccept, "TRANSPORT_ACCEPTED");
   check = await status(afterAccept);
-  assert(check.state === "attempted" && check.debited === 1 && check.reservations === 1 && sinkCount() === 2,
+  assert(check.state === "attempted" && check.debited === 1 && check.reservations === 1 && check.frozen === 1 && sinkCount() === 2,
     "provider-accepted kill did not persist one claimed attempt and one sink acceptance");
   dispatched = await completed("dispatch", afterAccept);
   assert(dispatched.accepted === 0 && (await status(afterAccept)).state === "attempted" && sinkCount() === 2,
@@ -225,7 +228,7 @@ try {
   const legacy = await makeFixture("legacy", true);
   dispatched = await completed("dispatch", legacy);
   check = await status(legacy);
-  assert(dispatched.accepted === 0 && check.state === null && check.debited === 0 && sinkCount() === 2,
+  assert(dispatched.accepted === 0 && check.state === null && check.debited === 0 && check.frozen === 0 && sinkCount() === 2,
     "legacy org-only claim got resurrected without recipient evidence");
   console.log("KILL_LEGACY_CLAIM_NO_RESURRECTION_PASS");
   console.log("MONTHLY_REAL_SIGKILL_DRILL_PASS: five synthetic crash boundaries, durable local sink, one-time quota, no replay");

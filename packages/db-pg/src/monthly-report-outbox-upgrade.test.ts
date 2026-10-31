@@ -17,7 +17,9 @@ describe.skipIf(!url)("monthly outbox migration from an existing Montral databas
       const fresh = new URL(url!);
       fresh.pathname = `/${name}`;
       db = createDb(fresh.href, { max: 4 });
-      const previous = MIGRATIONS.slice(0, -2);
+      // Upgrade historical 0040 through 0041 recipient outbox, 0042 review
+      // evidence and 0043 immutable report content, without replaying claims.
+      const previous = MIGRATIONS.slice(0, -3);
       expect(previous.at(-1)?.tag).toBe("0040_gray_ultimates");
       expect((await migrate(db, previous)).length).toBe(previous.length);
       const org = `synthetic-legacy-${randomUUID()}`;
@@ -26,10 +28,11 @@ describe.skipIf(!url)("monthly outbox migration from an existing Montral databas
       expect((await db.$client`select to_regclass('public.monthly_report_recipient') as name`)[0].name).toBeNull();
       // Simulate multiple application replicas upgrading at once.
       const runs = await Promise.all([migrate(db), migrate(db), migrate(db)]);
-      expect(runs.flat()).toEqual(MIGRATIONS.slice(-2).map((m) => m.tag));
+      expect(runs.flat()).toEqual(MIGRATIONS.slice(-3).map((m) => m.tag));
       expect((await db.$client`select last_report_month as month,monthly_report as enabled from workspace_setting where organization_id=${org}`)[0]).toEqual({ month: "2026-09", enabled: true });
       expect((await db.$client`select count(*)::int as n from monthly_report_recipient`)[0].n).toBe(0);
       expect((await db.$client`select count(*)::int as n from monthly_report_reconciliation`)[0].n).toBe(0);
+      expect((await db.$client`select count(*)::int as n from monthly_report_content`)[0].n).toBe(0);
       expect(await createRepo(db).monthlyReportRecipientCounts(org, "2026-09")).toEqual({ prepared: 0, attempted: 0, accepted: 0, uncertain: 0, skipped: 0 });
       expect(await migrate(db)).toEqual([]);
       // An old claimed report stays claimed; migrations never silently resend it.

@@ -1639,6 +1639,58 @@ export function createRepo(db: Db): Repo {
         return claimed;
       });
     },
+    async monthlyReportFrozenContent(orgId, month) {
+      if (!orgId || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month))
+        throw new Error("Invalid frozen monthly report lookup");
+      const [saved] = await db.select({ workspaceName: schema.monthlyReportContent.workspaceName,
+        components: schema.monthlyReportContent.components }).from(schema.monthlyReportContent)
+        .where(and(eq(schema.monthlyReportContent.organizationId, orgId),
+          eq(schema.monthlyReportContent.reportMonth, month)));
+      return saved ?? null;
+    },
+    async freezeMonthlyReportContent(orgId, month, content) {
+      if (!orgId || !/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month)
+        || !content || !content.workspaceName?.trim() || !Array.isArray(content.components)
+        || !content.components.length || content.components.length > 5000
+        || content.components.some((c) => !c || typeof c.name !== "string" || !c.name.trim()
+          || !(c.uptime === null || (Number.isFinite(c.uptime) && c.uptime >= 0 && c.uptime <= 100))
+          || !Number.isSafeInteger(c.downtimeMinutes) || c.downtimeMinutes < 0
+          || !Number.isSafeInteger(c.incidents) || c.incidents < 0)
+        || new TextEncoder().encode(JSON.stringify(content)).length > 131072)
+        throw new Error("Invalid frozen monthly report content");
+      return db.transaction(async (tx) => {
+        // Workspace setting row lock serializes with old/new claimers. The
+        // first worker that obtains this lock chooses the one durable payload.
+        const [setting] = await tx.select({ claimed: schema.workspaceSetting.lastReportMonth,
+          enabled: schema.workspaceSetting.monthlyReport }).from(schema.workspaceSetting)
+          .where(eq(schema.workspaceSetting.organizationId, orgId)).for("update");
+        if (!setting || !setting.enabled || setting.claimed !== month) return null;
+        const [existing] = await tx.select({ workspaceName: schema.monthlyReportContent.workspaceName,
+          components: schema.monthlyReportContent.components }).from(schema.monthlyReportContent)
+          .where(and(eq(schema.monthlyReportContent.organizationId, orgId),
+            eq(schema.monthlyReportContent.reportMonth, month)));
+        if (existing) return existing;
+        const [counts] = await rows<{ prepared: number; attempted: number }>(tx.execute(sql`
+          select count(*) filter (where state='prepared')::integer as prepared,
+            count(*) filter (where state <> 'prepared')::integer as attempted
+          from monthly_report_recipient where organization_id=${orgId} and report_month=${month}
+        `));
+        // Never create a fresh report after a prior provider attempt: doing so
+        // would silently change what other recipients may already have seen.
+        if (!counts?.prepared || counts.attempted) return null;
+        const [inserted] = await tx.insert(schema.monthlyReportContent).values({
+          organizationId: orgId, reportMonth: month,
+          workspaceName: content.workspaceName, components: content.components,
+        }).onConflictDoNothing().returning({ workspaceName: schema.monthlyReportContent.workspaceName,
+          components: schema.monthlyReportContent.components });
+        if (inserted) return inserted;
+        const [won] = await tx.select({ workspaceName: schema.monthlyReportContent.workspaceName,
+          components: schema.monthlyReportContent.components }).from(schema.monthlyReportContent)
+          .where(and(eq(schema.monthlyReportContent.organizationId, orgId),
+            eq(schema.monthlyReportContent.reportMonth, month)));
+        return won ?? null;
+      });
+    },
     async recoverPreparedMonthlyReportWorkspaces(month, limit) {
       if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
         throw new Error("Invalid monthly report recovery request");

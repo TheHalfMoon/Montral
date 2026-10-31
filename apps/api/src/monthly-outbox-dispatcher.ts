@@ -25,19 +25,28 @@ export async function dispatchPreparedMonthlyOutbox(
   const from = new Date(Date.UTC(year, m - 1, 1));
   const to = new Date(Date.UTC(year, m, 1));
   let source: Awaited<ReturnType<Repo["preparedMonthlyReportRecipients"]>>;
-  let workspace: Awaited<ReturnType<Repo["organization"]>>;
-  let components: Awaited<ReturnType<Repo["monthlyReport"]>>;
+  let frozen: Awaited<ReturnType<Repo["monthlyReportFrozenContent"]>>;
   try {
-    [source, workspace, components] = await Promise.all([
-      repo.preparedMonthlyReportRecipients(orgId, month),
-      repo.organization(orgId),
-      repo.monthlyReport(orgId, from, to),
-    ]);
+    source = await repo.preparedMonthlyReportRecipients(orgId, month);
+    if (!source.length) return result;
+    frozen = await repo.monthlyReportFrozenContent(orgId, month);
+    if (!frozen) {
+      // Only content that has never been sent can be safely materialized.
+      // A partially delivered pre-migration outbox with no frozen payload
+      // must be reviewed by an operator, never silently reconstructed.
+      const [workspace, components] = await Promise.all([
+        repo.organization(orgId), repo.monthlyReport(orgId, from, to),
+      ]);
+      if (!workspace || !components.length) return result;
+      frozen = await repo.freezeMonthlyReportContent(orgId, month, {
+        workspaceName: workspace.name, components,
+      });
+    }
   } catch {
     console.error("monthly outbox preparation unavailable");
     return result;
   }
-  if (!workspace || !source.length || !components.length) return result;
+  if (!frozen || !frozen.components.length) return result;
 
   for (const recipient of source) {
     // Render the entire message before reserving quota or moving an outbox row
@@ -45,7 +54,7 @@ export async function dispatchPreparedMonthlyOutbox(
     let message: ReturnType<typeof renderMonthlyReportMessage>;
     try {
       message = renderMonthlyReportMessage({
-        workspace: workspace.name, month, comps: components, owner: recipient,
+        workspace: frozen.workspaceName, month, comps: frozen.components, owner: recipient,
       });
     } catch {
       console.error("monthly outbox message preparation unavailable");

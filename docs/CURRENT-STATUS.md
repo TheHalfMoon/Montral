@@ -92,6 +92,8 @@
 
 - **Read-only monthly transition preflight (LOCAL ONLY):** `inspect:monthly-transition YYYY-MM` uses a real PostgreSQL repeatable-read, read-only snapshot to count old claims without recipient proof, outbox mismatches, missing settings, opted-out prepared recipients, ambiguous attempts and reservation gaps without revealing tenant or user identifiers. Fails closed and always returns `NO_GO`, even with zero counts; no SMTP, quota or data changes. Mac **950/950** package tests, production builds, CLI remote-secret rejection, five real SIGKILL boundaries, Chromium/SMTP loopback and 45-table/118-synthetic-workspace SHA-256 restore PASS. [Evidence](evidence/2026-10-31-readonly-monthly-transition-preflight.md).
 
+- **Once-frozen monthly report content — STAGED ONLY:** additive Drizzle `0043` stores one private workspace/monitor-statistics snapshot per workspace-month, rejects SQL UPDATE, uses a transactional first-writer-wins insert and never re-renders from changed metrics on restart. A missing snapshot with any prior SMTP attempt fails closed. No production cron integration. Mac **955/955** tests, TypeScript/builds, five real SIGKILL boundaries, Chromium/SMTP loopback and **46-table/118-synthetic-workspace** SHA-256 restore PASS; 44 embedded migrations synchronized. [Evidence](evidence/2026-10-31-once-frozen-monthly-report-content.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

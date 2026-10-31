@@ -330,6 +330,21 @@ export const monthlyReportRecipient = pgTable("monthly_report_recipient", {
   check("monthly_report_recipient_attempt_chk", sql`(${t.state} = 'prepared' and ${t.attemptedAt} is null and ${t.decidedAt} is null) or (${t.state} = 'attempted' and ${t.attemptedAt} is not null and ${t.decidedAt} is null) or (${t.state} in ('accepted', 'uncertain', 'skipped') and ${t.attemptedAt} is not null and ${t.decidedAt} is not null)`),
 ]);
 
+/** Staged-only, once-frozen report content shared by all recipients of a workspace/month.
+ * Never log monitor names; cascades on workspace deletion. */
+export const monthlyReportContent = pgTable("monthly_report_content", {
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  reportMonth: text("report_month").notNull(),
+  workspaceName: text("workspace_name").notNull(),
+  components: jsonb("components").$type<import("@montral/repo").MonthlyComponent[]>().notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ name: "monthly_report_content_pk", columns: [t.organizationId, t.reportMonth] }),
+  check("monthly_report_content_month_chk", sql`${t.reportMonth} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
+  check("monthly_report_content_components_chk", sql`jsonb_typeof(${t.components})='array' and jsonb_array_length(${t.components})>0`),
+  check("monthly_report_content_name_chk", sql`length(trim(${t.workspaceName})) > 0`),
+]);
+
 /** Staged-only, immutable evidence digest of one reviewed monthly delivery.
  * No raw provider reference, email address, secret or message body stored.
  * The actor is nullable on user deletion; workspace and recipient cascade. */

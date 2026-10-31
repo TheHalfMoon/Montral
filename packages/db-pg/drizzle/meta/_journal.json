@@ -302,6 +302,13 @@
       "when": 1793469997617,
       "tag": "0042_brief_sister_grimm",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1793474804027,
+      "tag": "0043_unknown_dagger",
+      "breakpoints": true
     }
   ]
 }

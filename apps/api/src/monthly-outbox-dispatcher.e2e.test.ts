@@ -63,6 +63,75 @@ describe.skipIf(!url)("staged monthly outbox dispatcher with real PostgreSQL and
     expect(await balance(org)).toMatchObject({ used: 2 });
   });
 
+  it("freezes report content before the first SMTP attempt and reuses it after metrics change", async () => {
+    const { org, users, repo } = await makeReport();
+    const messages: Array<{ to: string; html: string }> = [];
+    setMailTransport(async (mail) => { messages.push({ to: mail.to, html: mail.html }); });
+    // One recipient delivered; a second remains prepared for the next process.
+    const truncated = { ...repo, preparedMonthlyReportRecipients: async () =>
+      (await repo.preparedMonthlyReportRecipients(org, month)).filter((r) => r.userId === users[0]) } as Repo;
+    expect(await dispatchPreparedMonthlyOutbox(truncated, entitlements!, org, when)).toMatchObject({ accepted: 1 });
+    const first = await repo.monthlyReportFrozenContent(org, month);
+    expect(first).toMatchObject({ workspaceName: "Synthetic report",
+      components: [{ name: "Synthetic uptime monitor", uptime: 99.8 }] });
+    const changed = { ...repo,
+      organization: async () => ({ ...(await repo.organization(org))!, name: "Mutated after send" }),
+      monthlyReport: async () => [{ name: "WRONG LATE METRICS", uptime: 12, downtimeMinutes: 300, incidents: 8 }],
+    } as Repo;
+    expect(await dispatchPreparedMonthlyOutbox(changed, entitlements!, org, when)).toMatchObject({ accepted: 1 });
+    expect(messages.map((v) => v.to).sort()).toEqual(users.map((u) => `${u}@example.test`).sort());
+    expect(messages[0].html).toContain("Synthetic uptime monitor");
+    expect(messages[1].html).toContain("Synthetic uptime monitor");
+    expect(messages[1].html).not.toContain("WRONG LATE METRICS");
+    expect(messages[1].html).not.toContain("Mutated after send");
+    expect(await repo.monthlyReportFrozenContent(org, month)).toEqual(first);
+    expect(await balance(org)).toMatchObject({ used: 2 });
+  });
+
+  it("refuses to invent missing frozen content after any already-attempted recipient", async () => {
+    const { org, users, repo } = await makeReport();
+    expect(await entitlements!.claimMonthlyOutboxAttempt!(org, month, users[0])).toBe("attempted");
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await dispatchPreparedMonthlyOutbox(repo, entitlements!, org, when)).toMatchObject({ claimed: 0 });
+    expect(await repo.monthlyReportFrozenContent(org, month)).toBeNull();
+    expect(delivered).toHaveLength(0);
+    expect(await balance(org)).toMatchObject({ used: 1 });
+    expect(await counts(org)).toMatchObject({ attempted: 1, prepared: 1 });
+    expect(log).not.toHaveBeenCalledWith("monthly outbox provider acceptance uncertain");
+  });
+
+  it("concurrent content writers converge to the first committed immutable report", async () => {
+    const { org, repo } = await makeReport(2);
+    const candidate = (name: string) => ({ workspaceName: name,
+      components: [{ name: "Synthetic monitor", uptime: 98.9, downtimeMinutes: 4, incidents: 2 }] });
+    const reports = await Promise.all(Array.from({ length: 8 }, (_, n) =>
+      repo.freezeMonthlyReportContent(org, month, candidate(`Candidate-${n}`))));
+    expect(reports.every((r) => JSON.stringify(r) === JSON.stringify(reports[0]))).toBe(true);
+    expect((await repo.monthlyReportFrozenContent(org, month))?.workspaceName).toBe(reports[0]?.workspaceName);
+    expect(await repo.freezeMonthlyReportContent(org, month, candidate("Attempted overwrite"))).toEqual(reports[0]);
+    expect(await counts(org)).toMatchObject({ prepared: 2 });
+    expect(await balance(org)).toMatchObject({ used: 0 });
+  });
+
+  it("PostgreSQL trigger prohibits changing an already frozen report and workspace deletion erases it", async () => {
+    const { org, repo } = await makeReport();
+    const components = [{ name: "Confidential synthetic monitor", uptime: 99, downtimeMinutes: 1, incidents: 1 }];
+    expect(await repo.freezeMonthlyReportContent(org, month, { workspaceName: "Synthetic freeze", components })).toMatchObject({ components });
+    await expect(db!.query("UPDATE monthly_report_content SET workspace_name='Tampered' WHERE organization_id=$1 AND report_month=$2", [org, month])).rejects.toThrow("monthly report content is immutable");
+    expect((await repo.monthlyReportFrozenContent(org, month))?.workspaceName).toBe("Synthetic freeze");
+    await db!.query("DELETE FROM organization WHERE id=$1", [org]);
+    expect(await repo.monthlyReportFrozenContent(org, month)).toBeNull();
+    expect(await balance(org)).toMatchObject({ used: 0 });
+  });
+
+  it("cannot freeze bad content and does not spend mail quota", async () => {
+    const { org, repo } = await makeReport();
+    await expect(repo.freezeMonthlyReportContent(org, month, { workspaceName: "Bad",
+      components: [{ name: "Bad stats", uptime: 900, downtimeMinutes: 0, incidents: 0 }] })).rejects.toThrow();
+    expect(await repo.monthlyReportFrozenContent(org, month)).toBeNull();
+    expect(await balance(org)).toMatchObject({ used: 0 });
+  });
+
   it("records uncertain after provider accepted then timed out, and keeps healthy peers moving", async () => {
     const { org, users, repo } = await makeReport();
     setMailTransport(async (mail) => {

@@ -679,6 +679,9 @@ export interface Repo {
   attemptMonthlyReportRecipient(orgId: string, month: string, userId: string): Promise<boolean>;
   /** Record an explicit outcome for an already-attempted owner; never requeue uncertain sends. */
   finishMonthlyReportRecipient(orgId: string, month: string, userId: string, outcome: "accepted" | "uncertain"): Promise<boolean>;
+  /** Staged internal dispatcher only: prepared monthly owner snapshot, scoped to workspace+month.
+   * Never expose recipient addresses from this method via a public API. */
+  preparedMonthlyReportRecipients(orgId: string, month: string): Promise<{ userId: string; email: string; locale: string | null }[]>;
   /** Workspace-scoped outbox aggregate, without exposing recipient addresses. */
   monthlyReportRecipientCounts(orgId: string, month: string): Promise<Record<"prepared" | "attempted" | "accepted" | "uncertain" | "skipped", number>>;
   /** Per-component uptime, downtime and incident count between the two instants. */

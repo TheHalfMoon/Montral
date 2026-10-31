@@ -76,6 +76,8 @@
 
 - **Atomic monthly email outbox+quota claim — STAGED:** new Montral edition SQL function locks an unattempted recipient and atomically books the single idempotent quota grant plus outbox transition. Eight real PostgreSQL race, abort, insufficient quota, stale owner/email/report and prior ambiguous reservation tests PASS; **902/902** Mac tests and 44-table/110-synthetic-organization SHA-256 restore PASS. **The production monthly SMTP sender does not yet call this function, nor provide crash reconciliation.** [Evidence](evidence/2026-10-31-atomic-monthly-outbox-quota-claim.md).
 
+- **Monthly report outbox dispatcher — STAGED, not scheduled:** the new internal worker consumes prepared recipient snapshots from PostgreSQL, reuses the existing monthly mail renderer, claims quota + one attempt atomically, attempts required SMTP delivery once, and records `accepted`/`uncertain` without replaying post-acceptance timeouts or result-write failures. Ten synthetic real-PostgreSQL tests passed; Mac 912/912 total tests passed. **Production monthly sender unchanged; no scheduler, route or release activation.** [Evidence](evidence/2026-10-31-staged-monthly-outbox-dispatcher.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

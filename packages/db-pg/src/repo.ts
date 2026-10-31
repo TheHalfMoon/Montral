@@ -1646,6 +1646,19 @@ export function createRepo(db: Db): Repo {
         )).returning({ userId: schema.monthlyReportRecipient.recipientUserId });
       return finished.length === 1;
     },
+    async preparedMonthlyReportRecipients(orgId, month) {
+      return db.select({
+        userId: schema.monthlyReportRecipient.recipientUserId,
+        email: schema.monthlyReportRecipient.recipientEmail,
+        locale: schema.monthlyReportRecipient.locale,
+      }).from(schema.monthlyReportRecipient)
+        .where(and(
+          eq(schema.monthlyReportRecipient.organizationId, orgId),
+          eq(schema.monthlyReportRecipient.reportMonth, month),
+          eq(schema.monthlyReportRecipient.state, "prepared"),
+        ))
+        .orderBy(asc(schema.monthlyReportRecipient.recipientUserId));
+    },
     async monthlyReportRecipientCounts(orgId, month) {
       const summary: Record<"prepared" | "attempted" | "accepted" | "uncertain" | "skipped", number> = {
         prepared: 0, attempted: 0, accepted: 0, uncertain: 0, skipped: 0,

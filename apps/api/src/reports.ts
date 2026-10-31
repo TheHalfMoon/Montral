@@ -1,4 +1,4 @@
-import type { Repo } from "@montral/repo";
+import type { Repo, MonthlyComponent } from "@montral/repo";
 import { actionEmail, appUrl, sendEmail } from "./email";
 import { unmetered, type Entitlements } from "./entitlements";
 import { isLang, tr, type Lang } from "./mail-i18n";
@@ -13,6 +13,31 @@ export function previousMonth(now: Date) {
 }
 
 const duration = (min: number, lang: Lang) => (min < 60 ? `${min} ${lang === "zh-CN" ? "分钟" : "min"}` : `${Math.floor(min / 60)} ${lang === "zh-CN" ? "小时" : "h"}${min % 60 ? ` ${min % 60} ${lang === "zh-CN" ? "分钟" : "min"}` : ""}`);
+
+/** Shared HTML/text rendering for legacy digests and the disabled-by-default outbox dispatcher.
+ * Caller validates recipient ownership and obtains a durable address snapshot first. */
+export function renderMonthlyReportMessage(input: {
+  workspace: string; month: string; comps: MonthlyComponent[];
+  owner: { email: string; locale: string | null };
+}) {
+  const { workspace, month, comps, owner } = input;
+  if (typeof owner.email !== "string" || !owner.email.trim()) throw new Error("invalid monthly recipient");
+  const lang: Lang = isLang(owner.locale) ? owner.locale : "en";
+  const title = tr(lang, "Monthly report for {month}", { month });
+  const mail = actionEmail({
+    title,
+    body: tr(lang, "Uptime, downtime and incidents of each monitor in {workspace}.", { workspace }),
+    rows: comps.map((c): [string, string] => [
+      c.name,
+      [c.uptime == null ? tr(lang, "No checks yet") : `${tr(lang, "Uptime")} ${c.uptime}%`, duration(c.downtimeMinutes, lang), `${tr(lang, "Incidents")} ${c.incidents}`].join(" · "),
+    ]),
+    cta: tr(lang, "Open dashboard"),
+    url: `${appUrl()}/app`,
+    footer: tr(lang, "You get this because the monthly report is turned on for {workspace}. Turn it off in Settings.", { workspace }),
+    lang,
+  });
+  return { to: owner.email, subject: `${title} · Montral`, fromName: "Montral", ...mail };
+}
 
 /**
  * Emails the owners of every workspace that turned the monthly report on a summary of last month. A workspace is claimed
@@ -43,24 +68,7 @@ export async function sendMonthlyReports(repo: Repo, now = new Date(), entitleme
     // release the claim and retry preparation on a later scheduler tick.
     let messages: { to: string; subject: string; fromName: string; html: string; text: string }[];
     try {
-      messages = owners.map((o) => {
-        if (typeof o.email !== "string" || !o.email.trim()) throw new Error("invalid monthly recipient");
-        const lang: Lang = isLang(o.locale) ? o.locale : "en";
-        const title = tr(lang, "Monthly report for {month}", { month });
-        const mail = actionEmail({
-          title,
-          body: tr(lang, "Uptime, downtime and incidents of each monitor in {workspace}.", { workspace: org.name }),
-          rows: comps.map((c): [string, string] => [
-            c.name,
-            [c.uptime == null ? tr(lang, "No checks yet") : `${tr(lang, "Uptime")} ${c.uptime}%`, duration(c.downtimeMinutes, lang), `${tr(lang, "Incidents")} ${c.incidents}`].join(" · "),
-          ]),
-          cta: tr(lang, "Open dashboard"),
-          url: `${appUrl()}/app`,
-          footer: tr(lang, "You get this because the monthly report is turned on for {workspace}. Turn it off in Settings.", { workspace: org.name }),
-          lang,
-        });
-        return { to: o.email, subject: `${title} · Montral`, fromName: "Montral", ...mail };
-      });
+      messages = owners.map((owner) => renderMonthlyReportMessage({ workspace: org.name, month, comps, owner }));
     } catch {
       // No email has been attempted and the allowance has not been charged.
       // Do not log component contents, email recipients or underlying DB errors.

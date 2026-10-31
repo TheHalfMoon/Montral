@@ -31,7 +31,7 @@
 - [ ] Complete browser E2E matrix (account recovery, real-world external outage/notification and externally hosted SMTP deliverability, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
 - [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested
-- [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
+- [ ] Rerun all supported Node/TypeScript/PostgreSQL/API/web/probe and synthetic Lark tests on latest remote SHA. Lark provider acknowledgement is now fail-closed for malformed/empty bodies and generic error messages (code plus regression tests committed, **not executed on final remote revision**, Mac remote usage limit reached). See [Lark evidence](evidence/2026-10-31-strict-lark-webhook-ack.md)\n- [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
 - [ ] Hosted long-running scheduled pruning and orphan deletion behavior, crashes and retry reliability (local failure isolation and database tests PASS)
 - [x] Node trusted-proxy client-IP hardening: ignores attacker-supplied CF-Connecting-IP, uses final validated X-Forwarded-For peer, focused spoofing tests pass
 - [x] Parallel API test migrations protected with test-only Vitest global setup, verified on new PostgreSQL database; strict production environment-contract gate unchanged

@@ -55,6 +55,8 @@ services:
       BIND_HOST: ${BIND_HOST:-}
       # Explicitly opt in to provider TEST-MODE only; leave blank for the default OFF.
       MONTRAL_METERING_ENABLED: ${MONTRAL_METERING_ENABLED:-}
+      # Staged owner review, never active by default or as part of billing.
+      MONTRAL_RECONCILIATION_ENABLED: ${MONTRAL_RECONCILIATION_ENABLED:-false}
       MONTRAL_BILLING_ENABLED: ${MONTRAL_BILLING_ENABLED:-}
       MONTRAL_BILLING_MODE: ${MONTRAL_BILLING_MODE:-}
       LEMONSQUEEZY_API_KEY: ${LEMONSQUEEZY_API_KEY:-}

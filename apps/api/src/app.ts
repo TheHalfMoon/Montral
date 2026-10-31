@@ -12,6 +12,7 @@ import { channels } from "./routes/channels";
 import { push } from "./routes/push";
 import { incidents } from "./routes/incidents";
 import { maintenance } from "./routes/maintenance";
+import { monthlyReconciliation } from "./routes/monthly-reconciliation";
 import { monitors } from "./routes/monitors";
 import { projects } from "./routes/projects";
 import { publicStatus, statusPages } from "./routes/status";
@@ -212,6 +213,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   authed.route("/alert-log", alertLog);
   authed.route("/settings", settings);
   authed.route("/maintenance", maintenance);
+  authed.route("/monthly-reconciliation", monthlyReconciliation);
   authed.route("/status-pages", statusPages);
   // what this credential may reach: a session sees every workspace of the user, a key or an agent only what it was given
   authed.get("/workspaces", async (c) => {

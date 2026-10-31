@@ -16,6 +16,8 @@ export type Bindings = {
   GITHUB_CLIENT_SECRET?: string;
   /** All billing is fail-closed and restricted to provider TEST MODE in the private preview. */
   MONTRAL_METERING_ENABLED?: string;
+  /** Staged owner-only evidence review: OFF by default, and metered edition only. No dispatch enabled. */
+  MONTRAL_RECONCILIATION_ENABLED?: string;
   MONTRAL_BILLING_ENABLED?: string;
   MONTRAL_BILLING_MODE?: string;
   LEMONSQUEEZY_API_KEY?: string;

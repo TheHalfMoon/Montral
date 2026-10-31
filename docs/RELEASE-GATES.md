@@ -42,6 +42,7 @@
 - [x] Missing-client-IP auth fallback rate buckets and per-email signup quota (3/hour), including forged forwarding-header regression
 - [ ] Hosted unknown-IP shared-quota usability, CAPTCHA/bot defenses, credential-guessing load and reverse-proxy abuse testing
 - [ ] Hosted reverse-proxy/access-log bearer-token URL scrubbing, at-rest encryption/key rotation, data-export/privacy review and abuse-load evaluation for captured webhook payloads; HTTP privacy headers alone are not a substitute
+- [x] Local disposable pg_dump/pg_restore of 42 tables, including six populated tables (128 synthetic organizations, projects, monitors, status pages and channels), validates every table count and source stability without modifying the source; NOT hosted PITR or full content fidelity
 - [ ] Production database disaster recovery/PITR, resilience, incident drill and sustained load tests (local disposable pg_dump/restore PASSED)
 - [x] Test-mode-only Lemon Squeezy checkout and HMAC webhook simulator, one-time intent binding, idempotency and stale-event tests
 - [x] Merchant webhook HMAC and billing-event digest use byte-exact streamed request payload; only **after HMAC verification** is strict UTF-8 JSON decoded. Signed malformed UTF-8 rejects HTTP 400, altered bytes with old HMAC reject 401; real PostgreSQL red-to-green E2E

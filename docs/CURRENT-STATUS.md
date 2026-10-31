@@ -39,6 +39,8 @@
 
 - The production Node SMTP loopback qualification now additionally verifies delivery of exactly one account-recovery email to a synthetic address; real PostgreSQL recovery E2E verifies one-use reset, old-password refusal, new-password success, session invalidation and no message to unknown addresses. This is local-only, not real external inbox deliverability. [SMTP account recovery evidence](evidence/2026-10-31-local-smtp-account-recovery-qualification.md).
 
+- Stronger local restore drill now validates **all 42 table row counts** before/after restore and refuses a source count change during `pg_dump`; a synthetic 128-workspace fixture also populates project, monitor, status page and channel tables (6 nonempty tables). This is not a full byte-for-byte content check or hosted PITR. [Full-table restore evidence](evidence/2026-10-31-full-table-restore-qualification.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

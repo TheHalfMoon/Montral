@@ -61,6 +61,20 @@ describe("sendEmail through the Cloudflare binding", () => {
     expect(send.mock.calls[1][0]).not.toHaveProperty("headers");
   });
 
+  it("never prints a token echoed in a custom-header rejection", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const secret = "synthetic-unsubscribe-bearer-not-for-logs";
+    const send = vi.fn(async (m: Record<string, unknown>) => {
+      if (m.headers) throw new Error(`invalid headers: https://example.test/unsubscribe?token=${secret}`);
+      return {};
+    });
+    configureEmail({ EMAIL: { send }, EMAIL_FROM: "alerts@example.test", WEB_ORIGIN: "https://example.test" } as never);
+    await sendEmail(msg, true);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(secret);
+    expect(warn).toHaveBeenCalledWith("email binding refused custom headers, retrying without headers");
+  });
+
   it("does not send a second time when the failure has nothing to do with the headers", async () => {
     const send = vi.fn(async () => { throw new Error("timeout while sending"); });
     configureEmail({ EMAIL: { send }, EMAIL_FROM: "alerts@example.com", WEB_ORIGIN: "https://x" } as never);

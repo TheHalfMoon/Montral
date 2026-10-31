@@ -63,11 +63,11 @@ describe("alert routing policy", () => {
     expect(result.fetch).not.toHaveBeenCalled();
     expect(result.finished.slice(-2).every((r) => r.status === "failed")).toBe(true);
   });
-  it("logs the cause of a policy failure on the server only", async () => {
+  it("logs a generic routing failure without copying provider policy secrets", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const result = await run(async () => { throw new Error("secret token"); });
-    expect(log.mock.calls.flat().some((a) => a instanceof Error && a.message === "secret token")).toBe(true);
-    expect(JSON.stringify(result.finished)).not.toContain("secret token");
+    expect(log).toHaveBeenCalledWith("alert routing policy failed");
+    expect(JSON.stringify([log.mock.calls, result.finished])).not.toContain("secret token");
   });
   it("does not spend the attempt budget while the policy is down, and gives up after the window", async () => {
     vi.spyOn(console, "error").mockImplementation(() => {});

@@ -41,6 +41,7 @@
 - [x] Webhook text ingress rejects malformed UTF-8 and raw NUL before SQL (HTTP 422) with real PostgreSQL E2E coverage
 - [x] Missing-client-IP auth fallback rate buckets and per-email signup quota (3/hour), including forged forwarding-header regression
 - [ ] Hosted unknown-IP shared-quota usability, CAPTCHA/bot defenses, credential-guessing load and reverse-proxy abuse testing
+- [x] Local outbound provider error/log hardening: subscriber notification ledgers, alert retry failures, custom-header binding warnings and monthly-report email diagnostics do not echo arbitrary external exception text (synthetic credential-in-error regression); external reverse-proxy/provider logs still unqualified
 - [ ] Hosted reverse-proxy/access-log bearer-token URL scrubbing, at-rest encryption/key rotation, data-export/privacy review and abuse-load evaluation for captured webhook payloads; HTTP privacy headers alone are not a substitute
 - [x] Local 42-table PostgreSQL restore checks per-table SHA-256 normalized-content digests before/after dump and after restore; 128 synthetic organizations/projects/monitors/status pages/channels, equal-row-count tamper detection, and locally replayed CI restore step passed (NOT byte-exact WAL or hosted PITR)
 - [x] Local disposable pg_dump/pg_restore of 42 tables, including six populated tables (128 synthetic organizations, projects, monitors, status pages and channels), validates every table count and source stability without modifying the source; NOT hosted PITR or full content fidelity

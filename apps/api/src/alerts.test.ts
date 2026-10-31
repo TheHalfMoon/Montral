@@ -39,6 +39,26 @@ describe("lark channel", () => {
   });
 });
 
+describe("subscriber delivery diagnostics", () => {
+  it("never prints or persists provider errors or subscriber recipients", async () => {
+    const secret = "synthetic-subscriber-bearer-token-not-for-logs";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error(`SMTP rejected unsubscribe?token=${secret}`));
+    const recorded: Record<string, unknown>[] = [];
+    const repo = {
+      channelsToAlert: async () => [], queueDeliveries: async () => [],
+      subscribersFor: async () => [{ email: "subscriber-private@example.test", token: secret, title: "Synthetic status", slug: "synthetic", locale: "en", hideBranding: false }],
+      logDeliveries: async (rows: Record<string, unknown>[]) => void recorded.push(...rows),
+    };
+    const event = { kind: "incident.opened" as const, incident: { id: "synthetic-incident", title: "Down" }, monitor: { id: "synthetic-monitor", name: "Synthetic monitor", target: "https://example.test" } };
+    await dispatchAlert(repo as never, "synthetic-org", event, []);
+    expect(recorded).toContainEqual(expect.objectContaining({ status: "failed", error: "1/1 failed: notification delivery failed" }));
+    expect(JSON.stringify([recorded, log.mock.calls])).not.toContain(secret);
+    expect(JSON.stringify([recorded, log.mock.calls])).not.toContain("subscriber-private@example.test");
+    log.mockRestore();
+  });
+});
+
 describe("retryDeliveries", () => {
   const item = (attempts: number, over: { kind?: string; incident?: Record<string, unknown>; enabled?: boolean } = {}) => ({
     delivery: { id: "d1", kind: over.kind ?? "incident.opened", attempts, organizationId: "o" },

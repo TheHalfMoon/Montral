@@ -47,6 +47,8 @@
 
 - Monthly-report pre-send quota/preparation failures now **release only the matching PostgreSQL month claim** for a later scheduler retry; wrong-month or disabled preferences are protected, and ambiguous/partial email sends are never retried automatically. Real PostgreSQL and synthetic unit tests passed. [Monthly-report reclaim evidence](evidence/2026-10-31-monthly-report-pre-send-reclaim-qualification.md).
 
+- Outbound provider error privacy: email-binding header rejection, monthly reports, alert retries and subscriber notifications now suppress arbitrary provider exception text in ordinary logs and persisted delivery error rows. Safe diagnostic categories preserve HTTP status and routing state without copying token-bearing URLs or subscriber addresses. Synthetic secret-bearing regression passed; [provider-error evidence](evidence/2026-10-31-provider-error-privacy-qualification.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

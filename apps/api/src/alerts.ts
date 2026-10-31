@@ -49,7 +49,7 @@ export async function withProject<E extends Event>(repo: Repo, orgId: string, ev
     if (!name) return ev;
     return { ...ev, project: { id, name }, ...(hit.names.size > 1 ? { multiProject: true as const } : {}) };
   } catch (e) {
-    console.error("project name lookup failed", e);
+    console.error("project name lookup failed");
     return ev;
   }
 }
@@ -65,7 +65,15 @@ const duration = (ms: number, lang: Lang = "en") => {
   return m < 60 ? `${m}${sp}${min}` : `${Math.floor(m / 60)}${sp}${h}${m % 60 ? ` ${m % 60}${sp}${min}` : ""}`;
 };
 
-const reason = (e: unknown) => String((e as Error)?.message ?? e).slice(0, 500);
+/** Only vetted diagnostic categories may reach persisted delivery rows. Provider exceptions
+ * can echo webhook secrets, unsubscribe tokens or recipients verbatim. */
+const reason = (e: unknown) => {
+  if (e instanceof RoutingUnavailable) return ROUTING_UNAVAILABLE;
+  const message = e instanceof Error ? e.message : "";
+  if (message === "Email provider is not configured") return message;
+  const http = /\bHTTP ([1-5][0-9]{2})\b/.exec(message);
+  return http ? `notification provider HTTP ${http[1]}` : "notification delivery failed";
+};
 
 /** A slow or hung provider must not hold the check run (or the whole queue message) hostage. */
 const SEND_TIMEOUT_MS = 10_000;
@@ -153,7 +161,7 @@ export type PushedDevices = Map<string, Promise<boolean>>;
 /** Take emails for `subs` from the allowance: who may be mailed and how many were left out. A failing ledger lets them all through. */
 async function withinEmails<T>(entitlements: Entitlements, orgId: string, subs: T[]) {
   if (!subs.length) return { send: subs, skipped: 0 };
-  const granted = await entitlements.spendEmails(orgId, subs.length).catch((e) => (console.error("email allowance unavailable", e), subs.length));
+  const granted = await entitlements.spendEmails(orgId, subs.length).catch((e) => (console.error("email allowance unavailable"), subs.length));
   return { send: subs.slice(0, granted), skipped: subs.length - granted };
 }
 
@@ -216,7 +224,7 @@ async function authorizeChannel(channel: AlertChannel, ev: Event, entitlements: 
     });
   } catch (cause) {
     // the generic marker is all that reaches the delivery row; the cause (which may carry provider detail) stays in the server log
-    if (!(cause instanceof RoutingUnavailable)) console.error(`alert routing policy failed for channel ${channel.id}`, cause);
+    if (!(cause instanceof RoutingUnavailable)) console.error("alert routing policy failed");
     throw new RoutingUnavailable();
   }
   if (allowed !== true) throw new Skipped("skipped: not selected by alert routing policy");
@@ -237,7 +245,7 @@ async function execute(repo: Repo, d: Pick<AlertDelivery, "id" | "kind" | "attem
         // A crash immediately after this checkpoint may leave one email uncharged (quota is fail-open).
         let owned: boolean;
         try { owned = await repo.markDeliveryEmailQuotaAttempt(d.id, d.attempts); }
-        catch (cause) { console.error(`alert quota checkpoint failed for delivery ${d.id}`, cause); throw new RoutingUnavailable(); }
+        catch (cause) { console.error("alert quota checkpoint failed"); throw new RoutingUnavailable(); }
         if (!owned) return false;
       }
       if ((await withinEmails(meter, channel.organizationId, [channel])).skipped) throw new Skipped(SKIPPED);
@@ -247,21 +255,21 @@ async function execute(repo: Repo, d: Pick<AlertDelivery, "id" | "kind" | "attem
     return true;
   } catch (e) {
     if (e instanceof Skipped) {
-      await repo.finishDelivery(d.id, { status: "skipped", error: e.message, message: e.message }).catch((x) => console.error("could not record a skipped alert", x));
+      await repo.finishDelivery(d.id, { status: "skipped", error: e.message, message: e.message }).catch((x) => console.error("could not record a skipped alert"));
       return false;
     }
-    console.error(`alert via ${channel.name} failed`, e);
+    console.error("alert delivery failed");
     const why = reason(e);
     if (e instanceof RoutingUnavailable && RETRIED_KINDS.has(d.kind)) {
       const ageSec = d.createdAt ? (Date.now() - new Date(d.createdAt).getTime()) / 1000 : 0;
       const waiting = ageSec < ROUTING_WINDOW_SEC;
       const message = waiting ? `failed: ${why} (not counted as an attempt, trying again in ${ROUTING_RETRY_SEC / 60} min)` : `failed: ${why} (gave up after ${ROUTING_WINDOW_SEC / 3600} hours)`;
-      await repo.finishDelivery(d.id, { status: "failed", error: why, message, retryInSec: waiting ? ROUTING_RETRY_SEC : null, keepAttempts: waiting }).catch((x) => console.error("could not record a failed alert", x));
+      await repo.finishDelivery(d.id, { status: "failed", error: why, message, retryInSec: waiting ? ROUTING_RETRY_SEC : null, keepAttempts: waiting }).catch((x) => console.error("could not record a failed alert"));
       return false;
     }
     const retryInSec = !RETRIED_KINDS.has(d.kind) || attempts >= MAX_ATTEMPTS ? null : attempts === 1 ? FIRST_RETRY_DELAY_SEC : RETRY_DELAY_SEC;
     const message = retryInSec == null ? `failed: ${why}${RETRIED_KINDS.has(d.kind) ? ` (gave up after ${attempts} attempts)` : ""}` : `failed: ${why} (attempt ${attempts} of ${MAX_ATTEMPTS}, trying again in ${retryInSec >= 120 ? `${retryInSec / 60} min` : `${retryInSec} s`})`;
-    await repo.finishDelivery(d.id, { status: "failed", error: why, message, retryInSec }).catch((x) => console.error("could not record a failed alert", x));
+    await repo.finishDelivery(d.id, { status: "failed", error: why, message, retryInSec }).catch((x) => console.error("could not record a failed alert"));
     return false;
   }
 }
@@ -339,11 +347,11 @@ async function fanOut(repo: Repo, orgId: string, event: Event, channels: AlertCh
             return;
           }
           // No row means no durable retry, so a policy failure here loses this alert: say so loudly and try to leave a trace.
-          console.error(`ALERT NOT SENT via ${c.name} (${c.id}): routing policy failed and the delivery could not be queued for retry`, e);
+          console.error("ALERT NOT SENT: routing policy unavailable and retry could not be queued");
           await repo.logDeliveries([{ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "failed", error: ROUTING_UNAVAILABLE, statusMessage: `failed: ${ROUTING_UNAVAILABLE} (could not be queued for retry)` }]).catch(() => {});
           return;
         }
-        await deliver(c, ev, alertText(ev), lang, repo, pushed).catch((e) => console.error(`alert via ${c.name} failed`, e));
+        await deliver(c, ev, alertText(ev), lang, repo, pushed).catch((e) => console.error("alert delivery failed"));
         return;
       }
       const claimed = await repo.claimDelivery(row.id);
@@ -604,7 +612,7 @@ async function mailSubscribers(
       return sendEmail({ to: s.email, subject: o.subject(s.title, lang), fromName: white ? s.title : `${s.title} via Montral`, headers: { "List-Unsubscribe": `<${unsubscribe}>`, "List-Unsubscribe-Post": "List-Unsubscribe=One-Click" }, ...mail }, true);
     }),
   );
-  results.forEach((r, i) => r.status === "rejected" && console.error(`subscriber email to ${subs[i].email} failed`, r.reason));
+  if (results.some((r) => r.status === "rejected")) console.error("subscriber email delivery failed");
   const bad = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
   return { total: subs.length, failed: results.filter((r) => r.status === "rejected").length, error: bad ? reason(bad.reason) : "" };
 }
@@ -651,7 +659,7 @@ export async function notifyIncidentUpdate(
     title: (lang) => `${label(lang)}: ${inc.title}`,
     body: () => update.body,
     badge: (lang) => ({ label: label(lang), tone: update.status === "resolved" ? "up" : update.status === "investigating" ? "down" : "warn" }),
-  }).catch((e) => console.error("incident update notify failed", e));
+  }).catch((e) => console.error("incident update notify failed"));
 }
 
 /** How many times a reminder whose every mail failed is handed back before it is given up on. */
@@ -673,7 +681,7 @@ export async function sendMaintenanceReminders(repo: Repo, entitlements: Entitle
       // retry budget as mail failures, and continue so one page cannot strand the rest of the claimed batch.
       console.error("maintenance subscriber policy unavailable");
       const retry = await repo.withinLimit(`maint-reminder:${r.window.id}:${r.page.id}`, REMINDER_ATTEMPTS, 24 * 3600).catch(() => false);
-      if (retry) await repo.releaseMaintenanceReminder(r.window.id, r.page.id).catch((e) => console.error("maintenance reminder release failed", e));
+      if (retry) await repo.releaseMaintenanceReminder(r.window.id, r.page.id).catch((e) => console.error("maintenance reminder release failed"));
       continue;
     }
     // the plan allows no more mail: nothing to send and nothing to retry, so the claim stays
@@ -683,10 +691,10 @@ export async function sendMaintenanceReminders(repo: Repo, entitlements: Entitle
       title: (lang) => tr(lang, "Scheduled maintenance: {name}", { name: r.window.name }),
       body: (lang) => `${tr(lang, "Scheduled maintenance for {title} starts soon. Checks keep running, but alerts are paused while it lasts.", { title: r.page.title })}\n\n${tr(lang, "Starts")}: ${utc(r.window.startsAt)}\n${tr(lang, "Ends")}: ${utc(r.window.endsAt)}`,
       badge: (lang) => ({ label: tr(lang, "Scheduled"), tone: "neutral" }),
-    }).catch((e) => { console.error("maintenance reminder failed", e); return null; });
+    }).catch((e) => { console.error("maintenance reminder failed"); return null; });
     if (sent && sent.failed < sent.total) continue;
     // every mail failed: hand the claim back for another try, up to REMINDER_ATTEMPTS times
     const retry = await repo.withinLimit(`maint-reminder:${r.window.id}:${r.page.id}`, REMINDER_ATTEMPTS, 24 * 3600).catch(() => false);
-    if (retry) await repo.releaseMaintenanceReminder(r.window.id, r.page.id).catch((e) => console.error("maintenance reminder release failed", e));
+    if (retry) await repo.releaseMaintenanceReminder(r.window.id, r.page.id).catch((e) => console.error("maintenance reminder release failed"));
   }
 }

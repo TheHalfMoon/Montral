@@ -83,7 +83,8 @@ describe("monthly report email quota safety", () => {
     expect(await sendMonthlyReports(db as never, when)).toBe(1);
     expect(sendEmail).toHaveBeenCalledTimes(2);
     expect(db.releaseMonthlyReportClaim).not.toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("monthly report failed", expect.any(Error));
+    expect(log).toHaveBeenCalledWith("monthly report email delivery failed");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("provider accepted but failed to acknowledge");
   });
 
   it("logs only a generic error if releasing an unattempted claim fails", async () => {

@@ -46,7 +46,54 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_usage_meter_v1"];
+  // A separately persisted, idempotent single-recipient email quota reservation.
+  // This is a staged primitive: the monthly report sender is deliberately not
+  // switched over until durable outbox phase transitions share an atomic boundary.
+  await db.query(`CREATE TABLE IF NOT EXISTS montral_usage_reservation (
+    organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+    period_start timestamptz NOT NULL,
+    kind text NOT NULL CHECK (kind = 'emails'),
+    idempotency_key text NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+    requested integer NOT NULL DEFAULT 1 CHECK (requested = 1),
+    granted integer NOT NULL CHECK (granted IN (0,1)),
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (organization_id,period_start,kind,idempotency_key)
+  )`);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_spend_usage_once(
+      p_org text, p_start timestamptz, p_kind text, p_key text, p_limit integer
+    ) RETURNS TABLE (granted integer, is_new boolean) LANGUAGE plpgsql AS $montral$
+    DECLARE previous_grant integer; reserved_grant integer;
+    BEGIN
+      IF p_org IS NULL OR p_start IS NULL OR p_kind IS DISTINCT FROM 'emails'
+        OR p_key IS NULL OR char_length(p_key) NOT BETWEEN 1 AND 200
+        OR p_limit IS NULL OR p_limit < 0
+        OR p_start <> (date_trunc('month', p_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') THEN
+        RAISE EXCEPTION 'invalid idempotent email reservation';
+      END IF;
+      -- Share the *same* serialisation key with existing spend usage operations.
+      -- A process crash rolls the quota debit and reservation row back together.
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':' || p_kind, 0));
+      SELECT r.granted INTO previous_grant FROM montral_usage_reservation r
+        WHERE r.organization_id = p_org AND r.period_start = p_start
+        AND r.kind = p_kind AND r.idempotency_key = p_key;
+      IF FOUND THEN
+        -- Replay returns the original grant, but is_new=false tells callers
+        -- that there is no new entitlement to send an extra email.
+        RETURN QUERY SELECT previous_grant, false;
+        RETURN;
+      END IF;
+      SELECT montral_spend_usage(p_org, p_start, p_kind, 1, p_limit) INTO reserved_grant;
+      INSERT INTO montral_usage_reservation
+        (organization_id, period_start, kind, idempotency_key, requested, granted)
+        VALUES (p_org, p_start, p_kind, p_key, 1, reserved_grant);
+      -- Store exhausted/denied reservations too. A plan upgrade after denial
+      -- must not silently replay the same logical dispatch in the same period.
+      RETURN QUERY SELECT reserved_grant, true;
+    END;
+    $montral$
+  `);
+  return ["montral_usage_meter_v1", "montral_usage_reservation_v1"];
 }
 
 export function calendarMonthUtc(now: Date = new Date()): { start: Date; end: Date } {
@@ -87,6 +134,18 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     );
     return Math.max(0, Math.min(count, Number(rows[0]?.granted ?? 0)));
   };
+  const reserveEmailQuotaOnce = async (org: string, key: string): Promise<{ granted: boolean; newlyReserved: boolean }> => {
+    if (typeof key !== "string" || key.length < 1 || key.length > 200) throw new Error("Invalid email quota reservation key");
+    const [limits, { start }] = [TABLE[await tier(org)], calendarMonthUtc()];
+    const rows = await database.query<{ granted: number; is_new: boolean }>(
+      "SELECT granted,is_new FROM montral_spend_usage_once($1::text,$2::timestamptz,'emails',$3::text,$4::integer)",
+      [org, start.toISOString(), key, limits.emails],
+    );
+    const record = rows[0];
+    if (!record || (Number(record.granted) !== 0 && Number(record.granted) !== 1) || typeof record.is_new !== "boolean")
+      throw new Error("Invalid email reservation result");
+    return { granted: Number(record.granted) === 1, newlyReserved: record.is_new };
+  };
   const balance = async (org: string, kind: "credits" | "emails"): Promise<CreditBalance> => {
     const limits = TABLE[await tier(org)];
     const { start, end } = calendarMonthUtc();
@@ -111,6 +170,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     spendCredits: (org, count) => spend(org, count, "credits"),
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
+    reserveEmailQuotaOnce,
     emailBalance: org => balance(org, "emails"),
     plan,
   };

@@ -72,6 +72,8 @@
 
 - **Monthly report durable outbox — DB foundation STAGED:** append-only Drizzle `0041` creates per-owner/month records and strict state checks; new Postgres repository APIs atomically reserve immutable owners, claim the initial attempt, record accepted/uncertain, reject ownership/email changes and report opt-out, and expose aggregate counts. Nine real PostgreSQL regressions PASS, including a concurrent 0040→0041 legacy-claim upgrade. Mac **887/887** full suite PASS; 43-table/110-synthetic-org restore drill PASS. **Not connected to SMTP or the existing non-idempotent quota meter; no automatic resend is enabled.** [Evidence](evidence/2026-10-31-monthly-outbox-postgres-foundation.md) and [remaining integration contract](architecture/monthly-report-recipient-outbox.md).
 
+- **Idempotent monthly email quota reservation — STAGED:** new PostgreSQL edition table/function record one per-recipient email quota decision with a unique logical key; shared advisory locking with ordinary email spending, transaction rollback, and explicit `{granted,newlyReserved}` replay semantics prevent duplicate debit/unsafe resend eligibility. Seven real PostgreSQL synthetic regressions, Mac **894/894** package tests, three builds, TypeScript, Chromium/SMTP loopback and 44-table/110-synthetic-organization SHA-256 restore drill PASS. **Not connected to production report sender or yet joined atomically to outbox state.** [Evidence](evidence/2026-10-31-idempotent-email-quota-reservation.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

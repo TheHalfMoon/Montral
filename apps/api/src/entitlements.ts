@@ -27,6 +27,12 @@ export interface Entitlements {
   creditBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** Like `spendCredits`, for notification emails (alerts and status-page subscriber mails). System mails are never counted. */
   spendEmails(workspaceId: string, count: number): Promise<number>;
+  /** STAGED ONLY: an idempotent single-email quota reservation for a durable
+   * monthly recipient dispatch key. Only `newlyReserved && granted` may ever
+   * authorize a *first* attempt; `granted` on replay is bookkeeping, NOT
+   * permission to resend. Absent when metering is disabled. Not yet used by
+   * the active monthly report sender. */
+  reserveEmailQuotaOnce?(workspaceId: string, idempotencyKey: string): Promise<{ granted: boolean; newlyReserved: boolean }>;
   /** The email allowance and what is used of it, for display. null when emails are not metered. */
   emailBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** The plan the workspace is on, with its hard limits. null when this deployment has no plans. */

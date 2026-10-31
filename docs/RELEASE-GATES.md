@@ -68,6 +68,7 @@
 - [x] Local credit allowance guard accepts only safe integers 0..requested; malformed successful grants skip billable probes but preserve zero-cost heartbeat; metering exceptions intentionally fail open with secret-safe logs. Eight synthetic regressions passed. [Mac evidence](evidence/2026-10-31-mac-requalification-credit-grant-guard.md)
 - [ ] Production usage quota/cost/load validation and period aligned with subscription renewal
 - [x] Local Email binding custom-header compatibility retries only explicitly rejected header schemas, not unrelated post-acceptance errors mentioning `header`; synthetic 1-vs-2 mail attempts and token-log regressions verified (real provider remains unqualified)
+- [x] Local subscriber branding fallback and per-recipient preparation isolation: failed nonessential white-label entitlement lookups default to branded mail without bypassing access policy or quota; malformed recipient preparation does not abort peers. Four regression tests, **875/875 Mac suite**, local Chromium/SMTP PASS; real provider still unqualified. [Evidence](evidence/2026-10-31-subscriber-branding-outage-isolation.md)
 - [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review
 - [ ] Explicit user decision to publish the SaaS. Until then, keep repo private and **do not deploy**

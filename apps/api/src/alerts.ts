@@ -637,8 +637,16 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
   }
 }
 
-/** A page that hides the Montral brand also sends its mail under its own name, when the plan allows it. */
-const mayHideBranding = async (entitlements: Entitlements, orgId: string) => (await entitlements.plan(orgId))?.hideBranding !== false;
+/** A branding entitlement is cosmetic, not a reason to silence incident/maintenance mail.
+ * Fail closed on white-label permission when the plan backend is unavailable. */
+const mayHideBranding = async (entitlements: Entitlements, orgId: string) => {
+  try { return (await entitlements.plan(orgId))?.hideBranding !== false; }
+  catch {
+    // Plan errors can contain customer billing or provider credentials.
+    console.error("subscriber branding entitlement unavailable; using Montral branding");
+    return false;
+  }
+};
 
 async function mailSubscribers(
   subs: SubscriberTarget[],
@@ -646,7 +654,9 @@ async function mailSubscribers(
   o: { subject: (pageTitle: string, lang: Lang) => string; title: (lang: Lang) => string; body: (lang: Lang) => string; badge: (lang: Lang) => { label: string; tone: "down" | "up" | "warn" | "neutral" } },
 ) {
   const results = await Promise.allSettled(
-    subs.map((s) => {
+    // An unexpected malformed recipient/renderer error must not stop other recipients.
+    // Convert preparation errors to rejected per-recipient promises before allSettled.
+    subs.map(async (s) => {
       const lang: Lang = isLang(s.locale) ? s.locale : "en";
       const white = allowHide && s.hideBranding;
       const mail = actionEmail({

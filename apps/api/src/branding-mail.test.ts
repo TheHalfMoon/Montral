@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Repo } from "@montral/repo";
 import { notifyIncidentUpdate } from "./alerts";
 import { actionEmail, configureEmail, setMailTransport } from "./email";
@@ -32,6 +32,33 @@ describe("white-labelled mail", () => {
     expect(sent.find((m) => m.to === "hidden@example.com")).toMatchObject({ fromName: "Acme Status" });
     expect(sent.find((m) => m.to === "hidden@example.com")!.html).not.toContain("logo-mark.png");
     expect(sent.find((m) => m.to === "shown@example.com")).toMatchObject({ fromName: "Acme Status via Montral" });
+  });
+
+  it("delivers incident updates with normal branding when the plan backend fails", async () => {
+    const secret = "synthetic-provider-secret-DO-NOT-LOG";
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const meter: Entitlements = {
+      ...unmetered,
+      plan: async () => { throw new Error(`Billing connection failed: ${secret}`); },
+    };
+    try {
+      await expect(notifyIncidentUpdate(repo, inc, update, meter)).resolves.toBeUndefined();
+      expect(sent.map((m) => m.to)).toEqual(["hidden@example.com", "shown@example.com"]);
+      expect(sent.map((m) => m.fromName)).toEqual(["Acme Status via Montral", "Acme Status via Montral"]);
+      expect(sent.every((m) => m.html.includes("logo-mark.png"))).toBe(true);
+      expect(log).toHaveBeenCalledWith("subscriber branding entitlement unavailable; using Montral branding");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally { log.mockRestore(); }
+  });
+
+  it("isolates a malformed subscriber while sending a valid incident update", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const broken = { subscribersFor: async () => [null, target("healthy@example.com", false)] } as unknown as Repo;
+    try {
+      await expect(notifyIncidentUpdate(broken, inc, update)).resolves.toBeUndefined();
+      expect(sent.map((m) => m.to)).toEqual(["healthy@example.com"]);
+      expect(log).toHaveBeenCalledWith("subscriber email delivery failed");
+    } finally { log.mockRestore(); }
   });
 
   it("keeps the Montral brand for everyone when the plan does not include hiding it", async () => {

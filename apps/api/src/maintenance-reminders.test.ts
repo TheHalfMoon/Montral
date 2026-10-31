@@ -67,6 +67,40 @@ describe("sendMaintenanceReminders", () => {
     expect(denied.released).toEqual([]);
   });
 
+  it("sends all claimed maintenance windows under Montral branding when plan lookup fails", async () => {
+    const secret = "synthetic-secret-merchant-token-not-for-logs";
+    const f = fake();
+    const sent: { to: string; fromName: string; html: string }[] = [];
+    setMailTransport(async (mail) => { sent.push(mail); });
+    const second = { ...claim, window: { ...claim.window, id: "w2" }, subscribers: [{ ...claim.subscribers[0], email: "later@example.com", hideBranding: true }] };
+    f.repo.claimMaintenanceReminders = async () => [
+      { ...claim, subscribers: [{ ...claim.subscribers[0], hideBranding: true }] },
+      second,
+    ] as never;
+    const plan = vi.fn(async () => { throw new Error(secret); });
+    await expect(sendMaintenanceReminders(f.repo, { ...f.entitlements, plan })).resolves.toBeUndefined();
+    expect(sent.map((m) => m.to)).toEqual(["a@example.com", "later@example.com"]);
+    expect(sent.map((m) => m.fromName)).toEqual(["Acme via Montral", "Acme via Montral"]);
+    expect(sent.every((m) => m.html.includes("logo-mark.png"))).toBe(true);
+    expect(f.released).toEqual([]);
+    expect(plan).toHaveBeenCalledTimes(2);
+    expect(console.error).toHaveBeenCalledWith("subscriber branding entitlement unavailable; using Montral branding");
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(secret);
+  });
+
+  it("never bypasses subscriber access policy when both the plan and policy are unavailable", async () => {
+    const f = fake();
+    const sent = vi.fn(); setMailTransport(sent);
+    const meter = {
+      ...f.entitlements,
+      canNotifySubscriber: async () => { throw new Error("private subscriber policy token"); },
+      plan: async () => { throw new Error("billing unavailable"); },
+    };
+    await sendMaintenanceReminders(f.repo, meter);
+    expect(sent).not.toHaveBeenCalled();
+    expect(f.released).toEqual(["w1"]);
+  });
+
   it("keeps the claim when the plan's email allowance leaves nobody to mail", async () => {
     const f = fake(0);
     await sendMaintenanceReminders(f.repo, f.entitlements);

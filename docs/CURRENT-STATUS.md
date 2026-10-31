@@ -66,6 +66,8 @@
 
 - **Initial alert fanout and subscriber isolation:** channel-lookup, queue and individual channel claim/audit errors no longer suppress unrelated status-page subscriber notifications or other healthy channels. An ambiguous queue write is not bypassed by an unsafe untracked channel send; interrupted claims follow the existing timed recovery. Five synthetic regressions and Mac **871/871** package tests, TypeScript, three builds, Chromium, SMTP loopback and local SHA-256 restore drill PASSED. [Evidence](evidence/2026-10-31-initial-alert-fanout-isolation.md).
 
+- **Subscriber branding-outage resilience**: failed optional white-label plan lookups now produce Montral-branded subscriber mail instead of suppressing incident updates or maintenance reminders; a malformed individual subscriber no longer starves healthy recipients. Authorization and email quota rules still apply. Four synthetic cases added; Mac **875/875** package tests, TypeScript, all builds, Chromium, SMTP loopback and limited-data SHA-256 restore drill passed. [Evidence](evidence/2026-10-31-subscriber-branding-outage-isolation.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

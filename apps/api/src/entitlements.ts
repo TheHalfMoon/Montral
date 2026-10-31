@@ -33,6 +33,13 @@ export interface Entitlements {
    * permission to resend. Absent when metering is disabled. Not yet used by
    * the active monthly report sender. */
   reserveEmailQuotaOnce?(workspaceId: string, idempotencyKey: string): Promise<{ granted: boolean; newlyReserved: boolean }>;
+  /** STAGED ONLY. Atomically reserves one recipient's quota and moves its
+   * durable monthly outbox record out of `prepared`; a returned `attempted`
+   * permits at most one later SMTP attempt. No active sender uses this API.
+   * Already-claimed / uncertain results MUST NOT be replayed. */
+  claimMonthlyOutboxAttempt?(workspaceId: string, reportMonth: string, recipientUserId: string): Promise<
+    "attempted" | "quota_denied" | "already_claimed" | "not_eligible" | "prior_reservation_uncertain"
+  >;
   /** The email allowance and what is used of it, for display. null when emails are not metered. */
   emailBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** The plan the workspace is on, with its hard limits. null when this deployment has no plans. */

@@ -93,7 +93,70 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_usage_meter_v1", "montral_usage_reservation_v1"];
+  // STAGED ONLY. Move exactly one prepared monthly recipient to its first
+  // attempt, coupled with its quota decision in a *single* PostgreSQL transaction.
+  // Never call SMTP from this function: the caller must commit `attempted` first.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_claim_monthly_report_send(
+      p_org text, p_report_month text, p_user text,
+      p_period timestamptz, p_limit integer
+    ) RETURNS text LANGUAGE plpgsql AS $montral$
+    DECLARE previous_state text; recipient_address text;
+            reservation record; quota_key text;
+    BEGIN
+      IF p_org IS NULL OR p_user IS NULL OR p_report_month IS NULL
+         OR p_report_month !~ '^[0-9]{4}-(0[1-9]|1[0-2])$'
+         OR p_period IS NULL OR p_limit IS NULL OR p_limit < 0
+         OR p_period <> (date_trunc('month', p_period AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
+         OR to_char((p_period AT TIME ZONE 'UTC') - interval '1 month','YYYY-MM') <> p_report_month
+      THEN
+        RAISE EXCEPTION 'invalid monthly outbox claim';
+      END IF;
+      -- Lock the outbox row before the metering advisory lock. Concurrent
+      -- attempts on the same recipient cannot each reserve a separate debit.
+      SELECT r.state, r.recipient_email INTO previous_state, recipient_address
+        FROM monthly_report_recipient r
+        WHERE r.organization_id=p_org AND r.report_month=p_report_month
+        AND r.recipient_user_id=p_user FOR UPDATE;
+      IF NOT FOUND THEN RETURN 'not_eligible'; END IF;
+      IF previous_state <> 'prepared' THEN RETURN 'already_claimed'; END IF;
+      -- Prevent sends after report opt-out, claim rollover, owner removal, or
+      -- email changes since the original immutable recipient snapshot.
+      IF NOT EXISTS (
+        SELECT 1 FROM workspace_setting w
+        JOIN member m ON m.organization_id=w.organization_id
+        JOIN "user" u ON u.id=m.user_id
+        WHERE w.organization_id=p_org AND w.monthly_report=true
+          AND w.last_report_month=p_report_month
+          AND m.user_id=p_user AND m.role='owner'
+          AND u.email=recipient_address
+      ) THEN RETURN 'not_eligible'; END IF;
+      quota_key := 'monthly:' || p_report_month || ':' || p_user;
+      SELECT q.granted, q.is_new INTO reservation FROM montral_spend_usage_once(
+        p_org,p_period,'emails',quota_key,p_limit) q;
+      IF reservation.granted=0 THEN
+        -- Terminal denial: the schema's attempted_at is the durable decision
+        -- timestamp for skipped records (no SMTP request occurred).
+        UPDATE monthly_report_recipient SET state='skipped',
+          attempted_at=NOW(), decided_at=NOW()
+          WHERE organization_id=p_org AND report_month=p_report_month AND recipient_user_id=p_user;
+        RETURN 'quota_denied';
+      END IF;
+      IF reservation.is_new IS DISTINCT FROM true THEN
+        -- A prior reservation might have preceded provider acceptance. Treat
+        -- this as uncertain rather than minting another send authorization.
+        UPDATE monthly_report_recipient SET state='uncertain',
+          attempted_at=NOW(), decided_at=NOW()
+          WHERE organization_id=p_org AND report_month=p_report_month AND recipient_user_id=p_user;
+        RETURN 'prior_reservation_uncertain';
+      END IF;
+      UPDATE monthly_report_recipient SET state='attempted', attempted_at=NOW()
+        WHERE organization_id=p_org AND report_month=p_report_month AND recipient_user_id=p_user;
+      RETURN 'attempted';
+    END;
+    $montral$
+  `);
+  return ["montral_usage_meter_v1", "montral_usage_reservation_v1", "montral_monthly_outbox_quota_claim_v1"];
 }
 
 export function calendarMonthUtc(now: Date = new Date()): { start: Date; end: Date } {
@@ -146,6 +209,23 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
       throw new Error("Invalid email reservation result");
     return { granted: Number(record.granted) === 1, newlyReserved: record.is_new };
   };
+  const claimMonthlyOutboxAttempt = async (
+    org: string, reportMonth: string, userId: string,
+  ): Promise<"attempted" | "quota_denied" | "already_claimed" | "not_eligible" | "prior_reservation_uncertain"> => {
+    if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(reportMonth) || !org || !userId)
+      throw new Error("Invalid monthly outbox claim");
+    const { start } = calendarMonthUtc();
+    const limits = TABLE[await tier(org)];
+    const rows = await database.query<{ result: string }>(
+      "SELECT montral_claim_monthly_report_send($1::text,$2::text,$3::text,$4::timestamptz,$5::integer) AS result",
+      [org, reportMonth, userId, start.toISOString(), limits.emails],
+    );
+    const status = rows[0]?.result;
+    if (status !== "attempted" && status !== "quota_denied" && status !== "already_claimed"
+      && status !== "not_eligible" && status !== "prior_reservation_uncertain")
+      throw new Error("Invalid monthly outbox claim result");
+    return status;
+  };
   const balance = async (org: string, kind: "credits" | "emails"): Promise<CreditBalance> => {
     const limits = TABLE[await tier(org)];
     const { start, end } = calendarMonthUtc();
@@ -171,6 +251,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
     reserveEmailQuotaOnce,
+    claimMonthlyOutboxAttempt,
     emailBalance: org => balance(org, "emails"),
     plan,
   };

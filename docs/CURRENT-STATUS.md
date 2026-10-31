@@ -74,6 +74,8 @@
 
 - **Idempotent monthly email quota reservation — STAGED:** new PostgreSQL edition table/function record one per-recipient email quota decision with a unique logical key; shared advisory locking with ordinary email spending, transaction rollback, and explicit `{granted,newlyReserved}` replay semantics prevent duplicate debit/unsafe resend eligibility. Seven real PostgreSQL synthetic regressions, Mac **894/894** package tests, three builds, TypeScript, Chromium/SMTP loopback and 44-table/110-synthetic-organization SHA-256 restore drill PASS. **Not connected to production report sender or yet joined atomically to outbox state.** [Evidence](evidence/2026-10-31-idempotent-email-quota-reservation.md).
 
+- **Atomic monthly email outbox+quota claim — STAGED:** new Montral edition SQL function locks an unattempted recipient and atomically books the single idempotent quota grant plus outbox transition. Eight real PostgreSQL race, abort, insufficient quota, stale owner/email/report and prior ambiguous reservation tests PASS; **902/902** Mac tests and 44-table/110-synthetic-organization SHA-256 restore PASS. **The production monthly SMTP sender does not yet call this function, nor provide crash reconciliation.** [Evidence](evidence/2026-10-31-atomic-monthly-outbox-quota-claim.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

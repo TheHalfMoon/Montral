@@ -86,11 +86,11 @@ try {
     throw new Error(`Restored table contents differ: ${contentDrift.join(", ") || "table set differs"}`);
   }
   const nonemptyTables = tableNames.filter(t => Number(sourceCounts[t]) > 0).length;
-  const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_capture_hook_event','montral_apply_billing_event','montral_spend_usage','montral_spend_usage_once','montral_reserve_billing_intent')");
-  if (Number(functions) !== 6) throw new Error("Expected business-critical Postgres functions missing from restore");
+  const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_capture_hook_event','montral_apply_billing_event','montral_spend_usage','montral_spend_usage_once','montral_claim_monthly_report_send','montral_reserve_billing_intent')");
+  if (Number(functions) !== 7) throw new Error("Expected business-critical Postgres functions missing from restore");
   const appTables = await sql(restoredUrl.href, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('montral_hook_inbox','montral_hook_event','montral_subscription','montral_billing_event','montral_usage','montral_usage_reservation')");
   if (Number(appTables) !== 6) throw new Error("Montral-specific tables missing from restored database");
-  successMessage = `RESTORE_DRILL_PASS: ${tableCount} tables (${nonemptyTables} nonempty), ${orgCount} synthetic organizations, every table row count and SHA-256 content fingerprint matched; all webhook/billing/usage tables and 6 transactional functions restored`;
+  successMessage = `RESTORE_DRILL_PASS: ${tableCount} tables (${nonemptyTables} nonempty), ${orgCount} synthetic organizations, every table row count and SHA-256 content fingerprint matched; all webhook/billing/usage tables and 7 transactional functions restored`;
 } finally {
   try {
     if (created) await tools("dropdb", ["--if-exists", "--", restoreDb]);

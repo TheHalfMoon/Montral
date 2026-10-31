@@ -31,6 +31,32 @@ describe("runDueChecks", () => {
   });
 });
 
+describe("scheduler housekeeping isolation and private diagnostics", () => {
+  it("continues retries and optional maintenance after failed sweep and purge without leaking errors", async () => {
+    const secret = "synthetic-PG-URL-and-SMTP-secret-DO-NOT-LOG";
+    const calls: string[] = [];
+    const repo = {
+      claimDue: async () => [],
+      sweepStuckDeliveries: async () => { calls.push("sweep"); throw new Error(secret); },
+      claimRetries: async () => { calls.push("retry"); return []; },
+      claimReminders: async () => { calls.push("reminder"); return []; },
+      claimEscalations: async () => { calls.push("escalation"); return []; },
+      purgeExpired: async () => { calls.push("purge"); throw new Error(secret); },
+      claimMaintenanceReminders: async () => { calls.push("maintenance"); return []; },
+    } as unknown as Repo;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-31T10:00:00.000Z"));
+    try {
+      expect(await runDueChecks(repo)).toBe(0);
+      expect(calls).toEqual(["sweep", "retry", "reminder", "escalation", "purge", "maintenance"]);
+      expect(log).toHaveBeenCalledWith("delivery sweep failed");
+      expect(log).toHaveBeenCalledWith("expired monitor purge failed");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally { vi.useRealTimers(); log.mockRestore(); }
+  });
+});
+
 describe("queue delivery", () => {
   const at = new Date("2026-01-01T00:01:00.000Z");
   const http = (id: string, over: Partial<Monitor> = {}) => ({ id, organizationId: "o", type: "http", target: "not a url", paused: false, nextCheckAt: at, ...over }) as Monitor;
@@ -65,6 +91,43 @@ describe("queue delivery", () => {
     // it was never started, so the run is still unclaimed
     const started = await repo.beginRuns([{ id: "h", token: at }]);
     expect(started).toEqual(["h"]);
+  });
+
+  it("releases failed queue claims without logging either queue or database secrets", async () => {
+    const secret = "synthetic-queue-webhook-token-DO-NOT-LOG";
+    const due = [http("synthetic-monitor")];
+    let released = 0;
+    const repo = {
+      claimDue: async () => due,
+      releaseClaims: async () => { released++; throw new Error(`release rejected: ${secret}`); },
+      sweepStuckDeliveries: async () => 0,
+      claimRetries: async () => [], claimReminders: async () => [], claimEscalations: async () => [],
+      purgeExpired: async () => {},
+    } as unknown as Repo;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const count = await runDueChecks(repo, { sendBatch: async () => { throw new Error(`queue rejected ${secret}`); } });
+      expect(count).toBe(0);
+      expect(released).toBe(1);
+      expect(log).toHaveBeenCalledWith("could not queue checks, releasing them");
+      expect(log).toHaveBeenCalledWith("could not release claims");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally { log.mockRestore(); }
+  });
+
+  it("logs no private monitor target when a queued check fails", async () => {
+    const secret = "synthetic-provider-bearer-private";
+    const monitor = http("synthetic-monitor", { type: "heartbeat" });
+    const repo = {
+      monitorsByIds: async () => [monitor],
+      recordObservation: async () => { throw new Error(`database lost ${secret}`); },
+    } as unknown as Repo;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(processCheckMessage(repo, { ids: [monitor.id] })).resolves.toBeUndefined();
+      expect(log).toHaveBeenCalledWith("check failed for synthetic-monitor");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally { log.mockRestore(); }
   });
 
   it("hands the monitors back when they could not be queued", async () => {
@@ -556,7 +619,7 @@ describe("checkOne across regions", () => {
     const { repo, incidents } = repoWithRecords();
     await checkOne(repo, web({ minRegionsFailing: 3 }));
     expect(incidents).toHaveLength(0);
-    expect(info).toHaveBeenCalledWith(expect.stringContaining("2 of 3 regions failed, 3 needed"));
+    expect(info).toHaveBeenCalledWith(expect.stringContaining("no change, some regions unavailable"));
     info.mockRestore();
   });
 

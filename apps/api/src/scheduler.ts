@@ -64,9 +64,9 @@ export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements:
         } catch (e) {
           // Claimed but not queued: without this the monitors would sit idle until their next interval. Hand back everything
           // of this round that was not sent and stop; the next tick picks it up again.
-          console.error("could not queue checks, releasing them", e);
+          console.error("could not queue checks, releasing them");
           const unsent = messages.slice(i).flatMap((m) => m.body.ids.map((id) => ({ id, token: claimed.get(id)! }))).filter((r) => r.token);
-          await repo.releaseClaims(unsent).catch((err) => console.error("could not release claims", err));
+          await repo.releaseClaims(unsent).catch(() => console.error("could not release claims"));
           total -= unsent.length;
           return housekeeping(repo, queue, total, entitlements);
         }
@@ -79,9 +79,10 @@ export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements:
   return housekeeping(repo, queue, total, entitlements);
 }
 
-/** One housekeeping step must not stop the next. */
+/** Each housekeeping failure is isolated and logged by a fixed diagnostic only.
+ * Provider/DB exceptions can contain bearer URLs, SMTP credentials, or raw monitor targets. */
 const step = async (what: string, run: () => Promise<unknown>) => {
-  try { await run(); } catch (e) { console.error(`${what} failed`, e); }
+  try { await run(); } catch { console.error(`${what} failed`); }
 };
 
 async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0, entitlements: Entitlements = unmetered) {
@@ -93,11 +94,11 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
   await step("alert reminders", () => sendReminders(repo, entitlements, queue ? 10 : 3));
   await step("alert escalations", () => sendEscalations(repo, entitlements, queue ? 10 : 3));
   // cheap housekeeping once an hour
-  if (new Date().getMinutes() === 0) await repo.purgeExpired();
+  if (new Date().getMinutes() === 0) await step("expired monitor purge", () => repo.purgeExpired());
   // reminders and reports are claimed in the database before they are sent, so a coarse cadence is enough
   if (new Date().getMinutes() % 5 === 0) {
-    await sendMaintenanceReminders(repo, entitlements).catch((e) => console.error("maintenance reminders failed", e));
-    await sendMonthlyReports(repo, new Date(), entitlements).catch((e) => console.error("monthly reports failed", e));
+    await sendMaintenanceReminders(repo, entitlements).catch(() => console.error("maintenance reminders failed"));
+    await sendMonthlyReports(repo, new Date(), entitlements).catch(() => console.error("monthly reports failed"));
   }
   return total;
 }
@@ -160,7 +161,8 @@ async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements)
     // one failing monitor must not take the rest of the batch down with it
     const batch = monitors.slice(i, i + CONCURRENCY);
     const results = await Promise.allSettled(batch.map((m) => checkOne(repo, m, entitlements, true)));
-    results.forEach((r, j) => r.status === "rejected" && console.error(`check failed for ${batch[j].id}`, r.reason));
+    // Rejected exception objects can contain private probe targets or bearer tokens.
+    results.forEach((r, j) => r.status === "rejected" && console.error(`check failed for ${batch[j].id}`));
   }
 }
 
@@ -172,11 +174,11 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
       : await measure(m, repo);
   // the prober itself had no connectivity: the check says nothing about the monitor, so nothing is recorded or counted
   if (out.inconclusive) {
-    console.warn(`check for ${m.id} discarded: ${out.error ?? "this location is offline"}`);
+    console.warn(`check for ${m.id} discarded: probe unavailable`);
     return;
   }
   // a region that failed without the monitor going down leaves a trace, so a skipped change can be explained
-  if (regionNote && out.ok) console.info(`monitor ${m.id}: no change, ${regionNote}`);
+  if (regionNote && out.ok) console.info(`monitor ${m.id}: no change, some regions unavailable`);
   if (!(await repo.recordObservation(m, out, { generation: scheduled ? m.runGeneration : undefined }))) return;
   if (out.domainExpiry) {
     if (!(await repo.acceptDomainExpiry(m, out.domainExpiry))) return;
@@ -337,7 +339,7 @@ async function alertHistory(repo: Repo, inc: { id: string; organizationId: strin
     const openedAt = latest("incident.opened", true);
     return { openedAt, resolvedAt: latest("incident.resolved", true), muted: latest("incident.muted", false) > openedAt };
   } catch (e) {
-    console.error("alert history unavailable, alerting anyway", e);
+    console.error("alert history unavailable, alerting anyway");
     return NO_HISTORY;
   }
 }

@@ -60,6 +60,8 @@
 
 - **Newest Mac requalification**: Node v24.22.1 + pnpm 10.0.0 and local PostgreSQL 17.9, **861/861 tests** (633 API, 86 DB, 20 probe, 122 web), three production builds, all TypeScript checks and 638 preserved source hashes passed. Real offline Chromium E2E, synthetic loopback SMTP, and 42-table SHA-256 restore drill also passed. Credit-grant validation refuses malformed successful grants while preserving free heartbeat and deliberately fail-open monitoring on ledger exceptions. [Evidence](evidence/2026-10-31-mac-requalification-credit-grant-guard.md).
 
+- **Scheduler error-log privacy and failure isolation**: queue, claim-release, maintenance, retry, individual probe and alert-history errors now use constant diagnostics instead of raw exception objects or provider-supplied text; hourly purge failures no longer strand other housekeeping work. Synthetic secret-in-error regressions and Mac **864/864** full suite, supported-runtime builds/typecheck, real Chromium and loopback SMTP passed. [Evidence](evidence/2026-10-31-scheduler-error-log-privacy-isolation.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

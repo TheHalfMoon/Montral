@@ -366,13 +366,17 @@ async function fanOut(repo: Repo, orgId: string, event: Event, channels: AlertCh
   const base = { organizationId: orgId, projectId: ev.monitor.projectId ?? null, kind: ev.kind, incidentId: ev.incident.id, monitorName: ev.monitor.name, ...extra };
   const live = channels.filter((c) => c.enabled);
   const off = channels.filter((c) => !c.enabled);
-  await repo.logDeliveries(off.map((c) => ({ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "skipped" as const, error: "skipped: channel disabled", statusMessage: "skipped: channel disabled" })));
+  // An audit-write failure for disabled channels must not mute enabled channels.
+  if (off.length) await repo.logDeliveries(off.map((c) => ({ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "skipped" as const, error: "skipped: channel disabled", statusMessage: "skipped: channel disabled" }))).catch(() => console.error("disabled alert channel audit unavailable"));
   // a phone is pushed once per event, however many push channels reach it
   const pushed: PushedDevices = new Map();
   // Persist the pending authorization before claiming: worker recovery must not bypass the policy.
   // A completed provider attempt replaces this marker; interrupted attempts retain it for safe reevaluation.
   const rows = await repo.queueDeliveries(live.map((c) => ({ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, ...(entitlements.allowAlertChannel ? { error: ROUTING_UNAVAILABLE } : {}) })));
-  await Promise.all(
+  // Wait for every channel even if a database claim or locale lookup fails.
+  // The interrupted delivery remains pending/sending for the existing sweep; an
+  // immediate retry here could duplicate an already-accepted provider message.
+  const outcomes = await Promise.allSettled(
     live.map(async (c) => {
       const lang = await languageFor(repo, c, fallback);
       const row = rows.find((r) => r.channelId === c.id);
@@ -390,19 +394,28 @@ async function fanOut(repo: Repo, orgId: string, event: Event, channels: AlertCh
           await repo.logDeliveries([{ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "failed", error: ROUTING_UNAVAILABLE, statusMessage: `failed: ${ROUTING_UNAVAILABLE} (could not be queued for retry)` }]).catch(() => {});
           return;
         }
-        await deliver(c, ev, alertText(ev), lang, repo, pushed).catch((e) => console.error("alert delivery failed"));
+        await deliver(c, ev, alertText(ev), lang, repo, pushed).catch(() => console.error("alert delivery failed"));
         return;
       }
       const claimed = await repo.claimDelivery(row.id);
       if (claimed) await execute(repo, claimed, c, ev, lang, entitlements, pushed, entitlements.allowAlertChannel ? claimed.createdAt ?? new Date() : undefined);
     }),
   );
+  for (const result of outcomes) {
+    if (result.status === "rejected") console.error("alert channel interrupted; awaiting delivery recovery");
+  }
 }
 
 /** Fan an event out to every enabled channel in the org. Failures are logged, never thrown. */
 export async function dispatchAlert(repo: Repo, orgId: string, ev: Event, channelIds: string[] = [], entitlements: Entitlements = unmetered) {
-  const channels = await repo.channelsToAlert(orgId, { channelIds, projectId: ev.monitor.projectId, withDisabled: true });
-  await fanOut(repo, orgId, ev, channels, entitlements);
+  // Channel lookup/queue outages must not suppress independent status-page subscribers.
+  // Do not attempt unsafely to resend a channel when its queue commit was ambiguous.
+  try {
+    const channels = await repo.channelsToAlert(orgId, { channelIds, projectId: ev.monitor.projectId, withDisabled: true });
+    await fanOut(repo, orgId, ev, channels, entitlements);
+  } catch {
+    console.error("ALERT CHANNEL FANOUT FAILED: unable to confirm channel queue; subscriber notifications continuing");
+  }
   const base = { organizationId: orgId, projectId: ev.monitor.projectId ?? null, kind: ev.kind, incidentId: ev.incident.id, monitorName: ev.monitor.name };
   const subs = await notifySubscribers(repo, orgId, ev, entitlements).catch(async () => {
     const error = "subscriber notification unavailable";
@@ -412,7 +425,8 @@ export async function dispatchAlert(repo: Repo, orgId: string, ev: Event, channe
   });
   if (subs && subs.total > 0) {
     const error = subs.failed ? `${subs.failed}/${subs.total} failed: ${subs.error}` : subs.skipped ? `${subs.denied ? "skipped: subscriber access policy or email allowance" : SKIPPED} (${subs.skipped}/${subs.total} not sent)` : null;
-    await repo.logDeliveries([{ ...base, channelId: null, channelName: "Status page subscribers", channelType: "email", ok: !error, error, status: !error ? "sent" : subs.failed ? "failed" : "skipped", statusMessage: error && (subs.failed ? `failed: ${error}` : error) }]);
+    // A persisted-summary failure cannot undo accepted subscriber messages.
+    await repo.logDeliveries([{ ...base, channelId: null, channelName: "Status page subscribers", channelType: "email", ok: !error, error, status: !error ? "sent" : subs.failed ? "failed" : "skipped", statusMessage: error && (subs.failed ? `failed: ${error}` : error) }]).catch(() => console.error("subscriber delivery summary unavailable"));
   }
 }
 

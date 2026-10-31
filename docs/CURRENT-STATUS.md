@@ -64,6 +64,8 @@
 
 - **Per-delivery alert retry resilience**: exception handling now isolates claimed retry entries, so one failed status write or reopened-incident history lookup cannot starve later alerts in the same batch; interrupted claims remain for the existing timed sweep (rather than risking duplicate immediate sends). Two new synthetic tests verify continued delivery and secret-free diagnostics. The revised Mac worktree passed **866/866** unit/integration tests, three builds, TypeScript, Chromium, SMTP loopback, and a limited-data 42-table SHA-256 restore drill. [Evidence](evidence/2026-10-31-per-delivery-retry-failure-isolation.md).
 
+- **Initial alert fanout and subscriber isolation:** channel-lookup, queue and individual channel claim/audit errors no longer suppress unrelated status-page subscriber notifications or other healthy channels. An ambiguous queue write is not bypassed by an unsafe untracked channel send; interrupted claims follow the existing timed recovery. Five synthetic regressions and Mac **871/871** package tests, TypeScript, three builds, Chromium, SMTP loopback and local SHA-256 restore drill PASSED. [Evidence](evidence/2026-10-31-initial-alert-fanout-isolation.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

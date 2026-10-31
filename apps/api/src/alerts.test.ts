@@ -189,6 +189,108 @@ describe("subscriber delivery diagnostics", () => {
   });
 });
 
+describe("initial alert channel fanout resilience", () => {
+  const event = {
+    kind: "incident.opened" as const,
+    incident: { id: "synthetic-incident", title: "Synthetic outage" },
+    monitor: { id: "synthetic-monitor", name: "API", target: "https://example.test" },
+  };
+  const subscriber = {
+    email: "synthetic-subscriber@example.test", slug: "synthetic-status",
+    title: "Synthetic status", token: "synthetic-unsubscribe-token", locale: "en", hideBranding: false,
+  };
+  const channel = (id: string, enabled = true) => ({
+    id, organizationId: "synthetic-org", projectId: null, name: id,
+    type: "webhook", enabled, config: { url: `https://hooks.example/${id}` },
+  });
+  function setup(over: Record<string, unknown> = {}) {
+    const send = vi.mocked(sendEmail);
+    send.mockReset().mockResolvedValue(undefined);
+    const delivered: { id: string; status: string }[] = [];
+    const logged: Record<string, unknown>[] = [];
+    const subscribersFor = vi.fn(async () => [subscriber]);
+    const repo = {
+      channelsToAlert: async () => [],
+      queueDeliveries: async (rows: { channelId: string }[]) => rows.map((r) => ({ ...r, id: r.channelId, attempts: 0 })),
+      claimDelivery: async (id: string) => ({ id, kind: event.kind, attempts: 0 }),
+      finishDelivery: async (id: string, result: { status: string }) => { delivered.push({ id, status: result.status }); },
+      logDeliveries: async (rows: Record<string, unknown>[]) => { logged.push(...rows); },
+      subscribersFor, ...over,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response("", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+    return { repo, send, delivered, logged, subscribersFor, fetchMock, errorLog };
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  it("notifies subscribers when the channel-list query fails without exposing credentials", async () => {
+    const secret = "synthetic-db-private-password";
+    const f = setup({ channelsToAlert: async () => { throw new Error(secret); } });
+    await expect(dispatchAlert(f.repo as never, "synthetic-org", event)).resolves.toBeUndefined();
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.subscribersFor).toHaveBeenCalledTimes(1);
+    expect(f.logged).toContainEqual(expect.objectContaining({ status: "sent", channelName: "Status page subscribers" }));
+    expect(f.errorLog).toHaveBeenCalledWith(expect.stringContaining("ALERT CHANNEL FANOUT FAILED"));
+    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain(secret);
+  });
+
+  it("notifies subscribers on a failed queue commit, without sending an untracked channel", async () => {
+    const secret = "synthetic-queue-connection-token";
+    const f = setup({
+      channelsToAlert: async () => [channel("live")],
+      queueDeliveries: async () => { throw new Error(secret); },
+    });
+    await expect(dispatchAlert(f.repo as never, "synthetic-org", event)).resolves.toBeUndefined();
+    expect(f.fetchMock).not.toHaveBeenCalled();
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.errorLog).toHaveBeenCalledWith(expect.stringContaining("ALERT CHANNEL FANOUT FAILED"));
+    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain(secret);
+  });
+
+  it("sends other claimed channels and subscribers after one claim fails", async () => {
+    const secret = "synthetic-claim-token-private";
+    const f = setup({
+      channelsToAlert: async () => [channel("blocked"), channel("working")],
+      claimDelivery: async (id: string) => {
+        if (id === "blocked") throw new Error(secret);
+        return { id, kind: event.kind, attempts: 0 };
+      },
+    });
+    await expect(dispatchAlert(f.repo as never, "synthetic-org", event)).resolves.toBeUndefined();
+    expect(f.delivered).toEqual([{ id: "working", status: "sent" }]);
+    expect(f.fetchMock).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.errorLog).toHaveBeenCalledWith("alert channel interrupted; awaiting delivery recovery");
+    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain(secret);
+  });
+
+  it("does not silence live channels if disabled-channel audit logging fails", async () => {
+    const secret = "synthetic-audit-private-token";
+    const f = setup({
+      channelsToAlert: async () => [channel("disabled", false), channel("active")],
+      logDeliveries: async (rows: { status: string }[]) => {
+        if (rows.some((r) => r.status === "skipped")) throw new Error(secret);
+      },
+    });
+    await expect(dispatchAlert(f.repo as never, "synthetic-org", event)).resolves.toBeUndefined();
+    expect(f.delivered).toEqual([{ id: "active", status: "sent" }]);
+    expect(f.fetchMock).toHaveBeenCalledTimes(1);
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.errorLog).toHaveBeenCalledWith("disabled alert channel audit unavailable");
+    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain(secret);
+  });
+
+  it("does not throw or resend an accepted subscriber email when summary persistence fails", async () => {
+    const secret = "synthetic-summary-db-secret";
+    const f = setup({ logDeliveries: async () => { throw new Error(secret); } });
+    await expect(dispatchAlert(f.repo as never, "synthetic-org", event)).resolves.toBeUndefined();
+    expect(f.send).toHaveBeenCalledTimes(1);
+    expect(f.errorLog).toHaveBeenCalledWith("subscriber delivery summary unavailable");
+    expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain(secret);
+  });
+});
+
 describe("retryDeliveries", () => {
   const item = (attempts: number, over: { kind?: string; incident?: Record<string, unknown>; enabled?: boolean } = {}) => ({
     delivery: { id: "d1", kind: over.kind ?? "incident.opened", attempts, organizationId: "o" },

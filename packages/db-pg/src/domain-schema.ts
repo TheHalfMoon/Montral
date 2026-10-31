@@ -4,6 +4,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   doublePrecision,
   index,
   integer,
@@ -307,6 +308,27 @@ export const workspaceSetting = pgTable("workspace_setting", {
   /** the month (YYYY-MM) a report was last claimed for, so each month is sent once */
   lastReportMonth: text("last_report_month"),
 });
+
+/** Durable accounting boundary for one owner/month: NOT yet connected to production SMTP.
+ * It is intentionally impossible to transition attempted -> prepared for automatic replay.
+ * Recipient addresses are stored only for authorized owner notifications; never log them. */
+export const monthlyReportRecipient = pgTable("monthly_report_recipient", {
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  reportMonth: text("report_month").notNull(),
+  recipientUserId: text("recipient_user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  recipientEmail: text("recipient_email").notNull(),
+  locale: text("locale"),
+  state: text("state").notNull().default("prepared"),
+  attemptedAt: timestamp("attempted_at", { withTimezone: true }),
+  decidedAt: timestamp("decided_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ name: "monthly_report_recipient_pk", columns: [t.organizationId, t.reportMonth, t.recipientUserId] }),
+  index("monthly_report_recipient_org_month_state_idx").on(t.organizationId, t.reportMonth, t.state),
+  check("monthly_report_recipient_state_chk", sql`${t.state} in ('prepared', 'attempted', 'accepted', 'uncertain', 'skipped')`),
+  check("monthly_report_recipient_month_chk", sql`${t.reportMonth} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
+  check("monthly_report_recipient_attempt_chk", sql`(${t.state} = 'prepared' and ${t.attemptedAt} is null and ${t.decidedAt} is null) or (${t.state} = 'attempted' and ${t.attemptedAt} is not null and ${t.decidedAt} is null) or (${t.state} in ('accepted', 'uncertain', 'skipped') and ${t.attemptedAt} is not null and ${t.decidedAt} is not null)`),
+]);
 
 /** While a window is active, monitors it covers keep being checked but open no incidents and send no alerts. */
 export const maintenanceWindow = pgTable(

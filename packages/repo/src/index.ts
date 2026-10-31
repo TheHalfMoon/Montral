@@ -671,6 +671,16 @@ export interface Repo {
   claimMonthlyReports(month: string, limit: number): Promise<string[]>;
   /** Reopen a monthly claim only if its month still matches, before any delivery is attempted. */
   releaseMonthlyReportClaim(orgId: string, month: string): Promise<void>;
+  /** Reserve one owner/month outbox record, only for a claimed opted-in workspace-month.
+   * Transactional/idempotent: returns newly inserted rows only; no sender or quota consumption occurs.
+   * STAGED ONLY: calling these APIs does not enable automatic email dispatch. */
+  reserveMonthlyReportRecipients(orgId: string, month: string, owners: { userId: string; email: string; locale: string | null }[]): Promise<number>;
+  /** Transition a prepared owner to attempted (exactly one claimant), before any SMTP call. */
+  attemptMonthlyReportRecipient(orgId: string, month: string, userId: string): Promise<boolean>;
+  /** Record an explicit outcome for an already-attempted owner; never requeue uncertain sends. */
+  finishMonthlyReportRecipient(orgId: string, month: string, userId: string, outcome: "accepted" | "uncertain"): Promise<boolean>;
+  /** Workspace-scoped outbox aggregate, without exposing recipient addresses. */
+  monthlyReportRecipientCounts(orgId: string, month: string): Promise<Record<"prepared" | "attempted" | "accepted" | "uncertain" | "skipped", number>>;
   /** Per-component uptime, downtime and incident count between the two instants. */
   monthlyReport(orgId: string, from: Date, to: Date): Promise<MonthlyComponent[]>;
   /** Emails and locales of the workspace owners. */

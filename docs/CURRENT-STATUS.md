@@ -70,6 +70,8 @@
 
 - **Monthly report pre-send safety**: every eligible owner report is rendered before email quota consumption or SMTP attempt. Invalid component/recipient content safely reopens the unattempted month claim without starving other workspaces; an attempted send still never replays automatically. Three synthetic regressions and Mac **878/878** tests passed. A true durable recipient outbox remains **unimplemented**; see [evidence](evidence/2026-10-31-monthly-report-mail-preflight.md) and [outbox design](architecture/monthly-report-recipient-outbox.md).
 
+- **Monthly report durable outbox — DB foundation STAGED:** append-only Drizzle `0041` creates per-owner/month records and strict state checks; new Postgres repository APIs atomically reserve immutable owners, claim the initial attempt, record accepted/uncertain, reject ownership/email changes and report opt-out, and expose aggregate counts. Nine real PostgreSQL regressions PASS, including a concurrent 0040→0041 legacy-claim upgrade. Mac **887/887** full suite PASS; 43-table/110-synthetic-org restore drill PASS. **Not connected to SMTP or the existing non-idempotent quota meter; no automatic resend is enabled.** [Evidence](evidence/2026-10-31-monthly-outbox-postgres-foundation.md) and [remaining integration contract](architecture/monthly-report-recipient-outbox.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

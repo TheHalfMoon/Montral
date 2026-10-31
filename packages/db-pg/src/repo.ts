@@ -1591,6 +1591,72 @@ export function createRepo(db: Db): Repo {
         eq(schema.workspaceSetting.monthlyReport, true),
       ));
     },
+    async reserveMonthlyReportRecipients(orgId, month, owners) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month)) throw new Error("Invalid report month");
+      if (!owners.length) return 0;
+      if (owners.some((o) => !o.userId || !o.email?.trim()) || new Set(owners.map((o) => o.userId)).size !== owners.length)
+        throw new Error("Invalid or duplicate monthly recipient");
+      return db.transaction(async (tx) => {
+        // Serialize reservation with any other reserving worker on the same
+        // workspace-month. The previous org claim remains the only source of truth.
+        const [settings] = await tx.select({ id: schema.workspaceSetting.organizationId })
+          .from(schema.workspaceSetting)
+          .where(and(eq(schema.workspaceSetting.organizationId, orgId), eq(schema.workspaceSetting.monthlyReport, true), eq(schema.workspaceSetting.lastReportMonth, month)))
+          .for("update");
+        if (!settings) return 0;
+        const existing = await tx.select({ userId: schema.monthlyReportRecipient.recipientUserId })
+          .from(schema.monthlyReportRecipient)
+          .where(and(eq(schema.monthlyReportRecipient.organizationId, orgId), eq(schema.monthlyReportRecipient.reportMonth, month)));
+        // A report's original owner set is immutable; adding recipients after
+        // the first reservation might charge/send to newly-added members twice.
+        if (existing.length) return 0;
+        const allowed = await tx.select({ userId: schema.member.userId })
+          .from(schema.member)
+          .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.role, "owner"), inArray(schema.member.userId, owners.map((o) => o.userId))));
+        if (new Set(allowed.map((r) => r.userId)).size !== owners.length) throw new Error("Monthly report recipient is not a current workspace owner");
+        const reserved = await tx.insert(schema.monthlyReportRecipient).values(owners.map((o) => ({
+          organizationId: orgId, reportMonth: month, recipientUserId: o.userId,
+          recipientEmail: o.email, locale: o.locale,
+        }))).onConflictDoNothing().returning({ userId: schema.monthlyReportRecipient.recipientUserId });
+        return reserved.length;
+      });
+    },
+    async attemptMonthlyReportRecipient(orgId, month, userId) {
+      const attempted = await db.update(schema.monthlyReportRecipient)
+        .set({ state: "attempted", attemptedAt: new Date() })
+        .where(and(
+          eq(schema.monthlyReportRecipient.organizationId, orgId),
+          eq(schema.monthlyReportRecipient.reportMonth, month),
+          eq(schema.monthlyReportRecipient.recipientUserId, userId),
+          eq(schema.monthlyReportRecipient.state, "prepared"),
+          // Owner removal or report opt-out during preparation disables sends.
+          sql`exists (select 1 from member m join "user" u on u.id = m.user_id where m.organization_id = ${orgId} and m.user_id = ${userId} and m.role = 'owner' and u.email = ${schema.monthlyReportRecipient.recipientEmail})`,
+          sql`exists (select 1 from workspace_setting w where w.organization_id = ${orgId} and w.monthly_report = true and w.last_report_month = ${month})`,
+        )).returning({ userId: schema.monthlyReportRecipient.recipientUserId });
+      return attempted.length === 1;
+    },
+    async finishMonthlyReportRecipient(orgId, month, userId, outcome) {
+      const finished = await db.update(schema.monthlyReportRecipient)
+        .set({ state: outcome, decidedAt: new Date() })
+        .where(and(
+          eq(schema.monthlyReportRecipient.organizationId, orgId),
+          eq(schema.monthlyReportRecipient.reportMonth, month),
+          eq(schema.monthlyReportRecipient.recipientUserId, userId),
+          eq(schema.monthlyReportRecipient.state, "attempted"),
+        )).returning({ userId: schema.monthlyReportRecipient.recipientUserId });
+      return finished.length === 1;
+    },
+    async monthlyReportRecipientCounts(orgId, month) {
+      const summary: Record<"prepared" | "attempted" | "accepted" | "uncertain" | "skipped", number> = {
+        prepared: 0, attempted: 0, accepted: 0, uncertain: 0, skipped: 0,
+      };
+      const result = await db.select({ state: schema.monthlyReportRecipient.state, total: count() })
+        .from(schema.monthlyReportRecipient)
+        .where(and(eq(schema.monthlyReportRecipient.organizationId, orgId), eq(schema.monthlyReportRecipient.reportMonth, month)))
+        .groupBy(schema.monthlyReportRecipient.state);
+      for (const entry of result) if (entry.state in summary) summary[entry.state as keyof typeof summary] = entry.total;
+      return summary;
+    },
     async monthlyReport(orgId, from, to) {
       const comps = await db.select().from(schema.monitor).where(eq(schema.monitor.organizationId, orgId)).orderBy(asc(schema.monitor.name));
       if (!comps.length) return [];

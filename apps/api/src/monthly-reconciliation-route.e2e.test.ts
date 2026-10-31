@@ -108,6 +108,33 @@ describe.skipIf(!url)("feature-gated authenticated owner-only reconciliation HTT
     expect(stored[0].state).toBe("accepted");
   });
 
+  it("lists only mature unreviewed opaque identities for current workspace owner", async () => {
+    const owner = await signup("operator-redacted-queue");
+    const other = await signup("operator-redacted-other");
+    await seedAttempt(owner.orgId, owner.userId, "uncertain", 65);
+    await seedAttempt(other.orgId, other.userId, "attempted", 65);
+    const endpoint = `/monthly-reconciliation/pending?month=${month}`;
+    expect((await call(owner.cookie, endpoint, "GET", undefined, { env: { ...enabled, MONTRAL_RECONCILIATION_ENABLED: undefined } })).status).toBe(404);
+    expect((await call("", endpoint)).status).toBe(401);
+    expect((await call(other.cookie, endpoint)).body).toMatchObject({ items: [{ recipientUserId: other.userId, state: "attempted" }] });
+    const read = await call(owner.cookie, endpoint);
+    expect(read.status).toBe(200);
+    expect(read.body?.items).toHaveLength(1);
+    expect(read.body?.items[0]).toMatchObject({ recipientUserId: owner.userId, state: "uncertain" });
+    expect(read.body?.items[0].attemptedAt).toBeTruthy();
+    expect(read.cache).toContain("no-store");
+    const serialized = JSON.stringify(read.body);
+    expect(serialized).not.toContain("@example.test");
+    expect(serialized).not.toContain("evidenceSha256");
+    expect(serialized).not.toContain(other.userId);
+    expect((await call(owner.cookie, "/monthly-reconciliation/pending?month=2026-13")).status).toBe(400);
+    await db!.query("UPDATE monthly_report_recipient SET attempted_at=NOW()-INTERVAL '5 minutes' WHERE organization_id=$1", [owner.orgId]);
+    expect((await call(owner.cookie, endpoint)).body).toEqual({ items: [] });
+    await db!.query("UPDATE monthly_report_recipient SET attempted_at=NOW()-INTERVAL '65 minutes' WHERE organization_id=$1", [owner.orgId]);
+    expect((await call(owner.cookie, "/monthly-reconciliation/review", "POST", review(owner.userId))).body).toEqual({ applied: true });
+    expect((await call(owner.cookie, endpoint)).body).toEqual({ items: [] });
+  });
+
   it("rejects no-Origin cookie requests and rate-limits repeated operator writes", async () => {
     const owner = await signup("operator-limited");
     await seedAttempt(owner.orgId, owner.userId);

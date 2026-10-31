@@ -153,6 +153,20 @@ try {
   if (serverLog.includes("Verify email:") || /verify-email\?token=/i.test(serverLog) || serverLog.includes(email)) {
     throw new Error("Browser signup leaked a verification credential or recipient in Node logs");
   }
+  // A direct deep link to the unlisted, staged operator tool must never
+  // expose review work in the default-off private preview. Real Chromium
+  // renders the route, then the server's independent feature gate returns 404.
+  await page("/app/mail-review");
+  await until("disabled mail operator review page", () => js(
+    'document.body.innerText.includes("Review tool unavailable") && !document.body.innerText.includes("Record decision once")'
+  ));
+  // HttpOnly session cookies are intentionally invisible to document.cookie.
+  // Check the gate inside the actual authenticated browser origin instead of
+  // constructing a separate anonymous Node fetch.
+  const operatorGate = await js('fetch("/api/monthly-reconciliation/pending?month=2026-09", { credentials: "same-origin" }).then(r => r.status)');
+  if (operatorGate !== 404) throw new Error("Monthly operator API unexpectedly enabled");
+  if (await js('Array.from(document.querySelectorAll("nav.nl a[href]")).some(a => a.getAttribute("href") === "/app/mail-review")'))
+    throw new Error("Staged mail review must remain unlinked from normal navigation");
   // Real-browser monitoring journey, using only a synthetic heartbeat. It
   // does not probe any external site, DNS resolver, or third-party service.
   await page("/app");

@@ -36,6 +36,11 @@ export const monthlyReconciliation = new Hono<AppEnv>()
     const result = await c.get("repo").monthlyReportReconciliationSummary(c.get("orgId"), m, c.get("userId"));
     return c.json(result);
   })
+  .get("/pending", zValidator("query", summarySchema), async (c) => {
+    const { month: m } = c.req.valid("query");
+    const items = await c.get("repo").pendingMonthlyReportReconciliations(c.get("orgId"), m, c.get("userId"));
+    return c.json({ items });
+  })
   .post("/review", async (c, next) => {
     // Strict Origin and JSON, independent of CORS, to prevent cookie-based
     // cross-origin CSRF and simple form submissions. No origin = refused.

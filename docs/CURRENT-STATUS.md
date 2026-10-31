@@ -84,6 +84,8 @@
 
 - **Owner-session monthly reconciliation API — STAGED AND OFF by default:** `GET /api/monthly-reconciliation/summary` and `POST /api/monthly-reconciliation/review` require a Better Auth interactive session, current workspace owner role, a separate `MONTRAL_RECONCILIATION_ENABLED=true` flag and hosted metering. All API keys/OAuth bots denied; write requires exact same Origin, strict JSON and explicit provider-evidence attestation, plus 12/hour persistent limit. Four synthetic Hono+PostgreSQL regressions, **938/938** Mac tests, TypeScript/builds, Chromium/SMTP loopback, and 45-table/116-synthetic-workspace SHA-256 restore PASS. **No operator dashboard, external provider attestation or deployment.** [Evidence](evidence/2026-10-31-owner-session-reconciliation-route.md).
 
+- **Monthly operator UI + redacted queue — STAGED AND DEFAULT-OFF:** an owner-authorized `GET /api/monthly-reconciliation/pending` lists at most 50 old, unreviewed ambiguous deliveries with opaque user ID/state/attempt timestamp only; a hidden `/app/mail-review` React screen shows counts, row selection and explicit evidence acknowledgment. Server-side feature/session/role restrictions remain authoritative. Mac **941/941** tests, builds, TypeScript, real Chromium disabled-state check, loopback SMTP and 45-table/118-synthetic-workspace SHA-256 restore PASS. No email, raw evidence, resend, SMTP-provider verification or scheduled dispatch. [Evidence](evidence/2026-10-31-staged-mail-review-ui.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

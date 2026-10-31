@@ -1763,6 +1763,30 @@ export function createRepo(db: Db): Repo {
         return true;
       });
     },
+    async pendingMonthlyReportReconciliations(orgId, month, actorUserId) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !orgId || !actorUserId)
+        throw new Error("Invalid monthly reconciliation list request");
+      return db.transaction(async (tx) => {
+        const [owner] = await tx.select({ userId: schema.member.userId }).from(schema.member)
+          .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorUserId), eq(schema.member.role, "owner")))
+          .for("update");
+        if (!owner) throw new Error("Monthly reconciliation not authorized");
+        const pending = await rows<{ recipient_user_id: string; state: "attempted" | "uncertain"; attempted_at: Date }>(tx.execute(sql`
+          select r.recipient_user_id, r.state, r.attempted_at
+          from monthly_report_recipient r
+          where r.organization_id=${orgId} and r.report_month=${month}
+            and r.state in ('attempted','uncertain')
+            and r.attempted_at <= now() - interval '30 minutes'
+            and not exists (
+              select 1 from monthly_report_reconciliation a
+              where a.organization_id=r.organization_id and a.report_month=r.report_month
+                and a.recipient_user_id=r.recipient_user_id
+            )
+          order by r.attempted_at asc, r.recipient_user_id asc limit 50
+        `));
+        return pending.map((r) => ({ recipientUserId: r.recipient_user_id, state: r.state, attemptedAt: r.attempted_at }));
+      });
+    },
     async monthlyReportReconciliationSummary(orgId, month, actorUserId) {
       if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !orgId || !actorUserId)
         throw new Error("Invalid monthly reconciliation summary request");

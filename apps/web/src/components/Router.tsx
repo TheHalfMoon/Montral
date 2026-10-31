@@ -18,6 +18,7 @@ import Team from "./Team";
 import Account from "./Account";
 import ApiKeys from "./ApiKeys";
 import Settings from "./Settings";
+import MailReview from "./MailReview";
 import Usage from "./Usage";
 import { ChooseProject } from "./AllProjects";
 import { isAllProjects } from "../lib/scope";
@@ -72,6 +73,7 @@ function View({ name, params, title }: { name: string; params: string[]; title: 
     case "Account": return <Account />;
     case "ApiKeys": return <ApiKeys />;
     case "Settings": return <Settings />;
+    case "MailReview": return <MailReview />;
     case "Usage": return <Usage />;
     default: return null;
   }

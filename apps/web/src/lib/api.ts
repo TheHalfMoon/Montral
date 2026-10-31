@@ -59,6 +59,17 @@ export type Incident = {
 
 export type Channel = { id: string; type: "slack" | "webhook" | "email" | "telegram" | "pagerduty" | "lark" | "push" | "discord" | "teams" | "ntfy"; name: string; config: { url?: string; secret?: string; to?: string; chatId?: string; botToken?: string; routingKey?: string; topic?: string; token?: string; priority?: string }; enabled: boolean; autoEnable?: boolean; projectId?: string | null };
 export type WorkspaceSettings = { alertLogRetentionDays: number; checkRetentionDays: number; monthlyReport: boolean };
+/** Staged owner-only internal operations: no recipient email or provider evidence is returned. */
+export type MonthlyReconciliationSummary = { pending: number; unresolved: number; confirmed: number };
+export type MonthlyReviewCandidate = {
+  recipientUserId: string; state: "attempted" | "uncertain"; attemptedAt: string;
+};
+export type MonthlyReviewInput = {
+  month: string; recipientUserId: string;
+  decision: "provider_accepted" | "unresolved"; evidenceRef: string;
+  acknowledgment: "I_verified_external_provider_evidence";
+};
+
 export type StatusPage = { id: string; projectId?: string | null; slug: string; title: string; theme: "light" | "dark" | "auto"; showLatency: boolean; externalUrl?: string | null; hideBranding?: boolean; uptimeOkPct?: number; uptimeWarnPct?: number; mcpEnabled?: boolean; maintenanceReminderHours?: number; branding?: { allowed: boolean; upgradeUrl?: string }; monitorIds?: string[]; components?: { monitorId: string; groupName: string | null }[] };
 
 // Requests started as soon as the page's HTML is parsed (lib/boot.ts), in parallel with the JS bundles loading:
@@ -232,6 +243,9 @@ export const api = {
   projectAlerting: (projectId: string) => req<ProjectAlerting>(`/projects/${projectId}/alerting`),
   saveProjectAlerting: (projectId: string, b: ProjectAlerting) => req<ProjectAlerting>(`/projects/${projectId}/alerting`, { method: "PUT", body: JSON.stringify(b) }),
   alertLog: (limit = 30) => req<AlertDelivery[]>(`/alert-log?limit=${limit}`),
+  reconciliationSummary: (month: string) => req<MonthlyReconciliationSummary>(`/monthly-reconciliation/summary?month=${encodeURIComponent(month)}`),
+  reconciliationPending: (month: string) => req<{ items: MonthlyReviewCandidate[] }>(`/monthly-reconciliation/pending?month=${encodeURIComponent(month)}`),
+  reconcileMonthlyReport: (input: MonthlyReviewInput) => req<{ applied: boolean }>("/monthly-reconciliation/review", { method: "POST", body: JSON.stringify(input) }),
   settings: () => req<WorkspaceSettings>("/settings"),
   updateSettings: (b: Partial<WorkspaceSettings>) =>
     req<WorkspaceSettings>("/settings", { method: "PATCH", body: JSON.stringify(b) }),

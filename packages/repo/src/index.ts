@@ -700,6 +700,12 @@ export interface Repo {
     orgId: string, month: string, recipientUserId: string, actorUserId: string,
     decision: "provider_accepted" | "unresolved", evidenceRef: string,
   ): Promise<boolean>;
+  /** STAGED INTERNAL ONLY. At most 50 mature unreviewed ambiguous attempts.
+   * Only opaque user IDs, state and attempt timestamp; no recipient emails,
+   * raw provider references, or evidence digests leave the database. */
+  pendingMonthlyReportReconciliations(orgId: string, month: string, actorUserId: string): Promise<{
+    recipientUserId: string; state: "attempted" | "uncertain"; attemptedAt: Date;
+  }[]>;
   /** Current owner-only review summary, with no recipient addresses or raw evidence. */
   monthlyReportReconciliationSummary(orgId: string, month: string, actorUserId: string): Promise<{
     pending: number; unresolved: number; confirmed: number;

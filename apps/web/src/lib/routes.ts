@@ -34,6 +34,8 @@ export const ROUTES: Route[] = [
   { re: /^\/app\/api-keys$/, name: "ApiKeys", key: "api-keys", title: "API keys", data: () => ["/projects"] },
   { re: /^\/app\/usage$/, name: "Usage", key: "usage", title: "Plan & usage", data: () => ["/usage", "/monitors"] },
   { re: /^\/app\/settings$/, name: "Settings", key: "settings", title: "Settings", data: () => [] },
+  // Unlinked, staged workspace-owner tool; the API stays OFF unless explicitly configured.
+  { re: /^\/app\/mail-review$/, name: "MailReview", key: "settings", title: "Monthly mail review", data: () => [] },
 ];
 
 export function resolveRoute(pathname: string): { route: Route; params: string[] } | null {

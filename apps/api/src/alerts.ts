@@ -158,10 +158,16 @@ const RETRIED_KINDS = new Set(["incident.opened", "incident.resolved", "incident
 /** Devices an event is being pushed to, with whether that push worked: a phone is pushed once per event, unless the first push failed. */
 export type PushedDevices = Map<string, Promise<boolean>>;
 
-/** Take emails for `subs` from the allowance: who may be mailed and how many were left out. A failing ledger lets them all through. */
+/** Take emails for `subs` from the allowance: who may be mailed and how many were left out.
+ * A temporarily unavailable ledger preserves critical alert delivery, but a malformed *successful*
+ * grant must not silently over-authorize or produce negative/NaN skipped counts. */
 async function withinEmails<T>(entitlements: Entitlements, orgId: string, subs: T[]) {
   if (!subs.length) return { send: subs, skipped: 0 };
-  const granted = await entitlements.spendEmails(orgId, subs.length).catch((e) => (console.error("email allowance unavailable"), subs.length));
+  const granted = await entitlements.spendEmails(orgId, subs.length).catch(() => (console.error("email allowance unavailable"), subs.length));
+  if (!Number.isSafeInteger(granted) || granted < 0 || granted > subs.length) {
+    console.error("email allowance invalid");
+    return { send: [] as T[], skipped: subs.length };
+  }
   return { send: subs.slice(0, granted), skipped: subs.length - granted };
 }
 

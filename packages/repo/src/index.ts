@@ -692,6 +692,18 @@ export interface Repo {
   /** Staged internal dispatcher only: prepared monthly owner snapshot, scoped to workspace+month.
    * Never expose recipient addresses from this method via a public API. */
   preparedMonthlyReportRecipients(orgId: string, month: string): Promise<{ userId: string; email: string; locale: string | null }[]>;
+  /** STAGED INTERNAL ONLY. Caller MUST provide a previously authenticated actor.
+   * Verifies current owner role in PostgreSQL; does NOT send or retry mail.
+   * Reviews only an old attempted/uncertain record; stores evidence SHA-256,
+   * never the provider reference. Exactly one decision per recipient/month. */
+  reconcileMonthlyReportRecipient(
+    orgId: string, month: string, recipientUserId: string, actorUserId: string,
+    decision: "provider_accepted" | "unresolved", evidenceRef: string,
+  ): Promise<boolean>;
+  /** Current owner-only review summary, with no recipient addresses or raw evidence. */
+  monthlyReportReconciliationSummary(orgId: string, month: string, actorUserId: string): Promise<{
+    pending: number; unresolved: number; confirmed: number;
+  }>;
   /** Workspace-scoped outbox aggregate, without exposing recipient addresses. */
   monthlyReportRecipientCounts(orgId: string, month: string): Promise<Record<"prepared" | "attempted" | "accepted" | "uncertain" | "skipped", number>>;
   /** Per-component uptime, downtime and incident count between the two instants. */

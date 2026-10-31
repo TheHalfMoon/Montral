@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   DEFAULT_ALERT_LOG_DAYS,
   PUSH_DEVICE_STALE_DAYS,
@@ -1714,6 +1715,77 @@ export function createRepo(db: Db): Repo {
           eq(schema.monthlyReportRecipient.state, "prepared"),
         ))
         .orderBy(asc(schema.monthlyReportRecipient.recipientUserId));
+    },
+    async reconcileMonthlyReportRecipient(orgId, month, recipientUserId, actorUserId, decision, evidenceRef) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month)
+        || !orgId || !recipientUserId || !actorUserId
+        || (decision !== "provider_accepted" && decision !== "unresolved")
+        || !/^[A-Za-z0-9._:/-]{8,160}$/.test(evidenceRef))
+        throw new Error("Invalid monthly reconciliation request");
+      // Hash outside the transaction; never persist or log provider references.
+      const evidenceSha256 = createHash("sha256").update(evidenceRef).digest("hex");
+      return db.transaction(async (tx) => {
+        // Lock an actual current workspace OWNER, not just a member. The caller
+        // must authenticate actorUserId before accessing this internal API.
+        const [actor] = await tx.select({ userId: schema.member.userId })
+          .from(schema.member)
+          .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorUserId), eq(schema.member.role, "owner")))
+          .for("update");
+        if (!actor) throw new Error("Monthly reconciliation not authorized");
+        const [recipient] = await tx.select({
+          state: schema.monthlyReportRecipient.state,
+          attemptedAt: schema.monthlyReportRecipient.attemptedAt,
+        }).from(schema.monthlyReportRecipient).where(and(
+          eq(schema.monthlyReportRecipient.organizationId, orgId),
+          eq(schema.monthlyReportRecipient.reportMonth, month),
+          eq(schema.monthlyReportRecipient.recipientUserId, recipientUserId),
+        )).for("update");
+        if (!recipient || (recipient.state !== "attempted" && recipient.state !== "uncertain")) return false;
+        // Do not make an operator decision while an SMTP request could still
+        // be in flight, even on an explicit provider-acceptance assertion.
+        if (!recipient.attemptedAt || recipient.attemptedAt.getTime() > Date.now() - 30 * 60_000) return false;
+        const [already] = await tx.select({ id: schema.monthlyReportReconciliation.recipientUserId })
+          .from(schema.monthlyReportReconciliation)
+          .where(and(eq(schema.monthlyReportReconciliation.organizationId, orgId), eq(schema.monthlyReportReconciliation.reportMonth, month), eq(schema.monthlyReportReconciliation.recipientUserId, recipientUserId)));
+        if (already) return false;
+        // This action never creates SMTP work. Even an unresolved result stays
+        // terminal, and a confirmed provider acceptance merely changes status.
+        const next = decision === "provider_accepted" ? "accepted" : "uncertain";
+        const changed = await tx.update(schema.monthlyReportRecipient)
+          .set({ state: next, decidedAt: new Date() })
+          .where(and(eq(schema.monthlyReportRecipient.organizationId, orgId), eq(schema.monthlyReportRecipient.reportMonth, month), eq(schema.monthlyReportRecipient.recipientUserId, recipientUserId), eq(schema.monthlyReportRecipient.state, recipient.state)))
+          .returning({ id: schema.monthlyReportRecipient.recipientUserId });
+        if (changed.length !== 1) return false;
+        await tx.insert(schema.monthlyReportReconciliation).values({
+          organizationId: orgId, reportMonth: month, recipientUserId, actorUserId,
+          previousState: recipient.state, decision, evidenceSha256,
+        });
+        return true;
+      });
+    },
+    async monthlyReportReconciliationSummary(orgId, month, actorUserId) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !orgId || !actorUserId)
+        throw new Error("Invalid monthly reconciliation summary request");
+      return db.transaction(async (tx) => {
+        const [owner] = await tx.select({ userId: schema.member.userId }).from(schema.member)
+          .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.userId, actorUserId), eq(schema.member.role, "owner")))
+          .for("update");
+        if (!owner) throw new Error("Monthly reconciliation not authorized");
+        const [summary] = await rows<{ pending: number; unresolved: number; confirmed: number }>(tx.execute(sql`
+        select
+          count(*) filter (where r.state in ('attempted','uncertain')
+            and r.attempted_at <= now() - interval '30 minutes'
+            and a.recipient_user_id is null)::int as pending,
+          count(*) filter (where a.decision='unresolved')::int as unresolved,
+          count(*) filter (where a.decision='provider_accepted')::int as confirmed
+        from monthly_report_recipient r
+        left join monthly_report_reconciliation a
+          on a.organization_id=r.organization_id and a.report_month=r.report_month
+          and a.recipient_user_id=r.recipient_user_id
+        where r.organization_id=${orgId} and r.report_month=${month}
+      `));
+        return summary ?? { pending: 0, unresolved: 0, confirmed: 0 };
+      });
     },
     async monthlyReportRecipientCounts(orgId, month) {
       const summary: Record<"prepared" | "attempted" | "accepted" | "uncertain" | "skipped", number> = {

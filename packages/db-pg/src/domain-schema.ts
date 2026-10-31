@@ -330,6 +330,27 @@ export const monthlyReportRecipient = pgTable("monthly_report_recipient", {
   check("monthly_report_recipient_attempt_chk", sql`(${t.state} = 'prepared' and ${t.attemptedAt} is null and ${t.decidedAt} is null) or (${t.state} = 'attempted' and ${t.attemptedAt} is not null and ${t.decidedAt} is null) or (${t.state} in ('accepted', 'uncertain', 'skipped') and ${t.attemptedAt} is not null and ${t.decidedAt} is not null)`),
 ]);
 
+/** Staged-only, immutable evidence digest of one reviewed monthly delivery.
+ * No raw provider reference, email address, secret or message body stored.
+ * The actor is nullable on user deletion; workspace and recipient cascade. */
+export const monthlyReportReconciliation = pgTable("monthly_report_reconciliation", {
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  reportMonth: text("report_month").notNull(),
+  recipientUserId: text("recipient_user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  actorUserId: text("actor_user_id").references(() => user.id, { onDelete: "set null" }),
+  previousState: text("previous_state").notNull(),
+  decision: text("decision").notNull(),
+  evidenceSha256: text("evidence_sha256").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [
+  primaryKey({ name: "monthly_report_reconciliation_pk", columns: [t.organizationId, t.reportMonth, t.recipientUserId] }),
+  index("monthly_report_reconciliation_org_month_idx").on(t.organizationId, t.reportMonth),
+  check("monthly_report_reconciliation_month_chk", sql`${t.reportMonth} ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'`),
+  check("monthly_report_reconciliation_prev_chk", sql`${t.previousState} in ('attempted','uncertain')`),
+  check("monthly_report_reconciliation_decision_chk", sql`${t.decision} in ('provider_accepted','unresolved')`),
+  check("monthly_report_reconciliation_sha_chk", sql`${t.evidenceSha256} ~ '^[0-9a-f]{64}$'`),
+]);
+
 /** While a window is active, monitors it covers keep being checked but open no incidents and send no alerts. */
 export const maintenanceWindow = pgTable(
   "maintenance_window",

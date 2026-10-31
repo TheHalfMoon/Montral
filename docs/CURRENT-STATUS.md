@@ -80,6 +80,8 @@
 
 - **Atomic monthly owner materialization + crash-safe recovery — STAGED:** workspace-month claim and owner snapshots now commit together under PostgreSQL locks; recovery enumerates only actual `prepared` records, never uncertain old org-only claims. Legacy release cannot clear a snapshotted claim. Seven repository and six isolated staged-batch E2E regressions, **925/925 Mac package tests**, production builds, TypeScript, Chromium, SMTP loopback and 44-table SHA-256 restore PASS. The production monthly sender and schedule remain unchanged. [Evidence](evidence/2026-10-31-atomic-monthly-materialization-recovery.md).
 
+- **Monthly SMTP ambiguity review — STAGED ONLY:** generated `0042` reconciliation audit stores SHA-256-only evidence, enforces current workspace owner role and a 30-minute attempt-age gate, permits one explicit `provider_accepted` or `unresolved` decision without re-send or new quota, and exposes aggregate owner-only counts. Nine real PostgreSQL synthetic tests and Mac **934/934** full suite PASS; TypeScript/builds, Chromium/SMTP loopback and 45-table/110-synthetic-workspace SHA-256 restore PASS. **No authenticated operator route or real provider verification exists**. [Evidence](evidence/2026-10-31-staged-monthly-reconciliation.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

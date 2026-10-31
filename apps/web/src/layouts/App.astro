@@ -35,6 +35,7 @@ const workspace = [
 const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
 ---
 <Base noindex title={`${title} · Montral`} router={false}>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
   <div class="app" id="app">
     <div class="scrim" id="scrim"></div>
     <aside class="side">
@@ -43,15 +44,15 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
         <span class="bn">Montral</span>
       </a>
       <ProjectSwitcher client:only="react" />
-      <div class="nl">
+      <nav class="nl" aria-label="Dashboard navigation">
       {main.map(([k, href, label]) => (
-        <a data-nav={k} class={`nav ${active === k ? "on" : ""}`} href={href}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span>{(k === "monitors" || k === "incidents") && <em data-count={k} hidden></em>}</a>
+        <a data-nav={k} class={`nav ${active === k ? "on" : ""}`} href={href} aria-current={active === k ? "page" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span>{(k === "monitors" || k === "incidents") && <em data-count={k} hidden></em>}</a>
       ))}
       <div class="nav-l" data-t>Workspace</div>
       {workspace.map(([k, href, label]) => (
-        <a data-nav={k} class={`nav ${active === k ? "on" : ""}`} href={href} hidden={k === "usage" && active !== "usage"} data-metered={k === "usage" ? "" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
+        <a data-nav={k} class={`nav ${active === k ? "on" : ""}`} href={href} aria-current={active === k ? "page" : undefined} hidden={k === "usage" && active !== "usage"} data-metered={k === "usage" ? "" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
       ))}
-      </div>
+      </nav>
       <div class="sp"></div>
       <div class="me-wrap" id="me-wrap">
         <div class="menu card" id="me-menu" hidden>
@@ -73,11 +74,11 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
         <div class="crumb"><b data-t>{crumb}</b></div>
         <div class="bar-r"><TopBar client:only="react" /></div>
       </div>
-      <main class="page"><slot /></main>
+      <main class="page" id="main-content"><slot /></main>
     </div>
     <nav class="tabs" aria-label="Primary">
       {main.slice(0, 4).map(([k, href, label]) => (
-        <a data-nav={k} class={active === k ? "on" : ""} href={href}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
+        <a data-nav={k} class={active === k ? "on" : ""} href={href} aria-current={active === k ? "page" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
       ))}
       <button id="tab-more" class={["alerting", "team", "settings"].includes(active) ? "on" : ""}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg><span data-t>More</span></button>
     </nav>

@@ -10,12 +10,13 @@ const dot = (
 export function AuthShell({ side, children }: { side: "login" | "signup"; children: ReactNode }) {
   return (
     <div className="auth2">
+      <a className="skip-link" href="#main-content">{t("Skip to main content")}</a>
       <div className="auth-l">
         <header className="auth-top">
           <a href="/" className="auth-brand">{dot}<b>Montral</b></a>
           <div className="auth-tools"><TopBar /></div>
         </header>
-        <div className="auth-form">{children}</div>
+        <main className="auth-form" id="main-content">{children}</main>
         <p className="legal faint">{t("Open source · MIT licensed.")}</p>
       </div>
       <aside className="auth-r" aria-hidden="true">

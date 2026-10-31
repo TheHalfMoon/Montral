@@ -34,6 +34,9 @@
 
 - Account recovery reset page now sets no-referrer, removes the query credential after hydration, and offers a new-link path on missing input. The real Chromium journey validates these cases; [account recovery browser privacy evidence](evidence/2026-10-31-account-recovery-browser-privacy.md).
 
+- Scoped accessibility changes: keyboard-only skip links, semantic auth/dashboard landmarks, labeled dashboard navigation, plus React Router live `aria-current` synchronization across monitor/incident/webhook routes. Actual Chromium signup/dashboard checks pass under supported Node v24.22.1; full accessibility audit remains open. See [supported-runtime/browser/restore evidence](evidence/2026-10-31-supported-node-a11y-restore-qualification.md).
+- Supported runtime re-qualification: **574 API + 20 probe + 122 web tests passed**, Node/web/probe builds and typechecks passed, local SMTP and Chromium passed, source hashes verified and a real PostgreSQL dump restored **42 tables, 128 synthetic organizations and 5 functions**; exact Node v24.22.1 + pnpm 10.0.0 on Mac. Hosted CI remains runner-blocked.
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

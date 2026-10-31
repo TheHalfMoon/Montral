@@ -28,7 +28,14 @@ const NAV_PREFIX = "/app";
 function syncShell(pathname: string) {
   const hit = resolveRoute(pathname);
   const key = hit?.route.key ?? "";
-  document.querySelectorAll<HTMLElement>("[data-nav]").forEach((el) => el.classList.toggle("on", el.dataset.nav === key));
+  document.querySelectorAll<HTMLElement>("[data-nav]").forEach((el) => {
+    const current = el.dataset.nav === key;
+    el.classList.toggle("on", current);
+    if (el.tagName === "A") {
+      if (current) el.setAttribute("aria-current", "page");
+      else el.removeAttribute("aria-current");
+    }
+  });
   document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "usage", "billing"].includes(key));
   const label = hit ? t(NAV_LABEL[hit.route.key]) : t("Not found");
   const crumb = document.querySelector(".crumb b");

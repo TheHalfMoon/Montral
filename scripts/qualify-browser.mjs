@@ -133,6 +133,8 @@ try {
   }
   await page("/signup");
   await until("hydrated signup form", () => js('!!document.querySelector("form.auth-fields input[type=email]")'));
+  const signupSemantics = await js('document.querySelector("a.skip-link[href]")?.getAttribute("href") === "#main-content" && !!document.querySelector("main#main-content h1") && Array.from(document.querySelectorAll("form.auth-fields input")).every(el => el.labels && el.labels.length > 0)');
+  if (!signupSemantics) throw new Error("Signup heading, main landmark or input labels inaccessible");
   const email = `montral-browser-${Date.now()}@example.test`;
   await fill('form.auth-fields input[autocomplete=name]', "Montral Browser QA");
   await fill('form.auth-fields input[type=email]', email);
@@ -154,6 +156,8 @@ try {
   // Real-browser monitoring journey, using only a synthetic heartbeat. It
   // does not probe any external site, DNS resolver, or third-party service.
   await page("/app");
+  const dashboardLandmarks = await js('document.querySelector("a.skip-link[href]")?.getAttribute("href") === "#main-content" && !!document.querySelector("nav.nl[aria-label]") && !!document.querySelector("main#main-content") && !!document.querySelector("nav.nl a[aria-current=page][data-nav=monitors]")');
+  if (!dashboardLandmarks) throw new Error("Dashboard main/navigation landmarks or current-page state inaccessible");
   await until("monitor add action", () => js(
     'Array.from(document.querySelectorAll("button")).some(b => b.textContent.includes("Add your first monitor") || b.textContent.includes("New monitor"))'
   ));
@@ -173,6 +177,7 @@ try {
   await until("monitor resumed in browser", () => js('Array.from(document.querySelectorAll(".ph-actions button")).some(b => b.textContent.trim() === "Pause")'));
   await page("/app/incidents");
   await until("incident page rendered", () => js('document.querySelector("h1")?.textContent?.includes("Incidents")'));
+  if (!await js('!!document.querySelector("nav.nl a[data-nav=incidents][aria-current=page]")')) throw new Error("Incident navigation loses active-page semantics");
   // Qualify the actual manual incident lifecycle, including private team notes.
   // This test account has no configured channels or subscribers, and all
   // affected monitors/data are local synthetic records.
@@ -216,6 +221,7 @@ try {
 
   await page("/app/hooks");
   await until("webhook inbox form", () => js(`!!document.querySelector('form input[maxlength="100"]')`));
+  if (!await js('!!document.querySelector("nav.nl a[data-nav=hooks][aria-current=page]")')) throw new Error("Webhook navigation loses active-page semantics");
   await fill("form input[maxlength='100']", "Browser integration QA");
   await js('document.querySelector("form button.primary").click()');
   const secretPath = await until("new webhook inbox receiver URL", () => js('document.querySelector(".fresh code")?.textContent'));

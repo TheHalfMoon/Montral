@@ -23,6 +23,8 @@
 - [x] Real Chromium signup/monitor/incident/webhook/disabled-checkout journey added to CI workflow using an isolated, automatically deleted `montral_test_browser_ci` database; host-runner execution remains unqualified
 
 ## Unresolved production blockers
+- [x] Exact supported Node v24.22.1 + pnpm 10.0.0 Mac qualification: 716 local API/probe/web tests, Node/web/edge builds, Chromium, local SMTP, 638 source hashes and PostgreSQL backup/restore of 128 synthetic organizations; hosted CI still separately blocked
+- [x] Scoped accessibility smoke: keyboard skip links, auth/dashboard main/navigation landmarks and live `aria-current` synchronization verified across monitor, incident and webhook navigation in Chromium (NOT a full WCAG audit)
 - [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning); **local** Node v24.22.1 + pnpm 10.0.0 runs cover supported toolchain but do NOT replace hosted CI
 - [x] Account recovery reset page no-referrer meta, hydrated URL cleanup, and missing-link fallback verified in real Chromium on synthetic input; actual SMTP recovery link remains externally unqualified
 - [ ] Complete browser E2E matrix (account recovery, real-world external outage/notification and externally hosted SMTP deliverability, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED

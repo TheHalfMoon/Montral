@@ -97,6 +97,14 @@ export async function purgeFrozenContentInDisposableTestDb(
       ) as verified
     `;
     if (!marker?.verified) throw new Error("Synthetic retention fixture marker required");
+    // The DELETE predicate alone is not sufficient under READ COMMITTED:
+    // it can observe an old terminal recipient version while a concurrent
+    // writer has an uncommitted prepared/uncertain transition. This explicit
+    // synthetic-only table lock waits for those writers, then the following
+    // statement reads their *committed* states. It also blocks new writes
+    // until the bounded batch commits. NEVER use on a live customer database.
+    await tx`set local lock_timeout = '3s'`;
+    await tx`lock table monthly_report_recipient in share mode`;
     return tx<{ n: number }[]>`
     with eligible as (
       select c.organization_id, c.report_month from monthly_report_content c

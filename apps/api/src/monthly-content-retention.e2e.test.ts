@@ -87,6 +87,67 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
     expect(serialized).not.toContain(suffix);
   });
 
+  it("waits for committed concurrent recipient changes before deciding retention eligibility", async () => {
+    // An uncommitted writer may move terminal rows back to an unresolved
+    // state. The retention worker MUST NOT decide from the old MVCC version.
+    let releaseWriter!: () => void;
+    const holdWriter = new Promise<void>((resolve) => { releaseWriter = resolve; });
+    let writerReady!: () => void;
+    const ready = new Promise<void>((resolve) => { writerReady = resolve; });
+    const writer = db.$client.begin(async (tx) => {
+      await tx`update monthly_report_recipient set state='uncertain'
+        where organization_id in (${id("accepted")}, ${id("skipped")})`;
+      writerReady();
+      await holdWriter;
+    });
+    await ready;
+    try {
+      const prune = purgeFrozenContentInDisposableTestDb(db, 180, now, 2);
+      await new Promise((resolve) => setTimeout(resolve, 70));
+      releaseWriter();
+      await writer;
+      expect(await prune).toBe(0);
+      const report = await inspectFrozenContentRetention(db, 180, now);
+      expect(report.counts.eligibleClosed).toBe(0);
+      expect(report.counts.heldUnresolved).toBe(5);
+      // Restore the synthetic fixture for the independent eligibility drill.
+      await db.$client`update monthly_report_recipient set state='accepted'
+        where organization_id=${id("accepted")}`;
+      await db.$client`update monthly_report_recipient set state='skipped'
+        where organization_id=${id("skipped")}`;
+    } finally {
+      releaseWriter();
+      await writer;
+    }
+  });
+
+  it("fails closed if a recipient writer holds the lock past the bounded rehearsal timeout", async () => {
+    let releaseWriter!: () => void;
+    const holdWriter = new Promise<void>((resolve) => { releaseWriter = resolve; });
+    let writerReady!: () => void;
+    const ready = new Promise<void>((resolve) => { writerReady = resolve; });
+    const writer = db.$client.begin(async (tx) => {
+      await tx`update monthly_report_recipient set state='uncertain'
+        where organization_id in (${id("accepted")}, ${id("skipped")})`;
+      writerReady();
+      await holdWriter;
+    });
+    await ready;
+    try {
+      // Lock contention must NOT become permission to use a stale snapshot.
+      await expect(purgeFrozenContentInDisposableTestDb(db, 180, now, 2))
+        .rejects.toMatchObject({ code: "55P03" });
+      expect((await db.$client`select count(*)::integer as n from monthly_report_content`)[0].n).toBe(7);
+    } finally {
+      releaseWriter();
+      await writer;
+      await db.$client`update monthly_report_recipient set state='accepted'
+        where organization_id=${id("accepted")}`;
+      await db.$client`update monthly_report_recipient set state='skipped'
+        where organization_id=${id("skipped")}`;
+    }
+  });
+
   it("rehearsal removes only aged closed content, preserving usage recipients and uncertain cases", async () => {
     const before = await db.$client`select count(*)::integer as n from monthly_report_recipient`;
     expect(await purgeFrozenContentInDisposableTestDb(db, 180, now, 1)).toBe(1);

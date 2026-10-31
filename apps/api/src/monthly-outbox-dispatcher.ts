@@ -85,3 +85,47 @@ export async function dispatchPreparedMonthlyOutbox(
   }
   return result;
 }
+
+/**
+ * STAGED batch orchestrator, deliberately NOT wired to cron or HTTP routes.
+ * Commit the workspace-month claim together with all recipient snapshots;
+ * then rediscover previously committed `prepared` recipients on every call.
+ * A crash before commit leaves no claim, and a crash after commit can recover
+ * unattempted recipients. Attempted/uncertain/accepted mail is never replayed.
+ */
+export async function runStagedMonthlyOutboxBatch(
+  repo: Repo, entitlements: Entitlements, now = new Date(), limit = 20,
+) {
+  const result = { workspaces: 0, claimed: 0, accepted: 0, uncertain: 0, quotaDenied: 0 };
+  if (!entitlements.claimMonthlyOutboxAttempt || !emailEnabled() || now.getUTCDate() > REPORT_DAYS)
+    return result;
+  const month = previousMonth(now);
+  try {
+    await repo.claimMonthlyReportsWithRecipients(month, limit);
+  } catch {
+    // All new claims/snapshots rolled back. Previously committed prepared work
+    // could still be safe to recover; do not return early after this failure.
+    console.error("monthly outbox atomic owner snapshot unavailable");
+  }
+  let pending: string[];
+  try {
+    pending = await repo.recoverPreparedMonthlyReportWorkspaces(month, limit);
+  } catch {
+    console.error("monthly outbox recovery query unavailable");
+    return result;
+  }
+  for (const orgId of pending) {
+    result.workspaces++;
+    try {
+      const sent = await dispatchPreparedMonthlyOutbox(repo, entitlements, orgId, now);
+      result.claimed += sent.claimed;
+      result.accepted += sent.accepted;
+      result.uncertain += sent.uncertain;
+      result.quotaDenied += sent.quotaDenied;
+    } catch {
+      // One workspace's render/query failure must not starve another.
+      console.error("monthly outbox workspace dispatch unavailable");
+    }
+  }
+  return result;
+}

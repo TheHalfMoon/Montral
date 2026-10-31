@@ -1583,12 +1583,68 @@ export function createRepo(db: Db): Repo {
       );
       return rows_.map((r) => r.organization_id);
     },
+    async claimMonthlyReportsWithRecipients(month, limit) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        throw new Error("Invalid monthly report atomic snapshot request");
+      return db.transaction(async (tx) => {
+        // A legacy claim has no recipient proof, so NEVER use it to infer
+        // retryable work. The old scheduler uses this same setting row lock.
+        const candidates = await rows<{ organization_id: string }>(tx.execute(sql`
+          select w.organization_id from workspace_setting w
+          where w.monthly_report and w.last_report_month is distinct from ${month}
+            and exists (
+              select 1 from member m join "user" u on u.id=m.user_id
+              where m.organization_id=w.organization_id and m.role='owner' and length(trim(u.email))>0
+            )
+            and not exists (
+              select 1 from monthly_report_recipient r
+              where r.organization_id=w.organization_id and r.report_month=${month}
+            )
+          order by w.organization_id limit ${limit} for update of w skip locked
+        `));
+        const claimed: string[] = [];
+        for (const { organization_id: orgId } of candidates) {
+          const owners = await tx.select({
+            userId: schema.member.userId, email: schema.user.email, locale: schema.user.locale,
+          }).from(schema.member).innerJoin(schema.user, eq(schema.user.id, schema.member.userId))
+            .where(and(eq(schema.member.organizationId, orgId), eq(schema.member.role, "owner")))
+            .orderBy(asc(schema.member.userId));
+          // Without owners, or with broken contacts, do not consume a claim.
+          if (!owners.length || owners.some((o) => !o.email?.trim())) continue;
+          await tx.insert(schema.monthlyReportRecipient).values(owners.map((o) => ({
+            organizationId: orgId, reportMonth: month, recipientUserId: o.userId,
+            recipientEmail: o.email, locale: o.locale,
+          })));
+          await tx.update(schema.workspaceSetting).set({ lastReportMonth: month }).where(and(
+            eq(schema.workspaceSetting.organizationId, orgId), eq(schema.workspaceSetting.monthlyReport, true),
+          ));
+          claimed.push(orgId);
+        }
+        // No SMTP call or quota debit occurs until *after* this commits.
+        return claimed;
+      });
+    },
+    async recoverPreparedMonthlyReportWorkspaces(month, limit) {
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        throw new Error("Invalid monthly report recovery request");
+      const result = await rows<{ organization_id: string }>(db.execute(sql`
+        select distinct r.organization_id from monthly_report_recipient r
+        join workspace_setting w on w.organization_id=r.organization_id
+        where r.report_month=${month} and r.state='prepared'
+          and w.monthly_report=true and w.last_report_month=${month}
+        order by r.organization_id limit ${limit}
+      `));
+      return result.map((r) => r.organization_id);
+    },
     async releaseMonthlyReportClaim(orgId, month) {
       // Compare-and-set prevents releasing a different month's claim or a disabled preference.
       await db.update(schema.workspaceSetting).set({ lastReportMonth: null }).where(and(
         eq(schema.workspaceSetting.organizationId, orgId),
         eq(schema.workspaceSetting.lastReportMonth, month),
         eq(schema.workspaceSetting.monthlyReport, true),
+        // Do not let a legacy error-handler release a staged claim after any
+        // recipient was snapshotted, even if no SMTP attempt has started.
+        sql`not exists (select 1 from monthly_report_recipient r where r.organization_id=${orgId} and r.report_month=${month})`,
       ));
     },
     async reserveMonthlyReportRecipients(orgId, month, owners) {

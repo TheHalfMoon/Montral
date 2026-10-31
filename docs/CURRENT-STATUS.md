@@ -78,6 +78,8 @@
 
 - **Monthly report outbox dispatcher — STAGED, not scheduled:** the new internal worker consumes prepared recipient snapshots from PostgreSQL, reuses the existing monthly mail renderer, claims quota + one attempt atomically, attempts required SMTP delivery once, and records `accepted`/`uncertain` without replaying post-acceptance timeouts or result-write failures. Ten synthetic real-PostgreSQL tests passed; Mac 912/912 total tests passed. **Production monthly sender unchanged; no scheduler, route or release activation.** [Evidence](evidence/2026-10-31-staged-monthly-outbox-dispatcher.md).
 
+- **Atomic monthly owner materialization + crash-safe recovery — STAGED:** workspace-month claim and owner snapshots now commit together under PostgreSQL locks; recovery enumerates only actual `prepared` records, never uncertain old org-only claims. Legacy release cannot clear a snapshotted claim. Seven repository and six isolated staged-batch E2E regressions, **925/925 Mac package tests**, production builds, TypeScript, Chromium, SMTP loopback and 44-table SHA-256 restore PASS. The production monthly sender and schedule remain unchanged. [Evidence](evidence/2026-10-31-atomic-monthly-materialization-recovery.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

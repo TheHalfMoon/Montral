@@ -669,6 +669,16 @@ export interface Repo {
   releaseMaintenanceReminder(maintenanceId: string, statusPageId: string): Promise<void>;
   /** Workspaces that want a report for `month` (YYYY-MM) and had none yet; each is claimed once. */
   claimMonthlyReports(month: string, limit: number): Promise<string[]>;
+  /** STAGED ONLY: atomically claim fresh workspace-months AND persist their current
+   * owner recipient snapshots in the same PostgreSQL transaction. A worker crash
+   * before commit leaves neither claim nor recipients; after commit recipients
+   * are recoverable. Excludes legacy claimed months and months with any prior
+   * outbox records to prevent replay. Does NOT send any mail. */
+  claimMonthlyReportsWithRecipients(month: string, limit: number): Promise<string[]>;
+  /** STAGED ONLY: discover already committed, still-prepared recipient work
+   * from an existing opted-in outbox. Never infer work from legacy org-only
+   * claims with no outbox rows; no recipient addresses leave this method. */
+  recoverPreparedMonthlyReportWorkspaces(month: string, limit: number): Promise<string[]>;
   /** Reopen a monthly claim only if its month still matches, before any delivery is attempted. */
   releaseMonthlyReportClaim(orgId: string, month: string): Promise<void>;
   /** Reserve one owner/month outbox record, only for a claimed opted-in workspace-month.

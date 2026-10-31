@@ -52,6 +52,19 @@ jobs:
         run: pnpm --filter @montral/web test
       - name: Smoke-test running Node API and web against PostgreSQL
         run: node scripts/smoke-node.mjs
+      - name: Qualify real Chromium user journeys against disposable PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser="$(command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [[ -z "$browser" ]]; then
+            echo "Chrome/Chromium not installed on runner; browser qualification cannot pass"
+            exit 1
+          fi
+          browser_db="${TEST_DATABASE_URL%/*}/montral_test_browser_ci"
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_browser_ci'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_browser_ci WITH (FORCE)"' EXIT
+          MONTRAL_CHROMIUM="$browser" TEST_DATABASE_URL="$browser_db" node scripts/qualify-browser.mjs
       - name: Qualify automatic incident and SMTP alert delivery to local sink
         run: node scripts/qualify-smtp.mjs
       - name: No source brand leaks in active code

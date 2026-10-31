@@ -13,7 +13,7 @@ const connection = process.env.TEST_DATABASE_URL;
 const executable = process.env.MONTRAL_CHROMIUM;
 if (!connection || !executable) throw new Error("Set TEST_DATABASE_URL and MONTRAL_CHROMIUM");
 const db = new URL(connection);
-if (!["127.0.0.1", "localhost"].includes(db.hostname) || !db.pathname.includes("test_")) {
+if (!["127.0.0.1", "localhost"].includes(db.hostname) || !/^\/montral_test_[a-zA-Z0-9_]+$/.test(db.pathname)) {
   throw new Error("Browser qualification refuses any non-local or non-disposable database");
 }
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));

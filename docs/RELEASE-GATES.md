@@ -20,6 +20,7 @@
 - [x] Real headless Chromium journey: signup, **monitor creation/detail/pause/resume**, **manual incident declare/acknowledge/internal update/resolve**, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
 - [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 122 synthetic organizations and 5 transactional functions restored; source preserved
 - [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
+- [x] Real Chromium signup/monitor/incident/webhook/disabled-checkout journey added to CI workflow using an isolated, automatically deleted `montral_test_browser_ci` database; host-runner execution remains unqualified
 
 ## Unresolved production blockers
 - [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning); **local** Node v24.22.1 + pnpm 10.0.0 runs cover supported toolchain but do NOT replace hosted CI

@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { openDatabase } from "@montral/db-pg";
 import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
+import { migrateMontralSchema } from "./schema-migrate";
 import { fingerprint, pruneExpiredHookEvents } from "./montral-hooks";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -17,8 +18,7 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
   const database = url ? openDatabase(url, { max: 10 }) : null;
   const app = createApp(openDatabase, { edition: montralEdition });
   beforeAll(async () => {
-    await database!.migrate();
-    await montralEdition.migrate!(database!);
+    await migrateMontralSchema(database!, montralEdition);
   });
   afterAll(async () => { await database?.close(1); });
   async function account() {

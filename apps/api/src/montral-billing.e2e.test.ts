@@ -2,6 +2,7 @@ import { beforeAll, afterAll, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "@montral/db-pg";
 import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
+import { migrateMontralSchema } from "./schema-migrate";
 import { calendarMonthUtc, createMontralEntitlements } from "./montral-metering";
 import { runMontralMaintenance } from "./montral-maintenance";
 import type { Bindings } from "./env";
@@ -50,8 +51,7 @@ const event = (id: string, intent: string | null, eventName: string, status: str
 
 describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
   beforeAll(async () => {
-    await db!.migrate();
-    await montralEdition.migrate!(db!);
+    await migrateMontralSchema(db!, montralEdition);
   });
   afterAll(async () => { await db?.close(1); });
 

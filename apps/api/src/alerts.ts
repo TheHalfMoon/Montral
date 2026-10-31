@@ -314,35 +314,43 @@ export async function retryDeliveries(repo: Repo, limit = 10, entitlements: Enti
   // a phone is pushed once per event, also when several of its retries are due in the same round
   const pushedBy = new Map<string, PushedDevices>();
   for (const { delivery, incident, monitor, channel } of due) {
-    // a repeat or escalation is pointless once someone has taken the incident
-    if ((delivery.kind === "incident.reminder" || delivery.kind === "incident.escalated") && (incident.acknowledgedAt || incident.resolvedAt)) {
-      const why = incident.resolvedAt ? "skipped: the incident was resolved before this alert could be sent" : "skipped: the incident was acknowledged before this alert could be sent";
-      await repo.finishDelivery(delivery.id, { status: "skipped", error: why, message: why });
-      continue;
-    }
-    // the incident changed while this alert waited for its retry: a "down" for one that has recovered, or a "recovered" for one that was reopened
-    if ((delivery.kind === "incident.opened" && incident.resolvedAt) || (delivery.kind === "incident.resolved" && !incident.resolvedAt)) {
-      const why = delivery.kind === "incident.opened" ? "skipped: the incident was resolved before this alert could be sent" : "skipped: the incident was reopened before this alert could be sent";
-      await repo.finishDelivery(delivery.id, { status: "skipped", error: why, message: why });
-      continue;
-    }
-    // A reopened incident alerts again as "down again". Which of its down alerts this is follows from the order they were
-    // queued in: a later one makes this a stale original, an earlier one makes this the "again".
-    let reopened = false;
-    if (delivery.kind === "incident.opened" && incident.evaluationNote?.startsWith("reopened")) {
-      const opened = (await repo.incidentDeliveries(incident.organizationId, incident.id)).filter((x) => x.kind === "incident.opened" && x.id !== delivery.id);
-      if (opened.some((x) => x.channelId === delivery.channelId && x.createdAt > delivery.createdAt && wasDelivered(x))) {
-        const why = "skipped: the incident was reopened and alerted again before this alert could be sent";
+    try {
+      // a repeat or escalation is pointless once someone has taken the incident
+      if ((delivery.kind === "incident.reminder" || delivery.kind === "incident.escalated") && (incident.acknowledgedAt || incident.resolvedAt)) {
+        const why = incident.resolvedAt ? "skipped: the incident was resolved before this alert could be sent" : "skipped: the incident was acknowledged before this alert could be sent";
         await repo.finishDelivery(delivery.id, { status: "skipped", error: why, message: why });
         continue;
       }
-      reopened = opened.some((x) => x.createdAt < delivery.createdAt);
+      // the incident changed while this alert waited for its retry: a "down" for one that has recovered, or a "recovered" for one that was reopened
+      if ((delivery.kind === "incident.opened" && incident.resolvedAt) || (delivery.kind === "incident.resolved" && !incident.resolvedAt)) {
+        const why = delivery.kind === "incident.opened" ? "skipped: the incident was resolved before this alert could be sent" : "skipped: the incident was reopened before this alert could be sent";
+        await repo.finishDelivery(delivery.id, { status: "skipped", error: why, message: why });
+        continue;
+      }
+      // A reopened incident alerts again as "down again". Which of its down alerts this is follows from the order they were
+      // queued in: a later one makes this a stale original, an earlier one makes this the "again".
+      let reopened = false;
+      if (delivery.kind === "incident.opened" && incident.evaluationNote?.startsWith("reopened")) {
+        const opened = (await repo.incidentDeliveries(incident.organizationId, incident.id)).filter((x) => x.kind === "incident.opened" && x.id !== delivery.id);
+        if (opened.some((x) => x.channelId === delivery.channelId && x.createdAt > delivery.createdAt && wasDelivered(x))) {
+          const why = "skipped: the incident was reopened and alerted again before this alert could be sent";
+          await repo.finishDelivery(delivery.id, { status: "skipped", error: why, message: why });
+          continue;
+        }
+        reopened = opened.some((x) => x.createdAt < delivery.createdAt);
+      }
+      const ev = await withProject(repo, incident.organizationId, eventOf(delivery.kind, incident, monitor, delivery.kind === "incident.escalated" ? incident.escalationLevel : incident.reminderCount, reopened));
+      const eventKey = `${incident.id}:${delivery.kind}:${ev.count ?? 0}`;
+      if (!pushedBy.has(eventKey)) pushedBy.set(eventKey, new Map());
+      const pendingRouting = delivery.error === ROUTING_UNAVAILABLE;
+      await execute(repo, delivery, channel, ev, await languageFor(repo, channel), pendingRouting ? entitlements : undefined, pushedBy.get(eventKey), pendingRouting ? delivery.createdAt : undefined);
+    } catch {
+      // Rows were already claimed as `sending`. A transient read/finish error must
+      // not starve later deliveries; the sweeper recovers the interrupted row after
+      // its lease expires. Do not send it again now: provider acceptance may be ambiguous.
+      // Exceptions can echo bot credentials, webhook URLs or subscriber addresses.
+      console.error("alert retry item interrupted; awaiting delivery sweep");
     }
-    const ev = await withProject(repo, incident.organizationId, eventOf(delivery.kind, incident, monitor, delivery.kind === "incident.escalated" ? incident.escalationLevel : incident.reminderCount, reopened));
-    const eventKey = `${incident.id}:${delivery.kind}:${ev.count ?? 0}`;
-    if (!pushedBy.has(eventKey)) pushedBy.set(eventKey, new Map());
-    const pendingRouting = delivery.error === ROUTING_UNAVAILABLE;
-    await execute(repo, delivery, channel, ev, await languageFor(repo, channel), pendingRouting ? entitlements : undefined, pushedBy.get(eventKey), pendingRouting ? delivery.createdAt : undefined);
   }
   return due.length;
 }

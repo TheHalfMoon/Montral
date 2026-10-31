@@ -34,6 +34,7 @@
 - [x] Locally requalified Lark explicit-success acknowledgement, including malformed-body and secret-error regressions, as part of full 861/861 Mac tests. [Lark evidence](evidence/2026-10-31-strict-lark-webhook-ack.md)
 - [x] Locally requalified Telegram JSON `ok: true` delivery acknowledgement and ten synthetic regressions, including provider-error privacy, as part of full 861/861 Mac tests. [Evidence](evidence/2026-10-31-telegram-acknowledgement-qualification.md)
 - [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
+- [x] Local per-delivery retry isolation: a history-read or delivery-status-write failure no longer aborts later claimed retries, sensitive exceptions are suppressed, and the failed claim remains for timed sweep rather than immediate duplicate resend. Two synthetic cases and **866/866 Mac suite** PASS; hosted retry recovery still unqualified. [Evidence](evidence/2026-10-31-per-delivery-retry-failure-isolation.md)
 - [ ] Hosted long-running scheduled pruning and orphan deletion behavior, crashes and retry reliability (local failure isolation and database tests PASS)
 - [x] Node trusted-proxy client-IP hardening: ignores attacker-supplied CF-Connecting-IP, uses final validated X-Forwarded-For peer, focused spoofing tests pass
 - [x] Parallel API test migrations protected with test-only Vitest global setup, verified on new PostgreSQL database; strict production environment-contract gate unchanged

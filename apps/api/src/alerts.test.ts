@@ -204,6 +204,53 @@ describe("retryDeliveries", () => {
     fetchSpy.mockRestore();
     return done[0];
   };
+  it("processes later retries when a previous stale alert cannot be marked skipped", async () => {
+    const secret = "synthetic-db-token-DO-NOT-LOG";
+    const first = item(1, { incident: { resolvedAt: new Date() } });
+    const second = item(1);
+    second.delivery.id = "d2";
+    const done: { id: string; status: string }[] = [];
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const repo = {
+      claimRetries: async () => [first, second],
+      finishDelivery: async (id: string, result: { status: string }) => {
+        if (id === first.delivery.id) throw new Error(secret);
+        done.push({ id, status: result.status });
+      },
+    };
+    try {
+      expect(await retryDeliveries(repo as never)).toBe(2);
+      expect(done).toEqual([{ id: "d2", status: "sent" }]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith("alert retry item interrupted; awaiting delivery sweep");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally { fetchSpy.mockRestore(); log.mockRestore(); }
+  });
+
+  it("does not starve later alerts when a reopened incident history lookup fails", async () => {
+    const secret = "synthetic-webhook-access-token-DO-NOT-LOG";
+    const first = item(1, { incident: { evaluationNote: "reopened: outage again" } });
+    const second = item(1);
+    second.delivery.id = "d2";
+    second.incident.id = "i2";
+    const sent: string[] = [];
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("", { status: 200 }));
+    const repo = {
+      claimRetries: async () => [first, second],
+      incidentDeliveries: async () => { throw new Error(secret); },
+      finishDelivery: async (id: string, result: { status: string }) => void sent.push(`${id}:${result.status}`),
+    };
+    try {
+      expect(await retryDeliveries(repo as never)).toBe(2);
+      expect(sent).toEqual(["d2:sent"]);
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(log).toHaveBeenCalledWith("alert retry item interrupted; awaiting delivery sweep");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(secret);
+    } finally { fetchSpy.mockRestore(); log.mockRestore(); }
+  });
+
   it("marks a recovered delivery as sent", async () => expect(await run(1, 200)).toEqual({ status: "sent", error: null, message: null }));
   it("schedules another attempt, then gives up after the third", async () => {
     expect(await run(1, 500)).toMatchObject({ status: "failed", retryInSec: 300 });

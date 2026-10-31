@@ -43,6 +43,8 @@
 
 - Local PostgreSQL restore now checks normalized **SHA-256 fingerprints of all 42 tables** as well as row counts, comparing before/after dump and after restore. Synthetic same-row-count mutation changed the expected digest; a locally replayed GitHub Actions restore step also passed with 8 sample org/project/monitor records. Hosted CI still has no assigned runners. See [SHA-256 restore qualification](evidence/2026-10-31-sha256-restore-qualification.md).
 
+- Nonurgent monthly report email sending now fails closed when the usage-meter ledger throws or returns an invalid grant, preventing a quota bypass, while the availability-sensitive incident alerts remain unchanged. Ten focused synthetic unit tests verify failure, partial grants, unmetered self-hosted operation and out-of-window behavior. [Optional digest quota qualification](evidence/2026-10-31-monthly-report-quota-fail-closed.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

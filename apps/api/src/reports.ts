@@ -28,7 +28,15 @@ export async function sendMonthlyReports(repo: Repo, now = new Date(), entitleme
   for (const orgId of await repo.claimMonthlyReports(month, 20)) {
     const [org, owners, comps] = await Promise.all([repo.organization(orgId), repo.ownerContacts(orgId), repo.monthlyReport(orgId, from, to)]);
     if (!org || !owners.length || !comps.length) continue;
-    const granted = await entitlements.spendEmails(orgId, owners.length).catch(() => owners.length);
+    // A monthly digest is optional: a metering outage must never turn it into an unbounded email send.
+    // Unlike incident alerts, reports may safely be omitted when the allowance cannot be verified.
+    let granted: number;
+    try { granted = await entitlements.spendEmails(orgId, owners.length); }
+    catch { console.error("monthly report email allowance unavailable"); continue; }
+    if (!Number.isSafeInteger(granted) || granted < 0 || granted > owners.length) {
+      console.error("monthly report email allowance invalid");
+      continue;
+    }
     for (const o of owners.slice(0, granted)) {
       const lang: Lang = isLang(o.locale) ? o.locale : "en";
       const title = tr(lang, "Monthly report for {month}", { month });

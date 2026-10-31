@@ -1583,6 +1583,14 @@ export function createRepo(db: Db): Repo {
       );
       return rows_.map((r) => r.organization_id);
     },
+    async releaseMonthlyReportClaim(orgId, month) {
+      // Compare-and-set prevents releasing a different month's claim or a disabled preference.
+      await db.update(schema.workspaceSetting).set({ lastReportMonth: null }).where(and(
+        eq(schema.workspaceSetting.organizationId, orgId),
+        eq(schema.workspaceSetting.lastReportMonth, month),
+        eq(schema.workspaceSetting.monthlyReport, true),
+      ));
+    },
     async monthlyReport(orgId, from, to) {
       const comps = await db.select().from(schema.monitor).where(eq(schema.monitor.organizationId, orgId)).orderBy(asc(schema.monitor.name));
       if (!comps.length) return [];

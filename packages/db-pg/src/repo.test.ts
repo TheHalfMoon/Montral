@@ -798,7 +798,22 @@ describe.skipIf(!url)("status page reminders and monthly reports", () => {
     const month = "2026-09";
     const claims = (await Promise.all([repo.claimMonthlyReports(month, 500), repo.claimMonthlyReports(month, 500)])).flat().filter((id) => id === orgId);
     expect(claims).toHaveLength(1);
+    expect((await repo.claimMonthlyReports(month, 500)).filter((id) => id === orgId)).toHaveLength(0);
+    // A stale-month release cannot touch a valid outstanding claim.
+    await repo.releaseMonthlyReportClaim(orgId, "2026-08");
+    expect((await repo.claimMonthlyReports(month, 500)).filter((id) => id === orgId)).toHaveLength(0);
+    await repo.releaseMonthlyReportClaim(orgId, month);
+    expect((await repo.claimMonthlyReports(month, 500)).filter((id) => id === orgId)).toHaveLength(1);
+    expect((await repo.claimMonthlyReports(month, 500)).filter((id) => id === orgId)).toHaveLength(0);
+    // Releasing September after October has been claimed must not reopen October.
     expect((await repo.claimMonthlyReports("2026-10", 500)).filter((id) => id === orgId)).toHaveLength(1);
+    await repo.releaseMonthlyReportClaim(orgId, month);
+    expect((await repo.claimMonthlyReports("2026-10", 500)).filter((id) => id === orgId)).toHaveLength(0);
+    // Turning the preference off makes even a matching release a no-op.
+    await db.update(schema.workspaceSetting).set({ monthlyReport: false }).where(eq(schema.workspaceSetting.organizationId, orgId));
+    await repo.releaseMonthlyReportClaim(orgId, "2026-10");
+    const settings = await db.select().from(schema.workspaceSetting).where(eq(schema.workspaceSetting.organizationId, orgId));
+    expect(settings[0].lastReportMonth).toBe("2026-10");
   });
 
   it("summarises a month per component: uptime, downtime and incidents", async () => {

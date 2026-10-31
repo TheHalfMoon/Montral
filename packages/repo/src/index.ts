@@ -669,6 +669,8 @@ export interface Repo {
   releaseMaintenanceReminder(maintenanceId: string, statusPageId: string): Promise<void>;
   /** Workspaces that want a report for `month` (YYYY-MM) and had none yet; each is claimed once. */
   claimMonthlyReports(month: string, limit: number): Promise<string[]>;
+  /** Reopen a monthly claim only if its month still matches, before any delivery is attempted. */
+  releaseMonthlyReportClaim(orgId: string, month: string): Promise<void>;
   /** Per-component uptime, downtime and incident count between the two instants. */
   monthlyReport(orgId: string, from: Date, to: Date): Promise<MonthlyComponent[]>;
   /** Emails and locales of the workspace owners. */

@@ -16,7 +16,9 @@ const duration = (min: number, lang: Lang) => (min < 60 ? `${min} ${lang === "zh
 
 /**
  * Emails the owners of every workspace that turned the monthly report on a summary of last month. A workspace is claimed
- * for the month before anything is sent, so overlapping ticks cannot send twice; a send that fails is logged, not retried.
+ * for the month before anything is sent, so overlapping ticks cannot send twice. A failed quota
+ * decision reopens the claim before any email is attempted; an attempted email is never retried
+ * automatically because provider errors can be ambiguous about whether a message was delivered.
  */
 export async function sendMonthlyReports(repo: Repo, now = new Date(), entitlements: Entitlements = unmetered) {
   if (now.getUTCDate() > REPORT_DAYS) return 0;
@@ -26,15 +28,22 @@ export async function sendMonthlyReports(repo: Repo, now = new Date(), entitleme
   const to = new Date(Date.UTC(y, m, 1));
   let sent = 0;
   for (const orgId of await repo.claimMonthlyReports(month, 20)) {
-    const [org, owners, comps] = await Promise.all([repo.organization(orgId), repo.ownerContacts(orgId), repo.monthlyReport(orgId, from, to)]);
+    const retryBeforeSend = async () => {
+      try { await repo.releaseMonthlyReportClaim(orgId, month); }
+      catch { console.error("monthly report claim release failed"); }
+    };
+    const prepared = await Promise.all([repo.organization(orgId), repo.ownerContacts(orgId), repo.monthlyReport(orgId, from, to)]).catch(() => null);
+    if (!prepared) { console.error("monthly report preparation unavailable"); await retryBeforeSend(); continue; }
+    const [org, owners, comps] = prepared;
     if (!org || !owners.length || !comps.length) continue;
     // A monthly digest is optional: a metering outage must never turn it into an unbounded email send.
     // Unlike incident alerts, reports may safely be omitted when the allowance cannot be verified.
     let granted: number;
     try { granted = await entitlements.spendEmails(orgId, owners.length); }
-    catch { console.error("monthly report email allowance unavailable"); continue; }
+    catch { console.error("monthly report email allowance unavailable"); await retryBeforeSend(); continue; }
     if (!Number.isSafeInteger(granted) || granted < 0 || granted > owners.length) {
       console.error("monthly report email allowance invalid");
+      await retryBeforeSend();
       continue;
     }
     for (const o of owners.slice(0, granted)) {

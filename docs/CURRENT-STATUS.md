@@ -45,6 +45,8 @@
 
 - Nonurgent monthly report email sending now fails closed when the usage-meter ledger throws or returns an invalid grant, preventing a quota bypass, while the availability-sensitive incident alerts remain unchanged. Ten focused synthetic unit tests verify failure, partial grants, unmetered self-hosted operation and out-of-window behavior. [Optional digest quota qualification](evidence/2026-10-31-monthly-report-quota-fail-closed.md).
 
+- Monthly-report pre-send quota/preparation failures now **release only the matching PostgreSQL month claim** for a later scheduler retry; wrong-month or disabled preferences are protected, and ambiguous/partial email sends are never retried automatically. Real PostgreSQL and synthetic unit tests passed. [Monthly-report reclaim evidence](evidence/2026-10-31-monthly-report-pre-send-reclaim-qualification.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

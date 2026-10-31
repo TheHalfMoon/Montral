@@ -56,7 +56,7 @@
 - [x] Optional PostgreSQL atomic credit/email metering and plan caps under concurrent test requests
 - [ ] Real Lemon Squeezy test-store checkout + authentic provider callbacks (no connected merchant yet)
 - [ ] Production merchant onboarding, settlement validation, real billing, cancellation, refunds, chargebacks and proration
-- [x] Optional monthly report emails stop when metering is unavailable or reports an invalid grant (10 synthetic tests); critical outage alert behavior unchanged. Automatic requeue of skipped monthly digests remains unqualified
+- [x] Optional monthly reports fail closed on unavailable/invalid email quota. Pre-send preparation/ledger failures now conditionally release matching PostgreSQL monthly claims for retry during reporting window, with 13 focused tests and real PostgreSQL verification. Ambiguous provider outcomes intentionally never requeue; a durable per-recipient outbox remains unqualified
 - [ ] Production usage quota/cost/load validation and period aligned with subscription renewal
 - [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review

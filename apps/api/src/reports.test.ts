@@ -16,6 +16,7 @@ const owners = [
 function repo() {
   return {
     claimMonthlyReports: vi.fn(async () => ["synthetic-org"]),
+    releaseMonthlyReportClaim: vi.fn(async () => undefined),
     organization: vi.fn(async () => ({ id: "synthetic-org", name: "Synthetic workspace" })),
     ownerContacts: vi.fn(async () => owners),
     monthlyReport: vi.fn(async () => [{ name: "Synthetic heartbeat", uptime: 100, downtimeMinutes: 0, incidents: 0 }]),
@@ -33,6 +34,7 @@ describe("monthly report email quota safety", () => {
     expect(await sendMonthlyReports(db as never, when, meter)).toBe(0);
     expect(meter.spendEmails).toHaveBeenCalledWith("synthetic-org", 2);
     expect(sendEmail).not.toHaveBeenCalled();
+    expect(db.releaseMonthlyReportClaim).toHaveBeenCalledWith("synthetic-org", "2026-09");
     expect(log).toHaveBeenCalledWith("monthly report email allowance unavailable");
     expect(JSON.stringify(log.mock.calls)).not.toContain("secret tenant credential");
   });
@@ -40,8 +42,10 @@ describe("monthly report email quota safety", () => {
   it.each([NaN, Infinity, -1, 1.5, 3])("rejects invalid email quota grants (%s)", async (grant) => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const meter = { ...unmetered, spendEmails: async () => grant };
-    expect(await sendMonthlyReports(repo() as never, when, meter)).toBe(0);
+    const db = repo();
+    expect(await sendMonthlyReports(db as never, when, meter)).toBe(0);
     expect(sendEmail).not.toHaveBeenCalled();
+    expect(db.releaseMonthlyReportClaim).toHaveBeenCalledWith("synthetic-org", "2026-09");
     expect(log).toHaveBeenCalledWith("monthly report email allowance invalid");
   });
 
@@ -56,7 +60,41 @@ describe("monthly report email quota safety", () => {
     expect(await sendMonthlyReports(db as never, when, meter)).toBe(2);
     expect(meter.spendEmails).toHaveBeenCalledTimes(2);
     expect(sendEmail).toHaveBeenCalledTimes(2);
+    expect(db.releaseMonthlyReportClaim).toHaveBeenCalledTimes(1);
+    expect(db.releaseMonthlyReportClaim).toHaveBeenCalledWith("unavailable-org", "2026-09");
     expect(log).toHaveBeenCalledWith("monthly report email allowance unavailable");
+  });
+
+  it("reopens a claimed digest when report preparation fails before any delivery", async () => {
+    const db = repo();
+    db.monthlyReport.mockRejectedValue(new Error("private database DSN"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await sendMonthlyReports(db as never, when)).toBe(0);
+    expect(db.releaseMonthlyReportClaim).toHaveBeenCalledWith("synthetic-org", "2026-09");
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("monthly report preparation unavailable");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private database DSN");
+  });
+
+  it("does not retry a digest after a partial send or an ambiguous mail provider failure", async () => {
+    const db = repo();
+    vi.mocked(sendEmail).mockRejectedValueOnce(new Error("provider accepted but failed to acknowledge"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await sendMonthlyReports(db as never, when)).toBe(1);
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    expect(db.releaseMonthlyReportClaim).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("monthly report failed", expect.any(Error));
+  });
+
+  it("logs only a generic error if releasing an unattempted claim fails", async () => {
+    const db = repo();
+    db.releaseMonthlyReportClaim.mockRejectedValue(new Error("tenant secret database connection"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const meter = { ...unmetered, spendEmails: async () => { throw new Error("meter unavailable"); } };
+    expect(await sendMonthlyReports(db as never, when, meter)).toBe(0);
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("monthly report claim release failed");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("tenant secret");
   });
 
   it("sends only the number granted by the quota backend", async () => {

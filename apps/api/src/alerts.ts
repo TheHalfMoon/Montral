@@ -133,9 +133,19 @@ async function postLark(url: string, text: string, secret?: string) {
     body.sign = btoa(String.fromCharCode(...mac));
   }
   const res = await send(url, body);
-  const data = (await readCapped(res, 64 * 1024).then((t) => JSON.parse(t)).catch(() => null)) as { code?: number; StatusCode?: number; msg?: string; StatusMessage?: string } | null;
-  const code = data?.code ?? data?.StatusCode ?? 0;
-  if (!res.ok || code !== 0) throw new Error(`Lark responded HTTP ${res.status}${code ? ` (${code}: ${data?.msg ?? data?.StatusMessage ?? "rejected"})` : ""}`);
+  const data: unknown = await readCapped(res, 64 * 1024).then((t) => JSON.parse(t) as unknown).catch(() => null);
+  // Lark/Feishu may respond HTTP 200 even when a message was rejected. A missing,
+  // malformed or conflicting application acknowledgement must never count as "sent".
+  const ack = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+  const code = ack?.code ?? ack?.StatusCode;
+  const valid = res.ok && (ack?.code === 0 || ack?.StatusCode === 0) &&
+    (ack?.code === undefined || ack.code === 0) &&
+    (ack?.StatusCode === undefined || ack.StatusCode === 0);
+  if (!valid) {
+    // Provider message text could echo webhook URLs, signing secrets or monitor data.
+    const detail = typeof code === "number" && Number.isSafeInteger(code) && code !== 0 ? ` (provider code ${code})` : " (missing or invalid acknowledgement)";
+    throw new Error(`Lark responded HTTP ${res.status}${detail}`);
+  }
 }
 
 const domainHeading = (ev: Event, opened = ev.kind !== "incident.resolved") => !opened ? "{name}: domain expiry verified" : (!ev.monitor.domainExpiry || ev.monitor.domainExpiry.state === "unknown") ? "{name}: domain expiry unknown" : ev.monitor.domainExpiry?.state === "expired" ? "{name}: registration date passed" : "{name}: domain renewal needed";

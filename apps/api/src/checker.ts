@@ -214,7 +214,11 @@ async function open(hostname: string, port: number, signal?: AbortSignal): Promi
   };
 }
 
-/** Connect, optionally send bytes, read until `done(bytes)` says the reply is complete; everything bounded by timeoutMs. */
+/** Protocol handshakes are tiny. A malicious/misconfigured server must not
+ * grow an unbounded buffer while withholding the Redis line terminator. */
+export const MAX_PROTOCOL_REPLY_BYTES = 64 * 1024;
+
+/** Connect, optionally send bytes, read until `done(bytes)` says the reply is complete; bounded by time AND bytes. */
 async function exchange(m: CheckInput, port: number, send: Uint8Array | null, done: (b: Uint8Array) => boolean): Promise<Uint8Array> {
   const hp = hostPort(m.target, port);
   if (!hp) throw new Error("Target must be host or host:port");
@@ -233,6 +237,10 @@ async function exchange(m: CheckInput, port: number, send: Uint8Array | null, do
     while (!done(buf)) {
       const chunk = await conn.read();
       if (!chunk) break;
+      // Check before allocating/concatenating: even a single oversized read
+      // is untrusted and must not be copied into a larger process buffer.
+      if (chunk.byteLength > MAX_PROTOCOL_REPLY_BYTES - buf.byteLength)
+        throw new Error("Probe response exceeds byte budget");
       const next = new Uint8Array(buf.length + chunk.length);
       next.set(buf); next.set(chunk, buf.length);
       buf = next;

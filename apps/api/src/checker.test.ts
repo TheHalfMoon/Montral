@@ -86,6 +86,19 @@ describe("database probes", () => {
     expect((await probe("redis", noauth)).ok).toBe(true);
     expect((await probe("redis", bad)).ok).toBe(false);
   });
+  it("rejects oversized unterminated Redis replies before the connection timeout", async () => {
+    // An untrusted server may stream bytes forever without the required CRLF.
+    // The probe must not keep accumulating those bytes in process memory.
+    const t = await fake((s) => {
+      // The bounded client deliberately resets the hostile server socket.
+      s.on("error", () => {});
+      s.once("data", () => s.write(Buffer.alloc(96 * 1024, 0x61)));
+    });
+    const r = await probe("redis", t);
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/Probe response exceeds byte budget/);
+  });
+
   it("fails when nothing listens", async () => {
     expect((await probe("redis", "127.0.0.1:1")).ok).toBe(false);
   });

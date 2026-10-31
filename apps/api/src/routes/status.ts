@@ -225,7 +225,23 @@ async function statusAccess(c: Context<AppEnv>, next: () => Promise<void>) {
   c.header("vary", "Cookie, Authorization");
 }
 
+/** Subscription and one-click unsubscribe URLs are bearer tokens in query
+ * strings. Their response headers (including redirects and error paths) must
+ * prevent same-origin browser Referer propagation and intermediary caching.
+ * This does not replace redaction of incoming URLs in hosted reverse-proxy logs.
+ */
+const subscriptionTokenPrivacy = async (c: Context<AppEnv>, next: () => Promise<void>) => {
+  c.header("cache-control", "private, no-store");
+  c.header("referrer-policy", "no-referrer");
+  c.header("x-content-type-options", "nosniff");
+  c.header("x-robots-tag", "noindex, nofollow");
+  await next();
+};
+
 export const publicStatus = new Hono<AppEnv>()
+  .use("/_/confirm", subscriptionTokenPrivacy)
+  .use("/_/unsubscribe", subscriptionTokenPrivacy)
+  .use("/:slug/subscribe", subscriptionTokenPrivacy)
   .use("/:slug", statusAccess)
   .use("/:slug/*", statusAccess)
   // one-line state for embeds; small and cacheable
@@ -381,7 +397,7 @@ export const publicStatus = new Hono<AppEnv>()
       ? { title: "取消订阅", text: "确认不再收到此状态页的邮件通知？", button: "取消订阅" }
       : { title: "Unsubscribe", text: "Stop receiving email updates from this status page?", button: "Unsubscribe" };
     const html = `<!doctype html><html lang="${zh ? "zh-CN" : "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${t.title}</title><style>body{font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;background:#f7f7f4;color:#0e1411}main{max-width:360px;padding:24px;text-align:center}button{font:inherit;font-weight:600;padding:10px 20px;border:0;border-radius:8px;background:#0e1411;color:#fff;cursor:pointer}</style></head><body><main><h1 style="font-size:20px">${t.title}</h1><p>${t.text}</p><form method="post" action="?token=${encodeURIComponent(token)}"><button type="submit">${t.button}</button></form></main></body></html>`;
-    return c.html(html, 200, { "cache-control": "no-store", "x-robots-tag": "noindex" });
+    return c.html(html, 200);
   })
   // POST acts: from the page's button (answered with a redirect) and from a mail client's one-click unsubscribe (RFC 8058, answered with 200)
   .post("/_/unsubscribe", async (c) => {

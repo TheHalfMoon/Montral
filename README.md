@@ -74,6 +74,8 @@ Email without a configured provider is **not delivered**. Montral never logs ver
 
 Secret-bearing webhook receiver responses (including malformed payloads, invalid tokens and rate-limit refusals) now use `private, no-store`, `no-referrer`, `nosniff` and `noindex` consistently, alongside owner-only event access. See [local response-privacy qualification](docs/evidence/2026-10-31-webhook-secret-response-privacy-qualification.md). Production reverse-proxy/access logs must separately redact receiver tokens.
 
+Status-page subscriber confirmation and unsubscribe links carry bearer tokens in URL query strings. Redirects and forms now set `private, no-store`, `no-referrer`, `nosniff` and `noindex` consistently; the redirect destination never echoes the token. [Local evidence](docs/evidence/2026-10-31-status-subscription-token-privacy-qualification.md) includes a real built-Node privacy drill on the supported Node version. Hosting still must redact incoming URL query secrets from reverse-proxy access logs.
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

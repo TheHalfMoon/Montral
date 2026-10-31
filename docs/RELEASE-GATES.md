@@ -6,11 +6,12 @@
 - [x] Montral inboxes, one-time token, event inspector, manager-only sensitive body reads; `private, no-store` and `nosniff` for all authenticated inbox routes
 - [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E
 - [x] PostgreSQL concurrent inbox limit **10/16** verified over five runs after replacing flawed CTE snapshot locking
+- [x] Status-page subscriber email confirmation and unsubscribe token URLs (including redirects and one-click requests) set no-store, no-referrer, nosniff, noindex; real Node smoke and unit tests cover token privacy
 - [x] Public bearer-token webhook receiver, owner-only views and all refusal paths (201/202/200/404/413/422/429) consistently set no-store, no-referrer, nosniff and noindex; unit and real PostgreSQL E2E tests pass
 - [x] Atomic webhook event insertion and 7-day/250-event pruning under a per-inbox row lock; 275 concurrent PostgreSQL inserts, invalid token and receiver-deletion race passed
 - [x] Node/Worker scheduled 7-day event cleanup implemented; direct PostgreSQL idle prune tested
 - [x] Scheduler-failure-isolated maintenance for Node and Worker, including seven-day-old sandbox checkout intent cleanup and independent retry tests; 699 local tests passed
-- [x] API **569**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
+- [x] API **572**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
 - [x] No-provider email fallback cannot expose verification/password reset bearer tokens, message body, recipient or subject to logs; required alert/subscriber/report email now fails closed rather than falsely recording `sent` (dedicated real PostgreSQL 502/failed-ledger E2E, real Chromium log guard)
@@ -21,7 +22,7 @@
 - [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
 
 ## Unresolved production blockers
-- [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning), including tests on a declared-supported Node version
+- [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning); **local** Node v24.22.1 + pnpm 10.0.0 runs cover supported toolchain but do NOT replace hosted CI
 - [ ] Complete browser E2E matrix (account recovery, real-world external outage/notification and externally hosted SMTP deliverability, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
 - [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested
@@ -84,3 +85,5 @@ Production Node SMTP over loopback and cron-driven automatic down/recovery deliv
 Unconfigured email token-privacy and delivery-accounting evidence: [2026-10-31 local qualification](evidence/2026-10-31-email-fallback-privacy-qualification.md).
 
 Bearer webhook receiver HTTP privacy header qualification: [2026-10-31 local evidence](evidence/2026-10-31-webhook-secret-response-privacy-qualification.md).
+
+Subscription confirmation/unsubscribe token response privacy and supported Node qualification: [2026-10-31 local evidence](evidence/2026-10-31-status-subscription-token-privacy-qualification.md).

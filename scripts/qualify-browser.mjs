@@ -113,6 +113,24 @@ try {
     const unauth = await fetch(base + path);
     if (unauth.status !== 401) throw new Error("Private path not denied: " + path + " " + unauth.status);
   }
+  // Subscribe/unsubscribe confirmation URLs contain single-use bearer tokens.
+  // Test privacy headers on real Node HTTP redirects and the interactive form,
+  // without ever sending mail or altering a subscriber row.
+  for (const [path, init, expectedStatus] of [
+    ["/api/public/status/_/confirm?token=invalid-synthetic", {}, 302],
+    ["/api/public/status/_/unsubscribe?token=invalid-synthetic", {}, 200],
+    ["/api/public/status/_/unsubscribe?token=invalid-synthetic", { method: "POST", body: "List-Unsubscribe=One-Click" }, 200],
+  ]) {
+    const result = await fetch(base + path, { ...init, redirect: "manual" });
+    if (result.status !== expectedStatus ||
+        result.headers.get("cache-control") !== "private, no-store" ||
+        result.headers.get("referrer-policy") !== "no-referrer" ||
+        result.headers.get("x-content-type-options") !== "nosniff" ||
+        result.headers.get("x-robots-tag") !== "noindex, nofollow" ||
+        (result.headers.get("location") || "").includes("invalid-synthetic")) {
+      throw new Error("Status bearer-token URL privacy check failed for " + path);
+    }
+  }
   await page("/signup");
   await until("hydrated signup form", () => js('!!document.querySelector("form.auth-fields input[type=email]")'));
   const email = `montral-browser-${Date.now()}@example.test`;

@@ -82,6 +82,21 @@ export async function purgeFrozenContentInDisposableTestDb(
     if (!target || !/^montral_test_[A-Za-z0-9_]+$/.test(target.name)
       || !["127.0.0.1", "::1"].includes(target.address ?? ""))
       throw new Error("Disposable localhost database required for retention rehearsal");
+    // A localhost database named montral_test_* could still be a restored copy
+    // of real data. Require an additional marker installed explicitly by the
+    // synthetic fixture, bound to this database name (not a schema migration).
+    const [table] = await tx<{ present: string | null }[]>`
+      select to_regclass('public.montral_retention_rehearsal_fixture')::text as present
+    `;
+    if (!table?.present) throw new Error("Synthetic retention fixture marker required");
+    const [marker] = await tx<{ verified: boolean }[]>`
+      select exists (
+        select 1 from public.montral_retention_rehearsal_fixture
+        where database_name = current_database()
+          and purpose = 'synthetic-monthly-content-retention-v1'
+      ) as verified
+    `;
+    if (!marker?.verified) throw new Error("Synthetic retention fixture marker required");
     return tx<{ n: number }[]>`
     with eligible as (
       select c.organization_id, c.report_month from monthly_report_content c

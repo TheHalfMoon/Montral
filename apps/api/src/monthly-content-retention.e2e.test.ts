@@ -29,6 +29,13 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
     db = createDb(uri, { max: 12 });
     database = openDatabase(uri, { max: 6 });
     await migrateMontralSchema(database, montralEdition);
+    // Explicit synthetic-data attestation: not created by product migrations,
+    // and not available on an arbitrary local database named montral_test_*.
+    await db.$client`create table public.montral_retention_rehearsal_fixture (
+      database_name text primary key, purpose text not null
+    )`;
+    await db.$client`insert into public.montral_retention_rehearsal_fixture (database_name,purpose)
+      values (${dbName}, 'synthetic-monthly-content-retention-v1')`;
     for (const [kind, state, createdAt] of [
       ["accepted", "accepted", old], ["skipped", "skipped", old],
       ["recent", "accepted", recent], ["prepared", "prepared", old],
@@ -118,5 +125,19 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
       purgeFrozenContentInDisposableTestDb(db, 180, now, 1)));
     expect(concurrent.reduce((sum, n) => sum + n, 0)).toBe(1);
     expect((await inspectFrozenContentRetention(db, 180, now)).counts.heldUnresolved).toBe(2);
+  });
+
+  it("refuses deletion when a same-name localhost test DB lacks the explicit synthetic marker", async () => {
+    await db.$client`delete from public.montral_retention_rehearsal_fixture`;
+    await expect(purgeFrozenContentInDisposableTestDb(db, 180, now))
+      .rejects.toThrow("Synthetic retention fixture marker required");
+    await db.$client`insert into public.montral_retention_rehearsal_fixture (database_name,purpose)
+      values ('montral_test_wrong_database', 'synthetic-monthly-content-retention-v1')`;
+    await expect(purgeFrozenContentInDisposableTestDb(db, 180, now))
+      .rejects.toThrow("Synthetic retention fixture marker required");
+    await db.$client`drop table public.montral_retention_rehearsal_fixture`;
+    await expect(purgeFrozenContentInDisposableTestDb(db, 180, now))
+      .rejects.toThrow("Synthetic retention fixture marker required");
+    expect((await inspectFrozenContentRetention(db, 180, now)).counts.total).toBe(4);
   });
 });

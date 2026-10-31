@@ -16,6 +16,12 @@ The explicit CLI `pnpm --silent --filter @montral/api rehearse:monthly-content-r
 
 A fresh isolated and migrated local test database covers seven synthetic workspace-months: an old accepted row, old skipped row, recent accepted row, old prepared row, old attempted row, old uncertain row, and an orphan report with no recipients. Tests assert 2/7 old completed candidates, 1 recent, 1 orphan, and 3 unresolved rows; no private values escape the summary; the reporting transaction itself is read-only; two bounded one-item rehearsal passes remove only the accepted and skipped report content; recipient rows remain unchanged. A later independently updated attempted state can only be selected after it becomes terminal. Eight concurrent deletion workers cannot remove a report more than once. Invalid retention days, invalid batch sizes and calls against a non-`montral_test_*` database fail closed.
 
+## Additional disposable-fixture proof (follow-up hardening)
+
+The initial local purge guard enforced `montral_test_*` database identity and a real PostgreSQL loopback server address. That was necessary but not sufficient: a local restored database could carry actual data while accidentally retaining a test-like name. The rehearsal now also requires an **explicit, separate synthetic-fixture proof** stored inside the disposable database: `public.montral_retention_rehearsal_fixture` must have a row whose `database_name` equals `current_database()` and whose `purpose` equals `synthetic-monthly-content-retention-v1`. The table is provisioned **only in the test's disposable fixture setup**; it is never created by product migrations, runtime, HTTP endpoints or the CLI. A missing table, missing marker, or wrong database name refuses deletion.
+
+To exercise the stand-alone CLI in a manually created **synthetic-only** database, the operator must independently create and populate that fixture marker after verifying the database contains no customer data. Simply pointing the CLI at a matching database name no longer makes the destructive experiment runnable. The default command remains read-only and `NO_GO`. Even with a marker, this is not permission to delete production or restored customer data, and the rehearsal has no automatic schedule.
+
 ## Remaining release and policy gates
 
 - There is **no approved customer-data retention duration**, no automatic production purge, no data-processing/privacy assessment and no audited deletion approval. The 180-day minimum only bounds the local experiment.
@@ -36,3 +42,13 @@ Full package tests, production builds, real SIGKILL, SMTP loopback, Chromium, mi
 - Preliminary iteration: PostgreSQL `inet_server_addr()::text` includes a `/32` network suffix; the rehearsal safety guard now uses the explicit PostgreSQL `host(inet_server_addr())` to compare the actual loopback address. Following that repair, the guard and all 959 package tests and local system drills passed. No client data was accessed or changed.
 
 **Production NO-GO remains:** the chosen retention duration is experimental, no live purge or automated schedule is enabled, and privacy policy/provider/hosted CI/managed recovery gates are still open.
+
+## Follow-up verification — explicit fixture marker
+
+- Updated code based on private main `cfbbe728dbec8b09b93170a77325a6988639eb34`; only the staged retention helper/test and repository documentation changed. No migration or deployed service was modified.
+- Five focused PostgreSQL retention tests PASS, including rejecting a missing marker table, missing marker row, and a marker bound to a different disposable database. Intentional test fixture creation uses only its disposable `montral_test_*` database.
+- Supported **Node v24.22.1** / **pnpm 10.0.0** / **PostgreSQL 17.9** on Mac: **960/960 package tests PASS** (702 API, 114 DB, 20 Edge Probe, 124 Web); all workspace TypeScript checks PASS; three production-target builds PASS.
+- **638/638 immutable donor source files verified**. Node + PostgreSQL health/config/MCP/web dashboard smoke PASS. Real offline Chromium browser journeys PASS. Local loopback SMTP verification, alerts and account-recovery delivery PASS, with no external email or customers.
+- Disposable PostgreSQL `pg_dump`/`pg_restore` qualification PASS: **46 tables**, all per-table SHA-256 fingerprints and row counts identical; **8 synthetic organizations**, 8 sample projects, 8 heartbeat monitors and **8 required functions** survived. This does not prove managed PITR or hosted disaster recovery.
+- A separate **real OS SIGKILL** qualification PASSED at five synthetic outbox crash boundaries: precommit rollback, postcommit recovery, pre-SMTP no replay, post-acceptance no replay and legacy-claim no resurrection. This did not send real provider mail.
+- The special localhost-only fixture marker is **not** installed by migrations or by the CLI. This remains a deliberately isolated destructive rehearsal, not production permission. Hosted GitHub Actions, retention duration approval, cloud SMTP/Cloudflare/payment-provider validation and production release are still **NO-GO**.

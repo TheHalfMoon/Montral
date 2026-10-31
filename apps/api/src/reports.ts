@@ -36,32 +36,52 @@ export async function sendMonthlyReports(repo: Repo, now = new Date(), entitleme
     if (!prepared) { console.error("monthly report preparation unavailable"); await retryBeforeSend(); continue; }
     const [org, owners, comps] = prepared;
     if (!org || !owners.length || !comps.length) continue;
+    // Render the full recipient batch *before* metering or contacting any provider.
+    // A malformed monitor/component or recipient used to throw halfway through the
+    // send loop: the org stayed claimed, some mail could be sent, and a quota charge
+    // could already have happened. Before the first provider attempt it is safe to
+    // release the claim and retry preparation on a later scheduler tick.
+    let messages: { to: string; subject: string; fromName: string; html: string; text: string }[];
+    try {
+      messages = owners.map((o) => {
+        if (typeof o.email !== "string" || !o.email.trim()) throw new Error("invalid monthly recipient");
+        const lang: Lang = isLang(o.locale) ? o.locale : "en";
+        const title = tr(lang, "Monthly report for {month}", { month });
+        const mail = actionEmail({
+          title,
+          body: tr(lang, "Uptime, downtime and incidents of each monitor in {workspace}.", { workspace: org.name }),
+          rows: comps.map((c): [string, string] => [
+            c.name,
+            [c.uptime == null ? tr(lang, "No checks yet") : `${tr(lang, "Uptime")} ${c.uptime}%`, duration(c.downtimeMinutes, lang), `${tr(lang, "Incidents")} ${c.incidents}`].join(" · "),
+          ]),
+          cta: tr(lang, "Open dashboard"),
+          url: `${appUrl()}/app`,
+          footer: tr(lang, "You get this because the monthly report is turned on for {workspace}. Turn it off in Settings.", { workspace: org.name }),
+          lang,
+        });
+        return { to: o.email, subject: `${title} · Montral`, fromName: "Montral", ...mail };
+      });
+    } catch {
+      // No email has been attempted and the allowance has not been charged.
+      // Do not log component contents, email recipients or underlying DB errors.
+      console.error("monthly report message preparation unavailable");
+      await retryBeforeSend();
+      continue;
+    }
     // A monthly digest is optional: a metering outage must never turn it into an unbounded email send.
     // Unlike incident alerts, reports may safely be omitted when the allowance cannot be verified.
     let granted: number;
-    try { granted = await entitlements.spendEmails(orgId, owners.length); }
+    try { granted = await entitlements.spendEmails(orgId, messages.length); }
     catch { console.error("monthly report email allowance unavailable"); await retryBeforeSend(); continue; }
-    if (!Number.isSafeInteger(granted) || granted < 0 || granted > owners.length) {
+    if (!Number.isSafeInteger(granted) || granted < 0 || granted > messages.length) {
       console.error("monthly report email allowance invalid");
       await retryBeforeSend();
       continue;
     }
-    for (const o of owners.slice(0, granted)) {
-      const lang: Lang = isLang(o.locale) ? o.locale : "en";
-      const title = tr(lang, "Monthly report for {month}", { month });
-      const mail = actionEmail({
-        title,
-        body: tr(lang, "Uptime, downtime and incidents of each monitor in {workspace}.", { workspace: org.name }),
-        rows: comps.map((c): [string, string] => [
-          c.name,
-          [c.uptime == null ? tr(lang, "No checks yet") : `${tr(lang, "Uptime")} ${c.uptime}%`, duration(c.downtimeMinutes, lang), `${tr(lang, "Incidents")} ${c.incidents}`].join(" · "),
-        ]),
-        cta: tr(lang, "Open dashboard"),
-        url: `${appUrl()}/app`,
-        footer: tr(lang, "You get this because the monthly report is turned on for {workspace}. Turn it off in Settings.", { workspace: org.name }),
-        lang,
-      });
-      await sendEmail({ to: o.email, subject: `${title} · Montral`, fromName: "Montral", ...mail }, true)
+    // An attempted email is never requeued. Its provider acceptance is ambiguous
+    // after timeout; per-recipient durable outbox/reconciliation remains future work.
+    for (const message of messages.slice(0, granted)) {
+      await sendEmail(message, true)
         .then(() => sent++)
         .catch(() => console.error("monthly report email delivery failed"));
     }

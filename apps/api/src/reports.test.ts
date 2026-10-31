@@ -76,6 +76,62 @@ describe("monthly report email quota safety", () => {
     expect(JSON.stringify(log.mock.calls)).not.toContain("private database DSN");
   });
 
+  it("renders the whole batch before metering and safely reopens a malformed report", async () => {
+    const db = repo();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A malformed component row would throw while escaping a detail table cell.
+    // Previously this occurred *after* the metering charge and inside the send loop.
+    db.monthlyReport.mockResolvedValueOnce([{ name: null as never, uptime: 100, downtimeMinutes: 0, incidents: 0 }]);
+    const spend = vi.fn(async (_org: string, n: number) => n);
+    try {
+      expect(await sendMonthlyReports(db as never, when, { ...unmetered, spendEmails: spend })).toBe(0);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(spend).not.toHaveBeenCalled();
+      expect(db.releaseMonthlyReportClaim).toHaveBeenCalledExactlyOnceWith("synthetic-org", "2026-09");
+      expect(log).toHaveBeenCalledWith("monthly report message preparation unavailable");
+      expect(JSON.stringify(log.mock.calls)).not.toContain("owner-one@example.test");
+      // Once the source is healthy, an unattempted monthly claim can be retried.
+      expect(await sendMonthlyReports(db as never, when, { ...unmetered, spendEmails: spend })).toBe(2);
+      expect(sendEmail).toHaveBeenCalledTimes(2);
+      expect(spend).toHaveBeenCalledTimes(1);
+      expect(db.releaseMonthlyReportClaim).toHaveBeenCalledTimes(1);
+    } finally { log.mockRestore(); }
+  });
+
+  it("rejects a bad later owner before attempting mail for any earlier owner", async () => {
+    const db = repo();
+    db.ownerContacts.mockResolvedValueOnce([owners[0], { email: null as never, locale: "en" }]);
+    const spend = vi.fn(async (_org: string, n: number) => n);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await sendMonthlyReports(db as never, when, { ...unmetered, spendEmails: spend })).toBe(0);
+      expect(sendEmail).not.toHaveBeenCalled();
+      expect(spend).not.toHaveBeenCalled();
+      expect(db.releaseMonthlyReportClaim).toHaveBeenCalledWith("synthetic-org", "2026-09");
+      expect(log).toHaveBeenCalledWith("monthly report message preparation unavailable");
+    } finally { log.mockRestore(); }
+  });
+
+  it("isolates report formatting errors per workspace without leaking private source data", async () => {
+    const db = repo();
+    db.claimMonthlyReports.mockResolvedValue(["bad-org", "good-org"]);
+    const privateSecret = "synthetic-component-private-access-token";
+    let reportReads = 0;
+    db.monthlyReport.mockImplementation(async () => (++reportReads === 1)
+      ? [{ name: { privateSecret } as never, uptime: 80, downtimeMinutes: 12, incidents: 1 }]
+      : [{ name: "Good API", uptime: 100, downtimeMinutes: 0, incidents: 0 }]);
+    const spend = vi.fn(async (_org: string, n: number) => n);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await sendMonthlyReports(db as never, when, { ...unmetered, spendEmails: spend })).toBe(2);
+      expect(sendEmail).toHaveBeenCalledTimes(2);
+      expect(spend).toHaveBeenCalledExactlyOnceWith("good-org", 2);
+      expect(db.releaseMonthlyReportClaim).toHaveBeenCalledExactlyOnceWith("bad-org", "2026-09");
+      expect(log).toHaveBeenCalledWith("monthly report message preparation unavailable");
+      expect(JSON.stringify(log.mock.calls)).not.toContain(privateSecret);
+    } finally { log.mockRestore(); }
+  });
+
   it("does not retry a digest after a partial send or an ambiguous mail provider failure", async () => {
     const db = repo();
     vi.mocked(sendEmail).mockRejectedValueOnce(new Error("provider accepted but failed to acknowledge"));

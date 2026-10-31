@@ -68,6 +68,8 @@
 
 - **Subscriber branding-outage resilience**: failed optional white-label plan lookups now produce Montral-branded subscriber mail instead of suppressing incident updates or maintenance reminders; a malformed individual subscriber no longer starves healthy recipients. Authorization and email quota rules still apply. Four synthetic cases added; Mac **875/875** package tests, TypeScript, all builds, Chromium, SMTP loopback and limited-data SHA-256 restore drill passed. [Evidence](evidence/2026-10-31-subscriber-branding-outage-isolation.md).
 
+- **Monthly report pre-send safety**: every eligible owner report is rendered before email quota consumption or SMTP attempt. Invalid component/recipient content safely reopens the unattempted month claim without starving other workspaces; an attempted send still never replays automatically. Three synthetic regressions and Mac **878/878** tests passed. A true durable recipient outbox remains **unimplemented**; see [evidence](evidence/2026-10-31-monthly-report-mail-preflight.md) and [outbox design](architecture/monthly-report-recipient-outbox.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

@@ -127,6 +127,32 @@ try {
     if (error) throw new Error("Signup error: " + error);
     return false;
   }, 30000);
+  // Real-browser monitoring journey, using only a synthetic heartbeat. It
+  // does not probe any external site, DNS resolver, or third-party service.
+  await page("/app");
+  await until("monitor add action", () => js(
+    'Array.from(document.querySelectorAll("button")).some(b => b.textContent.includes("Add your first monitor") || b.textContent.includes("New monitor"))'
+  ));
+  await js('Array.from(document.querySelectorAll("button")).find(b => b.textContent.includes("Add your first monitor") || b.textContent.includes("New monitor")).click()');
+  await until("monitor creation dialog", () => js('!!document.querySelector("form.mform")'));
+  await js('Array.from(document.querySelectorAll("form.mform .type-c")).find(b => b.textContent.includes("Heartbeat (cron)")).click()');
+  await fill('form.mform input[required]', "Synthetic browser heartbeat");
+  await js('Array.from(document.querySelectorAll("form.mform .mbtns button")).find(b => b.textContent.trim() === "Create monitor").click()');
+  await until("created monitor rendered", () => js('document.body.innerText.includes("Synthetic browser heartbeat") && !document.querySelector("form.mform")'));
+  const newMonitor = await js('fetch("/api/monitors", { credentials: "same-origin" }).then(r => r.json()).then(rows => rows.find(x => x.name === "Synthetic browser heartbeat"))');
+  if (!newMonitor?.id || newMonitor.type !== "heartbeat") throw new Error("Browser-created heartbeat missing from authenticated API");
+  await page("/app/monitors/" + newMonitor.id);
+  await until("monitor detail view", () => js('document.querySelector("h1.ph-title")?.textContent?.includes("Synthetic browser heartbeat")'));
+  await js('Array.from(document.querySelectorAll(".ph-actions button")).find(b => b.textContent.trim() === "Pause").click()');
+  await until("monitor paused in browser", () => js('Array.from(document.querySelectorAll(".ph-actions button")).some(b => b.textContent.trim() === "Resume")'));
+  await js('Array.from(document.querySelectorAll(".ph-actions button")).find(b => b.textContent.trim() === "Resume").click()');
+  await until("monitor resumed in browser", () => js('Array.from(document.querySelectorAll(".ph-actions button")).some(b => b.textContent.trim() === "Pause")'));
+  await page("/app/incidents");
+  await until("incident page rendered", () => js('document.querySelector("h1")?.textContent?.includes("Incidents")'));
+  const resumed = await js(`fetch("/api/monitors/${newMonitor.id}", { credentials: "same-origin" }).then(r => r.json())`);
+  if (resumed.paused) throw new Error("Monitor remained paused after browser resume");
+  // We have deliberately NOT generated an outage or pushed notifications.
+
   await page("/app/hooks");
   await until("webhook inbox form", () => js(`!!document.querySelector('form input[maxlength="100"]')`));
   await fill("form input[maxlength='100']", "Browser integration QA");
@@ -150,7 +176,7 @@ try {
   await until("billing is fail-closed", () => js('document.body.innerText.includes("Checkout is not configured")'));
   const buttonsDisabled = await js('Array.from(document.querySelectorAll("button")).filter(b => b.textContent.includes("Open test checkout")).every(b => b.disabled)');
   if (!buttonsDisabled) throw new Error("Billing checkout unexpectedly enabled");
-  console.log("BROWSER_E2E_PASS: real Chromium signup, webhook inbox, live receipt and event inspector, disabled billing; anonymous routes denied");
+  console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic heartbeat monitor create/pause/resume, incidents view, webhook create/receipt/event inspector, disabled billing; anonymous routes denied");
 } finally {
   ws?.close();
   for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGTERM");

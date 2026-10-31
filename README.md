@@ -66,6 +66,8 @@ The PostgreSQL backend now serializes edition schema changes with a transaction-
 
 Webhook inbox capture is text-only (strict UTF-8, no NUL) and rejects invalid data with HTTP 422; unidentified client addresses use bounded authentication fallback quotas rather than silently bypassing limits. See [local input and auth qualification](docs/evidence/2026-10-30-webhook-auth-input-qualification.md). Neither measure replaces production reverse-proxy, CAPTCHA or customer privacy review.
 
+The offline real-Chromium smoke now exercises signed-in heartbeat monitor creation, detail view and pause/resume, incident navigation, webhook ingestion and disabled billing, all with synthetic test data. See [2026-10-31 browser qualification](docs/evidence/2026-10-31-browser-monitor-qualification.md). It does not exercise real alert delivery or an externally hosted browser.
+
 ## Private local qualification
 
 On a disposable **localhost** PostgreSQL database named `montral_test_*`, run the documented real-browser and backup recovery drills with `scripts/qualify-browser.mjs` and `scripts/qualify-backup.mjs`. The browser drill requires an **already installed** Chromium binary provided through `MONTRAL_CHROMIUM` and built Node API/web artifacts. These do not deploy or charge anything. See `docs/evidence/2026-10-30-browser-backup-qualification.md` for commands, verified results and scope limits.

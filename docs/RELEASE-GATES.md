@@ -12,13 +12,13 @@
 - [x] API **564**, web **122**, probe **20** tests and monorepo TypeScript/Astro typechecks passed locally
 - [x] API + self-hosted Node web + optional Cloudflare Edge worker build locally
 - [x] Node HTTP smoke passed with PostgreSQL: health, config, MCP discovery and HTML UI
-- [x] Real headless Chromium journey: signup, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
+- [x] Real headless Chromium journey: signup, **monitor creation/detail/pause/resume**, incident screen, authenticated webhook create/ingest/event viewer, one-time receiver secret, disabled checkout and anonymous read denials
 - [x] Disposable local PostgreSQL 17 backup+restore drill: 42 tables, 122 synthetic organizations and 5 transactional functions restored; source preserved
 - [x] GitHub Actions workflow configured with PostgreSQL service and smoke step (runner itself unqualified)
 
 ## Unresolved production blockers
 - [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning), including tests on a declared-supported Node version
-- [ ] Complete browser E2E matrix (account recovery, monitor/incident workflows, alerts, privileged/non-manager events, cross-browser and accessibility); narrow Chromium smoke PASSED
+- [ ] Complete browser E2E matrix (account recovery, real failure-to-incident/alert lifecycle, privileged/non-manager events, cross-browser and accessibility); Chromium monitor create/pause/resume plus webhook/billing smoke PASSED
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
 - [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested
 - [ ] Real Cloudflare probe deployment, DNS/egress controls and cross-region checks (still unqualified)
@@ -68,3 +68,5 @@ Trusted reverse-proxy IP attribution: [2026-10-30 local qualification](evidence/
 Local multi-replica migration/rollback evidence: [2026-10-30 qualification](evidence/2026-10-30-multireplica-migrations-qualification.md).
 
 Text webhook input and no-IP auth rate-limit evidence: [2026-10-30 qualification](evidence/2026-10-30-webhook-auth-input-qualification.md).
+
+Expanded real Chromium monitor journey: [2026-10-31 qualification](evidence/2026-10-31-browser-monitor-qualification.md).

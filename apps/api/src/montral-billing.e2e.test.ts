@@ -311,6 +311,87 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(rows).toEqual([]);
   });
 
+  it("never restores a paid state from a contradictory signed event sharing the provider timestamp", async () => {
+    const { org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 21000000));
+    await db!.query(
+      "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'pro','101',NOW()+INTERVAL '30 minutes')",
+      [intent, org, userId],
+    );
+    const equalTime = "2026-10-30T22:00:00.000Z";
+    const deadline = "2026-11-30T22:00:00.000Z";
+    const entitlements = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });
+    expect((await fire(event(provider, intent, "subscription_created", "active", equalTime))).status).toBe(200);
+    expect(await entitlements.plan(org)).toMatchObject({ id: "pro" });
+
+    // Separate legitimately signed events from the provider can share its
+    // timestamp; exact-payload digest deduplication is insufficient.
+    const cancel = await fire(event(provider, intent, "subscription_cancelled", "cancelled", equalTime, 101, deadline));
+    expect(cancel.status).toBe(200);
+    expect((await db!.query<{ status: string }>(
+      "SELECT status FROM montral_subscription WHERE provider_id=$1", [provider],
+    ))[0]?.status).toBe("cancelled");
+
+    const replayedActive = await fire(event(provider, intent, "subscription_updated", "active", equalTime));
+    expect(replayedActive.status).toBe(200);
+    expect(await replayedActive.json()).toMatchObject({ result: "stale" });
+    const afterEqualReplay = (await db!.query<{ status: string; ends_at: string | Date | null }>(
+      "SELECT status,ends_at FROM montral_subscription WHERE provider_id=$1", [provider],
+    ))[0];
+    expect(afterEqualReplay.status).toBe("cancelled");
+    expect(new Date(afterEqualReplay.ends_at!).toISOString()).toBe(deadline);
+
+    const shortened = "2026-11-15T22:00:00.000Z";
+    const shortenResult = await fire(event(provider, intent, "subscription_updated", "cancelled", equalTime, 101, shortened));
+    expect(shortenResult.status).toBe(200);
+    const afterShortenedDeadline = (await db!.query<{ ends_at: string | Date | null }>(
+      "SELECT ends_at FROM montral_subscription WHERE provider_id=$1", [provider],
+    ))[0]?.ends_at;
+    expect(new Date(afterShortenedDeadline!).toISOString()).toBe(shortened);
+
+    const expire = await fire(event(provider, intent, "subscription_expired", "expired", equalTime));
+    expect(expire.status).toBe(200);
+    expect((await db!.query<{ status: string }>(
+      "SELECT status FROM montral_subscription WHERE provider_id=$1", [provider],
+    ))[0]?.status).toBe("expired");
+    expect(await entitlements.plan(org)).toMatchObject({ id: "free" });
+
+    // A second previously-created checkout intent with the same provider must
+    // not reset an expired subscription on the exact same clock timestamp.
+    const freshIntent = crypto.randomUUID();
+    await db!.query(
+      "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'pro','101',NOW()+INTERVAL '30 minutes')",
+      [freshIntent, org, userId],
+    );
+    const reset = await fire(event(provider, freshIntent, "subscription_created", "active", equalTime));
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toMatchObject({ result: "stale" });
+    expect((await db!.query<{ status: string }>(
+      "SELECT status FROM montral_subscription WHERE provider_id=$1", [provider],
+    ))[0]?.status).toBe("expired");
+    expect(await entitlements.plan(org)).toMatchObject({ id: "free" });
+
+    // A genuinely new subscription provider has its OWN clock stream. Once
+    // the old provider expired, its timestamps must not block a fresh checkout.
+    const replacementIntent = crypto.randomUUID();
+    const replacementProvider = String(Number(provider) + 1);
+    await db!.query(
+      "INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'pro','101',NOW()+INTERVAL '30 minutes')",
+      [replacementIntent, org, userId],
+    );
+    const replaced = await fire(event(replacementProvider, replacementIntent,
+      "subscription_created", "active", "2026-10-30T21:00:00.000Z"));
+    expect(replaced.status).toBe(200);
+    expect(await replaced.json()).toMatchObject({ result: "applied" });
+    expect((await db!.query<{ provider_id: string; status: string }>(
+      "SELECT provider_id,status FROM montral_subscription WHERE organization_id=$1", [org],
+    ))[0]).toMatchObject({ provider_id: replacementProvider, status: "active" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "pro" });
+    // The superseded provider cannot mutate the newly linked subscription.
+    expect((await fire(event(provider, intent, "subscription_updated", "active", "2026-10-31T00:00:00.000Z"))).status).toBe(409);
+  });
+
   it("applies verified creation once, handles updates in order and rejects stale/replayed changes", async () => {
     const { cookie, org, userId } = await signup();
     const id = crypto.randomUUID();

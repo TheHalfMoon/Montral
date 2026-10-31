@@ -93,7 +93,7 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
       p_status text, p_updated timestamptz, p_intent uuid, p_ends timestamptz
     ) RETURNS text LANGUAGE plpgsql AS $montral$
     DECLARE target_org text; target_plan text; expected_variant text;
-            inserted_count integer;
+            inserted_count integer; changed_count integer;
     BEGIN
       -- A single database transaction covers identity resolution, deduplication
       -- and the subscription update; no event is "consumed" before an update commits.
@@ -134,13 +134,41 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
           provider_id=EXCLUDED.provider_id, variant_id=EXCLUDED.variant_id,
           plan=EXCLUDED.plan,status=EXCLUDED.status,provider_updated_at=EXCLUDED.provider_updated_at,
           ends_at=EXCLUDED.ends_at,updated_at=NOW()
-        WHERE montral_subscription.provider_updated_at <= EXCLUDED.provider_updated_at
-          AND (montral_subscription.provider_id = EXCLUDED.provider_id
-               OR montral_subscription.status = 'expired');
+        WHERE (
+          -- Provider replacement starts a distinct clock stream, but only
+          -- after the old subscription is really expired.
+          (montral_subscription.provider_id <> EXCLUDED.provider_id
+            AND montral_subscription.status = 'expired')
+          OR
+          (montral_subscription.provider_id = EXCLUDED.provider_id AND (
+            montral_subscription.provider_updated_at < EXCLUDED.provider_updated_at
+            OR (montral_subscription.provider_updated_at = EXCLUDED.provider_updated_at AND (
+              -- Equal provider timestamps must never restore paid access
+              -- after a cancellation/expiry. Prefer only stricter states.
+              array_position(ARRAY['on_trial','active','paused','past_due','unpaid','cancelled','expired']::text[], EXCLUDED.status)
+                > array_position(ARRAY['on_trial','active','paused','past_due','unpaid','cancelled','expired']::text[], montral_subscription.status)
+              OR (EXCLUDED.status='cancelled' AND montral_subscription.status='cancelled'
+                AND montral_subscription.ends_at IS NOT NULL
+                AND (EXCLUDED.ends_at IS NULL OR EXCLUDED.ends_at < montral_subscription.ends_at))
+            ))
+          ))
+        );
       ELSE
         UPDATE montral_subscription SET status=p_status,provider_updated_at=p_updated,ends_at=p_ends,updated_at=NOW()
-          WHERE provider_id=p_provider AND provider_updated_at <= p_updated;
+          WHERE provider_id=p_provider AND (
+            provider_updated_at < p_updated
+            OR (provider_updated_at = p_updated AND (
+              array_position(ARRAY['on_trial','active','paused','past_due','unpaid','cancelled','expired']::text[], p_status)
+                > array_position(ARRAY['on_trial','active','paused','past_due','unpaid','cancelled','expired']::text[], status)
+              OR (p_status='cancelled' AND status='cancelled' AND ends_at IS NOT NULL
+                AND (p_ends IS NULL OR p_ends < ends_at))
+            ))
+          );
       END IF;
+      GET DIAGNOSTICS changed_count = ROW_COUNT;
+      -- Digest remains in the replay ledger even if this valid signed event
+      -- is older, or tied in timestamp and not more restrictive.
+      IF changed_count = 0 THEN RETURN 'stale'; END IF;
       RETURN 'applied';
     END;
     $montral$

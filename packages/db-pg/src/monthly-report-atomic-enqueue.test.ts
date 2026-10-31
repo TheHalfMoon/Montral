@@ -110,6 +110,51 @@ describe.skipIf(!url)("atomic monthly owner snapshots and crash recovery (staged
     expect(ws.lastReportMonth).toBeNull();
   });
 
+  it("legacy claims cannot replay staged recipients after a mistaken month reset", async () => {
+    expect(await repo.claimMonthlyReportsWithRecipients(month, 20)).toEqual([orgA, orgB]);
+    // Even resetting the month claim is not permission to reconstruct a prior
+    // batch from a second scheduler that has no knowledge of previous SMTP.
+    await db.update(schema.workspaceSetting).set({ lastReportMonth: null })
+      .where(eq(schema.workspaceSetting.organizationId, orgA));
+    const legacy = await repo.claimMonthlyReports(month, 20);
+    expect(legacy).not.toContain(orgA);
+    expect(legacy).not.toContain(orgB);
+    expect(legacy).toEqual([orgC]); // No outbox rows and no owners: old behavior retained.
+    expect(await repo.monthlyReportRecipientCounts(orgA, month)).toMatchObject({ prepared: 2 });
+    expect(await repo.monthlyReportRecipientCounts(orgB, month)).toMatchObject({ prepared: 1 });
+    const [setting] = await db.select().from(schema.workspaceSetting)
+      .where(eq(schema.workspaceSetting.organizationId, orgA));
+    expect(setting.lastReportMonth).toBeNull();
+  });
+
+  it("mixed old and staged concurrent claimers never claim the same workspace", async () => {
+    const outcomes = await Promise.all(Array.from({ length: 10 }, (_, n) => n % 2 === 0
+      ? repo.claimMonthlyReports(month, 20)
+      : repo.claimMonthlyReportsWithRecipients(month, 20)));
+    const flat = outcomes.flat();
+    expect(new Set(flat).size).toBe(flat.length);
+    expect(flat.slice().sort()).toEqual([orgA, orgB, orgC]);
+    const staged = outcomes.filter((_, n) => n % 2 === 1).flat();
+    for (const id of staged) {
+      const counts = await repo.monthlyReportRecipientCounts(id, month);
+      expect(counts.prepared).toBeGreaterThan(0);
+      await db.update(schema.workspaceSetting).set({ lastReportMonth: null })
+        .where(eq(schema.workspaceSetting.organizationId, id));
+    }
+    const claimedAgain = await repo.claimMonthlyReports(month, 20);
+    for (const id of staged) expect(claimedAgain).not.toContain(id);
+  });
+
+  it("legacy claim validates bounded month/limit and still allows a safe month without outbox", async () => {
+    for (const amount of [0, -1, 1.5, 1001])
+      await expect(repo.claimMonthlyReports(month, amount)).rejects.toThrow("Invalid legacy monthly report claim");
+    // Backwards compatibility: pre-existing callers use 500-row batches.
+    expect((await repo.claimMonthlyReports(month, 500)).sort()).toEqual([orgA, orgB, orgC]);
+    expect(await repo.claimMonthlyReports(month, 500)).toEqual([]);
+    await expect(repo.claimMonthlyReports("2026-13", 20)).rejects.toThrow("Invalid legacy monthly report claim");
+
+  });
+
   it("rolls back workspace claim and entire recipient snapshot after a database write failure", async () => {
     await db.$client.unsafe(`create function synthetic_fail_monthly_snapshot() returns trigger language plpgsql as $$
       begin if new.organization_id = '${orgA}' then raise exception 'synthetic snapshot interrupted'; end if; return new; end; $$`);

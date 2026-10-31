@@ -155,7 +155,7 @@ const tick = setInterval(async () => {
   tickStartedAt = Date.now();
   try {
     try {
-      await runDueChecks(database.repo, queue, entitlements);
+      await runDueChecks(database.repo, queue, entitlements, { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
     } catch (e) {
       console.error("monitor scheduler", e);
     }

@@ -57,6 +57,8 @@ services:
       MONTRAL_METERING_ENABLED: ${MONTRAL_METERING_ENABLED:-}
       # Staged owner review, never active by default or as part of billing.
       MONTRAL_RECONCILIATION_ENABLED: ${MONTRAL_RECONCILIATION_ENABLED:-false}
+      # Explicit emergency pause for NEW monthly report claims only.
+      MONTRAL_MONTHLY_REPORTS_PAUSED: ${MONTRAL_MONTHLY_REPORTS_PAUSED:-false}
       MONTRAL_BILLING_ENABLED: ${MONTRAL_BILLING_ENABLED:-}
       MONTRAL_BILLING_MODE: ${MONTRAL_BILLING_MODE:-}
       LEMONSQUEEZY_API_KEY: ${LEMONSQUEEZY_API_KEY:-}

@@ -34,7 +34,7 @@ export function createWorker(edition: Edition = montralEdition) {
         try {
           let schedulerError: unknown = null;
           try {
-            await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }));
+            await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }), { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
           } catch (e) {
             schedulerError = e;
             console.error("monitor scheduler", e);

@@ -18,6 +18,8 @@ export type Bindings = {
   MONTRAL_METERING_ENABLED?: string;
   /** Staged owner-only evidence review: OFF by default, and metered edition only. No dispatch enabled. */
   MONTRAL_RECONCILIATION_ENABLED?: string;
+  /** Emergency transition guard: prevent new monthly digest claims, without silencing monitors or alert deliveries. OFF by default. */
+  MONTRAL_MONTHLY_REPORTS_PAUSED?: string;
   MONTRAL_BILLING_ENABLED?: string;
   MONTRAL_BILLING_MODE?: string;
   LEMONSQUEEZY_API_KEY?: string;

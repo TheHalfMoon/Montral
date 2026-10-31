@@ -35,7 +35,8 @@ export type CheckQueue = { sendBatch(messages: { body: CheckMessage; delaySecond
  * Cron entry point. Leases every due monitor and either fans the work out to the queue
  * (production) or runs the checks inline (local dev / no queue bound). Returns how many were due.
  */
-export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements: Entitlements = unmetered) {
+export type SchedulerOptions = Readonly<{ monthlyReportsPaused?: boolean }>;
+export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements: Entitlements = unmetered, options: SchedulerOptions = {}) {
   let total = 0;
   const limit = queue ? CLAIM_LIMIT : INLINE_LIMIT;
   for (let round = 0; round < (queue ? MAX_ROUNDS : 1); round++) {
@@ -68,7 +69,7 @@ export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements:
           const unsent = messages.slice(i).flatMap((m) => m.body.ids.map((id) => ({ id, token: claimed.get(id)! }))).filter((r) => r.token);
           await repo.releaseClaims(unsent).catch(() => console.error("could not release claims"));
           total -= unsent.length;
-          return housekeeping(repo, queue, total, entitlements);
+          return housekeeping(repo, queue, total, entitlements, options);
         }
       }
     } else {
@@ -76,7 +77,7 @@ export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements:
     }
     if (due.length < limit) break;
   }
-  return housekeeping(repo, queue, total, entitlements);
+  return housekeeping(repo, queue, total, entitlements, options);
 }
 
 /** Each housekeeping failure is isolated and logged by a fixed diagnostic only.
@@ -85,7 +86,7 @@ const step = async (what: string, run: () => Promise<unknown>) => {
   try { await run(); } catch { console.error(`${what} failed`); }
 };
 
-async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0, entitlements: Entitlements = unmetered) {
+async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0, entitlements: Entitlements = unmetered, options: SchedulerOptions = {}) {
   // alerts a dead worker left half-sent go back in line before the retries are picked up
   await step("delivery sweep", () => sweepDeliveries(repo));
   // failed incident alerts get another attempt (a few per tick; fewer when everything runs inline)
@@ -98,7 +99,12 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
   // reminders and reports are claimed in the database before they are sent, so a coarse cadence is enough
   if (new Date().getMinutes() % 5 === 0) {
     await sendMaintenanceReminders(repo, entitlements).catch(() => console.error("maintenance reminders failed"));
-    await sendMonthlyReports(repo, new Date(), entitlements).catch(() => console.error("monthly reports failed"));
+    // Controlled transition/incident kill-switch. This only blocks NEW monthly
+    // legacy claims in this scheduler invocation; it does not stop ongoing
+    // sends already in flight or alter critical monitor/incident housekeeping.
+    // Deliberately does NOT start the staged outbox worker.
+    if (!options.monthlyReportsPaused)
+      await sendMonthlyReports(repo, new Date(), entitlements).catch(() => console.error("monthly reports failed"));
   }
   return total;
 }

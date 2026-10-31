@@ -57,6 +57,48 @@ describe("scheduler housekeeping isolation and private diagnostics", () => {
   });
 });
 
+describe("monthly email transition pause does not disable monitors or alert housekeeping", () => {
+  it("avoids any new legacy report claim when explicitly paused, even inside a normal tick", async () => {
+    const calls: string[] = [];
+    const repo = {
+      claimDue: async () => { calls.push("monitor"); return []; },
+      sweepStuckDeliveries: async () => { calls.push("sweep"); return 0; },
+      claimRetries: async () => { calls.push("retries"); return []; },
+      claimReminders: async () => { calls.push("reminders"); return []; },
+      claimEscalations: async () => { calls.push("escalations"); return []; },
+      purgeExpired: async () => { calls.push("purge"); return 0; },
+      claimMaintenanceReminders: async () => { calls.push("maintenance"); return []; },
+      claimMonthlyReports: async () => { calls.push("monthly"); return []; },
+    } as unknown as Repo;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T10:00:00Z"));
+    try {
+      expect(await runDueChecks(repo, undefined, unmetered, { monthlyReportsPaused: true })).toBe(0);
+      expect(calls).toEqual(["monitor", "sweep", "retries", "reminders", "escalations", "purge", "maintenance"]);
+      calls.length = 0;
+      expect(await runDueChecks(repo, undefined, unmetered)).toBe(0);
+      expect(calls).toContain("monthly");
+    } finally { vi.useRealTimers(); }
+  });
+
+  it("pauses legacy reports even when queue fan-out is active", async () => {
+    const calls: string[] = [];
+    const repo = {
+      claimDue: async () => [], sweepStuckDeliveries: async () => 0,
+      claimRetries: async () => [], claimReminders: async () => [], claimEscalations: async () => [],
+      claimMaintenanceReminders: async () => { calls.push("maintenance"); return []; },
+      claimMonthlyReports: async () => { calls.push("monthly"); return []; },
+    } as unknown as Repo;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-01T10:05:00Z"));
+    try {
+      await runDueChecks(repo, { sendBatch: async () => {} }, unmetered, { monthlyReportsPaused: true });
+      expect(calls).toContain("maintenance");
+      expect(calls).not.toContain("monthly");
+    } finally { vi.useRealTimers(); }
+  });
+});
+
 describe("queue delivery", () => {
   const at = new Date("2026-01-01T00:01:00.000Z");
   const http = (id: string, over: Partial<Monitor> = {}) => ({ id, organizationId: "o", type: "http", target: "not a url", paused: false, nextCheckAt: at, ...over }) as Monitor;

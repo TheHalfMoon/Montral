@@ -175,7 +175,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // trigger checks from an external scheduler when Workers Cron is not available
   app.post("/internal/run-checks", async (c) => {
     if (!c.env.CRON_SECRET || !safeEqual(c.req.header("x-cron-secret"), c.env.CRON_SECRET)) return c.json({ error: "Forbidden" }, 403);
-    return c.json({ checked: await runDueChecks(c.get("repo"), c.env.CHECK_QUEUE, c.get("entitlements")) });
+    return c.json({ checked: await runDueChecks(c.get("repo"), c.env.CHECK_QUEUE, c.get("entitlements"), { monthlyReportsPaused: c.env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" }) });
   });
 
   // applies pending migrations over HTTP, for deployments that cannot run `pnpm db:migrate` from a shell

@@ -1577,10 +1577,24 @@ export function createRepo(db: Db): Repo {
       await db.delete(schema.maintenanceReminder).where(and(eq(schema.maintenanceReminder.maintenanceId, maintenanceId), eq(schema.maintenanceReminder.statusPageId, statusPageId)));
     },
     async claimMonthlyReports(month, limit) {
+      // Preserve historical callers that claim 500 at a time. The staged
+      // materializer separately caps its new, more expensive operation at 100.
+      if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(month) || !Number.isSafeInteger(limit) || limit < 1 || limit > 1000)
+        throw new Error("Invalid legacy monthly report claim");
       const rows_ = await rows<{ organization_id: string }>(
         db.execute(sql`update workspace_setting set last_report_month = ${month}
-          where organization_id in (select organization_id from workspace_setting where monthly_report and last_report_month is distinct from ${month} limit ${limit} for update skip locked)
-          returning organization_id`),
+          where organization_id in (
+            select w.organization_id from workspace_setting w
+            where w.monthly_report and w.last_report_month is distinct from ${month}
+              -- A prior staged recipient row is irreversible evidence this
+              -- workspace/month may already have attempted SMTP. Even if an
+              -- admin resets last_report_month, legacy must NEVER resurrect it.
+              and not exists (
+                select 1 from monthly_report_recipient r
+                where r.organization_id=w.organization_id and r.report_month=${month}
+              )
+            order by w.organization_id limit ${limit} for update of w skip locked
+          ) returning organization_id`),
       );
       return rows_.map((r) => r.organization_id);
     },

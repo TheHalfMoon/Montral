@@ -101,6 +101,21 @@ async function post(url: string, body: unknown) {
   if (!res.ok) throw new Error(`${hostOf(url)} responded HTTP ${res.status}`);
 }
 
+/** Telegram's Bot API reports application-level acceptance in `ok`. An HTTP 200
+ * alone (including a proxy's HTML response) is never delivery confirmation. */
+async function postTelegram(token: string, chatId: string, text: string) {
+  const res = await send(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text });
+  const data: unknown = await readCapped(res, 64 * 1024).then((body) => JSON.parse(body) as unknown).catch(() => null);
+  const ack = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+  if (res.ok && ack?.ok === true) return;
+  // Telegram's description could contain customer text or bot credentials.
+  // Keep the HTTP status and an integer API error code, never untrusted body text.
+  const apiCode = ack?.error_code;
+  const detail = typeof apiCode === "number" && Number.isSafeInteger(apiCode) && apiCode >= 100 && apiCode <= 599
+    ? ` (API code ${apiCode})` : " (missing or invalid acknowledgement)";
+  throw new Error(`Telegram responded HTTP ${res.status}${detail}`);
+}
+
 /** Teams rejects a message body over 4000 characters. */
 const TEAMS_LIMIT = 4000;
 /**
@@ -515,7 +530,7 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
       break;
     case "telegram":
       need(cfg.botToken && cfg.chatId, "bot token or chat id");
-      await post(`https://api.telegram.org/bot${cfg.botToken}/sendMessage`, { chat_id: cfg.chatId, text });
+      await postTelegram(cfg.botToken!, cfg.chatId!, text);
       break;
     case "pagerduty":
       need(cfg.routingKey, "routing key");

@@ -1,4 +1,4 @@
-# Montral Engineering Status — 2026-10-30
+# Montral Engineering Status — 2026-10-31
 
 ## Completed in this private engineering wave
 
@@ -36,6 +36,8 @@
 
 - Scoped accessibility changes: keyboard-only skip links, semantic auth/dashboard landmarks, labeled dashboard navigation, plus React Router live `aria-current` synchronization across monitor/incident/webhook routes. Actual Chromium signup/dashboard checks pass under supported Node v24.22.1; full accessibility audit remains open. See [supported-runtime/browser/restore evidence](evidence/2026-10-31-supported-node-a11y-restore-qualification.md).
 - Supported runtime re-qualification: **574 API + 20 probe + 122 web tests passed**, Node/web/probe builds and typechecks passed, local SMTP and Chromium passed, source hashes verified and a real PostgreSQL dump restored **42 tables, 128 synthetic organizations and 5 functions**; exact Node v24.22.1 + pnpm 10.0.0 on Mac. Hosted CI remains runner-blocked.
+
+- The production Node SMTP loopback qualification now additionally verifies delivery of exactly one account-recovery email to a synthetic address; real PostgreSQL recovery E2E verifies one-use reset, old-password refusal, new-password success, session invalidation and no message to unknown addresses. This is local-only, not real external inbox deliverability. [SMTP account recovery evidence](evidence/2026-10-31-local-smtp-account-recovery-qualification.md).
 
 ## Real blockers (do not claim complete)
 

@@ -49,5 +49,18 @@ describe.skipIf(!url)("password reset mail", () => {
     // the notice carries no secret: no token, no password
     expect(notice!.html + notice!.text).not.toContain(token!);
     expect(notice!.html + notice!.text).not.toContain("brand new");
+    const replay = await post("/api/auth/reset-password", { newPassword: "cannot reuse a link", token });
+    expect(replay.status).not.toBe(200);
+    const oldSignIn = await post("/api/auth/sign-in/email", { email, password: "correct horse battery" });
+    expect(oldSignIn.status).not.toBe(200);
+    const newSignIn = await post("/api/auth/sign-in/email", { email, password: "a brand new password" });
+    expect(newSignIn.status).toBe(200);
+    expect(sent.filter((m) => m.to === email && m.subject === "Your Montral password was changed")).toHaveLength(1);
+    const mailCount = sent.length;
+    const missingAccount = await post("/api/auth/request-password-reset", {
+      email: `unknown-${crypto.randomUUID()}@example.test`, redirectTo: `${ORIGIN}/reset-password`,
+    });
+    expect(missingAccount.status).toBe(200);
+    expect(sent).toHaveLength(mailCount);
   });
 });

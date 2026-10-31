@@ -216,7 +216,13 @@ try {
       incidents.body.filter(i => i.monitorId === id && i.auto === true && i.status === "resolved").length !== 1) {
     throw new Error("Automatic SMTP qualification did not resolve exactly one incident");
   }
-  console.log("SMTP_LOOPBACK_PASS: actual production Node SMTP verify + channel test and cron-driven automatic incident.down/recovery delivery over loopback SMTP, one resolved incident, no external mail");
+  const recovery = await send("POST", "/api/auth/request-password-reset", {
+    email: address, redirectTo: base + "/reset-password",
+  });
+  if (recovery.status !== 200) throw new Error("Local SMTP recovery request failed");
+  const resetMessages = smtpMessages.filter(m => m.to === address && m.raw.includes("Reset your Montral password"));
+  if (resetMessages.length !== 1) throw new Error("Local SMTP recovery mail not delivered exactly once");
+  console.log("SMTP_LOOPBACK_PASS: production Node SMTP verification, channel test, cron incident down/recovery and account recovery link delivery over loopback only");
 } finally {
   app.kill("SIGTERM");
   await Promise.race([new Promise(done => app.once("exit", done)), sleep(2500)]);

@@ -27,6 +27,7 @@
 - [x] Scoped accessibility smoke: keyboard skip links, auth/dashboard main/navigation landmarks and live `aria-current` synchronization verified across monitor, incident and webhook navigation in Chromium (NOT a full WCAG audit)
 - [ ] Green GitHub Actions on verified exact commit (current jobs fail before runner provisioning); **local** Node v24.22.1 + pnpm 10.0.0 runs cover supported toolchain but do NOT replace hosted CI
 - [x] Account recovery reset page no-referrer meta, hydrated URL cleanup, and missing-link fallback verified in real Chromium on synthetic input; actual SMTP recovery link remains externally unqualified
+- [x] Real local Node SMTP delivers exactly one synthetic account recovery email; separate PostgreSQL tests verify reset token single-use, old/new password authentication, session invalidation, security notice uniqueness and unknown-account non-enumeration (no external SMTP qualification)
 - [ ] Complete browser E2E matrix (account recovery, real-world external outage/notification and externally hosted SMTP deliverability, privileged/non-manager events, cross-browser and accessibility); Chromium manual incident lifecycle, monitor, webhook and billing-disabled smoke PASSED
 - [x] Dedicated real PostgreSQL API key/OAuth read/write/MCP webhook grants tested, including cross-project refusals
 - [x] Local workerd Edge Worker + real scheduler signed regional protocol E2E (5 tests) with mocked outbound fetch; strict host/port/header denial tested

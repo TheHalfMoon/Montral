@@ -94,6 +94,8 @@
 
 - **Once-frozen monthly report content — STAGED ONLY:** additive Drizzle `0043` stores one private workspace/monitor-statistics snapshot per workspace-month, rejects SQL UPDATE, uses a transactional first-writer-wins insert and never re-renders from changed metrics on restart. A missing snapshot with any prior SMTP attempt fails closed. No production cron integration. Mac **955/955** tests, TypeScript/builds, five real SIGKILL boundaries, Chromium/SMTP loopback and **46-table/118-synthetic-workspace** SHA-256 restore PASS; 44 embedded migrations synchronized. [Evidence](evidence/2026-10-31-once-frozen-monthly-report-content.md).
 
+- **Privacy retention of frozen monthly report content — SYNTHETIC REHEARSAL ONLY:** new read-only aggregate report and a separate explicit, database-identity-guarded `montral_test_*` local rehearsal. Only old reports whose recipients are entirely accepted/skipped are eligible; holds prepared, attempted, uncertain, orphan and recent content. No production timer, migration, mail send or customer data deletion. **Mac 959/959 package tests**, TypeScript/builds, five real SIGKILL boundaries, Chromium/SMTP loopback and **46-table/118-synthetic-workspace** SHA-256 restore PASS. **A real retention duration/privacy authorization is still OPEN.** [Evidence](evidence/2026-10-31-synthetic-monthly-content-retention-rehearsal.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

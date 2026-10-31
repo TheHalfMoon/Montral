@@ -82,6 +82,39 @@ describe("sendEmail through the Cloudflare binding", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    "timeout while waiting for header response after upstream acceptance",
+    "SMTP accepted message but the proxy header exchange timed out",
+    "connection reset after header write",
+    "error in X-Header while streaming message content",
+  ])("never retries an ambiguous provider error mentioning header: %s", async message => {
+    const send = vi.fn(async () => { throw new Error(message); });
+    configureEmail({ EMAIL: { send }, EMAIL_FROM: "alerts@example.test", WEB_ORIGIN: "https://example.test" } as never);
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(sendEmail(msg, true)).rejects.toThrow(message);
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(warnings).not.toHaveBeenCalled();
+  });
+
+  it("never retries a generic error code that incidentally contains HEADER", async () => {
+    const send = vi.fn(async () => { throw Object.assign(new Error("upstream disconnected"), { code: "HEADER_PIPELINE_TIMEOUT" }); });
+    configureEmail({ EMAIL: { send }, EMAIL_FROM: "alerts@example.test", WEB_ORIGIN: "https://example.test" } as never);
+    await expect(sendEmail(msg, true)).rejects.toThrow("upstream disconnected");
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["Unsupported custom headers", "header not supported", "invalid headers"]) (
+    "retries once on a clear header-schema rejection: %s", async message => {
+      const send = vi.fn(async (m: Record<string, unknown>) => { if (m.headers) throw new Error(message); });
+      configureEmail({ EMAIL: { send }, EMAIL_FROM: "alerts@example.test", WEB_ORIGIN: "https://example.test" } as never);
+      const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await expect(sendEmail(msg, true)).resolves.toBeUndefined();
+      expect(send).toHaveBeenCalledTimes(2);
+      expect(send.mock.calls[1][0]).not.toHaveProperty("headers");
+      expect(warnings).toHaveBeenCalledWith("email binding refused custom headers, retrying without headers");
+    },
+  );
+
   it("still fails when the message is refused without headers too", async () => {
     const send = vi.fn(async (m: Record<string, unknown>) => { throw new Error(m.headers ? "invalid headers" : "rejected"); });
     vi.spyOn(console, "warn").mockImplementation(() => {});

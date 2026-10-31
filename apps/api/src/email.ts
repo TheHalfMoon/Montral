@@ -52,10 +52,14 @@ export async function sendEmail(msg: { to: string; subject: string; html: string
   try {
     await cfg.binding.send({ ...base, headers: msg.headers });
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e);
-    // codes such as E_HEADER_NOT_ALLOWED or invalid_headers count too, so match the substring rather than a word
+    // A generic error merely *mentioning* a header may mean a post-acceptance
+    // timeout. Retrying that message could send its one-click unsubscribe email twice.
+    // Only an explicit schema/header rejection is safe to retry without headers.
+    const why = e instanceof Error ? e.message : "";
     const code = (e as { code?: unknown } | null)?.code;
-    if (!/header/i.test(why) && !(typeof code === "string" && /header/i.test(code))) throw e;
+    const knownCode = typeof code === "string" && /^(?:E_HEADER_NOT_ALLOWED|INVALID_HEADERS|UNSUPPORTED_HEADERS|ERR_UNSUPPORTED_HEADERS)$/i.test(code);
+    const clearMessage = /^(?:(?:unknown|invalid|unsupported|unrecognized)\s+(?:(?:field|property|parameter)\s+)?(?:custom\s+)?headers?\b|headers?\s+(?:are?\s+)?(?:not\s+(?:supported|allowed|permitted)|unsupported|invalid)\b)/i.test(why);
+    if (!knownCode && !clearMessage) throw e;
     console.warn("email binding refused custom headers, retrying without headers");
     await cfg.binding.send(base);
   }

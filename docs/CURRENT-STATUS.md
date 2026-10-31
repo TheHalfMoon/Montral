@@ -49,6 +49,8 @@
 
 - Outbound provider error privacy: email-binding header rejection, monthly reports, alert retries and subscriber notifications now suppress arbitrary provider exception text in ordinary logs and persisted delivery error rows. Safe diagnostic categories preserve HTTP status and routing state without copying token-bearing URLs or subscriber addresses. Synthetic secret-bearing regression passed; [provider-error evidence](evidence/2026-10-31-provider-error-privacy-qualification.md).
 
+- Cloudflare Email compatibility fallback now **retries only explicit rejection of custom headers**, preventing accidental duplicate notification sends when arbitrary timeout or post-acceptance errors mention `header`. Added regression tests for ambiguous errors and recognized schema failures. [Header-rejection qualification](evidence/2026-10-31-explicit-mail-header-rejection-qualification.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

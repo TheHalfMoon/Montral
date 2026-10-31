@@ -59,6 +59,7 @@
 - [ ] Production merchant onboarding, settlement validation, real billing, cancellation, refunds, chargebacks and proration
 - [x] Optional monthly reports fail closed on unavailable/invalid email quota. Pre-send preparation/ledger failures now conditionally release matching PostgreSQL monthly claims for retry during reporting window, with 13 focused tests and real PostgreSQL verification. Ambiguous provider outcomes intentionally never requeue; a durable per-recipient outbox remains unqualified
 - [ ] Production usage quota/cost/load validation and period aligned with subscription renewal
+- [x] Local Email binding custom-header compatibility retries only explicitly rejected header schemas, not unrelated post-acceptance errors mentioning `header`; synthetic 1-vs-2 mail attempts and token-log regressions verified (real provider remains unqualified)
 - [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review
 - [ ] Explicit user decision to publish the SaaS. Until then, keep repo private and **do not deploy**

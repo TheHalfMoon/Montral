@@ -14,6 +14,50 @@ const ev = { kind: "incident.opened" as const, incident: { id: "i1", title: "Dow
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("telegram channel", () => {
+  const channel = { type: "telegram", config: { botToken: "synthetic-bot-token", chatId: "42" } };
+
+  it("accepts a valid Telegram Bot API acknowledgement", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true, result: { message_id: 101 } }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(deliver(channel, ev, "Synthetic alert")).resolves.toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetch.mock.calls[0][1].body))).toEqual({ chat_id: "42", text: "Synthetic alert" });
+  });
+
+  it.each([
+    ["empty body", "", 200],
+    ["invalid JSON", "<html>upstream error</html>", 200],
+    ["null", "null", 200],
+    ["array", "[]", 200],
+    ["missing ok", "{}", 200],
+    ["string ok", '{"ok":"true"}', 200],
+    ["false ok", '{"ok":false}', 200],
+    ["HTTP failure despite ok true", '{"ok":true}', 502],
+  ])("rejects a false-positive Telegram acknowledgement: %s", async (_label, body, status) => {
+    const fetch = vi.fn().mockResolvedValue(new Response(String(body), { status: Number(status) }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(deliver(channel, ev, "Synthetic alert")).rejects.toThrow(/Telegram responded HTTP/);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reveal Telegram's untrusted error description or bot token", async () => {
+    const secret = "synthetic-private-provider-credential";
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      ok: false, error_code: 403, description: `Forbidden for https://example.test/?token=${secret}`,
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetch);
+    await expect(deliver(channel, ev, "Synthetic alert")).rejects.toThrow("Telegram responded HTTP 200 (API code 403)");
+    try {
+      await deliver(channel, ev, "Synthetic alert");
+      throw new Error("Expected a failed Telegram acknowledgement");
+    } catch (e) {
+      expect((e as Error).message).not.toContain(secret);
+      expect((e as Error).message).not.toContain("synthetic-bot-token");
+    }
+  });
+});
+
 describe("lark channel", () => {
   it("posts a text message, signed when a secret is set", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 0 }), { status: 200 }));
@@ -351,7 +395,7 @@ describe("project name in alerts", () => {
   async function sent(event: typeof opened & Record<string, unknown>, list: { id: string; name: string }[], type = "slack", extra: Record<string, unknown> = {}) {
     const cfg: Record<string, unknown> = { slack: { url: "https://hooks.example/s" }, lark: { url: "https://open.larksuite.com/h" }, telegram: { botToken: "t", chatId: "1" }, pagerduty: { routingKey: "k" }, webhook: { url: "https://hooks.example/w" } };
     const bodies: Record<string, unknown>[] = [];
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (_u, init) => (bodies.push(JSON.parse(String(init?.body))), new Response(JSON.stringify({ code: 0 }), { status: 200 })));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_u, init) => (bodies.push(JSON.parse(String(init?.body))), new Response(JSON.stringify(type === "telegram" ? { ok: true, result: { message_id: 101 } } : { code: 0 }), { status: 200 })));
     const channel = { id: "c1", organizationId: "o", projectId: null, type, name: "c", enabled: true, config: cfg[type] };
     const repo = {
       ...projects(list),

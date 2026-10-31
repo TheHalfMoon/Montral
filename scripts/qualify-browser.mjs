@@ -237,7 +237,18 @@ try {
   await until("billing is fail-closed", () => js('document.body.innerText.includes("Checkout is not configured")'));
   const buttonsDisabled = await js('Array.from(document.querySelectorAll("button")).filter(b => b.textContent.includes("Open test checkout")).every(b => b.disabled)');
   if (!buttonsDisabled) throw new Error("Billing checkout unexpectedly enabled");
-  console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic heartbeat monitor create/pause/resume, incident declare/ack/internal/resolve, webhook create/receipt/event inspector, disabled billing; anonymous routes denied");
+  // The reset-link credential is short-lived and must not stay in history after hydration.
+  await cdp("Page.navigate", { url: base + "/reset-password?token=syntheticbrowserresetcredential0123456789" });
+  await until("reset link scrubbed from browser URL", () => js(
+    'location.pathname === "/reset-password" && location.search === "" && !!document.querySelector("form.auth-fields input[type=password]")'
+  ));
+  const resetMeta = await js('document.querySelector("meta[name=referrer]")?.content');
+  if (resetMeta !== "no-referrer") throw new Error("Reset page missing no-referrer metadata");
+  await page("/reset-password");
+  await until("missing reset link fails closed", () => js(
+    'Array.from(document.querySelectorAll("a")).some(a => a.getAttribute("href") === "/forgot-password") && !document.querySelector("form.auth-fields")'
+  ));
+  console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic monitor, incident, webhook, disabled billing, reset-link URL privacy; anonymous routes denied");
 } finally {
   ws?.close();
   for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGTERM");

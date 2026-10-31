@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { authClient } from "../lib/auth-client";
 import { t } from "../lib/i18n";
@@ -29,19 +29,29 @@ export function ForgotPassword() {
 }
 
 export function ResetPassword() {
-  const token = new URLSearchParams(location.search).get("token");
+  // Clear the reset link from the address bar after React captures it.
+  const [token] = useState(() => new URLSearchParams(location.search).get("token"));
+  useEffect(() => {
+    if (!token) return;
+    const url = new URL(location.href);
+    url.searchParams.delete("token");
+    history.replaceState(history.state, "", url.pathname + url.search + url.hash);
+  }, [token]);
   const [pw, setPw] = useState("");
   const [state, setState] = useState<"idle" | "done" | "bad">(token ? "idle" : "bad");
   const [busy, run] = useBusy();
   async function submit(e: React.SyntheticEvent) {
     e.preventDefault();
-    const res = await run(() => authClient.resetPassword({ newPassword: pw, token: token! }).catch(() => ({ error: true })));
+    if (!token) return;
+    const res = await run(() => authClient.resetPassword({ newPassword: pw, token }).catch(() => ({ error: true })));
     setState(res?.error ? "bad" : "done");
   }
   return (
     <AuthShell side="login">
       <h1 className="serif">{t("Choose a new password")}</h1>
-      {state === "done" ? (
+      {!token ? (
+        <><p className="err">{t("This reset link is invalid or has expired.")}</p><a className="btn primary full auth-go" href="/forgot-password">{t("Send reset link")}</a></>
+      ) : state === "done" ? (
         <><p className="auth-note">{t("Your password was updated.")}</p><a className="btn primary full auth-go" href="/login">{t("Sign in")}</a></>
       ) : (
         <form className="auth-fields" onSubmit={submit}>

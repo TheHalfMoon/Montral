@@ -1,7 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import type { Repo } from "@montral/repo";
 import { Hono, type Context } from "hono";
-import { bodyLimit } from "hono/body-limit";
+import { limitedJsonBody } from "../json-body-budget";
 import { z } from "zod";
 import type { AppEnv } from "../env";
 import { ALL_PROJECTS, cookieValue, isManager, listedProjects, requireManager, uuidParams } from "../middleware";
@@ -224,7 +224,7 @@ async function importMonitors(c: Context<AppEnv>, preview: boolean) {
   // the project asked for by header or by the dashboard's cookie; a stale or unknown id would otherwise fall back silently to another project
   const explicitProject = c.req.header("x-project-id") ?? cookieValue(c.req.header("cookie"), "montral_project");
   if (explicitProject && explicitProject !== ALL_PROJECTS && explicitProject !== c.get("projectId")) return c.json({ error: "The selected import project is unavailable", code: "import_project_unavailable" }, 403);
-  const raw: unknown = await c.req.json().catch(() => null);
+  const raw: unknown = await limitedJsonBody(c.req.raw, 4 * 1024 * 1024);
   const envelope = raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : {};
   if (!preview && envelope.destination !== undefined) {
     const expected = envelope.destination as { organizationId?: unknown; projectId?: unknown } | null;
@@ -337,8 +337,8 @@ export const monitors = new Hono<AppEnv>()
     c.header("content-disposition", 'attachment; filename="montral-monitors.json"');
     return c.json({ version: 1, exportedAt: new Date().toISOString(), monitors });
   })
-  .post("/import/preview", bodyLimit({ maxSize: 4 * 1024 * 1024 }), (c) => importMonitors(c, true))
-  .post("/import", bodyLimit({ maxSize: 4 * 1024 * 1024 }), (c) => importMonitors(c, false))
+  .post("/import/preview", (c) => importMonitors(c, true))
+  .post("/import", (c) => importMonitors(c, false))
   .get("/:id/time-coverage", uuidParams, async (c) => {
     const days = c.req.query("days") ?? "7";
     if (days !== "7" && days !== "30") return c.json({ error: "days must be 7 or 30" }, 400);
@@ -431,7 +431,7 @@ export const monitors = new Hono<AppEnv>()
   // nothing is recorded, so a spot check from elsewhere cannot flip the monitor's state.
   .post("/:id/check", uuidParams, async (c) => {
     const repo = c.get("repo");
-    const asked = z.object({ region: z.string().regex(REGION_ID).optional() }).safeParse(await c.req.json().catch(() => ({})));
+    const asked = z.object({ region: z.string().regex(REGION_ID).optional() }).safeParse((await limitedJsonBody(c.req.raw, 1024)) ?? {});
     if (!asked.success) return c.json({ error: "region must be a region id", code: "unknown_region" }, 400);
     const region = asked.data.region;
     const m = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));

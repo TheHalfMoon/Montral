@@ -22,6 +22,7 @@ import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
 import { AuthBodyTimeoutError, limitedAuthBody } from "./auth-body-budget";
+import { limitedJsonBody } from "./json-body-budget";
 import { community, type Edition } from "./edition";
 import { migrateMontralSchema } from "./schema-migrate";
 import { availableRegions } from "./probes";
@@ -249,7 +250,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   authed.post("/workspaces", async (c) => {
     const granted = c.get("workspaceGrant");
     if (granted !== null && granted !== "all") return c.json({ error: "This API key or authorization is limited to specific workspaces" }, 403);
-    const name = String(((await c.req.json().catch(() => null)) as { name?: unknown } | null)?.name ?? "").trim();
+    const name = String(((await limitedJsonBody(c.req.raw, 1024)) as { name?: unknown } | null)?.name ?? "").trim();
     if (!name || name.length > 60) return c.json({ error: "name must be 1 to 60 characters" }, 400);
     const repo = c.get("repo");
     const userId = c.get("userId");
@@ -273,7 +274,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // preferred language for emails sent to this user
   authed.patch("/me/locale", async (c) => {
     if (c.get("workspaceGrant") !== null) return c.json({ error: "This needs a signed-in session, not an API key or agent authorization" }, 403);
-    const body = (await c.req.json().catch(() => null)) as { locale?: unknown } | null;
+    const body = (await limitedJsonBody(c.req.raw, 1024)) as { locale?: unknown } | null;
     if (!isLang(body?.locale)) return c.json({ error: "Unsupported language" }, 400);
     await c.get("repo").setUserLocale(c.get("userId"), body.locale);
     return c.json({ locale: body.locale });

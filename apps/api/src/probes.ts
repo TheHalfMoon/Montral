@@ -85,24 +85,33 @@ const outcomeOf = (v: unknown): CheckOutcome | null => {
 const PROBE_REPLY_MAX_BYTES = 16 * 1024;
 class ProbeReplyTooLarge extends Error {}
 
-async function readProbeReply(res: Response): Promise<unknown> {
+async function readProbeReply(res: Response, signal: AbortSignal): Promise<unknown> {
   if (!res.body) return null;
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let complete = false;
+  let onAbort: (() => void) | undefined;
+  // Fetch's AbortSignal also limits body reads if an upstream stream ignores
+  // the abort or drips data without ever reaching EOF.
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new DOMException("Probe reply body timed out", "TimeoutError"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value.byteLength > PROBE_REPLY_MAX_BYTES - size) {
-        // The peer may never finish writing: avoid awaiting cancellation.
-        void reader.cancel().catch(() => {});
-        throw new ProbeReplyTooLarge();
-      }
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) { complete = true; break; }
+      if (value.byteLength > PROBE_REPLY_MAX_BYTES - size) throw new ProbeReplyTooLarge();
       chunks.push(value);
       size += value.byteLength;
     }
   } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+    // Neither a size rejection nor a timeout may await a sender-controlled
+    // cancellation promise. Normal EOF needs no cancellation.
+    if (!complete) void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);
@@ -137,9 +146,10 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
     // Old probes ignore unknown fields: verify support BEFORE sending a payload. A positive answer is remembered
     // briefly so every check does not pay for a second request; a rolled-back probe is noticed within CAPABILITY_TTL_MS.
     if (input.type === "http" && (input.requestBody || !["GET", "HEAD", "POST"].includes(input.method)) && (capable.get(probe.url) ?? 0) <= Date.now()) {
-      const health = await fetch(probe.url, { redirect: "manual", signal: AbortSignal.timeout(5000) });
-      const capabilities: unknown = health.ok ? JSON.parse(await readCapped(health, 4096)) : null;
-      if (!health.ok) await health.body?.cancel();
+      const healthSignal = AbortSignal.timeout(5000);
+      const health = await fetch(probe.url, { redirect: "manual", signal: healthSignal });
+      const capabilities: unknown = health.ok ? JSON.parse(await readCapped(health, 4096, healthSignal)) : null;
+      if (!health.ok) void health.body?.cancel().catch(() => {});
       const advertised = (capabilities as { capabilities?: unknown } | null)?.capabilities;
       if (!Array.isArray(advertised) || !advertised.includes(HTTP_REQUEST_CAPABILITY)) {
         capable.delete(probe.url);
@@ -148,19 +158,21 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
       capable.set(probe.url, Date.now() + CAPABILITY_TTL_MS);
     }
     const ts = Math.floor(Date.now() / 1000);
+    // One time budget applies to both response headers and body consumption.
+    const replySignal = AbortSignal.timeout(input.timeoutMs + 8000);
     const res = await fetch(probe.url, {
       method: "POST",
       redirect: "manual",
       headers: { "content-type": "application/json", [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: await signProbe(secret, ts, body) },
       body,
-      // the probe enforces timeoutMs itself; this only covers a probe that hangs
-      signal: AbortSignal.timeout(input.timeoutMs + 8000),
+      signal: replySignal,
     });
     if (!res.ok) {
-      await res.body?.cancel();
+      // An unavailable region may send a body that cannot be canceled.
+      void res.body?.cancel().catch(() => {});
       return { region, unreachable: `Probe answered ${res.status}` };
     }
-    const answer = await readProbeReply(res);
+    const answer = await readProbeReply(res, replySignal);
     // the probe could not even reach the internet: that says nothing about the target, same as a probe we cannot reach
     if ((answer as { inconclusive?: unknown } | null)?.inconclusive === true) return { region, unreachable: "Probe is offline" };
     const outcome = outcomeOf(answer);

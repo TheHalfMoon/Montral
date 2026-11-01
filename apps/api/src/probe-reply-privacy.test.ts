@@ -46,6 +46,82 @@ describe("bounded remote probe replies and network diagnostics", () => {
     expect(reads).toBeLessThanOrEqual(5);
   });
 
+  it("does not wait for an HTTP error stream whose cancellation refuses to settle", async () => {
+    configured();
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([65])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream, { status: 503 })));
+    const result = await Promise.race([
+      runInRegion(region, input),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(result).toEqual({ region, unreachable: "Probe answered 503" });
+    expect(canceled).toBe(true);
+  });
+
+  it("bounds an incomplete sublimit signed probe response even if the fetch stream ignores abort", async () => {
+    configured();
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"ok":')); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(stream)));
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => nativeTimeout(35));
+    try {
+      const result = await Promise.race([
+        runInRegion(region, input),
+        new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 250)),
+      ]);
+      expect(result).toEqual({ region, unreachable: "Probe did not answer in time" });
+      expect(canceled).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+
+  it("does not await a nonresponsive capability-check HTTP refusal", async () => {
+    configured();
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([65])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const fetcher = vi.fn(async () => new Response(stream, { status: 503 }));
+    vi.stubGlobal("fetch", fetcher);
+    const result = await Promise.race([
+      runInRegion(region, { ...input, method: "PUT" }),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(result).toEqual({ region, unreachable: "Probe upgrade required for HTTP request bodies and methods" });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(canceled).toBe(true);
+  });
+
+  it("enforces a single capability-check body deadline before sending private request data", async () => {
+    configured();
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"capabilities":')); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const fetcher = vi.fn(async () => new Response(stream));
+    vi.stubGlobal("fetch", fetcher);
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => nativeTimeout(35));
+    try {
+      const result = await Promise.race([
+        runInRegion(region, { ...input, method: "PUT", requestBody: "private-request-fixture" }),
+        new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 250)),
+      ]);
+      expect(result).toEqual({ region, unreachable: "Probe did not answer in time" });
+      expect(fetcher).toHaveBeenCalledOnce();
+      expect(canceled).toBe(true);
+    } finally { spy.mockRestore(); }
+  });
+
   it("preserves a small successful response including Unicode and numeric measurements", async () => {
     configured();
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({ ok: true, statusCode: 204, latencyMs: 12, error: "café 🎯" })));

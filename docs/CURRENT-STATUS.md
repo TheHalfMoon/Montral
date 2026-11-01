@@ -195,6 +195,8 @@
 
 - **2026-11-02 RDAP stream cancellation/read-deadline fix:** RED: hostile registry HTTP 429, 1-MiB oversize and incomplete sublimit reply each left domain checks stalled despite fetch timeout. GREEN: nonblocking cancellation and a body read bound to the **original fetch AbortSignal**, preserving SSRF/no-redirect/1-MiB limits and cached expiry behavior. Focused **16/16** RDAP tests and complete supported-Node local **1,024/1,024** package tests (API 765, DB 115, Probe 20, Web 124), all type/build, 638 donor hashes and brand check PASS. Hosted exact-SHA CI separate; live registries and cloud egress remain OPEN. [Evidence](evidence/2026-11-02-rdap-body-abort-cancel-availability.md).
 
+- **2026-11-02 regional probe response deadline hardening:** RED: four synthetic blocked streams across signed probe JSON replies and request-capability discovery stalled despite pre-existing fetch timeouts / cancel budgets. GREEN: signed probe reply reader and capability `readCapped` share original AbortSignals with body reads, HTTP error cancellation never awaits hostile streams, preserve region-unreachable classification and prevent early sending of advanced request data. Focused **25/25** remote-probe/netguard tests and resource-bounded full local **1,029/1,029** package tests (API 770, PG 115, Probe 20, Web 124), all typechecks/builds, 638 donor hashes and active-brand guard PASS. Exact-SHA hosted CI separate. [Evidence](evidence/2026-11-02-remote-probe-response-reads-deadline.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

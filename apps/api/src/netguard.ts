@@ -368,16 +368,24 @@ export async function guardedFetch(url: string, init: RequestInit = {}, { follow
 
 /** Reads at most `max` response bytes. A remote peer must not hold a
  * completed monitor/alert request open by refusing body-stream cancellation. */
-export async function readCapped(res: Response, max: number): Promise<string> {
+export async function readCapped(res: Response, max: number, signal?: AbortSignal): Promise<string> {
   if (!res.body || max <= 0) return "";
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let out = "";
   let size = 0;
   let complete = false;
+  let onAbort: (() => void) | undefined;
+  // Optional caller deadline also applies to response body reads, including
+  // a synthetic or noncompliant stream that ignores network-level aborts.
+  const aborted = signal ? new Promise<never>((_, reject) => {
+    onAbort = () => reject(new DOMException("Response body read timed out", "TimeoutError"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }) : null;
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = aborted ? await Promise.race([reader.read(), aborted]) : await reader.read();
       if (done) { complete = true; break; }
       const room = max - size;
       const part = value.byteLength > room ? value.subarray(0, room) : value;
@@ -387,8 +395,9 @@ export async function readCapped(res: Response, max: number): Promise<string> {
     }
     return out + decoder.decode();
   } finally {
-    // On cap or read failure, request cancellation without awaiting a
-    // malicious stream's never-resolving cancel promise.
+    if (onAbort && signal) signal.removeEventListener("abort", onAbort);
+    // On cap, deadline or read failure, request cancellation without awaiting
+    // a malicious stream's never-resolving cancel promise.
     if (!complete) void reader.cancel().catch(() => {});
     reader.releaseLock();
   }

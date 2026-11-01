@@ -21,6 +21,22 @@ describe("bounded monitored HTTP reply consumption", () => {
     expect(canceled).toBe(true);
   });
 
+  it("honors an optional fixed read deadline without awaiting stalled cancellation", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("small")); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const outcome = await Promise.race([
+      readCapped(new Response(stream), 4096, AbortSignal.timeout(30)).then(
+        () => "unexpected", (e: Error) => e.name,
+      ),
+      new Promise<string>(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(outcome).toBe("TimeoutError");
+    expect(canceled).toBe(true);
+  });
+
   it("returns a fully consumed smaller body unchanged", async () => {
     expect(await readCapped(new Response("OK"), 16)).toBe("OK");
   });

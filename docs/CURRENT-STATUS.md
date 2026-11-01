@@ -130,6 +130,10 @@
 
 - **2026-11-01 subscription SMTP diagnostic log requalification:** Mac Node 24.22.1/pnpm 10.0.0/PostgreSQL 17.9 **969/969 package tests PASS** (711 API, 114 DB, 20 Probe, 124 Web); TypeScript/Astro and three production builds PASS. The initial API run passed all 711 cases but was FAIL because two afterAll hooks timed out; 14/14 focused rerun and fresh 711/711 full rerun PASS. Chromium, loopback SMTP, 46-table SHA-256 restore, five real OS SIGKILL and 638 source files PASS. Hosted CI on exact revision separately required. [Evidence](evidence/2026-11-01-subscription-confirmation-error-log-redaction.md).
 
+- **2026-11-01 OAuth grant-cookie malformed encoding guard:** synthetic RED reproduced unhandled `URIError` in PKCE-bound grant-cookie parser from client-controlled `%ZZ`/invalid UTF-8. Fixed to return no grant selection instead of throwing; valid PKCE-bound choices and mismatch refusal unchanged. Focused GREEN 2/2, full local/hosted CI tracked separately. [Evidence](evidence/2026-11-01-oauth-grant-cookie-uri-decoding.md).
+
+- **2026-11-01 OAuth grant-cookie Mac qualification:** Node 24.22.1 full **971/971 tests PASS** (713 API, 114 DB, 20 Probe, 124 Web); TypeScript/Astro and three production builds PASS. Real localhost Node/PostgreSQL smoke, Chromium, SMTP local sink, 46-table SHA-256 restore, five OS SIGKILL boundaries and 638 donor hash check PASS. The focused OAuth cookie invalid-percent test was RED with URIError before the fix and GREEN 2/2 afterward. Exact hosted CI run must be checked separately. [Evidence](evidence/2026-11-01-oauth-grant-cookie-uri-decoding.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

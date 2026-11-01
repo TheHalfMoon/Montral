@@ -68,9 +68,18 @@ export const GRANT_COOKIE = "montral_grant";
  * The cookie reads `<code_challenge>~<grant>`: it only counts for the authorization request (one PKCE challenge) the
  * picker was shown for, so an answer left over from an earlier attempt can never skip the picker of a later one.
  */
-const grantCookie = (header: string | null | undefined, challenge: string) => {
+export const grantCookie = (header: string | null | undefined, challenge: string) => {
   const m = header?.split(/;\s*/).find((p) => p.startsWith(`${GRANT_COOKIE}=`));
-  const v = m ? decodeURIComponent(m.slice(GRANT_COOKIE.length + 1)) : "";
+  let v = "";
+  if (m) {
+    try {
+      v = decodeURIComponent(m.slice(GRANT_COOKIE.length + 1));
+    } catch {
+      // Malformed percent sequences and invalid UTF-8 are client-controlled.
+      // Never abort the OAuth request or reuse a previous grant selection.
+      return undefined;
+    }
+  }
   const i = v.indexOf("~");
   return i >= 0 && v.slice(0, i) === challenge ? v.slice(i + 1) || undefined : undefined;
 };

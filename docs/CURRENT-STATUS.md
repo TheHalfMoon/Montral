@@ -191,6 +191,8 @@
 
 - **2026-11-01 public unsubscribe low-rate body deadline:** RED: unauthenticated one-byte POST under existing 1-KiB cap could remain pending forever. GREEN: one global 10-second read timeout returns privacy-protected HTTP 408 before removing subscriber; no wait for nonsettling cancellation. Normal RFC 8058 200, HTML form 303, oversize 413 and token privacy preserved. Focused **7/7** and supported-Node resource-bounded **1,017/1,017** local package tests (API 758, PG 115, Probe 20, Web 124), monorepo typechecks, API/Probe/Web builds, 638 donor hashes and brand scan PASS. Exact-SHA hosted CI, real socket abuse and external SMTP remain OPEN. [Evidence](evidence/2026-11-01-public-unsubscribe-slow-stream-deadline.md).
 
+- **2026-11-01 public subscription body budget and slow-sender deadline:** RED: 24-KiB JSON with forged short Content-Length reached subscription page lookup (404); GREEN: byte-exact 12-KiB cap returns HTTP 413 before JSON validation/DB writes, one total 10-second read deadline returns private 408 without waiting for stuck cancellation. Valid 200-UUID selection remains within the budget and retains Hono validation, per-address/page quotas and no-enumeration behavior. Focused **11/11** token-privacy checks and resource-bounded local **1,021/1,021** full package tests (API 762, DB 115, Probe 20, Web 124), all typechecks/builds, 638 donor hashes and active brand scan PASS. Hosted exact-SHA CI separate. [Evidence](evidence/2026-11-01-public-subscribe-stream-body-budget.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

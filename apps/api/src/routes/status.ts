@@ -291,6 +291,58 @@ export async function unsubscribeOneClick(request: Request, timeoutMs = UNSUBSCR
   }
 }
 
+/** A public subscription accepts at most 200 component UUIDs and an email.
+ * Bound the upload before Hono's JSON validator parses it or any mail/SQL
+ * side effect occurs. Reading a clone preserves the validated original body.
+ */
+const SUBSCRIBE_BODY_MAX_BYTES = 12 * 1024;
+const SUBSCRIBE_BODY_TIMEOUT_MS = 10_000;
+export class SubscribeBodyTimeoutError extends Error {
+  constructor() { super("Subscribe request body read timeout"); }
+}
+export async function subscriptionBodyOversize(request: Request, timeoutMs = SUBSCRIBE_BODY_TIMEOUT_MS): Promise<boolean> {
+  const length = request.headers.get("content-length");
+  if (length && /^\d+$/.test(length) && Number(length) > SUBSCRIBE_BODY_MAX_BYTES) {
+    void request.body?.cancel().catch(() => {});
+    return true;
+  }
+  if (!request.body) return false;
+  const reader = request.clone().body!.getReader();
+  let consumed = 0;
+  let completed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new SubscribeBodyTimeoutError()), timeoutMs);
+  });
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), deadline]);
+      if (done) { completed = true; return false; }
+      if (value.byteLength > SUBSCRIBE_BODY_MAX_BYTES - consumed) return true;
+      consumed += value.byteLength;
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    if (!completed) {
+      // Refusals must not block on never-settling tee cancellation.
+      void reader.cancel().catch(() => {});
+      void request.body?.cancel().catch(() => {});
+    }
+    reader.releaseLock();
+  }
+}
+const subscriptionBodyGuard = async (c: Context<AppEnv>, next: () => Promise<void>) => {
+  try {
+    if (await subscriptionBodyOversize(c.req.raw)) return c.json({ error: "Payload too large" }, 413);
+  } catch (error) {
+    if (error instanceof SubscribeBodyTimeoutError) {
+      return c.json({ error: error.message }, 408);
+    }
+    throw error;
+  }
+  await next();
+};
+
 export const publicStatus = new Hono<AppEnv>()
   .use("/_/confirm", subscriptionTokenPrivacy)
   .use("/_/unsubscribe", subscriptionTokenPrivacy)
@@ -398,7 +450,7 @@ export const publicStatus = new Hono<AppEnv>()
     }));
     return c.json({ slug: page.slug, items }, 200, { "cache-control": "public, max-age=60" });
   })
-  .post("/:slug/subscribe", zValidator("json", emailSchema.extend({ monitorIds: z.array(z.string().uuid()).max(200).optional() })), async (c) => {
+  .post("/:slug/subscribe", subscriptionBodyGuard, zValidator("json", emailSchema.extend({ monitorIds: z.array(z.string().uuid()).max(200).optional() })), async (c) => {
     const repo = c.get("repo");
     const page = await repo.statusPageBySlug(c.req.param("slug"));
     if (!page) return c.json({ error: "Not found" }, 404);

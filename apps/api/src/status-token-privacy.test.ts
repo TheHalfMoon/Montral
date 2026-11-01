@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { publicStatus, unsubscribeOneClick, UnsubscribeBodyTimeoutError } from "./routes/status";
+import { publicStatus, unsubscribeOneClick, UnsubscribeBodyTimeoutError, subscriptionBodyOversize, SubscribeBodyTimeoutError } from "./routes/status";
 
 function app() {
   const api = new Hono<AppEnv>();
@@ -131,6 +131,71 @@ describe("public status subscription bearer-token response privacy", () => {
     expect(canceled).toBe(true);
     expect(observed).toEqual([]);
   }, 15_000);
+
+  it("time-bounds the public subscribe request clone before any email-side effect", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"email":')); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/public/status/acme/subscribe", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      subscriptionBodyOversize(request, 30).then(() => "unexpected", (e: Error) => e.message),
+      new Promise<string>(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(outcome).toBe(new SubscribeBodyTimeoutError().message);
+    expect(canceled).toBe(true);
+  });
+
+  it("returns HTTP 408 for a stalled public subscribe stream before any subscriber lookup", async () => {
+    const { api, observed } = app();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"email":')); },
+      cancel() { return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/public/status/acme/subscribe", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const result = await Promise.race([
+      api.fetch(request),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 11_000)),
+    ]);
+    expect(result).not.toBe("still-stalled");
+    if (result === "still-stalled") throw new Error("Subscribe stream stayed blocked");
+    expect(result.status).toBe(408);
+    protectedResponse(result);
+    expect(await result.json()).toEqual({ error: "Subscribe request body read timeout" });
+    expect(observed).toEqual([]);
+  }, 15_000);
+
+  it("preserves the maximum allowed 200 component UUIDs and original JSON for validation", async () => {
+    const { api } = app();
+    const monitorIds = Array.from({ length: 200 }, (_, i) =>
+      `00000000-0000-4000-8000-${i.toString(16).padStart(12, "0")}`);
+    const response = await api.request("/api/public/status/acme/subscribe", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "reader@example.test", monitorIds }),
+    });
+    // No page exists in this isolated fixture. Returning 404 proves the bounded
+    // pre-reader did not reject or consume the original valid JSON input.
+    expect(response.status).toBe(404);
+    protectedResponse(response);
+  });
+
+  it("rejects an oversized public subscription request before parsing its valid email", async () => {
+    const { api } = app();
+    const response = await api.request("/api/public/status/acme/subscribe", {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-length": "5" },
+      body: JSON.stringify({ email: "reader@example.test", padding: "x".repeat(24 * 1024) }),
+    });
+    expect(response.status).toBe(413);
+    protectedResponse(response);
+    expect(await response.json()).toEqual({ error: "Payload too large" });
+  });
 
   it("keeps POST subscriber rejection responses private and non-referrable", async () => {
     const { api } = app();

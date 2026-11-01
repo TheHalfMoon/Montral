@@ -20,6 +20,19 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
   let db: ReturnType<typeof createDb>;
   let database: ReturnType<typeof openDatabase>;
   let uri: string;
+  let directLoopbackServer = false;
+  /** The CI database is a Docker service reached through a loopback *port
+   * mapping*. PostgreSQL sees the Docker bridge (e.g. 172.x), not 127.0.0.1.
+   * Never weaken the production method's actual server-side socket check just
+   * to make its destructive rehearsal run through the hosted CI bridge. */
+  async function localRehearsalOrFailClosed() {
+    if (directLoopbackServer) return true;
+    await expect(purgeFrozenContentInDisposableTestDb(db, 180, now))
+      .rejects.toThrow("Disposable localhost database required for retention rehearsal");
+    const [snapshot] = await db.$client`select count(*)::integer as n from monthly_report_content`;
+    expect(snapshot.n).toBe(7); // hosted CI is strictly non-destructive
+    return false;
+  }
   beforeAll(async () => {
     admin = createDb(base!, { max: 1 });
     await admin.$client.unsafe(`create database "${dbName}"`);
@@ -27,6 +40,8 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
     url.pathname = `/${dbName}`;
     uri = url.href;
     db = createDb(uri, { max: 12 });
+    const [server] = await db.$client`select host(inet_server_addr()) as address`;
+    directLoopbackServer = ["127.0.0.1", "::1"].includes(server?.address ?? "");
     database = openDatabase(uri, { max: 6 });
     await migrateMontralSchema(database, montralEdition);
     // Explicit synthetic-data attestation: not created by product migrations,
@@ -88,6 +103,7 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
   });
 
   it("waits for committed concurrent recipient changes before deciding retention eligibility", async () => {
+    if (!(await localRehearsalOrFailClosed())) return;
     // An uncommitted writer may move terminal rows back to an unresolved
     // state. The retention worker MUST NOT decide from the old MVCC version.
     let releaseWriter!: () => void;
@@ -122,6 +138,7 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
   });
 
   it("fails closed if a recipient writer holds the lock past the bounded rehearsal timeout", async () => {
+    if (!(await localRehearsalOrFailClosed())) return;
     let releaseWriter!: () => void;
     const holdWriter = new Promise<void>((resolve) => { releaseWriter = resolve; });
     let writerReady!: () => void;
@@ -149,6 +166,7 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
   });
 
   it("rehearsal removes only aged closed content, preserving usage recipients and uncertain cases", async () => {
+    if (!(await localRehearsalOrFailClosed())) return;
     const before = await db.$client`select count(*)::integer as n from monthly_report_recipient`;
     expect(await purgeFrozenContentInDisposableTestDb(db, 180, now, 1)).toBe(1);
     expect(await purgeFrozenContentInDisposableTestDb(db, 180, now, 1)).toBe(1);
@@ -173,6 +191,7 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
   });
 
   it("remains fail-closed for bad batch sizes and a newly accepted but previously attempted row", async () => {
+    if (!(await localRehearsalOrFailClosed())) return;
     await expect(purgeFrozenContentInDisposableTestDb(db, 180, now, 0)).rejects.toThrow();
     await expect(purgeFrozenContentInDisposableTestDb(db, 180, now, 101)).rejects.toThrow();
     await db.$client`update monthly_report_recipient set state='accepted', decided_at=now()
@@ -189,6 +208,7 @@ describe.skipIf(!base)("local-only confidential monthly content retention rehear
   });
 
   it("refuses deletion when a same-name localhost test DB lacks the explicit synthetic marker", async () => {
+    if (!(await localRehearsalOrFailClosed())) return;
     await db.$client`delete from public.montral_retention_rehearsal_fixture`;
     await expect(purgeFrozenContentInDisposableTestDb(db, 180, now))
       .rejects.toThrow("Synthetic retention fixture marker required");

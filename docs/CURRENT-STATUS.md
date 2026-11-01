@@ -108,6 +108,8 @@
 
 - **Latest complete Mac qualification (2026-11-01):** **965/965 PASS** (707 API, 114 real PostgreSQL, 20 Probe, 124 Web after build), all TypeScript/Astro checks and Node API/Web + Edge builds. Real local Chromium, loopback SMTP, 46-table/8-synthetic-workspace SHA-256 restore, five OS SIGKILL boundaries and 638 donor source hashes PASS. The initially observed stale-dated monthly E2E fixtures were repaired *without production quota change*. Hosted CI and release blockers remain open. [Evidence: auth cookie](evidence/2026-11-01-malformed-project-cookie-resilience.md), [calendar fixtures](evidence/2026-11-01-calendar-stable-monthly-outbox-e2e.md).
 
+- **2026-11-01 hosted CI safety correction:** GitHub Actions runner started (source-integrity PASS) but API failed when a test expected **local-only** destructive retention rehearsals to succeed over a Docker bridge despite the real PostgreSQL server-side socket not being loopback. Test fixtures now explicitly assert guarded rejection and unchanged seven snapshots on hosted service networks; actual DELETE/concurrent-writer/lock-timeout scenarios remain restricted to real localhost PostgreSQL. No production purge guard was relaxed. [Evidence](evidence/2026-11-01-hosted-retention-bridge-failclosed.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

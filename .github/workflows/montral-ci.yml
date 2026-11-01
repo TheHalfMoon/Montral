@@ -111,5 +111,7 @@ jobs:
           MONTRAL_CHROMIUM="$browser" TEST_DATABASE_URL="$browser_db" node scripts/qualify-browser.mjs
       - name: Qualify automatic incident and SMTP alert delivery to local sink
         run: node scripts/qualify-smtp.mjs
+      - name: Qualify Node SMTP failure log privacy with synthetic local peer
+        run: node scripts/qualify-smtp-error-log.mjs
       - name: No source brand leaks in active code
         run: bash scripts/verify-active-branding.sh

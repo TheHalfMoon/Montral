@@ -21,4 +21,4 @@ serve({ fetch: (req) => app.fetch(req, env), port }, () => console.log(`api → 
 
 // local stand-in for the Workers cron trigger
 const { repo } = openDatabase(env.DATABASE_URL!, { max: 5 });
-setInterval(() => runDueChecks(repo).catch((e) => console.error("scheduler", e)), 15_000);
+setInterval(() => runDueChecks(repo).catch(() => console.error("scheduler failed; private diagnostic suppressed")), 15_000);

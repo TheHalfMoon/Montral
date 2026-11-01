@@ -37,7 +37,7 @@ export function createWorker(edition: Edition = montralEdition) {
             await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }), { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
           } catch (e) {
             schedulerError = e;
-            console.error("monitor scheduler", e);
+            console.error("monitor scheduler failed; private diagnostic suppressed");
           }
           // A monitor scheduler exception must never suppress data retention.
           // Cron triggers this each five minutes, including idle inboxes.
@@ -45,11 +45,11 @@ export function createWorker(edition: Edition = montralEdition) {
             try {
               await runMontralMaintenance(database);
             } catch (e) {
-              console.error("montral maintenance", e);
+              console.error("montral maintenance failed; private diagnostic suppressed");
               if (!schedulerError) schedulerError = e;
             }
           }
-          if (schedulerError) throw schedulerError;
+          if (schedulerError) throw new Error("Scheduled Montral work failed; private diagnostic suppressed");
         } finally {
           await database.close(5);
         }
@@ -69,8 +69,8 @@ export function createWorker(edition: Edition = montralEdition) {
           try {
             await processCheckMessage(database.repo, msg.body, entitlements);
             msg.ack();
-          } catch (e) {
-            console.error("check batch failed", e);
+          } catch {
+            console.error("check batch failed; private diagnostic suppressed");
             msg.retry({ delaySeconds: 10 });
           }
         }

@@ -61,7 +61,7 @@ if (smtpConfig) {
     // report a bad host/credentials at startup instead of on the first invitation; never fatal
     smtp.verify().then(
       () => console.log("smtp: connection verified"),
-      (e) => console.warn(`smtp: cannot connect (${(e as Error).message}); emails will fail until this is fixed`),
+      () => console.warn("smtp: connection verification failed; outbound emails are unavailable"),
     );
   }
 }
@@ -87,7 +87,7 @@ const pump = () => {
     const msg = waiting.shift()!;
     running++;
     processCheckMessage(database.repo, msg, entitlements)
-      .catch((e) => console.error("check batch failed", e))
+      .catch(() => console.error("check batch failed; private diagnostic suppressed"))
       .finally(() => {
         running--;
         pump();
@@ -113,8 +113,8 @@ let assets: NodeHandler | undefined;
 try {
   astro = (await import(pathToFileURL(`${webDist}/server/entry.mjs`).href)).handler;
   assets = sirv(`${webDist}/client`, { etag: true, maxAge: 0 }) as NodeHandler;
-} catch (e) {
-  console.warn(`web build not found in ${webDist}; serving the API only`, (e as Error).message);
+} catch {
+  console.warn("web build unavailable; serving the API only");
 }
 
 const honoListener = getRequestListener((req) => app.fetch(req, env));
@@ -135,14 +135,14 @@ for (let attempt = 1; ; attempt++) {
     const applied = await migrateMontralSchema(database, edition);
     if (applied.length) console.log(`migrations applied: ${applied.join(", ")}`);
     break;
-  } catch (e) {
-    if (attempt >= 30) throw e;
-    console.warn(`database not ready (${(e as Error).message}); retrying`);
+  } catch {
+    if (attempt >= 30) throw new Error("Database connection/migration unavailable after bounded startup retries");
+    console.warn("database connection/migration unavailable; retrying");
     await new Promise((r) => setTimeout(r, 2000));
   }
 }
 
-server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral → ${env.WEB_ORIGIN} (listening on :${port})`));
+server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral: server listening on port ${port}`));
 
 // A tick normally takes well under a second, and a failing one (database down) ends quickly with an error. One that
 // never ends is a hung database call: it would block every later tick while /health keeps answering. Nothing else can
@@ -156,8 +156,8 @@ const tick = setInterval(async () => {
   try {
     try {
       await runDueChecks(database.repo, queue, entitlements, { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
-    } catch (e) {
-      console.error("monitor scheduler", e);
+    } catch {
+      console.error("monitor scheduler failed; private diagnostic suppressed");
     }
     // Cleanup is independent of monitor checks: a broken monitor job may not
     // delay seven-day webhook expiry or orphaned sandbox checkout nonce cleanup.
@@ -165,8 +165,8 @@ const tick = setInterval(async () => {
       try {
         await runMontralMaintenance(database);
         lastHookPruneAt = Date.now();
-      } catch (e) {
-        console.error("montral maintenance", e);
+      } catch {
+        console.error("montral maintenance failed; private diagnostic suppressed");
         // No timestamp update: try again on the next scheduled tick.
       }
     }

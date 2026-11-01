@@ -82,6 +82,51 @@ describe("Montral webhook security", () => {
     expect(await readPayload(new Request("https://example.invalid", { method: "POST", body: "a".repeat(33 * 1024) }))).toBeNull();
     expect(await readPayload(new Request("https://example.invalid", { method: "POST", body: "ok" }))).toBe("ok");
   });
+  it("does not wait for a stalled upstream cancel after the webhook body exceeds 32 KiB", async () => {
+    let canceled = false;
+    let reads = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { reads++; controller.enqueue(new Uint8Array(16 * 1024).fill(65)); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("https://example.invalid/receive", {
+      method: "POST", body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      readPayload(request),
+      new Promise<"stalled">(resolve => setTimeout(() => resolve("stalled"), 200)),
+    ]);
+    expect(outcome).toBeNull();
+    expect(canceled).toBe(true);
+    expect(reads).toBeLessThanOrEqual(5);
+  });
+
+  it("responds HTTP 413 without inserting events if a public webhook sender never completes cancellation", async () => {
+    const f = fixture();
+    const create = await f.app.request("/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"name":"Stalled sender"}',
+    });
+    const { path } = await create.json() as { path: string };
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(16 * 1024).fill(65)); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost" + path, {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await Promise.race([
+      f.app.fetch(request),
+      new Promise<"stalled">(resolve => setTimeout(() => resolve("stalled"), 200)),
+    ]);
+    expect(response).not.toBe("stalled");
+    const rejected = response as Response;
+    expect(rejected.status).toBe(413);
+    expectPrivateHookHeaders(rejected);
+    expect(canceled).toBe(true);
+    expect(f.events).toHaveLength(0);
+  });
+
   it("rejects raw NUL and invalid UTF-8 before PostgreSQL can reject or corrupt a capture", async () => {
     const raw = (bytes: Uint8Array) => new Request("https://example.invalid", {
       method: "POST", body: new Blob([bytes as BlobPart]),

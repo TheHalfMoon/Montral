@@ -166,6 +166,10 @@
 
 - **2026-11-01 bounded concurrent quota Mac requalification:** 996/996 package tests (737 API, 115 DB, 20 Probe, 124 Web), TypeScript/Astro and all three production builds PASS. Cross-replica 24 and 36 auth attempts, 40 atomic DB calls, repeated same-DB tests PASS; no production code changed. Node/PostgreSQL smoke, Chromium, loopback SMTP, 46-table SHA-256 restore, five OS SIGKILL monthly-outbox boundaries, 638 donor hash checks PASS. External multi-region load, latency/capacity and ingress failover remain OPEN; hosted CI exact SHA separate. [Evidence](evidence/2026-11-01-auth-quota-cross-replica-bounded-burst.md).
 
+- **2026-11-01 webhook oversize cancellation fail-fast:** RED synthetic 16-KiB chunk source with never-settling `cancel()` stalled `readPayload()` instead of returning HTTP 413. Webhook reader now cancels nonblocking and releases its lock; mounted receiver returns 413 with private headers and zero captured rows, even with stalled cancellation. Focused GREEN **9/9**. Hosted hostile-ingress/load qualification still OPEN. [Evidence](evidence/2026-11-01-webhook-body-cancel-stall.md).
+
+- **2026-11-01 webhook stalled cancel Mac requalification:** RED synthetic uncooperative stream left 32-KiB receiver waiting for `cancel()`; GREEN 9/9 verifies HTTP 413, privacy headers and zero event writes without waiting. Supported Node 24.22.1 local **998/998 package tests PASS** (739 API, 115 DB, 20 Probe, 124 Web), TypeScript/Astro, three production builds, Node/PG smoke, Chromium, loopback SMTP, 46-table fingerprint-matched restore, five OS SIGKILL crash boundaries, 638 donor hashes PASS. Hosted CI exact-SHA separate; external webhook ingress/capacity OPEN. [Evidence](evidence/2026-11-01-webhook-body-cancel-stall.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

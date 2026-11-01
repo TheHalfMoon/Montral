@@ -1,0 +1,19 @@
+# Public webhook oversize refusal does not wait for a stalled body cancellation
+
+**Date:** 2026-11-01 Asia/Riyadh. **Scope:** private Montral; synthetic in-memory Webhook request streams and local Mac qualification. No production webhook, external URL, paid service, deployment or real customer content was used.
+
+## Reproduced availability issue
+
+The public `POST|PUT|PATCH /api/hooks/receive/:id/:token` endpoint already strictly limits captured bodies to **32 KiB** and checks a hashed 256-bit receiver bearer token, private response headers and per-inbox PostgreSQL quotas. `readPayload()` correctly stopped accumulating bytes on overflow. However its `finally` block unconditionally used `await reader.cancel()`. A malicious or faulty body source can implement cancellation with a never-settling promise; the HTTP handler then waits indefinitely rather than returning the expected HTTP 413. This is a request-availability failure, not a token authentication bypass or an oversized event being persisted.
+
+A deterministic local regression created a readable stream yielding 16-KiB chunks, with a `cancel()` callback that was invoked but returned a promise that never settled. **RED:** seven older webhook tests passed and this new test failed because `readPayload()` was still pending after 200 ms (`stalled` instead of `null`). The stream is synthetic; no network service or indefinite background workload was needed to prove the defect.
+
+## Narrow production correction
+
+`readPayload()` still stops reading at **32 KiB**, rejects invalid UTF-8 and NUL bytes as before, and preserves body decoding, token validation, rate limiting and PostgreSQL event retention. The `finally` cleanup now requests cancellation without awaiting completion (`void reader.cancel().catch(() => {})`) and releases its reader lock. The cancellation rejection is handled asynchronously, so even if the peer ignores cancellation or rejects it later, the request can return `413` promptly and cleanup errors cannot become unhandled. No retries, token rules, data model, external integrations or third-party source snapshots changed.
+
+**GREEN:** existing webhook protections and two new cases **9/9 PASS**: a direct stalled-cancel stream returns `null` within the deadline; and the mounted public receiver returns **HTTP 413** with `private, no-store`, `no-referrer`, `nosniff`, `noindex` headers, while **zero events** are inserted when cancellation never resolves. Previous successful capture and malformed payload tests still pass.
+
+## Qualification and release scope
+
+Full Mac qualification on Node **24.22.1**, pnpm **10.0.0**, PostgreSQL **17.9**: **998/998** package tests PASS (API **739/739** across 97 files, PostgreSQL DB **115/115**, Probe **20/20**, Web **124/124**), plus all TypeScript/Astro checks and three production builds (Node API, edge probe, Node web) PASS. Separate disposable-DB Node/PostgreSQL health/config/MCP/dashboard smoke PASS; headless Chromium signup, monitor, incident, webhook, disabled billing and reset-link privacy PASS; loopback SMTP verification/channel/incident down/recovery/password reset PASS. Full `pg_dump`/`pg_restore` validated **46 tables** (14 nonempty), **nine synthetic organizations**, exact table row counts and normalized-content SHA-256 fingerprints, and eight required SQL functions. Five real OS `SIGKILL` monthly-outbox boundaries PASS with no duplicate recipients or quota debit. All **638 pinned donor source files** and active-brand checks verified separately. Hosted GitHub Actions must still be checked on the exact pushed commit; local success does not imply hosted success. This proof is limited to the webhook body's cancellation settlement; it does not constitute Cloudflare ingress, hostile real-world load, network capacity, commercial billing, external mail, hosted disaster recovery or production release qualification. Project remains PRIVATE and release **NO-GO**.

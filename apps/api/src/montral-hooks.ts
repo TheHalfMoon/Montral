@@ -63,7 +63,10 @@ export async function readPayload(request: Request): Promise<string | null> {
       chunks.push(value);
     }
   } finally {
-    await reader.cancel().catch(() => {});
+    // A sender can stall forever while handling cancellation. Never let an
+    // over-budget public webhook keep the HTTP response open waiting for it.
+    void reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
   const bytes = new Uint8Array(length);
   let at = 0;

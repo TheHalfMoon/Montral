@@ -14,6 +14,29 @@ const ev = { kind: "incident.opened" as const, incident: { id: "i1", title: "Dow
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("HTTP notification response cancellation must not hold deliveries open", () => {
+  it.each([
+    { name: "custom webhook", type: "webhook", config: { url: "https://hooks.example/alerts" }, status: 200, expected: "accepted" },
+    { name: "custom webhook failure", type: "webhook", config: { url: "https://hooks.example/alerts" }, status: 502, expected: "rejected" },
+    { name: "ntfy", type: "ntfy", config: { url: "https://notify.example/message", topic: "synthetic" }, status: 200, expected: "accepted" },
+    { name: "ntfy failure", type: "ntfy", config: { url: "https://notify.example/message", topic: "synthetic" }, status: 502, expected: "rejected" },
+  ])("does not stall $name when response cancellation never settles", async ({ type, config, status, expected }) => {
+    let cancellations = 0;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      cancel() {
+        cancellations++;
+        return new Promise<void>(() => {});
+      },
+    }), { status })));
+    const outcome = await Promise.race([
+      deliver({ type, config }, ev, "Synthetic alert").then(() => "accepted", () => "rejected"),
+      new Promise<"blocked-by-cancel">(resolve => setTimeout(() => resolve("blocked-by-cancel"), 180)),
+    ]);
+    expect(outcome).toBe(expected);
+    expect(cancellations).toBe(1);
+  });
+});
+
 describe("telegram channel", () => {
   const channel = { type: "telegram", config: { botToken: "synthetic-bot-token", chatId: "42" } };
 

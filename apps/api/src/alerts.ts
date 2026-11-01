@@ -97,7 +97,9 @@ async function send(url: string, body: unknown) {
 
 async function post(url: string, body: unknown) {
   const res = await send(url, body);
-  await res.body?.cancel().catch(() => {}); // only the status matters; do not hold the connection open for a body
+  // The provider may finish its HTTP status but never settle body-stream cancellation.
+  // Cleanup must not delay an acknowledged alert or leave a failed attempt stuck.
+  void res.body?.cancel().catch(() => {}); // no untrusted response body is retained
   if (!res.ok) throw new Error(`${hostOf(url)} responded HTTP ${res.status}`);
 }
 
@@ -538,7 +540,8 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
       } catch (e) {
         throw new Error((e as Error).name === "TimeoutError" ? `${hostOf(cfg.url!)} timed out` : `Could not reach ${hostOf(cfg.url!)}`);
       }
-      await res.body?.cancel().catch(() => {});
+      // Best-effort cleanup: a hostile or broken stream must not stall ntfy delivery.
+      void res.body?.cancel().catch(() => {});
       if (!res.ok) throw new Error(`${hostOf(cfg.url!)} responded HTTP ${res.status}`);
       break;
     }

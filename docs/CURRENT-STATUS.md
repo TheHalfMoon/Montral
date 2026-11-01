@@ -158,6 +158,10 @@
 
 - **2026-11-01 public unsubscribe body-budget Mac requalification:** synthetic RED oversized POST was HTTP 200 and triggered removal; bounded 1,024-byte stream now cancels excessive/endless bodies and returns HTTP 413 **before** mutating subscriber state, preserving one-click behavior and privacy headers. Full Node 24.22.1 local **988/988 tests PASS** (730 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three builds PASS; Node/PostgreSQL smoke, Chromium, loopback SMTP, 46-table SHA-256 restore, five real OS SIGKILL and 638 donor hashes PASS. Exact hosted CI separate. [Evidence](evidence/2026-11-01-public-unsubscribe-request-body-budget.md).
 
+- **2026-11-01 public auth email-quota body budget:** RED 32-KiB synthetic JSON was fully parsed by existing `clone().json()` before checking email-key size. New strict 16-KiB streamed clone reader checks both declared and received bytes, rejects HTTP 413 before Better Auth, and retains original small body/quotas; GREEN 4/4 helper and 4/4 PostgreSQL hardening E2E. External ingress and abuse-load qualification still OPEN. [Evidence](evidence/2026-11-01-auth-email-request-body-memory-budget.md).
+
+- **2026-11-01 auth body-budget full Mac requalification:** synthetic RED 32-KiB JSON parsed unbounded before per-email quota check → GREEN strict 16-KiB reader; real PostgreSQL oversized-auth HTTP 413/normal quota E2E PASS. Supported Node 24.22.1 **993/993 package tests PASS** (735 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three builds PASS. Node/PostgreSQL smoke, Chromium, loopback SMTP, 46-table fingerprint-matched restore, five OS SIGKILL boundaries and pinned 638 donor source hashes PASS. Exact hosted CI separate. [Evidence](evidence/2026-11-01-auth-email-request-body-memory-budget.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

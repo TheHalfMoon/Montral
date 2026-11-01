@@ -21,6 +21,7 @@ import { apnsConfigured, configureApns } from "./apns";
 import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
+import { limitedAuthBody } from "./auth-body-budget";
 import { community, type Edition } from "./edition";
 import { migrateMontralSchema } from "./schema-migrate";
 import { availableRegions } from "./probes";
@@ -120,7 +121,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
       const cap = ip ? rule.limit : Math.max(300, rule.limit * 15);
       let ok = await allow(repo, limitKey, cap, rule.windowSec);
       if (ok && rule.perEmail) {
-        const email = ((await c.req.raw.clone().json().catch(() => null)) as { email?: unknown } | null)?.email;
+        const body = await limitedAuthBody(c.req.raw);
+        if (body.oversized) return c.json({ error: "Payload too large" }, 413);
+        const email = body.email;
         if (typeof email === "string" && email) {
           const normalized = email.trim().toLowerCase();
           // Never store attacker-controlled megabyte-long rate-limit keys.

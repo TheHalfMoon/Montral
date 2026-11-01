@@ -50,6 +50,15 @@ describe.skipIf(!url)("request hardening", () => {
     expect((await call("GET", `/monitors/${hb.id}`)).body.status).toBe("paused");
   });
 
+  it("refuses oversized auth email body before forwarding to provider", async () => {
+    const response = await raw("/api/auth/sign-up/email", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "large@example.test", name: "x".repeat(32 * 1024), password: "synthetic" }),
+    });
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: "Payload too large" });
+  });
+
   it("limits repeated signups for one email even without a trusted client address", async () => {
     const email = `signup-throttle-${crypto.randomUUID()}@example.test`;
     const attempt = () => raw("/api/auth/sign-up/email", { method: "POST",

@@ -147,6 +147,35 @@ describe("checks and redirects", () => {
     }
   });
 
+  it("follows a redirect without waiting forever for a hostile stream cancellation", async () => {
+    const seen: string[] = [];
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        canceled = true;
+        // A remote peer or transport can fail to finish cancellation.
+        return new Promise<void>(() => {});
+      },
+    });
+    vi.stubGlobal("fetch", async (url: string) => {
+      seen.push(url);
+      return seen.length === 1
+        ? new Response(stream, { status: 302, headers: { location: "https://8.8.8.8/next" } })
+        : new Response("ok", { status: 200 });
+    });
+    try {
+      const outcome = await Promise.race([
+        guardedFetch("https://1.1.1.1/start").then(({ res, url }) => ({ status: res.status, url })),
+        new Promise<"blocked-by-cancel">(resolve => setTimeout(() => resolve("blocked-by-cancel"), 180)),
+      ]);
+      expect(outcome).toEqual({ status: 200, url: "https://8.8.8.8/next" });
+      expect(canceled).toBe(true);
+      expect(seen).toEqual(["https://1.1.1.1/start", "https://8.8.8.8/next"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("checks every redirect hop, not just the first", async () => {
     const seen: string[] = [];
     vi.stubGlobal("fetch", async (url: string) => {

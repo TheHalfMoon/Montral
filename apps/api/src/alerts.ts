@@ -103,11 +103,16 @@ async function post(url: string, body: unknown) {
   if (!res.ok) throw new Error(`${hostOf(url)} responded HTTP ${res.status}`);
 }
 
+/** A provider may complete its response headers while never yielding an ACK
+ * body. A separate finite body deadline is required even if the transport's
+ * initial response used an abort signal; otherwise a noncompliant stream
+ * can hold an alert delivery open forever. */
+
 /** Telegram's Bot API reports application-level acceptance in `ok`. An HTTP 200
  * alone (including a proxy's HTML response) is never delivery confirmation. */
 async function postTelegram(token: string, chatId: string, text: string) {
   const res = await send(`https://api.telegram.org/bot${token}/sendMessage`, { chat_id: chatId, text });
-  const data: unknown = await readCapped(res, 64 * 1024).then((body) => JSON.parse(body) as unknown).catch(() => null);
+  const data: unknown = await readCapped(res, 64 * 1024, AbortSignal.timeout(SEND_TIMEOUT_MS)).then((body) => JSON.parse(body) as unknown).catch(() => null);
   const ack = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
   if (res.ok && ack?.ok === true) return;
   // Telegram's description could contain customer text or bot credentials.
@@ -150,7 +155,7 @@ async function postLark(url: string, text: string, secret?: string) {
     body.sign = btoa(String.fromCharCode(...mac));
   }
   const res = await send(url, body);
-  const data: unknown = await readCapped(res, 64 * 1024).then((t) => JSON.parse(t) as unknown).catch(() => null);
+  const data: unknown = await readCapped(res, 64 * 1024, AbortSignal.timeout(SEND_TIMEOUT_MS)).then((t) => JSON.parse(t) as unknown).catch(() => null);
   // Lark/Feishu may respond HTTP 200 even when a message was rejected. A missing,
   // malformed or conflicting application acknowledgement must never count as "sent".
   const ack = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;

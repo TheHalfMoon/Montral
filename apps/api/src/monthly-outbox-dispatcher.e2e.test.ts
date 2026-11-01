@@ -7,14 +7,18 @@ import type { Bindings } from "./env";
 import { createMontralEntitlements } from "./montral-metering";
 import { migrateMontralSchema } from "./schema-migrate";
 import { montralEdition } from "./montral-edition";
+import { previousMonth } from "./reports";
 import { dispatchPreparedMonthlyOutbox } from "./monthly-outbox-dispatcher";
 
 const url = process.env.TEST_DATABASE_URL;
 const db = url ? openDatabase(url, { max: 12 }) : null;
 const flags = { MONTRAL_METERING_ENABLED: "true", MONTRAL_BILLING_ENABLED: "false" } as Bindings;
 const entitlements = db ? createMontralEntitlements(db, flags) : null;
-const month = "2026-09";
-const when = new Date("2026-10-01T12:00:00.000Z");
+// Use the current UTC accounting month: the PostgreSQL metering ledger
+// intentionally rejects attempts billed to a stale historical month.
+const current = new Date();
+const when = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 2, 12));
+const month = previousMonth(when);
 const orgs: { org: string; users: string[] }[] = [];
 const delivered: string[] = [];
 
@@ -235,7 +239,7 @@ describe.skipIf(!url)("staged monthly outbox dispatcher with real PostgreSQL and
 
   it("enforces reporting window and refuses unmetered entitlement bypass", async () => {
     const { org, repo } = await makeReport();
-    expect(await dispatchPreparedMonthlyOutbox(repo, entitlements!, org, new Date("2026-10-04T00:00:00Z"))).toMatchObject({ claimed: 0 });
+    expect(await dispatchPreparedMonthlyOutbox(repo, entitlements!, org, new Date(Date.UTC(when.getUTCFullYear(), when.getUTCMonth(), 4)))).toMatchObject({ claimed: 0 });
     expect(await dispatchPreparedMonthlyOutbox(repo, unmetered, org, when)).toMatchObject({ claimed: 0 });
     expect(delivered).toHaveLength(0);
     expect(await counts(org)).toMatchObject({ prepared: 2 });

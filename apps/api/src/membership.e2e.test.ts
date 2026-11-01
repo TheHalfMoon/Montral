@@ -39,6 +39,11 @@ describe.skipIf(!url)("workspace membership", () => {
       const cookie = active.cookie || member.cookie;
       expect(await db.repo.isMember(member.id, orgId)).toBe(true);
       expect((await call(cookie, "GET", "/monitors")).status).toBe(200);
+      // Keep live session authentication and membership intact even when an
+      // untrusted optional project-selector cookie has broken URL escapes.
+      for (const malformed of ["%", "%ZZ", "%E0%A4%A", "%C3%28"]) {
+        expect((await call(`${cookie}; montral_project=${malformed}`, "GET", "/monitors")).status).toBe(200);
+      }
       expect((await call(owner.cookie, "POST", "/auth/organization/remove-member", { organizationId: orgId, memberIdOrEmail: member.email })).status).toBe(200);
       expect(await db.repo.isMember(member.id, orgId)).toBe(false);
       for (const session of [cookie, cookie.split("; ").filter((c) => c.split("=")[0].endsWith("session_token")).join("; ")]) {

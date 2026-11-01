@@ -134,7 +134,15 @@ export const uuidParams = createMiddleware<AppEnv>(async (c, next) => {
 
 export function cookieValue(header: string | undefined, name: string) {
   const m = header?.split(/;\s*/).find((p) => p.startsWith(`${name}=`));
-  return m ? decodeURIComponent(m.slice(name.length + 1)) : undefined;
+  if (!m) return undefined;
+  try {
+    return decodeURIComponent(m.slice(name.length + 1));
+  } catch {
+    // Project selection is optional, not an authentication credential. A
+    // malformed percent escape/UTF-8 cookie must never turn a valid session
+    // into an uncaught URIError (HTTP 500); use the normal project fallback.
+    return undefined;
+  }
 }
 
 // each lookup is a database round trip (~350ms to the origin): remember answers briefly per isolate

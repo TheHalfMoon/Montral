@@ -7,12 +7,16 @@ import type { Bindings } from "./env";
 import { createMontralEntitlements } from "./montral-metering";
 import { migrateMontralSchema } from "./schema-migrate";
 import { montralEdition } from "./montral-edition";
+import { previousMonth } from "./reports";
 import { runStagedMonthlyOutboxBatch } from "./monthly-outbox-dispatcher";
 
 const url = process.env.TEST_DATABASE_URL;
 const flags = { MONTRAL_METERING_ENABLED: "true", MONTRAL_BILLING_ENABLED: "false" } as Bindings;
-const when = new Date("2026-10-01T10:00:00Z");
-const month = "2026-09";
+// Keep the injected report window and the actual UTC billing period aligned.
+// Historical fixed months stop being eligible when the calendar rolls over.
+const current = new Date();
+const when = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 2, 10));
+const month = previousMonth(when);
 const zero = { workspaces: 0, claimed: 0, accepted: 0, uncertain: 0, quotaDenied: 0 };
 
 /** Isolated database: the staged *batch* intentionally selects all eligible

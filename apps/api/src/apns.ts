@@ -115,25 +115,12 @@ export const fetchTransport: ApnsTransport = async (r) => {
 };
 
 type H2Session = { request(h: Record<string, string>): any; close(): void; destroy(): void; on(e: string, f: (...a: any[]) => void): void; closed: boolean; destroyed: boolean; setTimeout(ms: number, f: () => void): void; unref(): void };
-const sessions = new Map<string, H2Session>();
 
-/** Node's fetch (undici) is HTTP/1.1 only and APNs requires HTTP/2, so the Node/Docker server uses node:http2 directly. */
-const http2Transport: ApnsTransport = async (r) => {
-  // a computed specifier keeps bundlers for Workers from resolving it; this branch never runs there
-  const http2 = (await import(/* @vite-ignore */ "node:" + "http2")) as unknown as { connect(url: string): H2Session };
-  let session = sessions.get(r.host);
-  if (!session || session.closed || session.destroyed) {
-    const s = http2.connect(`https://${r.host}`);
-    s.on("error", () => { sessions.delete(r.host); s.destroy(); });
-    s.on("close", () => sessions.delete(r.host));
-    s.setTimeout(60_000, () => s.close());
-    s.unref();
-    sessions.set(r.host, s);
-    session = s;
-  }
-  const s = session;
+/** One Node HTTP/2 stream. Kept separate to qualify protocol events with a
+ * synthetic local stream rather than contacting Apple. */
+export function sendHttp2Request(session: Pick<H2Session, "request">, r: ApnsRequest): Promise<ApnsResponse> {
   return new Promise<ApnsResponse>((resolve, reject) => {
-    const req = s.request({ ":method": "POST", ":path": r.path, ...r.headers });
+    const req = session.request({ ":method": "POST", ":path": r.path, ...r.headers });
     const collected = apnsResponseCollector();
     let status = 0;
     let settled = false;
@@ -157,8 +144,32 @@ const http2Transport: ApnsTransport = async (r) => {
       resolve({ status, body: collected.text() });
     });
     req.on("error", (e: Error) => fail(e));
+    // An HTTP/2 stream can close without sending END_STREAM. Waiting for the
+    // ten-second timeout degrades alert delivery; a later `end` must not turn
+    // an incomplete provider response into a successful 410 dead-token verdict.
+    req.on("aborted", () => fail(new Error("APNs stream aborted")));
+    req.on("close", () => fail(new Error("APNs stream closed before completion")));
     req.end(r.body);
   });
+}
+
+const sessions = new Map<string, H2Session>();
+
+/** Node's fetch (undici) is HTTP/1.1 only and APNs requires HTTP/2, so the Node/Docker server uses node:http2 directly. */
+const http2Transport: ApnsTransport = async (r) => {
+  // a computed specifier keeps bundlers for Workers from resolving it; this branch never runs there
+  const http2 = (await import(/* @vite-ignore */ "node:" + "http2")) as unknown as { connect(url: string): H2Session };
+  let session = sessions.get(r.host);
+  if (!session || session.closed || session.destroyed) {
+    const s = http2.connect(`https://${r.host}`);
+    s.on("error", () => { sessions.delete(r.host); s.destroy(); });
+    s.on("close", () => sessions.delete(r.host));
+    s.setTimeout(60_000, () => s.close());
+    s.unref();
+    sessions.set(r.host, s);
+    session = s;
+  }
+  return sendHttp2Request(session, r);
 };
 
 let transport: ApnsTransport | null = null;

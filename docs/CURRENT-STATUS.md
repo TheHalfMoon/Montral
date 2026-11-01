@@ -142,6 +142,10 @@
 
 - **2026-11-01 APNs reply memory limit Mac requalification:** supported Node 24.22.1, pnpm 10, PostgreSQL 17.9 **976/976 package tests PASS** (718 API, 114 DB, 20 Probe, 124 Web), all TypeScript/Astro and three production builds PASS. Node/PostgreSQL smoke, Chromium, local SMTP, 46-table fingerprint-matched backup/restore, five OS SIGKILL boundaries and 638-source pinned hash verification PASS. Synthetic endless APNs fetch RED test worker SIGKILL before fix; corrected 64-KiB capped streaming path GREEN 23/23 focused. **External Apple APNs, hosted load, and live production qualification remain OPEN; hosted CI exact-commit status separate.** [Evidence](evidence/2026-11-01-apns-streamed-response-memory-budget.md).
 
+- **2026-11-01 APNs Node HTTP/2 incomplete-stream fail-closed:** synthetic RED showed early `close` and `aborted` events left a request pending for ten seconds or permitted later `end` to resolve. Node per-stream sender now rejects immediately on either event with a constant error, retains idempotent settlement and 64-KiB cap. Focused GREEN 27/27; actual Apple delivery still OPEN. [Evidence](evidence/2026-11-01-apns-http2-incomplete-stream-failclosed.md).
+
+- **2026-11-01 APNs HTTP/2 premature stream Mac qualification:** supported Node 24.22.1/pnpm 10/PostgreSQL 17.9 **980/980 package tests PASS** (722 API, 114 DB, 20 Probe, 124 Web), all types/production builds PASS, Node/PostgreSQL smoke, Chromium, localhost SMTP, 46-table SHA-256 restore, five OS SIGKILL boundaries and unchanged 638 donor hashes PASS. HTTP/2 local protocol RED 2/4 → GREEN 27/27 combined APNs suite. Exact-hosted-CI status separate; Apple live APNs/egress and production release remain OPEN. [Evidence](evidence/2026-11-01-apns-http2-incomplete-stream-failclosed.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

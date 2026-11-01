@@ -148,6 +148,57 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
       .toMatchObject({ id: "free" });
   });
 
+  it("refuses an oversized manager checkout body before minting a nonce or calling any provider", async () => {
+    const { cookie, org } = await signup();
+    const fetchBefore = globalThis.fetch;
+    let called = 0;
+    try {
+      vi.stubGlobal("fetch", async () => { called++; throw new Error("unreachable provider"); });
+      const response = await app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+        method: "POST", headers: { cookie, "content-type": "application/json", "content-length": "5" },
+        body: JSON.stringify({ plan: "pro", padding: "x".repeat(8 * 1024) }),
+      }), config as never);
+      expect(response.status).toBe(413);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(await response.json()).toEqual({ error: "Payload too large" });
+      expect(called).toBe(0);
+      expect(await db!.query("SELECT id FROM montral_billing_intent WHERE organization_id=$1", [org])).toHaveLength(0);
+    } finally {
+      vi.stubGlobal("fetch", fetchBefore);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("returns 408 on a never-ending manager checkout body, with no nonce or provider call", async () => {
+    const { cookie, org } = await signup();
+    const fetchBefore = globalThis.fetch;
+    let canceled = false;
+    let calls = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"plan":"pro"')); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    try {
+      vi.stubGlobal("fetch", async () => { calls++; throw new Error("must not reach provider"); });
+      const response = await app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+        method: "POST", headers: { cookie, "content-type": "application/json" },
+        body: stream, duplex: "half",
+      } as RequestInit & { duplex: "half" }), config as never);
+      expect(response.status).toBe(408);
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+      expect(await response.json()).toEqual({ error: "Checkout body read timeout" });
+      expect(canceled).toBe(true);
+      expect(calls).toBe(0);
+      expect(await db!.query("SELECT id FROM montral_billing_intent WHERE organization_id=$1", [org])).toHaveLength(0);
+    } finally {
+      vi.stubGlobal("fetch", fetchBefore);
+      vi.unstubAllGlobals();
+    }
+  }, 15_000);
+
   it("allows only one pending checkout across concurrent requests and database connections", async () => {
     const { cookie, org } = await signup();
     const originalFetch = globalThis.fetch;

@@ -187,6 +187,8 @@
 
 - **2026-11-01 outbound monitored reply cap nonblocking cancellation:** RED: a byte-capped HTTP reader waited indefinitely on a sender-controlled, never-settling `cancel()`; GREEN: return capped bytes without awaiting cancellation, preserve normal response and stream decoding, release lock. Synthetic focused netguard **16/16** and full supported-Node resource-bounded **1,012/1,012** package tests (API 753, DB 115, Probe 20, Web 124), monorepo typechecks, all builds, 638 donor hashes and active-branding check PASS. Hosted exact-SHA CI and live egress/load remain OPEN. [Evidence](evidence/2026-11-01-http-response-cap-nonblocking-cancel.md).
 
+- **2026-11-01 sandbox checkout selection body budget:** RED: manager-only test-mode Checkout parsed an 8-KiB forged-Content-Length request into HTTP 400 instead of refusing early; GREEN: a 2-KiB byte cap returns 413, and a total 10-second streaming deadline returns private 408, both **before creating a nonce, writing a checkout intent or invoking a provider**. Real PostgreSQL and unit **23/23** focused tests PASS; supported-Node local **1,015/1,015** full package tests (API 756, DB 115, Probe 20, Web 124), full types/builds, 638 donor hashes and active-branding check PASS. Exact-SHA hosted CI separately qualified. Billing remains OFF by default. [Evidence](evidence/2026-11-01-sandbox-checkout-selection-body-budget.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

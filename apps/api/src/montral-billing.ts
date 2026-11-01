@@ -6,6 +6,8 @@ import { requireManager } from "./middleware";
 import { z } from "zod";
 
 const BODY_LIMIT = 64 * 1024;
+/** Authenticated sandbox checkout accepts only a small JSON plan selection. */
+const CHECKOUT_BODY_LIMIT = 2 * 1024;
 const BODY_READ_TIMEOUT_MS = 10_000;
 export class BillingBodyTimeoutError extends Error {
   constructor() { super("Billing callback body read timeout"); }
@@ -244,8 +246,8 @@ export function parseSubscriptionEvent(raw: unknown, env: Bindings) {
 /** A signed callback's HMAC covers exact bytes; allow only bounded memory
  * and one total wall-clock upload interval before verifying any signature.
  * The test-only timeout override is never supplied by mounted HTTP routes. */
-export async function limitedBody(req: Request, timeoutMs = BODY_READ_TIMEOUT_MS): Promise<Uint8Array | null> {
-  if (Number(req.headers.get("content-length")) > BODY_LIMIT) {
+export async function limitedBody(req: Request, timeoutMs = BODY_READ_TIMEOUT_MS, maxBytes = BODY_LIMIT): Promise<Uint8Array | null> {
+  if (Number(req.headers.get("content-length")) > maxBytes) {
     void req.body?.cancel().catch(() => {});
     return null;
   }
@@ -262,7 +264,7 @@ export async function limitedBody(req: Request, timeoutMs = BODY_READ_TIMEOUT_MS
       const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) { complete = true; break; }
       bytes += value.byteLength;
-      if (bytes > BODY_LIMIT) return null;
+      if (bytes > maxBytes) return null;
       chunks.push(value);
     }
   } finally {
@@ -368,7 +370,31 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
   });
   billing.post("/checkout", requireManager, async (c) => {
     if (!billingReady(c.env)) return c.json({ error: "Billing is unavailable" }, 503);
-    const result = inputPlan.safeParse(await c.req.json().catch(() => null));
+    // Refuse unbounded/slow plan-selection JSON before generating a one-time
+    // checkout nonce or reserving a transaction. Reuse the byte-exact reader.
+    let rawPlan: Uint8Array | null;
+    try {
+      rawPlan = await limitedBody(c.req.raw, BODY_READ_TIMEOUT_MS, CHECKOUT_BODY_LIMIT);
+    } catch (error) {
+      if (error instanceof BillingBodyTimeoutError) {
+        c.header("cache-control", "no-store");
+        c.header("referrer-policy", "no-referrer");
+        c.header("x-content-type-options", "nosniff");
+        return c.json({ error: "Checkout body read timeout" }, 408);
+      }
+      throw error;
+    }
+    if (rawPlan === null) {
+      c.header("cache-control", "no-store");
+      c.header("referrer-policy", "no-referrer");
+      c.header("x-content-type-options", "nosniff");
+      return c.json({ error: "Payload too large" }, 413);
+    }
+    let plan: unknown;
+    try {
+      plan = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(rawPlan)) as unknown;
+    } catch { return c.json({ error: "Invalid plan" }, 400); }
+    const result = inputPlan.safeParse(plan);
     if (!result.success) return c.json({ error: "Invalid plan" }, 400);
     const variant = result.data.plan === "pro" ? c.env.LEMONSQUEEZY_VARIANT_PRO! : c.env.LEMONSQUEEZY_VARIANT_BUSINESS!;
     const id = crypto.randomUUID();

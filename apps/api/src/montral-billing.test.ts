@@ -58,6 +58,23 @@ describe("Montral commercial billing is sandbox-only and signature-bound", () =>
     expect(canceled).toBe(true);
   });
 
+  it("bounds an authenticated checkout plan upload that drips below its tiny byte cap", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([123])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/billing/checkout", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      limitedBody(request, 30, 2048).then(() => "unexpected-read", (e: Error) => e.message),
+      new Promise<string>(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(outcome).toBe("Billing callback body read timeout");
+    expect(canceled).toBe(true);
+  });
+
   it("rejects missing mode, live mode and incomplete merchant credentials", () => {
     expect(billingReady({} as Bindings)).toBe(false);
     expect(billingReady({ ...config, MONTRAL_BILLING_ENABLED: "false" })).toBe(false);

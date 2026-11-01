@@ -112,6 +112,8 @@
 
 - **2026-11-01 hosted PostgreSQL client parity:** the first post-guard GitHub CI run reached production builds/web/Node smoke but failed full-table restore before dump: hosted PostgreSQL 17.11 server vs Ubuntu-default `pg_dump` 16.15. Added an official signed-repository installation of version-matched PostgreSQL 17 client in the ephemeral CI runner; the complete existing backup/restore verification remains mandatory. **Hosted outcome on updated commit remains to be checked separately.** [Evidence](evidence/2026-11-01-hosted-postgres-client-major-parity.md).
 
+- **2026-11-01 hosted active-brand scan false-positive repaired:** run 41294665718 passed all test/build/restore/Chromium/SMTP steps, but the last source-brand guard incorrectly treated `grep | head` as success when there were **no upstream product matches**. New fail-closed scanner checks grep's exact tri-state status (match/no-match/error) and passed clean/seeded-leak negative tests; preserved donor snapshots remain intact. Updated hosted CI result to be verified on the next commit. [Evidence](evidence/2026-11-01-hosted-brand-scan-tristate.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

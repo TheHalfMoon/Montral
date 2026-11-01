@@ -109,8 +109,4 @@ jobs:
       - name: Qualify automatic incident and SMTP alert delivery to local sink
         run: node scripts/qualify-smtp.mjs
       - name: No source brand leaks in active code
-        run: |
-          if grep -R -i -E 'openuptime|uptimeflare|webhook.site' apps packages --include='*.ts' --include='*.tsx' --include='*.astro' --include='*.json' --exclude-dir=dist --exclude-dir=.astro --exclude-dir=node_modules | head -n 1; then
-            echo "Unexpected upstream product branding in active code"
-            exit 1
-          fi
+        run: bash scripts/verify-active-branding.sh

@@ -110,6 +110,8 @@
 
 - **2026-11-01 hosted CI safety correction:** GitHub Actions runner started (source-integrity PASS) but API failed when a test expected **local-only** destructive retention rehearsals to succeed over a Docker bridge despite the real PostgreSQL server-side socket not being loopback. Test fixtures now explicitly assert guarded rejection and unchanged seven snapshots on hosted service networks; actual DELETE/concurrent-writer/lock-timeout scenarios remain restricted to real localhost PostgreSQL. No production purge guard was relaxed. [Evidence](evidence/2026-11-01-hosted-retention-bridge-failclosed.md).
 
+- **2026-11-01 hosted PostgreSQL client parity:** the first post-guard GitHub CI run reached production builds/web/Node smoke but failed full-table restore before dump: hosted PostgreSQL 17.11 server vs Ubuntu-default `pg_dump` 16.15. Added an official signed-repository installation of version-matched PostgreSQL 17 client in the ephemeral CI runner; the complete existing backup/restore verification remains mandatory. **Hosted outcome on updated commit remains to be checked separately.** [Evidence](evidence/2026-11-01-hosted-postgres-client-major-parity.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

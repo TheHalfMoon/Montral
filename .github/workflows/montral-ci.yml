@@ -52,6 +52,29 @@ jobs:
         run: pnpm --filter @montral/web test
       - name: Smoke-test running Node API and web against PostgreSQL
         run: node scripts/smoke-node.mjs
+      # Ubuntu runner images may ship pg_dump 16 while the service is PostgreSQL
+      # 17. PostgreSQL refuses a major-version-older pg_dump, so install the
+      # version-matched client before testing the actual full-content restore.
+      # This never touches production DBs; the drill creates/drops test DBs.
+      - name: Install PostgreSQL 17 backup client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          curl --fail --silent --show-error --location --retry 3 \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc >/dev/null
+          . /etc/os-release
+          printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "$VERSION_CODENAME" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-client-17
+          # Explicit binaries avoid accidentally invoking the image's v16 tools.
+          test -x /usr/lib/postgresql/17/bin/pg_dump
+          test -x /usr/lib/postgresql/17/bin/pg_restore
+          /usr/lib/postgresql/17/bin/pg_dump --version
+          /usr/lib/postgresql/17/bin/pg_restore --version
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
       - name: Qualify full-table PostgreSQL backup and content restore
         shell: bash
         run: |

@@ -54,3 +54,34 @@ describe.skipIf(!url)("missing email provider on real PostgreSQL", () => {
     }
   }, 25_000);
 });
+
+describe.skipIf(!url)("channel test provider diagnostic privacy", () => {
+  it("hides provider error details from both HTTP and audit", async () => {
+    const app = createApp(openDatabase);
+    const db = openDatabase(url!, { max: 2 });
+    const marker = `private-provider-debug-${crypto.randomUUID()}`;
+    try {
+      const settings = { ...env, EMAIL_FROM: "alerts@example.test" };
+      const post = async (cookie: string, path: string, body?: unknown) => {
+        const res = await app.fetch(new Request(ORIGIN + "/api" + path, {
+          method: "POST", headers: { cookie, origin: ORIGIN, "content-type": "application/json" },
+          body: body === undefined ? undefined : JSON.stringify(body),
+        }), settings as never);
+        return { status: res.status, data: await res.json().catch(() => null) as any,
+          cookie: res.headers.getSetCookie().map(c => c.split(";")[0]).join("; ") };
+      };
+      const signup = await post("", "/auth/sign-up/email", { email: `provider-${crypto.randomUUID()}@example.test`, name: "Synthetic", password: "correct horse battery" });
+      expect(signup.status).toBe(200);
+      const channel = await post(signup.cookie, "/channels", { type: "email", name: "Synthetic email", config: { to: "synthetic-recipient@example.test" } });
+      expect(channel.status).toBe(201);
+      setMailTransport(async () => { throw new Error(marker); });
+      const outcome = await post(signup.cookie, `/channels/${channel.data.id}/test`);
+      expect(outcome.status).toBe(502);
+      expect(outcome.data).toEqual({ error: "notification delivery failed" });
+      const audit = await db.query<{ status: string; error: string }>(
+        "SELECT status,error FROM alert_delivery WHERE channel_id=$1 AND kind='test'", [channel.data.id]);
+      expect(audit).toContainEqual(expect.objectContaining({ status: "failed", error: "notification delivery failed" }));
+      expect(JSON.stringify([outcome.data, audit])).not.toContain(marker);
+    } finally { setMailTransport(undefined); await db.close(2); }
+  });
+});

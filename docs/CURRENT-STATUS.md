@@ -118,6 +118,10 @@
 
 - **2026-11-01 latest Mac package requalification:** **966/966 PASS** (708 API including new subscriber-privacy PostgreSQL E2E, 114 DB, 20 Probe, 124 Web), three API/Probe/Web builds and all TypeScript/Astro checks on supported Node 24.22.1 and pnpm 10.0.0. After adding no-store/no-referrer/nosniff/noindex to the subscriber contact endpoint, the focused PostgreSQL test, typechecks and rebuilt API remained PASS. Original 638-source hash and no-active-donor-brand checks PASS. Hosted CI qualification remains exact-commit dependent. [Evidence](evidence/2026-11-01-status-subscriber-contact-access.md).
 
+- **2026-11-01 channel test provider-error privacy:** real PostgreSQL RED reproduced a channel test API echo of arbitrary synthetic provider diagnostic text, which could contain destination credentials or contact details and was also persisted in the delivery log. The route now uses the existing category-only alert diagnostic classifier for both HTTP 502 and the failed audit, retaining the explicit no-provider message. Synthetic RED/GREEN E2E and full qualification documented; no live transport connected. [Evidence](evidence/2026-11-01-channel-test-provider-error-redaction.md).
+
+- **2026-11-01 latest Montral local requalification:** Node 24.22.1/pnpm 10.0.0/PostgreSQL 17.9 Mac **967/967 package tests** PASS (709 API, 114 DB, 20 Probe, 124 Web after build); all TypeScript/Astro and production Node API/Edge/Web builds PASS. Real Node/PostgreSQL smoke, headless Chromium browser, localhost SMTP, 46-table SHA-256 exact normalized-content backup/restore and five real OS SIGKILL boundaries, original 638-file source hash and active-brand checks PASS. Existing GitHub-hosted CI `47632db` green; exact CI qualification for the new privacy fix remains separate. [Evidence](evidence/2026-11-01-channel-test-provider-error-redaction.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

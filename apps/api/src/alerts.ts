@@ -67,7 +67,7 @@ const duration = (ms: number, lang: Lang = "en") => {
 
 /** Only vetted diagnostic categories may reach persisted delivery rows. Provider exceptions
  * can echo webhook secrets, unsubscribe tokens or recipients verbatim. */
-const reason = (e: unknown) => {
+export const safeDeliveryReason = (e: unknown): string => {
   if (e instanceof RoutingUnavailable) return ROUTING_UNAVAILABLE;
   const message = e instanceof Error ? e.message : "";
   if (message === "Email provider is not configured") return message;
@@ -290,7 +290,7 @@ async function execute(repo: Repo, d: Pick<AlertDelivery, "id" | "kind" | "attem
       return false;
     }
     console.error("alert delivery failed");
-    const why = reason(e);
+    const why = safeDeliveryReason(e);
     if (e instanceof RoutingUnavailable && RETRIED_KINDS.has(d.kind)) {
       const ageSec = d.createdAt ? (Date.now() - new Date(d.createdAt).getTime()) / 1000 : 0;
       const waiting = ageSec < ROUTING_WINDOW_SEC;
@@ -677,7 +677,7 @@ async function mailSubscribers(
   );
   if (results.some((r) => r.status === "rejected")) console.error("subscriber email delivery failed");
   const bad = results.find((r): r is PromiseRejectedResult => r.status === "rejected");
-  return { total: subs.length, failed: results.filter((r) => r.status === "rejected").length, error: bad ? reason(bad.reason) : "" };
+  return { total: subs.length, failed: results.filter((r) => r.status === "rejected").length, error: bad ? safeDeliveryReason(bad.reason) : "" };
 }
 
 async function notifySubscribers(repo: Repo, orgId: string, ev: Event, entitlements: Entitlements) {

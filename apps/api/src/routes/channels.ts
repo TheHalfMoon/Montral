@@ -1,7 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
-import { deliver } from "../alerts";
+import { deliver, safeDeliveryReason } from "../alerts";
 import { apnsConfigured } from "../apns";
 import type { AppEnv } from "../env";
 import { isManager, requireManager, uuidParams } from "../middleware";
@@ -106,8 +106,12 @@ export const channels = new Hono<AppEnv>()
       await log(null);
       return c.json({ ok: true });
     } catch (e) {
-      await log((e as Error).message.slice(0, 500));
-      return c.json({ error: (e as Error).message }, 502);
+      // SMTP, push and third-party webhook exceptions can include credentials,
+      // private recipients, and token-bearing destination paths. Never relay or
+      // persist raw provider errors via this user-triggered test endpoint.
+      const error = safeDeliveryReason(e);
+      await log(error).catch(() => console.error("channel test delivery audit unavailable"));
+      return c.json({ error }, 502);
     }
   })
   .delete("/:id", uuidParams, requireManager, async (c) => {

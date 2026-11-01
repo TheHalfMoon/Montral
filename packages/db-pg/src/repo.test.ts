@@ -19,6 +19,24 @@ describe.skipIf(!url)("withinLimit", () => {
     expect(await repo.withinLimit(`${k}:other`, 3, 60)).toBe(true);
   });
 
+  it("enforces an exact budget under 40 bounded concurrent PostgreSQL callers", async () => {
+    const key = `test:concurrent:${crypto.randomUUID()}`;
+    const allowed: boolean[] = [];
+    let cursor = 0;
+    const workers = Array.from({ length: 8 }, async () => {
+      while (cursor < 40) {
+        cursor++;
+        allowed.push(await repo.withinLimit(key, 7, 60));
+      }
+    });
+    await Promise.all(workers);
+    expect(allowed).toHaveLength(40);
+    expect(allowed.filter(Boolean)).toHaveLength(7);
+    const row = await db.select({ count: schema.rateLimit.count }).from(schema.rateLimit)
+      .where(eq(schema.rateLimit.key, key));
+    expect(row).toEqual([{ count: 40 }]);
+  }, 20_000);
+
   it("starts a fresh window once the old one expires", async () => {
     const k = `test:${crypto.randomUUID()}`;
     expect(await repo.withinLimit(k, 1, 1)).toBe(true);

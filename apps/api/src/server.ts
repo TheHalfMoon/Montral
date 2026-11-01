@@ -16,7 +16,8 @@ import { montralEdition } from "./montral-edition";
 import { runMontralMaintenance } from "./montral-maintenance";
 import { migrateMontralSchema } from "./schema-migrate";
 import type { Bindings } from "./env";
-import { processCheckMessage, runDueChecks, type CheckMessage, type CheckQueue } from "./scheduler";
+import { processCheckMessage, runDueChecks, type CheckQueue } from "./scheduler";
+import { createLocalCheckQueue } from "./local-check-queue";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -78,32 +79,12 @@ const edition: Edition = montralEdition;
 const entitlements = edition.entitlements({ database, env: env as never });
 const app = createApp(shared, { edition });
 
-// in-process stand-in for the Cloudflare Queue: same packing and slot delays, executed in this process
-const CHECK_CONCURRENCY = 4;
-let running = 0;
-const waiting: CheckMessage[] = [];
-const pump = () => {
-  while (running < CHECK_CONCURRENCY && waiting.length) {
-    const msg = waiting.shift()!;
-    running++;
-    processCheckMessage(database.repo, msg, entitlements)
-      .catch(() => console.error("check batch failed; private diagnostic suppressed"))
-      .finally(() => {
-        running--;
-        pump();
-      });
-  }
-};
-const queue: CheckQueue = {
-  async sendBatch(messages) {
-    for (const m of messages) {
-      setTimeout(() => {
-        waiting.push(m.body);
-        pump();
-      }, (m.delaySeconds ?? 0) * 1000).unref();
-    }
-  },
-};
+// In-process Cloudflare Queue substitute. Reserve every delayed, ready and
+// running task inside one finite, atomically accepting backpressure budget.
+// On rejection runDueChecks releases the entire unsent batch's DB claims.
+const queue: CheckQueue = createLocalCheckQueue(
+  (message) => processCheckMessage(database.repo, message, entitlements),
+);
 
 // the web build is optional so the API can also run on its own
 const webDist = resolve(env.WEB_DIST ?? "web");

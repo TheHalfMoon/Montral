@@ -250,6 +250,36 @@ const subscriptionTokenPrivacy = async (c: Context<AppEnv>, next: () => Promise<
   await next();
 };
 
+/** Read only the small form/protocol body, not an unbounded public stream. */
+const UNSUBSCRIBE_BODY_LIMIT = 1024;
+async function unsubscribeOneClick(request: Request): Promise<boolean | null> {
+  const length = request.headers.get("content-length");
+  if (length && /^\d+$/.test(length) && Number(length) > UNSUBSCRIBE_BODY_LIMIT) {
+    void request.body?.cancel().catch(() => {});
+    return null;
+  }
+  if (!request.body) return false;
+  const reader = request.body.getReader();
+  const decoder = new TextDecoder();
+  let consumed = 0;
+  let text = "";
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > UNSUBSCRIBE_BODY_LIMIT - consumed) {
+        void reader.cancel().catch(() => {});
+        return null;
+      }
+      consumed += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+    return (text + decoder.decode()).includes("List-Unsubscribe=One-Click");
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 export const publicStatus = new Hono<AppEnv>()
   .use("/_/confirm", subscriptionTokenPrivacy)
   .use("/_/unsubscribe", subscriptionTokenPrivacy)
@@ -418,8 +448,11 @@ export const publicStatus = new Hono<AppEnv>()
   })
   // POST acts: from the page's button (answered with a redirect) and from a mail client's one-click unsubscribe (RFC 8058, answered with 200)
   .post("/_/unsubscribe", async (c) => {
+    // Mail clients send a tiny RFC 8058 body. Do not buffer an arbitrary
+    // unauthenticated stream or act on a token before checking its size.
+    const oneClick = await unsubscribeOneClick(c.req.raw);
+    if (oneClick === null) return c.json({ error: "Payload too large" }, 413);
     const slug = await c.get("repo").removeSubscriber(c.req.query("token") ?? "");
-    const oneClick = (await c.req.text().catch(() => "")).includes("List-Unsubscribe=One-Click");
     if (oneClick) return c.text("OK");
     return c.redirect(slug ? `${appUrl()}/status/${slug}?unsubscribed=1` : `${appUrl()}/`, 303);
   })

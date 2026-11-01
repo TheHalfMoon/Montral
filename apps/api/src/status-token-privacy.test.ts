@@ -64,6 +64,34 @@ describe("public status subscription bearer-token response privacy", () => {
     expect(observed).toEqual(["unsubscribe:valid-unsubscribe", "unsubscribe:not-valid"]);
   });
 
+  it("rejects excessive public unsubscribe bodies before changing a subscription", async () => {
+    const { api, observed } = app();
+    const oversized = await api.request("/api/public/status/_/unsubscribe?token=valid-unsubscribe", {
+      method: "POST", body: "List-Unsubscribe=One-Click" + "X".repeat(2048),
+    });
+    expect(oversized.status).toBe(413);
+    protectedResponse(oversized);
+    expect(observed).toEqual([]);
+  });
+
+  it("cancels a never-ending unsubscribe body before touching subscriber state", async () => {
+    const { api, observed } = app();
+    let reads = 0;
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { reads++; controller.enqueue(new Uint8Array(512).fill(65)); },
+      cancel() { canceled = true; },
+    });
+    const response = await api.fetch(new Request("http://localhost/api/public/status/_/unsubscribe?token=valid-unsubscribe", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" }));
+    expect(response.status).toBe(413);
+    protectedResponse(response);
+    expect(canceled).toBe(true);
+    expect(reads).toBeLessThanOrEqual(5);
+    expect(observed).toEqual([]);
+  });
+
   it("keeps POST subscriber rejection responses private and non-referrable", async () => {
     const { api } = app();
     const response = await api.request("/api/public/status/acme/subscribe", {

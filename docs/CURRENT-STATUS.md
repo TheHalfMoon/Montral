@@ -154,6 +154,10 @@
 
 - **2026-11-01 remote probe response local requalification:** Node 24.22.1 / PostgreSQL 17.9 full **986/986 package tests PASS** (728 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three builds PASS. Node/PG smoke, Chromium, loopback SMTP, 46-table fingerprint-matched restore, five OS SIGKILL outbox boundaries, 638 donor snapshot/hash checks PASS. Synthetic external probe reply 32 KiB and unsafe fetch-error marker were accepted/leaked before change (RED 2/3); new strict 16-KiB streaming bound and fixed diagnostics GREEN 30/30 focused; hosted CI separately required. [Evidence](evidence/2026-11-01-remote-probe-response-budget-and-diagnostics.md).
 
+- **2026-11-01 public unsubscribe bounded-body guard:** synthetic RED 2-KiB request accepted and subscriber mutation ran before unbounded body read. New 1,024-byte byte-exact streaming cap rejects HTTP 413 before mutation and cancels endless bodies; valid RFC 8058 one-click and ordinary form redirects unchanged. Focused GREEN 5/5 including private response headers; full local/hosted CI separate. [Evidence](evidence/2026-11-01-public-unsubscribe-request-body-budget.md).
+
+- **2026-11-01 public unsubscribe body-budget Mac requalification:** synthetic RED oversized POST was HTTP 200 and triggered removal; bounded 1,024-byte stream now cancels excessive/endless bodies and returns HTTP 413 **before** mutating subscriber state, preserving one-click behavior and privacy headers. Full Node 24.22.1 local **988/988 tests PASS** (730 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three builds PASS; Node/PostgreSQL smoke, Chromium, loopback SMTP, 46-table SHA-256 restore, five real OS SIGKILL and 638 donor hashes PASS. Exact hosted CI separate. [Evidence](evidence/2026-11-01-public-unsubscribe-request-body-budget.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

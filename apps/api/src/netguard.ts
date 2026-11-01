@@ -341,7 +341,9 @@ export async function guardedFetch(url: string, init: RequestInit = {}, { follow
     }
     const location = res.headers.get("location");
     if (!follow || res.status < 300 || res.status >= 400 || !location || [304].includes(res.status)) return { res, url: current };
-    await res.body?.cancel();
+    // A peer may never settle stream cancellation. Cleanup is best-effort:
+    // it must not block the redirect hop, SSRF validation or the check deadline.
+    void res.body?.cancel().catch(() => {});
     if (hop >= MAX_REDIRECTS) throw new Error("Too many redirects");
     const next = new URL(location, current);
     // like browsers: 303, and POST after 301/302, become a bodiless GET; 307 / 308 repeat the request

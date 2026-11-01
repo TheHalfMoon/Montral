@@ -150,6 +150,10 @@
 
 - **2026-11-01 API/account security error-log Mac requalification:** two distinct real-PostgreSQL integration RED leaks → GREEN after fixed-category logging. Supported Node 24.22.1 **982/982 tests PASS** (724 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three production builds, Node/PG smoke, Chromium, loopback SMTP, 46-table fingerprint-matched restore, five OS SIGKILL boundaries PASS. Hosted CI on exact revision separately required. [Evidence](evidence/2026-11-01-api-security-error-log-redaction.md).
 
+- **2026-11-01 regional probe response/privacy hardening:** RED synthetic 32-KiB external probe reply was accepted as a monitored-target failure and a fetch error leaked an Authorization marker into regional summaries. New byte-exact 16-KiB streaming reply limit cancels oversize/endless responses, reports probe **unreachable** instead of target down, and suppresses raw network errors. Focused GREEN **30/30** including normal Unicode result; hosted regional qualification still OPEN. [Evidence](evidence/2026-11-01-remote-probe-response-budget-and-diagnostics.md).
+
+- **2026-11-01 remote probe response local requalification:** Node 24.22.1 / PostgreSQL 17.9 full **986/986 package tests PASS** (728 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three builds PASS. Node/PG smoke, Chromium, loopback SMTP, 46-table fingerprint-matched restore, five OS SIGKILL outbox boundaries, 638 donor snapshot/hash checks PASS. Synthetic external probe reply 32 KiB and unsafe fetch-error marker were accepted/leaked before change (RED 2/3); new strict 16-KiB streaming bound and fixed diagnostics GREEN 30/30 focused; hosted CI separately required. [Evidence](evidence/2026-11-01-remote-probe-response-budget-and-diagnostics.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

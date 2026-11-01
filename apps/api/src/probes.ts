@@ -80,6 +80,38 @@ const outcomeOf = (v: unknown): CheckOutcome | null => {
   };
 };
 
+/** Remote probe JSON should be tiny. Neither an oversized nor incomplete reply
+ * may count as a target failure, and streaming it cannot exhaust worker RAM. */
+const PROBE_REPLY_MAX_BYTES = 16 * 1024;
+class ProbeReplyTooLarge extends Error {}
+
+async function readProbeReply(res: Response): Promise<unknown> {
+  if (!res.body) return null;
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > PROBE_REPLY_MAX_BYTES - size) {
+        // The peer may never finish writing: avoid awaiting cancellation.
+        void reader.cancel().catch(() => {});
+        throw new ProbeReplyTooLarge();
+      }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const part of chunks) { bytes.set(part, offset); offset += part.byteLength; }
+  try { return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown; }
+  catch { return null; }
+}
+
 /**
  * Run a check from `region`. A probe that cannot be reached, refuses us or answers nonsense is `unreachable`: that says
  * nothing about the target, so callers must not count it as a failed check.
@@ -128,14 +160,16 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
       await res.body?.cancel();
       return { region, unreachable: `Probe answered ${res.status}` };
     }
-    const answer = await res.json().catch(() => null);
+    const answer = await readProbeReply(res);
     // the probe could not even reach the internet: that says nothing about the target, same as a probe we cannot reach
     if ((answer as { inconclusive?: unknown } | null)?.inconclusive === true) return { region, unreachable: "Probe is offline" };
     const outcome = outcomeOf(answer);
     return outcome ? { region, outcome } : { region, unreachable: "Probe answered with something that is not a result" };
   } catch (e) {
-    const err = e as Error;
-    return { region, unreachable: err.name === "TimeoutError" ? "Probe did not answer in time" : `Probe unreachable: ${err.message}` };
+    if (e instanceof ProbeReplyTooLarge) return { region, unreachable: "Probe response exceeded 16 KiB limit" };
+    // Fetch exceptions can embed tokens, addresses, proxy headers or URLs.
+    // These messages are included in region summaries and scheduler logs.
+    return { region, unreachable: (e as Error)?.name === "TimeoutError" ? "Probe did not answer in time" : "Probe unreachable" };
   }
 }
 

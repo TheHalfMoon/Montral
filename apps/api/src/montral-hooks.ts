@@ -82,26 +82,37 @@ export function capturedHeaders(headers: Headers): Record<string, string> {
 export class InvalidWebhookPayloadError extends Error {
   constructor() { super("Webhook payload must be valid UTF-8 text without NUL bytes"); }
 }
+export class WebhookPayloadTimeoutError extends Error {
+  constructor() { super("Webhook payload read timeout"); }
+}
+const MAX_READ_MS = 10_000;
 
-/** Bounded streamed read: does not allocate unbounded data from an arbitrary webhook sender. */
-export async function readPayload(request: Request): Promise<string | null> {
+/** Bound both bytes and elapsed time. A sender can drip <32 KiB forever; the
+ * deadline covers the whole stream, not each read. Timeout is injectable only
+ * for deterministic regression tests; mounted endpoints use the production cap. */
+export async function readPayload(request: Request, timeoutMs = MAX_READ_MS): Promise<string | null> {
   const size = Number(request.headers.get("content-length"));
   if (Number.isFinite(size) && size > MAX_BYTES) return null;
   if (!request.body) return "";
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let length = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new WebhookPayloadTimeoutError()), timeoutMs);
+  });
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) break;
       length += value.byteLength;
       if (length > MAX_BYTES) return null;
       chunks.push(value);
     }
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
     // A sender can stall forever while handling cancellation. Never let an
-    // over-budget public webhook keep the HTTP response open waiting for it.
+    // over-budget or timed-out webhook keep the HTTP response open waiting for it.
     void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
@@ -294,6 +305,7 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       payload = await readPayload(c.req.raw);
     } catch (error) {
       if (error instanceof InvalidWebhookPayloadError) return c.json({ error: error.message }, 422);
+      if (error instanceof WebhookPayloadTimeoutError) return c.json({ error: error.message }, 408);
       throw error;
     }
     if (payload === null) return c.json({ error: "Payload too large (32 KiB)" }, 413);

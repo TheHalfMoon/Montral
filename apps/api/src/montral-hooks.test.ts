@@ -101,6 +101,45 @@ describe("Montral webhook security", () => {
     expect(reads).toBeLessThanOrEqual(5);
   });
 
+  it("bounds a sender that drips a byte then stalls indefinitely, even if cancel never finishes", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([65])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("https://example.invalid/receive", {
+      method: "POST", body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      readPayload(request, 30).then(() => "accepted", (error: Error) => error.message),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still-stalled"), 150)),
+    ]);
+    expect(outcome).toBe("Webhook payload read timeout");
+    expect(canceled).toBe(true);
+  });
+
+  it("answers HTTP 408 with private headers and no stored event when a valid sender stalls", async () => {
+    const f = fixture();
+    const create = await f.app.request("/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json" }, body: '{"name":"Slow sender"}',
+    });
+    const { path } = await create.json() as { path: string };
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([65])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost" + path, {
+      method: "POST", body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await f.app.fetch(request);
+    expect(response.status).toBe(408);
+    expectPrivateHookHeaders(response);
+    expect(await response.json()).toEqual({ error: "Webhook payload read timeout" });
+    expect(canceled).toBe(true);
+    expect(f.events).toHaveLength(0);
+  }, 15_000);
+
   it("responds HTTP 413 without inserting events if a public webhook sender never completes cancellation", async () => {
     const f = fixture();
     const create = await f.app.request("/api/hooks/inboxes", {

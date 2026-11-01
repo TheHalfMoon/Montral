@@ -39,6 +39,19 @@ describe("monitor headers", () => {
 
 describe("client address", () => {
   const ctx = (headers: Record<string, string>) => ({ req: { header: (k: string) => headers[k.toLowerCase()] }, env: {} }) as never;
+  it("uses one canonical rate-limit identity for equivalent IPv6 proxy peers", () => {
+    const proxy = { TRUST_PROXY: "true" };
+    const variants = ["2001:db8::1", "2001:0DB8:0:0:0:0:0:1", "2001:0db8:0000:0000:0000:0000:0000:0001"];
+    for (const ip of variants) {
+      expect(clientIp(ctx({ "x-forwarded-for": `spoofed, ${ip}` }), proxy)).toBe("2001:db8::1");
+    }
+  });
+
+  it("rejects ambiguously zero-prefixed IPv4 peer octets", () => {
+    expect(clientIp(ctx({ "x-forwarded-for": "001.002.003.004" }), { TRUST_PROXY: "true" })).toBeNull();
+    expect(clientIp(ctx({ "x-forwarded-for": "1.2.3.4" }), { TRUST_PROXY: "true" })).toBe("1.2.3.4");
+  });
+
   it("ignores forwarding headers unless a proxy is trusted", () => {
     expect(clientIp(ctx({ "x-forwarded-for": "1.2.3.4", "cf-connecting-ip": "5.6.7.8" }))).toBeNull();
     expect(clientIp(ctx({ "x-forwarded-for": "9.9.9.9, 1.2.3.4" }), { TRUST_PROXY: "true" })).toBe("1.2.3.4");

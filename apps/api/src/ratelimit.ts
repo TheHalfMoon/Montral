@@ -5,33 +5,41 @@ import type { AppEnv, Bindings } from "./env";
 const onWorkers = typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
 const proxied = (env: Pick<Bindings, "TRUST_PROXY"> | undefined) => ["true", "1"].includes(String(env?.TRUST_PROXY ?? "").trim().toLowerCase());
 
-/**
- * The caller's address, or null when it cannot be told. On Cloudflare the edge sets `cf-connecting-ip`; anywhere else
- * a client can send any header it likes. Node intentionally ignores CF-Connecting-IP.
- * Forwarding headers count only with TRUST_PROXY=true (exactly one reverse
- * proxy in front, which appends the real address to `x-forwarded-for`).
- */
-export function clientIp(c: Context, env?: Pick<Bindings, "TRUST_PROXY">): string | null {
-  if (onWorkers) return c.req.header("cf-connecting-ip") ?? null;
-  if (!proxied(env ?? (c.env as Bindings | undefined))) return null;
-  const forwarded = c.req.header("x-forwarded-for")?.split(",").map((s) => s.trim()).filter(Boolean);
-  // On Node, CF-Connecting-IP may be supplied by any caller. Only trust
-  // the last XFF hop that an explicitly trusted proxy appends from its
-  // socket peer. Otherwise spoofed headers bypass per-IP auth throttling.
-  const ip = forwarded?.at(-1);
+/** Canonical validated IP for shared quota keys. Never let different textual
+ * IPv6 spellings divide one network peer into multiple rate-limit buckets.
+ * Ambiguous IPv4 leading-zero octets are refused, not interpreted as octal.
+ * Works on Node and Workers without importing a platform-specific net API. */
+function canonicalIp(raw: string | null | undefined): string | null {
+  const ip = raw?.trim();
   if (!ip || ip.length > 64) return null;
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(ip)) {
-    return ip.split(".").every(o => Number(o) >= 0 && Number(o) <= 255) ? ip : null;
+    const parts = ip.split(".");
+    return parts.every((p) => /^(?:0|[1-9]\d*)$/.test(p) && Number(p) <= 255)
+      ? parts.map(Number).join(".") : null;
   }
   if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return null;
-  // WHATWG URL parsing validates IPv6 literals in Node and Workers without
-  // using a Node-only networking module or accepting arbitrary rate-limit keys.
   try {
-    new URL("http://[" + ip + "]/");
-    return ip;
+    // The URL parser fully validates and compresses IPv6. A normalized
+    // bracketed hostname can be used as an unambiguous string quota key.
+    return new URL("http://[" + ip + "]/").hostname.slice(1, -1);
   } catch {
     return null;
   }
+}
+
+/**
+ * The caller's canonical address, or null when it cannot be told. Cloudflare
+ * controls `cf-connecting-ip` at the edge. Node must never trust that header.
+ * Node accepts only the final XFF value from one trusted proxy configured to
+ * append the actual socket peer; production must also block direct ingress.
+ */
+export function clientIp(c: Context, env?: Pick<Bindings, "TRUST_PROXY">): string | null {
+  if (onWorkers) return canonicalIp(c.req.header("cf-connecting-ip"));
+  if (!proxied(env ?? (c.env as Bindings | undefined))) return null;
+  // A client can prepend spoofed XFF entries; the trusted final hop is the
+  // only entry used as the quota identity.
+  const forwarded = c.req.header("x-forwarded-for")?.split(",");
+  return canonicalIp(forwarded?.at(-1));
 }
 
 /** Counts one attempt under `key`; false once more than `limit` happened within `windowSec`. */

@@ -122,6 +122,10 @@
 
 - **2026-11-01 latest Montral local requalification:** Node 24.22.1/pnpm 10.0.0/PostgreSQL 17.9 Mac **967/967 package tests** PASS (709 API, 114 DB, 20 Probe, 124 Web after build); all TypeScript/Astro and production Node API/Edge/Web builds PASS. Real Node/PostgreSQL smoke, headless Chromium browser, localhost SMTP, 46-table SHA-256 exact normalized-content backup/restore and five real OS SIGKILL boundaries, original 638-file source hash and active-brand checks PASS. Existing GitHub-hosted CI `47632db` green; exact CI qualification for the new privacy fix remains separate. [Evidence](evidence/2026-11-01-channel-test-provider-error-redaction.md).
 
+- **2026-11-01 canonical trusted-proxy IP quotas:** RED reproduced distinct string rate-limit identities for equivalent IPv6 spellings and acceptance of zero-prefixed ambiguous IPv4. Node/Workers IP extraction now validates and canonicalizes addresses before using `auth:ip:` keys, without changing the final-XFF trust rule, quota values or shared-unknown fallback. Focused GREEN 8/8; deployed proxy trust remains unqualified. [Evidence](evidence/2026-11-01-proxy-ip-rate-limit-canonicalization.md).
+
+- **2026-11-01 Mac requalification of canonical IP quota keys:** **969/969 PASS** (711 API, 114 DB, 20 Probe, 124 Web), all TypeScript/Astro checks and three production builds on Node 24.22.1. Node/PostgreSQL smoke, Chromium, localhost SMTP, 46-table SHA-256 restore across nine synthetic organizations and five real OS SIGKILL boundaries PASS. **Trusted-proxy ingress remains unqualified on a deployed network**; hosted CI on this exact commit to be checked. [Evidence](evidence/2026-11-01-proxy-ip-rate-limit-canonicalization.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

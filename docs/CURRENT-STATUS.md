@@ -209,6 +209,8 @@
 
 - **2026-11-02 outbound alert cancellation stall guard — PRIVATE MAIN MERGED / VERIFIED HOSTED RED→GREEN:** webhook/Slack/Discord/Teams/PagerDuty and ntfy alert paths could stall forever after receiving an HTTP status because they awaited a never-settling response-stream cancellation. Now both paths request nonblocking best-effort cancellation before classifying success/failure; four synthetic HTTP 200/502 regressions cover webhook and ntfy. GitHub pre-fix test-only head `e9f6eca` verified **4 failed / 788 passed** (every new case `blocked-by-cancel`); fixed head `682b0a3` verified **792/792 API**, full app CI and source integrity SUCCESS, then PR #3 merged privately as `54b933b`. No real provider qualified. [Evidence](evidence/2026-11-02-alert-http-body-cancellation.md).
 
+- **2026-11-02 Telegram/Lark acknowledgement read deadline — PRIVATE PR #4 / HOSTED CI PENDING:** An HTTP 200 whose response body never yields JSON could previously stall Telegram and Lark alert delivery despite 64 KiB body caps. Both now read with a separate 10-second AbortSignal; strict application-level acknowledgement remains required. Two fast synthetic stalled-stream regressions added; exact-head hosted RED→GREEN to be verified before private merge. Live-provider and production gates remain OPEN. [Evidence](evidence/2026-11-02-alert-ack-body-deadline.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

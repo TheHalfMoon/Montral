@@ -252,7 +252,13 @@ const subscriptionTokenPrivacy = async (c: Context<AppEnv>, next: () => Promise<
 
 /** Read only the small form/protocol body, not an unbounded public stream. */
 const UNSUBSCRIBE_BODY_LIMIT = 1024;
-async function unsubscribeOneClick(request: Request): Promise<boolean | null> {
+const UNSUBSCRIBE_READ_TIMEOUT_MS = 10_000;
+export class UnsubscribeBodyTimeoutError extends Error {
+  constructor() { super("Unsubscribe request body read timeout"); }
+}
+/** Fixed total read window, not an idle timeout reset by byte-drip senders.
+ * The optional override is only for synthetic tests; mounted HTTP is 10s. */
+export async function unsubscribeOneClick(request: Request, timeoutMs = UNSUBSCRIBE_READ_TIMEOUT_MS): Promise<boolean | null> {
   const length = request.headers.get("content-length");
   if (length && /^\d+$/.test(length) && Number(length) > UNSUBSCRIBE_BODY_LIMIT) {
     void request.body?.cancel().catch(() => {});
@@ -263,19 +269,24 @@ async function unsubscribeOneClick(request: Request): Promise<boolean | null> {
   const decoder = new TextDecoder();
   let consumed = 0;
   let text = "";
+  let completed = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new UnsubscribeBodyTimeoutError()), timeoutMs);
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value.byteLength > UNSUBSCRIBE_BODY_LIMIT - consumed) {
-        void reader.cancel().catch(() => {});
-        return null;
-      }
+      const { done, value } = await Promise.race([reader.read(), deadline]);
+      if (done) { completed = true; break; }
+      if (value.byteLength > UNSUBSCRIBE_BODY_LIMIT - consumed) return null;
       consumed += value.byteLength;
       text += decoder.decode(value, { stream: true });
     }
     return (text + decoder.decode()).includes("List-Unsubscribe=One-Click");
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    // Do not await a hostile stream's never-settling cancel promise.
+    if (!completed) void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 }
@@ -450,7 +461,15 @@ export const publicStatus = new Hono<AppEnv>()
   .post("/_/unsubscribe", async (c) => {
     // Mail clients send a tiny RFC 8058 body. Do not buffer an arbitrary
     // unauthenticated stream or act on a token before checking its size.
-    const oneClick = await unsubscribeOneClick(c.req.raw);
+    let oneClick: boolean | null;
+    try {
+      oneClick = await unsubscribeOneClick(c.req.raw);
+    } catch (error) {
+      if (error instanceof UnsubscribeBodyTimeoutError) {
+        return c.json({ error: "Unsubscribe request body read timeout" }, 408);
+      }
+      throw error;
+    }
     if (oneClick === null) return c.json({ error: "Payload too large" }, 413);
     const slug = await c.get("repo").removeSubscriber(c.req.query("token") ?? "");
     if (oneClick) return c.text("OK");

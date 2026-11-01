@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { publicStatus } from "./routes/status";
+import { publicStatus, unsubscribeOneClick, UnsubscribeBodyTimeoutError } from "./routes/status";
 
 function app() {
   const api = new Hono<AppEnv>();
@@ -91,6 +91,46 @@ describe("public status subscription bearer-token response privacy", () => {
     expect(reads).toBeLessThanOrEqual(5);
     expect(observed).toEqual([]);
   });
+
+  it("enforces a non-resetting body deadline without awaiting stalled stream cancellation", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("L")); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/public/status/_/unsubscribe?token=valid-unsubscribe", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      unsubscribeOneClick(request, 30).then(() => "unexpected", (e: Error) => e.message),
+      new Promise<string>(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(outcome).toBe(new UnsubscribeBodyTimeoutError().message);
+    expect(canceled).toBe(true);
+  });
+
+  it("rejects a never-closing one-byte public unsubscribe body before removing the subscriber", async () => {
+    const { api, observed } = app();
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("L")); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/public/status/_/unsubscribe?token=valid-unsubscribe", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      api.fetch(request),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 11_000)),
+    ]);
+    expect(outcome).not.toBe("still-stalled");
+    if (outcome === "still-stalled") throw new Error("Unsubscribe read remained blocked");
+    expect(outcome.status).toBe(408);
+    protectedResponse(outcome);
+    expect(await outcome.json()).toEqual({ error: "Unsubscribe request body read timeout" });
+    expect(canceled).toBe(true);
+    expect(observed).toEqual([]);
+  }, 15_000);
 
   it("keeps POST subscriber rejection responses private and non-referrable", async () => {
     const { api } = app();

@@ -189,6 +189,8 @@
 
 - **2026-11-01 sandbox checkout selection body budget:** RED: manager-only test-mode Checkout parsed an 8-KiB forged-Content-Length request into HTTP 400 instead of refusing early; GREEN: a 2-KiB byte cap returns 413, and a total 10-second streaming deadline returns private 408, both **before creating a nonce, writing a checkout intent or invoking a provider**. Real PostgreSQL and unit **23/23** focused tests PASS; supported-Node local **1,015/1,015** full package tests (API 756, DB 115, Probe 20, Web 124), full types/builds, 638 donor hashes and active-branding check PASS. Exact-SHA hosted CI separately qualified. Billing remains OFF by default. [Evidence](evidence/2026-11-01-sandbox-checkout-selection-body-budget.md).
 
+- **2026-11-01 public unsubscribe low-rate body deadline:** RED: unauthenticated one-byte POST under existing 1-KiB cap could remain pending forever. GREEN: one global 10-second read timeout returns privacy-protected HTTP 408 before removing subscriber; no wait for nonsettling cancellation. Normal RFC 8058 200, HTML form 303, oversize 413 and token privacy preserved. Focused **7/7** and supported-Node resource-bounded **1,017/1,017** local package tests (API 758, PG 115, Probe 20, Web 124), monorepo typechecks, API/Probe/Web builds, 638 donor hashes and brand scan PASS. Exact-SHA hosted CI, real socket abuse and external SMTP remain OPEN. [Evidence](evidence/2026-11-01-public-unsubscribe-slow-stream-deadline.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

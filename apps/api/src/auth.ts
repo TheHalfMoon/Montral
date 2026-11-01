@@ -197,7 +197,7 @@ export function createAuth(database: Database, env: Bindings) {
           await sendEmail({ to: user.email, subject: tr(lang, "Your Montral password was changed"), fromName: "Montral", ...mail });
         } catch (err) {
           // the password is already changed; a failed notice must not turn that into an error for the user
-          console.error("password-changed email failed", err);
+          console.error("password-changed email failed; provider diagnostics suppressed");
         }
       },
     },

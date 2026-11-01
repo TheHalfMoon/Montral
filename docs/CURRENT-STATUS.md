@@ -146,6 +146,10 @@
 
 - **2026-11-01 APNs HTTP/2 premature stream Mac qualification:** supported Node 24.22.1/pnpm 10/PostgreSQL 17.9 **980/980 package tests PASS** (722 API, 114 DB, 20 Probe, 124 Web), all types/production builds PASS, Node/PostgreSQL smoke, Chromium, localhost SMTP, 46-table SHA-256 restore, five OS SIGKILL boundaries and unchanged 638 donor hashes PASS. HTTP/2 local protocol RED 2/4 → GREEN 27/27 combined APNs suite. Exact-hosted-CI status separate; Apple live APNs/egress and production release remain OPEN. [Evidence](evidence/2026-11-01-apns-http2-incomplete-stream-failclosed.md).
 
+- **2026-11-01 API and account security-notice log privacy:** two fresh real-PostgreSQL integration tests reproduced raw private exception leakage from Hono's generic 500 handler and Better Auth's post-reset notice failure. Both now emit only fixed error categories. RED 2/2 failed on old code → GREEN 2/2 on corrected code; reset still succeeds and new credentials work. Full local/hosted CI recorded separately. [Evidence](evidence/2026-11-01-api-security-error-log-redaction.md).
+
+- **2026-11-01 API/account security error-log Mac requalification:** two distinct real-PostgreSQL integration RED leaks → GREEN after fixed-category logging. Supported Node 24.22.1 **982/982 tests PASS** (724 API, 114 DB, 20 Probe, 124 Web), TypeScript/Astro and three production builds, Node/PG smoke, Chromium, loopback SMTP, 46-table fingerprint-matched restore, five OS SIGKILL boundaries PASS. Hosted CI on exact revision separately required. [Evidence](evidence/2026-11-01-api-security-error-log-redaction.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

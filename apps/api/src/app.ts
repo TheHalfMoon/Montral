@@ -291,7 +291,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
-    console.error(err);
+    console.error("Unhandled API error; private diagnostics suppressed");
     return c.json({ error: "Internal error" }, 500);
   });
   return app;

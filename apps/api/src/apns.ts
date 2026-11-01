@@ -67,13 +67,51 @@ export type ApnsTransport = (req: ApnsRequest) => Promise<ApnsResponse>;
 
 const HOSTS = { production: "api.push.apple.com", sandbox: "api.development.push.apple.com" } as const;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** APNs JSON errors are tiny. Bound both Worker fetch and Node HTTP/2 replies. */
+export const APNS_RESPONSE_MAX_BYTES = 64 * 1024;
+
+/** Retain at most 64 KiB even if the transport keeps streaming forever. */
+export function apnsResponseCollector() {
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  return {
+    append(chunk: Uint8Array): boolean {
+      if (chunk.byteLength > APNS_RESPONSE_MAX_BYTES - size) return false;
+      chunks.push(chunk);
+      size += chunk.byteLength;
+      return true;
+    },
+    text(): string {
+      const all = new Uint8Array(size);
+      let cursor = 0;
+      for (const chunk of chunks) { all.set(chunk, cursor); cursor += chunk.byteLength; }
+      return new TextDecoder().decode(all);
+    },
+  };
+}
 
 const onWorkers = typeof navigator !== "undefined" && navigator.userAgent === "Cloudflare-Workers";
 
 /** Cloudflare Workers' fetch speaks HTTP/2 to APNs. */
-const fetchTransport: ApnsTransport = async (r) => {
+export const fetchTransport: ApnsTransport = async (r) => {
   const res = await fetch(`https://${r.host}${r.path}`, { method: "POST", headers: r.headers, body: r.body, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
-  return { status: res.status, body: await res.text().catch(() => "") };
+  if (!res.body) return { status: res.status, body: "" };
+  const reader = res.body.getReader();
+  const collected = apnsResponseCollector();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!collected.append(value)) {
+        // Do not await a potentially stalled provider stream cancellation.
+        void reader.cancel().catch(() => {});
+        throw new Error("APNs response exceeded 64 KiB limit");
+      }
+    }
+    return { status: res.status, body: collected.text() };
+  } finally {
+    reader.releaseLock();
+  }
 };
 
 type H2Session = { request(h: Record<string, string>): any; close(): void; destroy(): void; on(e: string, f: (...a: any[]) => void): void; closed: boolean; destroyed: boolean; setTimeout(ms: number, f: () => void): void; unref(): void };
@@ -96,14 +134,29 @@ const http2Transport: ApnsTransport = async (r) => {
   const s = session;
   return new Promise<ApnsResponse>((resolve, reject) => {
     const req = s.request({ ":method": "POST", ":path": r.path, ...r.headers });
-    const chunks: Buffer[] = [];
+    const collected = apnsResponseCollector();
     let status = 0;
-    const timer = setTimeout(() => { req.close(); reject(new Error("timeout")); }, REQUEST_TIMEOUT_MS);
+    let settled = false;
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      req.close();
+      reject(error);
+    };
+    const timer = setTimeout(() => fail(new Error("timeout")), REQUEST_TIMEOUT_MS);
     req.on("response", (h: Record<string, unknown>) => { status = Number(h[":status"] ?? 0); });
-    req.on("data", (d: Buffer) => chunks.push(d));
-    req.on("end", () => { clearTimeout(timer); resolve({ status, body: Buffer.concat(chunks).toString("utf8") }); });
-    req.on("error", (e: Error) => { clearTimeout(timer); reject(e); });
-    req.setEncoding?.("utf8");
+    req.on("data", (d: Buffer | string) => {
+      const chunk = typeof d === "string" ? new TextEncoder().encode(d) : d;
+      if (!collected.append(chunk)) fail(new Error("APNs response exceeded 64 KiB limit"));
+    });
+    req.on("end", () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ status, body: collected.text() });
+    });
+    req.on("error", (e: Error) => fail(e));
     req.end(r.body);
   });
 };

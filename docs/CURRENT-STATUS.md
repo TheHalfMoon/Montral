@@ -138,6 +138,10 @@
 
 - **2026-11-01 APNs token-log Mac requalification:** private synthetic RED reproduced two push backend exception leaks; GREEN 21/21. First API run failed on 10-second PostgreSQL retention `beforeAll` despite 708 other tests passing; new DB 28/28 focused and fresh complete API **715/715** PASS. Full **973/973 package tests** (715 API, 114 DB, 20 Probe, 124 Web), all typechecks and three production builds PASS. Node/PostgreSQL smoke, Chromium, loopback SMTP, 46-table SHA-256 backup/restore, five real OS SIGKILL boundaries PASS. Hosted CI on exact commit is separate; Apple APNs production remains unqualified. [Evidence](evidence/2026-11-01-apns-device-token-error-log-privacy.md).
 
+- **2026-11-01 APNs streamed response byte budget:** RED synthetic endless APNs HTTP 410 response caused test worker SIGKILL on unbounded Workers `.text()`; shared 64-KiB byte-exact cap now rejects/cancels Worker streams and closes/rejects oversized Node HTTP/2 responses. UTF-8 split bytes and normal status preserved; focused GREEN 23/23. Apple production delivery remains unqualified. [Evidence](evidence/2026-11-01-apns-streamed-response-memory-budget.md).
+
+- **2026-11-01 APNs reply memory limit Mac requalification:** supported Node 24.22.1, pnpm 10, PostgreSQL 17.9 **976/976 package tests PASS** (718 API, 114 DB, 20 Probe, 124 Web), all TypeScript/Astro and three production builds PASS. Node/PostgreSQL smoke, Chromium, local SMTP, 46-table fingerprint-matched backup/restore, five OS SIGKILL boundaries and 638-source pinned hash verification PASS. Synthetic endless APNs fetch RED test worker SIGKILL before fix; corrected 64-KiB capped streaming path GREEN 23/23 focused. **External Apple APNs, hosted load, and live production qualification remain OPEN; hosted CI exact-commit status separate.** [Evidence](evidence/2026-11-01-apns-streamed-response-memory-budget.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

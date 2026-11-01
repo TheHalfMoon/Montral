@@ -21,7 +21,7 @@ import { apnsConfigured, configureApns } from "./apns";
 import { configureNetGuard } from "./netguard";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
-import { limitedAuthBody } from "./auth-body-budget";
+import { AuthBodyTimeoutError, limitedAuthBody } from "./auth-body-budget";
 import { community, type Edition } from "./edition";
 import { migrateMontralSchema } from "./schema-migrate";
 import { availableRegions } from "./probes";
@@ -121,7 +121,18 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
       const cap = ip ? rule.limit : Math.max(300, rule.limit * 15);
       let ok = await allow(repo, limitKey, cap, rule.windowSec);
       if (ok && rule.perEmail) {
-        const body = await limitedAuthBody(c.req.raw);
+        let body: Awaited<ReturnType<typeof limitedAuthBody>>;
+        try {
+          body = await limitedAuthBody(c.req.raw);
+        } catch (error) {
+          if (error instanceof AuthBodyTimeoutError) {
+            c.header("cache-control", "no-store");
+            c.header("referrer-policy", "no-referrer");
+            c.header("x-content-type-options", "nosniff");
+            return c.json({ error: error.message }, 408);
+          }
+          throw error;
+        }
         if (body.oversized) return c.json({ error: "Payload too large" }, 413);
         const email = body.email;
         if (typeof email === "string" && email) {

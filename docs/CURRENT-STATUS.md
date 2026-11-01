@@ -181,6 +181,8 @@
 
 - **2026-11-01 authenticated Webhook inbox creation stream deadline:** RED: a 1-byte inbox POST that never closed hung below the existing 4-KiB budget; GREEN: one global 10-second body-read deadline returns HTTP 408 with private headers and **no inbox/token creation**, even when sender cancellation never settles. Focused **16/16** Webhook tests plus supported-Node local **1,005/1,005** full package tests (API 746, DB 115, Probe 20, Web 124), all types/builds, 638 donor hashes and branding check pass; hosted CI on final SHA is separate. [Evidence](evidence/2026-11-01-webhook-inbox-creation-slow-stream-deadline.md).
 
+- **2026-11-01 public email-auth low-rate body deadline:** RED: 1-byte request held a 16-KiB bounded email-body reader indefinitely; GREEN: one 10-second wall-clock deadline rejects with HTTP 408 before Better Auth, keeping no-store/no-referrer/nosniff response and prior 16-KiB/quota protections. Synthetic direct stream and real PostgreSQL mounted request verify no wait for uncooperative cancellation; focused **10/10** tests and supported-Node local **1,007/1,007** full package tests (API 748, DB 115, Probe 20, Web 124), all TypeScript/Astro checks and builds, 638 donor source hashes and active-brand scan PASS. Hosted CI on exact revision separate. [Evidence](evidence/2026-11-01-auth-email-slow-stream-wallclock.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

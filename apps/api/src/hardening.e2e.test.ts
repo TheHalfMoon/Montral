@@ -59,6 +59,24 @@ describe.skipIf(!url)("request hardening", () => {
     expect(await response.json()).toEqual({ error: "Payload too large" });
   });
 
+  it("rejects a stalled public email-auth request with no-store HTTP 408 before provider handling", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"email":"slow@example.test"')); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const response = await app.fetch(new Request(ORIGIN + "/api/auth/sign-in/email", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body, duplex: "half",
+    } as RequestInit & { duplex: "half" }), env as never);
+    expect(response.status).toBe(408);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await response.json()).toEqual({ error: "Authentication body read timeout" });
+    expect(canceled).toBe(true);
+  }, 15_000);
+
   it("limits repeated signups for one email even without a trusted client address", async () => {
     const email = `signup-throttle-${crypto.randomUUID()}@example.test`;
     const attempt = () => raw("/api/auth/sign-up/email", { method: "POST",

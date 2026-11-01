@@ -27,6 +27,23 @@ describe("auth email quota body budget", () => {
     expect(reads).toBeLessThanOrEqual(1);
   });
 
+  it("does not wait forever for a slow email-auth body whose cancellation never settles", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([123])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const req = new Request("http://localhost/api/auth/sign-in/email", {
+      method: "POST", body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const outcome = await Promise.race([
+      limitedAuthBody(req, 30).then(() => "accepted", (error: Error) => error.message),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still-stalled"), 160)),
+    ]);
+    expect(outcome).toBe("Authentication body read timeout");
+    expect(canceled).toBe(true);
+  });
+
   it("keeps small normal requests available to downstream handlers", async () => {
     const body = JSON.stringify({ email: "test@example.test" });
     const req = new Request("http://localhost", { method: "POST", body });

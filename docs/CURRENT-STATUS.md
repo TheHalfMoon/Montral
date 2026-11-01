@@ -114,6 +114,10 @@
 
 - **2026-11-01 hosted active-brand scan false-positive repaired:** run 41294665718 passed all test/build/restore/Chromium/SMTP steps, but the last source-brand guard incorrectly treated `grep | head` as success when there were **no upstream product matches**. New fail-closed scanner checks grep's exact tri-state status (match/no-match/error) and passed clean/seeded-leak negative tests; preserved donor snapshots remain intact. Updated hosted CI result to be verified on the next commit. [Evidence](evidence/2026-11-01-hosted-brand-scan-tristate.md).
 
+- **2026-11-01 subscriber-contact authorization:** real PostgreSQL RED verified ordinary workspace members could read confirmed status-page subscriber email addresses (HTTP 200). Restricted contact-list access to current owner/admin via `requireManager`, leaving non-contact status reads available, and made React handle a 403 without retaining stale email data. Real PostgreSQL GREEN tested owner/member/outsider/anonymous, DELETE denial and live manager promotion/demotion. [Evidence](evidence/2026-11-01-status-subscriber-contact-access.md). Hosted CI/release outcome tracked separately.
+
+- **2026-11-01 latest Mac package requalification:** **966/966 PASS** (708 API including new subscriber-privacy PostgreSQL E2E, 114 DB, 20 Probe, 124 Web), three API/Probe/Web builds and all TypeScript/Astro checks on supported Node 24.22.1 and pnpm 10.0.0. After adding no-store/no-referrer/nosniff/noindex to the subscriber contact endpoint, the focused PostgreSQL test, typechecks and rebuilt API remained PASS. Original 638-source hash and no-active-donor-brand checks PASS. Hosted CI qualification remains exact-commit dependent. [Evidence](evidence/2026-11-01-status-subscriber-contact-access.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

@@ -255,6 +255,7 @@ export const zh: Record<string, string> = {
   "elapsed": "已持续",
   "Auto-detected": "自动发现",
   "Sent to status page subscribers": "将发送给状态页订阅者",
+  "Could not load subscribers.": "无法加载订阅者列表。",
   "This incident has been resolved.": "该事件已恢复。",
   "Acknowledged": "已确认",
   "Incident opened": "事件创建",

@@ -93,7 +93,7 @@ const groups: Group[] = [
       { m: "GET", p: "/status-pages/:id", en: "A status page with its ordered components.", zh: "获取状态页及其有序组件。", res: `{ ...page, monitorIds: uuid[], components: [{ monitorId, groupName }], branding: { allowed, upgradeUrl? } }` },
       { m: "PATCH", p: "/status-pages/:id", en: "Update title, theme, showLatency or replace the components. Slug cannot be changed. Returns { ok: true }.", zh: "更新标题、主题、延迟显示，或替换组件。slug 不可修改。返回 { ok: true }。", req: `title, theme, showLatency, externalUrl, hideBranding, uptimeOkPct, uptimeWarnPct, mcpEnabled, maintenanceReminderHours, monitorIds, components   (all optional, as in create)` },
       { m: "DELETE", p: "/status-pages/:id", en: "Delete a status page. Returns 204.", zh: "删除状态页。返回 204。" },
-      { m: "GET", p: "/status-pages/:id/subscribers", en: "Up to 1000 subscribers, newest first.", zh: "最多 1000 位订阅者，按时间倒序。", res: `[{ id, email, confirmedAt, createdAt }]` },
+      { m: "GET", p: "/status-pages/:id/subscribers", en: "Workspace owners/admins only. Up to 1000 subscriber email addresses, newest first; other members receive 403.", zh: "仅工作区所有者或管理员可读取最多 1000 位订阅者的邮箱；其他成员返回 403。", res: `[{ id, email, confirmedAt, createdAt }]` },
       { m: "DELETE", p: "/status-pages/:id/subscribers/:sid", en: "Remove a subscriber. Returns 204.", zh: "移除订阅者。返回 204。" },
     ],
   },

@@ -252,9 +252,21 @@ export function StatusPageEditor({ id }: { id: string }) {
 function Subscribers({ pageId }: { pageId: string }) {
   const [subs, setSubs] = useState<Subscriber[] | null>(null);
   const [removing, setRemoving] = useState("");
-  const load = () => api.subscribers(pageId).then(setSubs);
-  useEffect(() => { load(); }, [pageId]);
-  if (!subs) return null;
+  const [loadError, setLoadError] = useState("");
+  const load = async () => {
+    try {
+      setSubs(await api.subscribers(pageId));
+      setLoadError("");
+    } catch (error) {
+      // Subscription emails are visible only to current workspace managers.
+      // A normal member can still view the status page editor; never leave an
+      // unhandled rejection or keep stale contact data on an authorization loss.
+      setSubs(null);
+      setLoadError((error as { status?: number }).status === 403 ? "" : "Could not load subscribers.");
+    }
+  };
+  useEffect(() => { void load(); }, [pageId]);
+  if (!subs) return loadError ? <p role="alert" className="muted">{t(loadError)}</p> : null;
   return (
     <div className="card cc">
       <div className="cc-h"><h3>{t("Subscribers")}</h3><span className="faint" style={{ fontSize: 13 }}>{subs.length}</span></div>

@@ -91,6 +91,7 @@
 - [x] Local Email binding custom-header compatibility retries only explicitly rejected header schemas, not unrelated post-acceptance errors mentioning `header`; synthetic 1-vs-2 mail attempts and token-log regressions verified (real provider remains unqualified)
 - [x] Local subscriber branding fallback and per-recipient preparation isolation: failed nonessential white-label entitlement lookups default to branded mail without bypassing access policy or quota; malformed recipient preparation does not abort peers. Four regression tests, **875/875 Mac suite**, local Chromium/SMTP PASS; real provider still unqualified. [Evidence](evidence/2026-10-31-subscriber-branding-outage-isolation.md)
 - [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
+- [x] **Subscriber contact-list authorization (local):** `GET /status-pages/:id/subscribers` now requires current owner/admin role, like subscriber removal. Real PostgreSQL RED (member 200) → GREEN (403) with owner 200, other-tenant 404, anonymous 401 and live role promotion/revocation; ordinary non-contact status reads still work. Hosted/privacy assessment remains OPEN. [Evidence](evidence/2026-11-01-status-subscriber-contact-access.md).
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review
 - [ ] Explicit user decision to publish the SaaS. Until then, keep repo private and **do not deploy**
 

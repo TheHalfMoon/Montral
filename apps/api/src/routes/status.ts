@@ -59,8 +59,20 @@ async function brandingProblem(c: Context<AppEnv>, hide: boolean | undefined) {
   return c.json({ error: `The ${plan!.name} plan cannot hide the Montral branding`, code: "branding_not_allowed", plan: plan!.id, upgradeUrl: plan!.upgradeUrl }, 402);
 }
 
+/** Subscriber addresses are private personal data. These headers also cover
+ * denials, before the manager authorization check runs. */
+const subscriberContactPrivacy = async (c: Context<AppEnv>, next: () => Promise<void>) => {
+  c.header("cache-control", "private, no-store");
+  c.header("referrer-policy", "no-referrer");
+  c.header("x-content-type-options", "nosniff");
+  c.header("x-robots-tag", "noindex, nofollow");
+  await next();
+};
+
 /** Management API for status pages (authenticated). */
 export const statusPages = new Hono<AppEnv>()
+  .use("/:id/subscribers", subscriberContactPrivacy)
+  .use("/:id/subscribers/:sid", subscriberContactPrivacy)
   // an edit made through the API shows on the public page at once (on this instance; others catch up within the TTL)
   .use("*", async (c, next) => {
     await next();
@@ -109,7 +121,7 @@ export const statusPages = new Hono<AppEnv>()
     if (monitorIds || components) await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
     return c.json({ ok: true });
   })
-  .get("/:id/subscribers", uuidParams, async (c) => {
+  .get("/:id/subscribers", uuidParams, requireManager, async (c) => {
     const repo = c.get("repo");
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!page) return c.json({ error: "Not found" }, 404);

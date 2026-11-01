@@ -12,7 +12,14 @@ const MAX_INBOXES = 10;
 const listInbox = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 /** Inbox creation only needs a name (100 chars), not unlimited JSON input. */
 const INBOX_CREATE_MAX_BYTES = 4 * 1024;
-async function readInboxCreation(request: Request): Promise<{ oversized: boolean; value?: unknown }> {
+const INBOX_CREATE_READ_MS = 10_000;
+export class InboxCreationTimeoutError extends Error {
+  constructor() { super("Inbox creation body read timeout"); }
+}
+/** A single end-to-end read deadline prevents low-rate senders from holding
+ * authenticated inbox-creation requests open indefinitely. The override exists
+ * for deterministic test streams; mounted requests use the 10-second bound. */
+export async function readInboxCreation(request: Request, timeoutMs = INBOX_CREATE_READ_MS): Promise<{ oversized: boolean; value?: unknown }> {
   const declared = request.headers.get("content-length");
   if (declared && /^\d+$/.test(declared) && Number(declared) > INBOX_CREATE_MAX_BYTES) {
     void request.body?.cancel().catch(() => {});
@@ -22,19 +29,22 @@ async function readInboxCreation(request: Request): Promise<{ oversized: boolean
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new InboxCreationTimeoutError()), timeoutMs);
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
+      const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) break;
-      if (value.byteLength > INBOX_CREATE_MAX_BYTES - size) {
-        // Do not await an uncooperative sender's cancellation.
-        void reader.cancel().catch(() => {});
-        return { oversized: true };
-      }
+      if (value.byteLength > INBOX_CREATE_MAX_BYTES - size) return { oversized: true };
       chunks.push(value);
       size += value.byteLength;
     }
   } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    // A hostile upload can also refuse stream cancellation; do not await it.
+    void reader.cancel().catch(() => {});
     reader.releaseLock();
   }
   const bytes = new Uint8Array(size);
@@ -247,7 +257,13 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     return c.json({ inboxes: rows });
   });
   privateHooks.post("/inboxes", requireManager, async (c) => {
-    const incoming = await readInboxCreation(c.req.raw);
+    let incoming: Awaited<ReturnType<typeof readInboxCreation>>;
+    try {
+      incoming = await readInboxCreation(c.req.raw);
+    } catch (error) {
+      if (error instanceof InboxCreationTimeoutError) return c.json({ error: error.message }, 408);
+      throw error;
+    }
     if (incoming.oversized) return c.json({ error: "Payload too large" }, 413);
     const parsed = listInbox.safeParse(incoming.value);
     if (!parsed.success) return c.json({ error: "Invalid inbox name" }, 400);

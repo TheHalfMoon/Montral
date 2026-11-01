@@ -179,6 +179,8 @@
 
 - **2026-11-01 webhook combined-code supported Mac qualification:** reconciled simultaneous private `main` 4-KiB inbox-creation JSON fix with the new 10-second public webhook stream deadline, retaining both. After an intermediate repeatedly-used DB OAuth test failure (743/744) that passed when isolated on a fresh DB, the **entire clean isolated Mac suite passed 1,003/1,003** (API 744, PostgreSQL 115, Probe 20, Web 124). TypeScript/Astro, API/Probe/Web builds, 638 donor hashes and active branding check PASS. Hosted CI, production availability/load and cloud provider gates remain **NO-GO**. [Evidence](evidence/2026-11-01-webhook-slow-sender-total-read-deadline.md).
 
+- **2026-11-01 authenticated Webhook inbox creation stream deadline:** RED: a 1-byte inbox POST that never closed hung below the existing 4-KiB budget; GREEN: one global 10-second body-read deadline returns HTTP 408 with private headers and **no inbox/token creation**, even when sender cancellation never settles. Focused **16/16** Webhook tests plus supported-Node local **1,005/1,005** full package tests (API 746, DB 115, Probe 20, Web 124), all types/builds, 638 donor hashes and branding check pass; hosted CI on final SHA is separate. [Evidence](evidence/2026-11-01-webhook-inbox-creation-slow-stream-deadline.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

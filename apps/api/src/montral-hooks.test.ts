@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { capturedHeaders, fingerprint, mountMontralHooks, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
+import { capturedHeaders, fingerprint, mountMontralHooks, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
 function fixture(allowReceipt = true) {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string }> = [];
@@ -233,6 +233,42 @@ describe("Montral webhook security", () => {
     expectPrivateHookHeaders(throttled);
     expect(blocked.events).toHaveLength(0);
   });
+
+  it("bounds a one-byte inbox creation upload that stalls with a non-settling cancellation", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([123])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/hooks/inboxes", {
+      method: "POST", body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const result = await Promise.race([
+      readInboxCreation(request, 30).then(() => "unexpected-accept", (error: Error) => error.message),
+      new Promise<string>((resolve) => setTimeout(() => resolve("still-stalled"), 160)),
+    ]);
+    expect(result).toBe("Inbox creation body read timeout");
+    expect(canceled).toBe(true);
+  });
+
+  it("returns private HTTP 408 without creating any inbox when an authenticated upload stalls", async () => {
+    const f = fixture();
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode('{"name":"stalled"')); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const response = await f.app.fetch(request);
+    expect(response.status).toBe(408);
+    expectPrivateHookHeaders(response);
+    expect(await response.json()).toEqual({ error: "Inbox creation body read timeout" });
+    expect(canceled).toBe(true);
+    expect(f.inboxes).toHaveLength(0);
+  }, 15_000);
 
   it("rejects oversized inbox creation JSON before parsing or writing any secret receiver", async () => {
     const f = fixture();

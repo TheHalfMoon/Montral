@@ -195,6 +195,53 @@ describe("Montral webhook security", () => {
     expect(blocked.events).toHaveLength(0);
   });
 
+  it("rejects oversized inbox creation JSON before parsing or writing any secret receiver", async () => {
+    const f = fixture();
+    const oversized = await f.app.request("/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "test", padding: "A".repeat(8 * 1024) }),
+    });
+    expect(oversized.status).toBe(413);
+    expect(await oversized.json()).toEqual({ error: "Payload too large" });
+    expectPrivateHookHeaders(oversized);
+    expect(f.inboxes).toHaveLength(0);
+  });
+
+  it("does not trust a forged short Content-Length when inbox body is actually oversized", async () => {
+    const f = fixture();
+    const oversized = await f.app.fetch(new Request("http://localhost/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json", "content-length": "5" },
+      body: JSON.stringify({ name: "test", padding: "x".repeat(8 * 1024) }),
+    }));
+    expect(oversized.status).toBe(413);
+    expectPrivateHookHeaders(oversized);
+    expect(f.inboxes).toHaveLength(0);
+  });
+
+  it("never waits for a streaming inbox sender that stalls while canceling", async () => {
+    const f = fixture();
+    let canceled = false;
+    let chunks = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { chunks++; controller.enqueue(new Uint8Array(2048).fill(88)); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json" }, body, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const result = await Promise.race([
+      f.app.fetch(request),
+      new Promise<"stalled">(resolve => setTimeout(() => resolve("stalled"), 250)),
+    ]);
+    expect(result).not.toBe("stalled");
+    const response = result as Response;
+    expect(response.status).toBe(413);
+    expectPrivateHookHeaders(response);
+    expect(canceled).toBe(true);
+    expect(chunks).toBeLessThanOrEqual(5);
+    expect(f.inboxes).toHaveLength(0);
+  });
+
   it("requires workspace manager for inbox creation and reading sensitive event bodies", async () => {
     const f = fixture();
     f.setMember("member");

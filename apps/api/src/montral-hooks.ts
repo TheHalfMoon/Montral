@@ -10,6 +10,43 @@ const TOKEN = /^[0-9a-f]{64}$/;
 const MAX_BYTES = 32 * 1024;
 const MAX_INBOXES = 10;
 const listInbox = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+/** Inbox creation only needs a name (100 chars), not unlimited JSON input. */
+const INBOX_CREATE_MAX_BYTES = 4 * 1024;
+async function readInboxCreation(request: Request): Promise<{ oversized: boolean; value?: unknown }> {
+  const declared = request.headers.get("content-length");
+  if (declared && /^\d+$/.test(declared) && Number(declared) > INBOX_CREATE_MAX_BYTES) {
+    void request.body?.cancel().catch(() => {});
+    return { oversized: true };
+  }
+  if (!request.body) return { oversized: false };
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value.byteLength > INBOX_CREATE_MAX_BYTES - size) {
+        // Do not await an uncooperative sender's cancellation.
+        void reader.cancel().catch(() => {});
+        return { oversized: true };
+      }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  try {
+    return { oversized: false, value: JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)) as unknown };
+  } catch {
+    return { oversized: false };
+  }
+}
+
 
 export type HookInbox = {
   id: string; organization_id: string; project_id: string; name: string;
@@ -199,7 +236,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     return c.json({ inboxes: rows });
   });
   privateHooks.post("/inboxes", requireManager, async (c) => {
-    const parsed = listInbox.safeParse(await c.req.json().catch(() => null));
+    const incoming = await readInboxCreation(c.req.raw);
+    if (incoming.oversized) return c.json({ error: "Payload too large" }, 413);
+    const parsed = listInbox.safeParse(incoming.value);
     if (!parsed.success) return c.json({ error: "Invalid inbox name" }, 400);
     const db = c.get("database");
     const scope = [c.get("orgId"), c.get("projectId")];

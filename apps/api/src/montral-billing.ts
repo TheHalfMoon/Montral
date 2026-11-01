@@ -6,6 +6,10 @@ import { requireManager } from "./middleware";
 import { z } from "zod";
 
 const BODY_LIMIT = 64 * 1024;
+const BODY_READ_TIMEOUT_MS = 10_000;
+export class BillingBodyTimeoutError extends Error {
+  constructor() { super("Billing callback body read timeout"); }
+}
 const PLANS = ["pro", "business"] as const;
 const inputPlan = z.object({ plan: z.enum(PLANS) }).strict();
 const SUB_EVENTS = new Set(["subscription_created", "subscription_updated", "subscription_cancelled",
@@ -237,21 +241,36 @@ export function parseSubscriptionEvent(raw: unknown, env: Bindings) {
   };
 }
 
-async function limitedBody(req: Request): Promise<Uint8Array | null> {
-  if (Number(req.headers.get("content-length")) > BODY_LIMIT) return null;
+/** A signed callback's HMAC covers exact bytes; allow only bounded memory
+ * and one total wall-clock upload interval before verifying any signature.
+ * The test-only timeout override is never supplied by mounted HTTP routes. */
+export async function limitedBody(req: Request, timeoutMs = BODY_READ_TIMEOUT_MS): Promise<Uint8Array | null> {
+  if (Number(req.headers.get("content-length")) > BODY_LIMIT) {
+    void req.body?.cancel().catch(() => {});
+    return null;
+  }
   if (!req.body) return new Uint8Array(0);
   const reader = req.body.getReader();
   let bytes = 0; const chunks: Uint8Array[] = [];
+  let complete = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new BillingBodyTimeoutError()), timeoutMs);
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.length;
+      const { done, value } = await Promise.race([reader.read(), deadline]);
+      if (done) { complete = true; break; }
+      bytes += value.byteLength;
       if (bytes > BODY_LIMIT) return null;
       chunks.push(value);
     }
   } finally {
-    await reader.cancel().catch(() => {});
+    if (timer !== undefined) clearTimeout(timer);
+    // A sender can refuse cancellation forever; neither 413 nor 408 may
+    // await that promise, and successful signed callbacks need no cancellation.
+    if (!complete) void reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
   const joined = new Uint8Array(bytes);
   let position = 0;
@@ -300,7 +319,18 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
   // The endpoint is hidden until this project is deliberately configured.
   app.post("/api/billing/lemon", async (c) => {
     if (!billingReady(c.env)) return c.json({ error: "Not configured" }, 404);
-    const body = await limitedBody(c.req.raw);
+    let body: Uint8Array | null;
+    try {
+      body = await limitedBody(c.req.raw);
+    } catch (error) {
+      if (error instanceof BillingBodyTimeoutError) {
+        c.header("cache-control", "no-store");
+        c.header("referrer-policy", "no-referrer");
+        c.header("x-content-type-options", "nosniff");
+        return c.json({ error: error.message }, 408);
+      }
+      throw error;
+    }
     if (body === null) return c.json({ error: "Payload too large" }, 413);
     if (!await verifyLemonSignature(body, c.req.header("x-signature"), c.env.LEMONSQUEEZY_WEBHOOK_SECRET!)) {
       return c.json({ error: "Invalid signature" }, 401);

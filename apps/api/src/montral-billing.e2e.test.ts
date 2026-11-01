@@ -55,6 +55,32 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
   });
   afterAll(async () => { await db?.close(1); });
 
+  it("refuses a stalled signed sandbox callback with 408 and zero event writes", async () => {
+    const provider = String(Math.floor(Math.random() * 9000000 + 11000000));
+    const raw = JSON.stringify(event(provider, "00000000-0000-4000-8000-000000000000",
+      "subscription_created", "active", "2026-11-01T10:00:00Z"));
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(raw)); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const response = await app.fetch(new Request(ORIGIN + "/api/billing/lemon", {
+      method: "POST", headers: {
+        "content-type": "application/json", "x-signature": await signed(raw),
+        "x-event-name": "subscription_created",
+      }, body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" }), config as never);
+    expect(response.status).toBe(408);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(await response.json()).toEqual({ error: "Billing callback body read timeout" });
+    expect(canceled).toBe(true);
+    const changes = await db!.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM montral_billing_event WHERE provider_id=$1", [provider]);
+    expect(changes).toEqual([{ count: "0" }]);
+  }, 15_000);
+
   it("measures calendar months in UTC including leap years", () => {
     const period = calendarMonthUtc(new Date("2024-02-29T23:59:59Z"));
     expect(period.start.toISOString()).toBe("2024-02-01T00:00:00.000Z");

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { billingReady, createLemonTestCheckout, parseSubscriptionEvent, verifyLemonSignature } from "./montral-billing";
+import { billingReady, createLemonTestCheckout, limitedBody, parseSubscriptionEvent, verifyLemonSignature } from "./montral-billing";
 import type { Bindings } from "./env";
 
 const config = {
@@ -24,6 +24,40 @@ async function signature(body: string, secret = config.LEMONSQUEEZY_WEBHOOK_SECR
   return Array.from(bytes, x => x.toString(16).padStart(2, "0")).join("");
 }
 describe("Montral commercial billing is sandbox-only and signature-bound", () => {
+  it("does not keep an under-limit signed-billing request open forever on a slow sender", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([123])); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/billing/lemon", {
+      method: "POST", body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const result = await Promise.race([
+      limitedBody(request, 30).then(() => "accepted", (e: Error) => e.message),
+      new Promise<string>(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(result).toBe("Billing callback body read timeout");
+    expect(canceled).toBe(true);
+  });
+
+  it("does not block oversized billing callback refusal when cancellation hangs", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(20 * 1024)); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const request = new Request("http://localhost/api/billing/lemon", {
+      method: "POST", headers: { "content-length": "1" }, body: stream, duplex: "half",
+    } as RequestInit & { duplex: "half" });
+    const result = await Promise.race([
+      limitedBody(request, 300),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(result).toBeNull();
+    expect(canceled).toBe(true);
+  });
+
   it("rejects missing mode, live mode and incomplete merchant credentials", () => {
     expect(billingReady({} as Bindings)).toBe(false);
     expect(billingReady({ ...config, MONTRAL_BILLING_ENABLED: "false" })).toBe(false);

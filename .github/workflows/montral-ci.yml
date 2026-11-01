@@ -93,6 +93,9 @@ jobs:
               SELECT p.organization_id,p.id,'Synthetic CI heartbeat','heartbeat','synthetic-only' FROM project p;
           "
           TEST_DATABASE_URL="$restore_db" node scripts/qualify-backup.mjs
+          # Deliberately corrupt only a fresh disposable restore. A data-only
+          # verifier used to accept a disabled monthly-content trigger.
+          TEST_DATABASE_URL="$restore_db" node scripts/qualify-backup-negative.mjs
       - name: Qualify real Chromium user journeys against disposable PostgreSQL
         shell: bash
         run: |

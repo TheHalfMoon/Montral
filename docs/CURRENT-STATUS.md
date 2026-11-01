@@ -193,6 +193,8 @@
 
 - **2026-11-01 public subscription body budget and slow-sender deadline:** RED: 24-KiB JSON with forged short Content-Length reached subscription page lookup (404); GREEN: byte-exact 12-KiB cap returns HTTP 413 before JSON validation/DB writes, one total 10-second read deadline returns private 408 without waiting for stuck cancellation. Valid 200-UUID selection remains within the budget and retains Hono validation, per-address/page quotas and no-enumeration behavior. Focused **11/11** token-privacy checks and resource-bounded local **1,021/1,021** full package tests (API 762, DB 115, Probe 20, Web 124), all typechecks/builds, 638 donor hashes and active brand scan PASS. Hosted exact-SHA CI separate. [Evidence](evidence/2026-11-01-public-subscribe-stream-body-budget.md).
 
+- **2026-11-02 RDAP stream cancellation/read-deadline fix:** RED: hostile registry HTTP 429, 1-MiB oversize and incomplete sublimit reply each left domain checks stalled despite fetch timeout. GREEN: nonblocking cancellation and a body read bound to the **original fetch AbortSignal**, preserving SSRF/no-redirect/1-MiB limits and cached expiry behavior. Focused **16/16** RDAP tests and complete supported-Node local **1,024/1,024** package tests (API 765, DB 115, Probe 20, Web 124), all type/build, 638 donor hashes and brand check PASS. Hosted exact-SHA CI separate; live registries and cloud egress remain OPEN. [Evidence](evidence/2026-11-02-rdap-body-abort-cancel-availability.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

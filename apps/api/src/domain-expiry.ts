@@ -23,20 +23,39 @@ async function json(url: string, signal: AbortSignal): Promise<unknown> {
   const u = new URL(url);
   if (u.protocol !== "https:" || u.username || u.password || u.port && u.port !== "443") throw new Error("RDAP requires a public HTTPS endpoint");
   const { res } = await guardedFetch(url, { headers: { accept: "application/rdap+json, application/json" }, signal }, { follow: false, publicOnly: true }).catch(networkFailure);
-  if (!res.ok) { await res.body?.cancel(); throw new Error(res.status === 429 ? "RDAP registry rate limited the lookup (429)" : `RDAP returned HTTP ${res.status}; redirects are not followed`); }
+  if (!res.ok) {
+    // Registry error bodies are unused and can refuse cancellation forever.
+    void res.body?.cancel().catch(() => {});
+    throw new Error(res.status === 429 ? "RDAP registry rate limited the lookup (429)" : `RDAP returned HTTP ${res.status}; redirects are not followed`);
+  }
   if (!res.body) throw new Error("RDAP returned an empty response");
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
+  let complete = false;
+  let onAbort: (() => void) | undefined;
+  // The fetch AbortSignal must also bound the body reader, including
+  // synthetic or noncompliant streams that ignore network-level aborts.
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(new Error("RDAP response read timed out"));
+    if (signal.aborted) onAbort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  });
   try {
     for (;;) {
-      const { done, value } = await reader.read().catch(networkFailure);
-      if (done) break;
+      const { done, value } = await Promise.race([reader.read().catch(networkFailure), aborted]);
+      if (done) { complete = true; break; }
+      if (value.byteLength > MAX_BYTES - size) throw new Error("RDAP response exceeds 1 MiB");
       size += value.byteLength;
-      if (size > MAX_BYTES) throw new Error("RDAP response exceeds 1 MiB");
       chunks.push(value);
     }
-  } finally { await reader.cancel().catch(() => {}); }
+  } finally {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
+    // A peer can decline cancellation forever. Return promptly on size,
+    // timeout and read failure; a finished body needs no cancellation.
+    if (!complete) void reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   try { return JSON.parse(new TextDecoder().decode(bytes)); } catch { throw new Error("RDAP returned invalid JSON"); }

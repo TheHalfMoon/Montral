@@ -78,6 +78,43 @@ describe("domain RDAP", () => {
     vi.advanceTimersByTime(DOMAIN_TTL_MS + 1); response({}, 429);
     expect(await domainCheck(repo, input)).toMatchObject({ ok: false, domainExpiry: { state: "unknown", expiresAt: null } });
   });
+  it.each([
+    { label: "HTTP 429 refusal", status: 429, bytes: 1 },
+    { label: "one MiB oversize refusal", status: 200, bytes: 1024 * 1024 + 1 },
+  ])("does not await a hostile RDAP stream cancel after $label", async ({ status, bytes }) => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array(bytes)); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    vi.mocked(guardedFetch).mockResolvedValueOnce({ res: new Response(stream, { status }), url: "https://registry.example" } as never);
+    const result = await Promise.race([
+      domainCheck(cache().repo, input).then(outcome => outcome.error),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 250)),
+    ]);
+    expect(result).not.toBe("still-stalled");
+    expect(result).toContain(status === 429 ? "429" : "1 MiB");
+    expect(canceled).toBe(true);
+  });
+
+  it("stops an incomplete RDAP body at the declared check deadline even if fetch ignores abort", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode("{")); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    // The network layer has completed headers, but the response's stream never
+    // finishes. A synthetic upstream that ignores AbortSignal must not stall.
+    vi.mocked(guardedFetch).mockResolvedValueOnce({ res: new Response(stream), url: "https://registry.example" } as never);
+    const result = await Promise.race([
+      domainCheck(cache().repo, { ...input, timeoutMs: 35 }).then(outcome => outcome.error),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 250)),
+    ]);
+    expect(result).not.toBe("still-stalled");
+    expect(result).toContain("timed out");
+    expect(canceled).toBe(true);
+  });
+
   it("distinguishes passed dates from unknown, and bounds bodies and timeout failures", async () => {
     response(bootstrap); response(record(-1));
     expect(await domainCheck(cache().repo, input)).toMatchObject({ ok: false, domainExpiry: { state: "expired" }, error: expect.stringContaining("date has passed") });

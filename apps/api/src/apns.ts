@@ -227,7 +227,11 @@ export async function sendPush(repo: Pick<Repo, "deletePushDeviceByToken">, devi
     devices.map(async (d) => {
       const lang: Lang = isLang(d.locale) ? d.locale : "en";
       const r = await sendOne(cfg, jwt, d, buildPayload(ev, orgId, lang, d.critical), collapseId, expiresAt);
-      if (r.outcome === "dead") await repo.deletePushDeviceByToken(d.token).catch((e) => console.error("could not remove a dead push device", (e as Error).message));
+      if (r.outcome === "dead") await repo.deletePushDeviceByToken(d.token).catch(() => {
+        // Storage failures may repeat the APNs bearer device token or a
+        // database credential in their message. Never emit the exception.
+        console.error("could not remove a dead push device; diagnostics suppressed");
+      });
       return r;
     }),
   );

@@ -36,7 +36,11 @@ export const push = new Hono<AppEnv>()
       if (!c.get("projectScope")) {
         for (const orgId of await repo.managedOrgsWithoutPushChannel(userId)) {
           if (granted instanceof Map && !granted.has(orgId)) continue;
-          await repo.createChannel(orgId, null, { type: "push", name: "Mobile app", config: {}, enabled: true, autoEnable: true }).catch((e) => console.error("could not create the push channel", (e as Error).message));
+          await repo.createChannel(orgId, null, { type: "push", name: "Mobile app", config: {}, enabled: true, autoEnable: true }).catch(() => {
+            // DB/transport exceptions are untrusted; registration still works
+            // even when optional auto-channel provisioning cannot finish.
+            console.error("could not create the push channel; diagnostics suppressed");
+          });
         }
       }
     }

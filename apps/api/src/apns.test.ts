@@ -173,6 +173,20 @@ describe("sendPush", () => {
     }
   });
 
+  it("suppresses backend cleanup exceptions containing an APNs device token", async () => {
+    stub(() => ({ status: 410, body: "" }));
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const secret = "synthetic-private-apns-secret-" + crypto.randomUUID();
+    try {
+      await expect(sendPush({ deletePushDeviceByToken: async () => { throw new Error(`database diagnostic ${TOKEN_A} ${secret}`); } },
+        [device(TOKEN_A)], ev, "org1")).resolves.toBeUndefined();
+      const logged = error.mock.calls.flat().map(String).join(" ");
+      expect(logged).toContain("could not remove a dead push device");
+      expect(logged).not.toContain(TOKEN_A);
+      expect(logged).not.toContain(secret);
+    } finally { error.mockRestore(); }
+  });
+
   it("throws only when every attempted device failed, and never names the token", async () => {
     stub(() => ({ status: 500, body: JSON.stringify({ reason: "InternalServerError" }) }));
     const { repo, removed } = repoStub();

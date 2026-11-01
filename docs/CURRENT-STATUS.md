@@ -134,6 +134,10 @@
 
 - **2026-11-01 OAuth grant-cookie Mac qualification:** Node 24.22.1 full **971/971 tests PASS** (713 API, 114 DB, 20 Probe, 124 Web); TypeScript/Astro and three production builds PASS. Real localhost Node/PostgreSQL smoke, Chromium, SMTP local sink, 46-table SHA-256 restore, five OS SIGKILL boundaries and 638 donor hash check PASS. The focused OAuth cookie invalid-percent test was RED with URIError before the fix and GREEN 2/2 afterward. Exact hosted CI run must be checked separately. [Evidence](evidence/2026-11-01-oauth-grant-cookie-uri-decoding.md).
 
+- **2026-11-01 APNs token/error-log redaction:** two synthetic RED regressions reproduced raw APNs device token/private marker leakage from failed dead-device deletion and automatic push-channel provisioning. These now log fixed categories only while retaining delivery, device and 200 registration outcomes; focused GREEN 21/21. External APNs production endpoints remain unqualified. [Evidence](evidence/2026-11-01-apns-device-token-error-log-privacy.md).
+
+- **2026-11-01 APNs token-log Mac requalification:** private synthetic RED reproduced two push backend exception leaks; GREEN 21/21. First API run failed on 10-second PostgreSQL retention `beforeAll` despite 708 other tests passing; new DB 28/28 focused and fresh complete API **715/715** PASS. Full **973/973 package tests** (715 API, 114 DB, 20 Probe, 124 Web), all typechecks and three production builds PASS. Node/PostgreSQL smoke, Chromium, loopback SMTP, 46-table SHA-256 backup/restore, five real OS SIGKILL boundaries PASS. Hosted CI on exact commit is separate; Apple APNs production remains unqualified. [Evidence](evidence/2026-11-01-apns-device-token-error-log-privacy.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

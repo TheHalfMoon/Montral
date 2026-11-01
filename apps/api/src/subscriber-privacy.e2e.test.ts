@@ -1,10 +1,11 @@
 import { openDatabase } from "@montral/db-pg";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setMailTransport } from "./email";
 import { createApp } from "./app";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
-const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "subscriber-access-test-secret-not-for-production", BETTER_AUTH_URL: origin, WEB_ORIGIN: origin };
+const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "subscriber-access-test-secret-not-for-production", BETTER_AUTH_URL: origin, WEB_ORIGIN: origin, EMAIL_FROM: "alerts@example.test" };
 
 /** Subscriber email addresses are personal data, not monitoring telemetry. */
 describe.skipIf(!url)("status subscriber contact privacy on real PostgreSQL", () => {
@@ -41,6 +42,27 @@ describe.skipIf(!url)("status subscriber contact privacy on real PostgreSQL", ()
       const created = await call(owner.cookie, "POST", "/status-pages", { slug, title: "Synthetic public status" });
       expect(created.status).toBe(201);
       const pageId = created.body.id as string;
+      // A provider may return internal credentials or email addresses inside
+      // its exception; a public subscription must never log those details.
+      const marker = `synthetic-provider-private-${crypto.randomUUID()}`;
+      const noisy = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        setMailTransport(async () => { throw new Error(marker); });
+        const pendingEmail = `pending-${crypto.randomUUID()}@example.test`;
+        const response = await call("", "POST", `/public/status/${slug}/subscribe`, { email: pendingEmail });
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual({ ok: true });
+        const pending = await db.query<{ confirmed_at: Date | null }>(
+          "SELECT confirmed_at FROM status_subscriber WHERE status_page_id=$1 AND email=$2", [pageId, pendingEmail]);
+        expect(pending).toEqual([{ confirmed_at: null }]);
+        const logged = noisy.mock.calls.flat().map(String).join(" ");
+        expect(logged).toContain("subscription email failed");
+        expect(logged).not.toContain(marker);
+        expect(logged).not.toContain(pendingEmail);
+      } finally {
+        setMailTransport(undefined);
+        noisy.mockRestore();
+      }
       const syntheticEmail = `private-recipient-${crypto.randomUUID()}@example.test`;
       const subscriberId = crypto.randomUUID();
       await db.query("INSERT INTO status_subscriber(id,status_page_id,email,token,confirmed_at) VALUES($1,$2,$3,$4,NOW())", [subscriberId, pageId, syntheticEmail, crypto.randomUUID()]);

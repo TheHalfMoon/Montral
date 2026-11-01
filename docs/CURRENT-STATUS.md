@@ -126,6 +126,10 @@
 
 - **2026-11-01 Mac requalification of canonical IP quota keys:** **969/969 PASS** (711 API, 114 DB, 20 Probe, 124 Web), all TypeScript/Astro checks and three production builds on Node 24.22.1. Node/PostgreSQL smoke, Chromium, localhost SMTP, 46-table SHA-256 restore across nine synthetic organizations and five real OS SIGKILL boundaries PASS. **Trusted-proxy ingress remains unqualified on a deployed network**; hosted CI on this exact commit to be checked. [Evidence](evidence/2026-11-01-proxy-ip-rate-limit-canonicalization.md).
 
+- **2026-11-01 public status subscription mail log privacy:** real PostgreSQL synthetic SMTP RED exposed arbitrary provider exception text in subscription confirmation `console.error`; GREEN now emits only a fixed non-sensitive log line, retains pending subscriber state, `200 {ok:true}` non-enumeration and all existing subscriber access controls. Hosted CI must be checked on the new exact commit. [Evidence](evidence/2026-11-01-subscription-confirmation-error-log-redaction.md).
+
+- **2026-11-01 subscription SMTP diagnostic log requalification:** Mac Node 24.22.1/pnpm 10.0.0/PostgreSQL 17.9 **969/969 package tests PASS** (711 API, 114 DB, 20 Probe, 124 Web); TypeScript/Astro and three production builds PASS. The initial API run passed all 711 cases but was FAIL because two afterAll hooks timed out; 14/14 focused rerun and fresh 711/711 full rerun PASS. Chromium, loopback SMTP, 46-table SHA-256 restore, five real OS SIGKILL and 638 source files PASS. Hosted CI on exact revision separately required. [Evidence](evidence/2026-11-01-subscription-confirmation-error-log-redaction.md).
+
 ## Real blockers (do not claim complete)
 
 1. GitHub Actions jobs failed *before runner assignment* (no steps executed); CI cannot be called green. Check account/organization runner availability and billing limits without enabling paid services.

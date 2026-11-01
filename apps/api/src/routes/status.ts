@@ -393,7 +393,12 @@ export const publicStatus = new Hono<AppEnv>()
       brand: white ? page.title : undefined,
     });
     const subject = tr(lang, "Confirm your subscription to {title}", { title: page.title });
-    await sendEmail({ to: email, subject, fromName: white ? page.title : "Montral", ...mail }, true).catch((e) => console.error("subscription email failed", e));
+    // Provider exceptions may echo recipient addresses, mail authentication
+    // credentials, or the bearer token in the confirmation URL. Never log
+    // the raw error or the message; preserve the existing non-enumerating
+    // response and keep the subscriber unconfirmed for a later retry.
+    await sendEmail({ to: email, subject, fromName: white ? page.title : "Montral", ...mail }, true)
+      .catch(() => console.error("subscription email failed; provider diagnostics suppressed"));
     return c.json({ ok: true });
   })
   // Confirming stays a GET so the link in the mail works in one click; it only ever sets a flag, so repeating it (or a mail

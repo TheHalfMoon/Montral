@@ -366,21 +366,30 @@ export async function guardedFetch(url: string, init: RequestInit = {}, { follow
   }
 }
 
-/** Reads at most `max` bytes of a body as text and drops the rest, so a huge or endless response cannot be pulled in. */
+/** Reads at most `max` response bytes. A remote peer must not hold a
+ * completed monitor/alert request open by refusing body-stream cancellation. */
 export async function readCapped(res: Response, max: number): Promise<string> {
-  if (!res.body) return "";
+  if (!res.body || max <= 0) return "";
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let out = "";
   let size = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const room = max - size;
-    const part = value.byteLength > room ? value.subarray(0, room) : value;
-    size += part.byteLength;
-    out += decoder.decode(part, { stream: true });
-    if (size >= max) { await reader.cancel(); break; }
+  let complete = false;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) { complete = true; break; }
+      const room = max - size;
+      const part = value.byteLength > room ? value.subarray(0, room) : value;
+      size += part.byteLength;
+      out += decoder.decode(part, { stream: true });
+      if (size >= max) break;
+    }
+    return out + decoder.decode();
+  } finally {
+    // On cap or read failure, request cancellation without awaiting a
+    // malicious stream's never-resolving cancel promise.
+    if (!complete) void reader.cancel().catch(() => {});
+    reader.releaseLock();
   }
-  return out + decoder.decode();
 }

@@ -2,9 +2,29 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { runCheck } from "./checker";
-import { addressBlocked, configureNetGuard, guardedFetch, hostBlocked, hostPort, targetProblem } from "./netguard";
+import { addressBlocked, configureNetGuard, guardedFetch, hostBlocked, hostPort, readCapped, targetProblem } from "./netguard";
 
 afterEach(() => configureNetGuard({}));
+
+describe("bounded monitored HTTP reply consumption", () => {
+  it("returns a capped reply without awaiting a sender that never resolves cancellation", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new TextEncoder().encode("abcdefghijk")); },
+      cancel() { canceled = true; return new Promise<void>(() => {}); },
+    });
+    const result = await Promise.race([
+      readCapped(new Response(stream), 8),
+      new Promise<"still-stalled">(resolve => setTimeout(() => resolve("still-stalled"), 180)),
+    ]);
+    expect(result).toBe("abcdefgh");
+    expect(canceled).toBe(true);
+  });
+
+  it("returns a fully consumed smaller body unchanged", async () => {
+    expect(await readCapped(new Response("OK"), 16)).toBe("OK");
+  });
+});
 
 describe("addressBlocked", () => {
   it("refuses private, loopback, link-local and metadata IPv4", () => {

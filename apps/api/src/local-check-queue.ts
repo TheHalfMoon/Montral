@@ -17,7 +17,7 @@ export function createLocalCheckQueue(
   options: { maxPending?: number; concurrency?: number } = {},
 ): CheckQueue & { pendingCount(): number } {
   const maxPending = options.maxPending ?? LOCAL_CHECK_QUEUE_CAPACITY;
-  const concurrency = options.concurrency ?? LOCAL_CHECK_CONCURRENCY;
+  const concurrency = options.concurrency ?? Math.min(LOCAL_CHECK_CONCURRENCY, maxPending);
   if (!Number.isSafeInteger(maxPending) || maxPending < 1 ||
       !Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > maxPending) {
     throw new Error("Invalid local check queue capacity/concurrency");

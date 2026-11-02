@@ -37,6 +37,33 @@ describe("HTTP notification response cancellation must not hold deliveries open"
   });
 });
 
+describe("provider application acknowledgements have a bounded body-read deadline", () => {
+  it.each([
+    { name: "Telegram", type: "telegram", config: { botToken: "synthetic-token", chatId: "42" } },
+    { name: "Lark", type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/synthetic" } },
+  ])("rejects a $name HTTP 200 that never delivers its acknowledgement body", async ({ type, config }) => {
+    const realTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(30));
+    let canceled = false;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
+      cancel() {
+        canceled = true;
+        return new Promise<void>(() => {});
+      },
+    }), { status: 200 })));
+    try {
+      const outcome = await Promise.race([
+        deliver({ type, config }, ev, "Synthetic alert").then(() => "incorrectly-accepted", () => "rejected"),
+        new Promise<"ack-read-stalled">(resolve => setTimeout(() => resolve("ack-read-stalled"), 180)),
+      ]);
+      expect(outcome).toBe("rejected");
+      expect(canceled).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+});
+
 describe("telegram channel", () => {
   const channel = { type: "telegram", config: { botToken: "synthetic-bot-token", chatId: "42" } };
 

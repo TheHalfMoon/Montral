@@ -117,9 +117,18 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
  * redelivery is dropped instead of charging again. The price is that a worker dying in between loses that single check.
  */
 export async function processCheckMessage(repo: Repo, msg: CheckMessage, entitlements: Entitlements = unmetered) {
+  // Queue payloads may be stale or malformed. Reject them before touching the repo:
+  // an undefined/invalid lease token must never accidentally start an unleased run.
+  if (!Array.isArray(msg.ids) || !msg.ids.every((id) => typeof id === "string" && id.length > 0) ||
+      (msg.at !== undefined && (!Array.isArray(msg.at) || msg.at.length !== msg.ids.length ||
+        !msg.at.every((at) => typeof at === "string" && Number.isFinite(Date.parse(at))))) ||
+      (msg.generations !== undefined && (!Array.isArray(msg.generations) || !msg.at ||
+        msg.generations.length !== msg.ids.length ||
+        !msg.generations.every((g) => Number.isSafeInteger(g) && g > 0)))) {
+    throw new Error("Invalid check message");
+  }
   const monitors = await repo.monitorsByIds(msg.ids);
   const token = new Map(msg.at ? msg.ids.map((id, i) => [id, new Date(msg.at![i])] as const) : []);
-  if (msg.generations && (msg.generations.length !== msg.ids.length || !msg.at || msg.generations.some((g) => !Number.isSafeInteger(g) || g <= 0))) throw new Error("Invalid run generations");
   const generation = new Map(msg.generations ? msg.ids.map((id, i) => [id, msg.generations![i]] as const) : []);
   // a heartbeat that was pinged after it was claimed has a new due time and is not missing anything
   const pinged = (m: Monitor) => m.type === "heartbeat" && token.has(m.id) && m.nextCheckAt.getTime() !== token.get(m.id)!.getTime();

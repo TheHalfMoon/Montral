@@ -5,6 +5,22 @@ import { resetSelfCheck } from "./selfcheck";
 import { unmetered, type Entitlements } from "./entitlements";
 import { MESSAGE_SIZE, checkOne, resolveIncident, nextAfter, processCheckMessage, runDueChecks, slotOf, type CheckMessage } from "./scheduler";
 
+describe("queued check message validation", () => {
+  it("rejects malformed timestamps and mismatched arrays before any repository operation", async () => {
+    const read = vi.fn(async () => []);
+    const repo = { monitorsByIds: read } as unknown as Repo;
+    const cases: CheckMessage[] = [
+      { ids: ["one", "two"], at: ["2026-11-03T10:00:00.000Z"] },
+      { ids: ["one"], at: ["not-a-date"] },
+      { ids: ["one"], at: ["2026-11-03T10:00:00.000Z"], generations: [1, 2] },
+      { ids: ["one"], generations: [1] },
+    ];
+    for (const message of cases) {
+      await expect(processCheckMessage(repo, message)).rejects.toThrow("Invalid check message");
+    }
+    expect(read).not.toHaveBeenCalled();
+  });
+});
 describe("runDueChecks", () => {
   it("packs due monitors into queue messages, each monitor exactly once", async () => {
     const due = Array.from({ length: 130 }, () => ({ id: crypto.randomUUID(), nextCheckAt: new Date("2026-10-23T12:00:00Z"), runGeneration: 7 }) as Monitor);

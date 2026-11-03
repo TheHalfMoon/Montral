@@ -119,7 +119,9 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
 export async function processCheckMessage(repo: Repo, msg: CheckMessage, entitlements: Entitlements = unmetered) {
   // Queue payloads may be stale or malformed. Reject them before touching the repo:
   // an undefined/invalid lease token must never accidentally start an unleased run.
-  if (!Array.isArray(msg.ids) || !msg.ids.every((id) => typeof id === "string" && id.length > 0) ||
+  if (!Array.isArray(msg.ids) || msg.ids.length === 0 || msg.ids.length > MESSAGE_SIZE ||
+      new Set(msg.ids).size !== msg.ids.length ||
+      !msg.ids.every((id) => typeof id === "string" && id.length > 0) ||
       (msg.at !== undefined && (!Array.isArray(msg.at) || msg.at.length !== msg.ids.length ||
         !msg.at.every((at) => typeof at === "string" && Number.isFinite(Date.parse(at))))) ||
       (msg.generations !== undefined && (!Array.isArray(msg.generations) || !msg.at ||

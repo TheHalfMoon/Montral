@@ -156,6 +156,14 @@ const tick = setInterval(async () => {
   }
 }, 30_000);
 const watchdog = setInterval(() => {
+  // The scheduler tick can complete while local queue handlers remain hung.
+  // Restart rather than silently exhausting all 512 in-process reservations.
+  // In-flight work is not durable; this is availability detection, not
+  // exactly-once delivery or multi-replica qualification.
+  if (queue.oldestRunningAgeMs() > TICK_STUCK_MS) {
+    console.error("scheduler: local check queue worker stalled; exiting so the container restarts");
+    process.exit(1);
+  }
   if (tickStartedAt && Date.now() - tickStartedAt > TICK_STUCK_MS) {
     console.error(`scheduler: a tick has been running for over ${TICK_STUCK_MS / 60_000} minutes; exiting so the container restarts`);
     process.exit(1);

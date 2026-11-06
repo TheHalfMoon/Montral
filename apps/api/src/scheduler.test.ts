@@ -14,6 +14,9 @@ describe("queued check message validation", () => {
       { ids: ["one"], at: ["not-a-date"] },
       { ids: ["one"], at: ["2026-11-03T10:00:00.000Z"], generations: [1, 2] },
       { ids: ["one"], generations: [1] },
+      { ids: [] },
+      { ids: ["one", "one"] },
+      { ids: Array.from({ length: MESSAGE_SIZE + 1 }, (_, i) => `monitor-${i}`) },
     ];
     for (const message of cases) {
       await expect(processCheckMessage(repo, message)).rejects.toThrow("Invalid check message");

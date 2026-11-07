@@ -58,6 +58,7 @@ for (const stream of [api.stdout, api.stderr]) {
 }
 let chrome;
 let ws;
+let browserCompleted = false;
 try {
   await until("Node API /health", async () => {
     if (api.exitCode !== null) throw new Error(serverLog);
@@ -211,14 +212,30 @@ try {
   await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
   await until("incident acknowledgement persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => !!s.acknowledgedAt)`));
   // An internal update is never intended for outbound status-page subscribers.
-  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
-  await until("identified incident status selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  // Set the privacy and body first. A late incident-detail reload can reset
+  // the draft status; select 'identified' last and verify the complete draft
+  // in the committed React UI immediately before submitting.
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
   await until("internal note visibility selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
+  await until("internal incident draft text exact", () => js('document.querySelector("form.card.cc textarea.in[required]")?.value === "Synthetic private investigation update"'));
+  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  await until("identified incident status selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  await until("internal visibility still selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');
   await until("internal incident note in timeline", () => js('Array.from(document.querySelectorAll(".tl .ev")).some(e => e.textContent.includes("Synthetic private investigation update"))'));
-  await until("internal incident state persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => s.status === "identified" && !!s.acknowledgedAt && Array.isArray(s.updates) && s.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update"))`));
+  try {
+    await until("internal incident state persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => s.status === "identified" && !!s.acknowledgedAt && Array.isArray(s.updates) && s.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update"))`));
+  } catch {
+    // Only metadata from disposable synthetic content; never log incident
+    // bodies, identities, credentials, targets or provider responses.
+    let diagnostic = "unavailable";
+    try {
+      const state = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => ({ status: s.status, acknowledged: !!s.acknowledgedAt, updates: Array.isArray(s.updates) ? s.updates.slice(-3).map(u => ({ status: u.status, visibility: u.visibility, bodyExact: u.body === "Synthetic private investigation update", bodyLength: typeof u.body === "string" ? u.body.length : null })) : null }))`);
+      diagnostic = JSON.stringify(state);
+    } catch {}
+    throw new Error("Internal incident persistence mismatch (synthetic metadata only): " + diagnostic);
+  }
   const internalState = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json())`);
   if (internalState.status !== "identified" || !internalState.acknowledgedAt ||
       !internalState.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update")) {
@@ -273,11 +290,35 @@ try {
     'Array.from(document.querySelectorAll("a")).some(a => a.getAttribute("href") === "/forgot-password") && !document.querySelector("form.auth-fields")'
   ));
   console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic monitor, incident, webhook, disabled billing, reset-link URL privacy; anonymous routes denied");
+  browserCompleted = true;
 } finally {
   ws?.close();
-  for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGTERM");
-  await pause(800);
-  for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGKILL");
+  if (chrome && chrome.exitCode === null && chrome.signalCode === null) chrome.kill("SIGTERM");
+  let shutdownFailed = false;
+  // The browser fixture is a real Node process using an isolated PostgreSQL
+  // database. A successful user journey must also demonstrate clean SIGTERM
+  // shutdown: the old 800ms SIGKILL fallback never asserted the exit code.
+  const apiAlive = api.exitCode === null && api.signalCode === null;
+  if (apiAlive) {
+    const exited = new Promise((resolveExit) => {
+      api.once("exit", (code, signal) => resolveExit({ code, signal }));
+    });
+    const sent = api.kill("SIGTERM");
+    const exit = await Promise.race([
+      exited,
+      pause(browserCompleted ? 10500 : 800).then(() => null),
+    ]);
+    if (browserCompleted) {
+      shutdownFailed = !sent || !exit || exit.code !== 0 || exit.signal !== null;
+      if (!shutdownFailed) console.log("NODE_SIGTERM_PASS: self-hosted Node exited cleanly with disposable PostgreSQL");
+    }
+  } else if (browserCompleted) {
+    shutdownFailed = true;
+  }
+  for (const child of [chrome, api]) {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
   await pause(250);
   await rm(chromeProfile, { recursive: true, force: true });
+  if (shutdownFailed) throw new Error("Node SIGTERM did not finish cleanly within the bounded shutdown deadline");
 }

@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { rm } from "node:fs/promises";
 import WebSocket from "../apps/api/node_modules/ws/index.js";
+import postgres from "../packages/db-pg/node_modules/postgres/src/index.js";
 
 const connection = process.env.TEST_DATABASE_URL;
 const executable = process.env.MONTRAL_CHROMIUM;
@@ -80,8 +81,10 @@ try {
   await new Promise((done, fail) => { ws.once("open", done); ws.once("error", fail); });
   let nextId = 0;
   const pending = new Map();
+  const cdpEvents = [];
   ws.on("message", (raw) => {
     const msg = JSON.parse(String(raw));
+    if (msg.method) cdpEvents.push(msg);
     if (!msg.id || !pending.has(msg.id)) return;
     const { ok, fail } = pending.get(msg.id);
     pending.delete(msg.id);
@@ -199,7 +202,10 @@ try {
   await js('Array.from(document.querySelectorAll(".ph-actions button")).find(b => b.textContent.includes("Declare incident")).click()');
   await until("incident declaration dialog", () => js('!!document.querySelector(".modal form input[required]")'));
   await fill(".modal form input[required]", "Synthetic browser incident");
-  await js('document.querySelector(".modal form textarea").value = "Synthetic incident created for local qualification"; document.querySelector(".modal form textarea").dispatchEvent(new Event("input", { bubbles: true }))');
+  // Type through CDP like a user; assigning .value bypasses React state and
+  // silently declared the incident without its first public update.
+  await fill(".modal form textarea", "Synthetic incident created for local qualification");
+  await until("declaration description typed", () => js('document.querySelector(".modal form textarea")?.value === "Synthetic incident created for local qualification"'));
   await js('Array.from(document.querySelectorAll(".modal form button")).find(b => b.textContent.trim() === "Declare incident").click()');
   await until("incident detail navigation", () => js('location.pathname.startsWith("/app/incidents/") && !!document.querySelector(".dh h1")'), 25000);
   const incidentId = await js('location.pathname.split("/").at(-1)');
@@ -208,18 +214,39 @@ try {
   if (opened.title !== "Synthetic browser incident" || opened.status !== "investigating" || opened.auto) {
     throw new Error("Manual browser incident not persisted as investigating");
   }
+  // Force the race deterministically: hold the detail reload that follows the
+  // acknowledgement, pick a draft status while it is held, then release it.
+  // The late load() must not overwrite the user's draft status.
+  cdpEvents.length = 0;
+  // CDP URL patterns are globs where "?" matches one character, so only the
+  // exact detail URL is intercepted (never POST .../ack).
+  await cdp("Fetch.enable", { patterns: [{ urlPattern: `*/api/incidents/${incidentId}`, requestStage: "Request" }] });
   await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Acknowledge").click()');
+  const released = new Set();
+  const heldReload = await until("post-acknowledgement detail reload held", async () => {
+    for (const e of cdpEvents) {
+      if (e.method !== "Fetch.requestPaused" || released.has(e.params.requestId)) continue;
+      if (e.params.request.method === "GET" && new URL(e.params.request.url).pathname === `/api/incidents/${incidentId}`) return e;
+      // Anything else that matched is released immediately.
+      released.add(e.params.requestId);
+      await cdp("Fetch.continueRequest", { requestId: e.params.requestId });
+    }
+  });
+  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  await until("identified draft selected while reload is held", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  await cdp("Fetch.continueRequest", { requestId: heldReload.params.requestId });
+  await cdp("Fetch.disable");
   await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
   await until("incident acknowledgement persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => !!s.acknowledgedAt)`));
+  await until("draft status survives acknowledgement reload", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   // An internal update is never intended for outbound status-page subscribers.
-  // Set the privacy and body first. A late incident-detail reload can reset
-  // the draft status; select 'identified' last and verify the complete draft
-  // in the committed React UI immediately before submitting.
+  // Set the privacy and body, then verify the complete draft (including the
+  // status chosen during the held reload) in the committed React UI.
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
   await until("internal note visibility selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
   await until("internal incident draft text exact", () => js('document.querySelector("form.card.cc textarea.in[required]")?.value === "Synthetic private investigation update"'));
-  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  // Not re-selected: the draft chosen during the held reload must still stand.
   await until("identified incident status selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   await until("internal visibility still selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');
@@ -247,6 +274,25 @@ try {
   if (closed.status !== "resolved" || !closed.resolvedAt ||
       !closed.updates.some(u => u.status === "resolved" && u.visibility === "public")) {
     throw new Error("Manual incident resolution was not persisted as a public update");
+  }
+  // Verify the committed PostgreSQL rows directly, not only the API view: the
+  // draft-status race must have stored exactly declare -> identified (internal,
+  // chosen during the acknowledgement reload) -> resolved (public).
+  {
+    const sql = postgres(connection, { max: 1, onnotice: () => {} });
+    try {
+      const [row] = await sql`select status, acknowledged_at, resolved_at, auto from incident where id = ${incidentId}`;
+      const updates = await sql`select status, visibility, body = 'Synthetic private investigation update' as private_body from incident_update where incident_id = ${incidentId} order by created_at, id`;
+      const sequence = updates.map((u) => u.status + "/" + u.visibility).join(",");
+      if (!row || row.status !== "resolved" || !row.acknowledged_at || !row.resolved_at || row.auto) {
+        throw new Error("PostgreSQL incident row mismatch after browser journey");
+      }
+      if (sequence !== "investigating/public,identified/internal,resolved/public" || !updates[1].private_body) {
+        throw new Error("PostgreSQL incident_update sequence mismatch: " + sequence);
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
   }
   await page("/app/incidents");
   await until("resolved incident in list", () => js('document.body.innerText.includes("Synthetic browser incident")'));

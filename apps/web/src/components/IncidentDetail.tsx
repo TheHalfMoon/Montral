@@ -1,6 +1,6 @@
 import { adoptProject, backToAll } from "../lib/nav";
 import { t } from "../lib/i18n";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { ago, api, type Incident } from "../lib/api";
 import { deliveryReason, deliveryState, stateClass } from "../lib/delivery";
@@ -27,15 +27,18 @@ export default function IncidentDetail({ id }: { id: string }) {
   const [busy, run] = useBusy();
   const [acking, ack] = useBusy();
   const [err, setErr] = useState("");
-  const load = () => api.incident(id).then((i) => { adoptProject(i.projectId); setInc(i); setStatus(i.status === "resolved" ? "resolved" : i.status); setRootCause(i.rootCause ?? ""); setPostmortem(i.postmortem ?? ""); setPublish(!!i.postmortemPublishedAt); });
-  useEffect(() => { load(); }, [id]);
+  // Preserve a manually chosen draft status if an earlier async detail/ack
+  // refresh finishes while the user is composing a private incident update.
+  const statusDraftEdited = useRef(false);
+  const load = () => api.incident(id).then((i) => { adoptProject(i.projectId); setInc(i); if (!statusDraftEdited.current) setStatus(i.status === "resolved" ? "resolved" : i.status); setRootCause(i.rootCause ?? ""); setPostmortem(i.postmortem ?? ""); setPublish(!!i.postmortemPublishedAt); });
+  useEffect(() => { statusDraftEdited.current = false; load(); }, [id]);
   if (!inc) return <p className="muted">{t("Loading…")}</p>;
 
   const resolved = inc.status === "resolved";
   const post = (s: Incident["status"], text: string, hidden = false) =>
     run(async () => {
       setErr("");
-      try { await api.postUpdate(id, { status: s, body: text, visibility: hidden ? "internal" : "public" }); setBody(""); setInternal(false); await load(); } catch (x) { setErr((x as Error).message); }
+      try { await api.postUpdate(id, { status: s, body: text, visibility: hidden ? "internal" : "public" }); statusDraftEdited.current = false; setBody(""); setInternal(false); await load(); } catch (x) { setErr((x as Error).message); }
     });
   // a resolution is what subscribers are mailed about, so it is always public
   const hidden = internal && status !== "resolved";
@@ -64,7 +67,7 @@ export default function IncidentDetail({ id }: { id: string }) {
         <div className="col">
           <form className="card cc" onSubmit={(e) => { e.preventDefault(); post(status, body, hidden); }}>
             <div className="cc-h"><h3>{t("Post an update")}</h3><span className="faint" style={{ fontSize: 13 }}>{hidden ? t("Visible to your team only") : t("Sent to status page subscribers")}</span></div>
-            <div className="seg">{STATES.map((s) => <i key={s} className={status === s ? "on" : ""} onClick={() => setStatus(s)}>{t(s)}</i>)}</div>
+            <div className="seg">{STATES.map((s) => <i key={s} className={status === s ? "on" : ""} aria-disabled={busy} onClick={() => { if (busy) return; statusDraftEdited.current = true; setStatus(s); }}>{t(s)}</i>)}</div>
             <div className="seg" style={{ marginTop: 14 }}>
               {(["public", "internal"] as const).map((v) => <i key={v} className={(hidden ? "internal" : "public") === v ? "on" : ""} onClick={() => setInternal(v === "internal")}>{t(v === "public" ? "Public update" : "Internal note")}</i>)}
             </div>

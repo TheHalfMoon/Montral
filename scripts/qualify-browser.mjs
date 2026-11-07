@@ -212,12 +212,16 @@ try {
   await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
   await until("incident acknowledgement persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => !!s.acknowledgedAt)`));
   // An internal update is never intended for outbound status-page subscribers.
-  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
-  await until("identified incident status selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  // Set the privacy and body first. A late incident-detail reload can reset
+  // the draft status; select 'identified' last and verify the complete draft
+  // in the committed React UI immediately before submitting.
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
   await until("internal note visibility selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
   await until("internal incident draft text exact", () => js('document.querySelector("form.card.cc textarea.in[required]")?.value === "Synthetic private investigation update"'));
+  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  await until("identified incident status selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  await until("internal visibility still selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');
   await until("internal incident note in timeline", () => js('Array.from(document.querySelectorAll(".tl .ev")).some(e => e.textContent.includes("Synthetic private investigation update"))'));
   try {

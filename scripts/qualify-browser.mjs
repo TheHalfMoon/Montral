@@ -81,8 +81,10 @@ try {
   await new Promise((done, fail) => { ws.once("open", done); ws.once("error", fail); });
   let nextId = 0;
   const pending = new Map();
+  const cdpEvents = [];
   ws.on("message", (raw) => {
     const msg = JSON.parse(String(raw));
+    if (msg.method) cdpEvents.push(msg);
     if (!msg.id || !pending.has(msg.id)) return;
     const { ok, fail } = pending.get(msg.id);
     pending.delete(msg.id);
@@ -212,23 +214,31 @@ try {
   if (opened.title !== "Synthetic browser incident" || opened.status !== "investigating" || opened.auto) {
     throw new Error("Manual browser incident not persisted as investigating");
   }
+  // Force the race deterministically: hold the detail reload that follows the
+  // acknowledgement, pick a draft status while it is held, then release it.
+  // The late load() must not overwrite the user's draft status.
+  cdpEvents.length = 0;
+  await cdp("Fetch.enable", { patterns: [
+    { urlPattern: `*/api/incidents/${incidentId}`, requestStage: "Request" },
+    { urlPattern: `*/api/incidents/${incidentId}?*`, requestStage: "Request" },
+  ] });
   await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Acknowledge").click()');
-  // Compose a desired status while the asynchronous acknowledgement refresh
-  // may still be pending; its later load() must not overwrite user draft state.
+  const heldReload = await until("post-acknowledgement detail reload held", () => cdpEvents.find((e) => e.method === "Fetch.requestPaused" && e.params.request.method === "GET"));
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
-  await until("identified draft selected during acknowledgement", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  await until("identified draft selected while reload is held", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
+  await cdp("Fetch.continueRequest", { requestId: heldReload.params.requestId });
+  await cdp("Fetch.disable");
   await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
   await until("incident acknowledgement persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => !!s.acknowledgedAt)`));
   await until("draft status survives acknowledgement reload", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   // An internal update is never intended for outbound status-page subscribers.
-  // Set the privacy and body first. A late incident-detail reload can reset
-  // the draft status; select 'identified' last and verify the complete draft
-  // in the committed React UI immediately before submitting.
+  // Set the privacy and body, then verify the complete draft (including the
+  // status chosen during the held reload) in the committed React UI.
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
   await until("internal note visibility selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
   await until("internal incident draft text exact", () => js('document.querySelector("form.card.cc textarea.in[required]")?.value === "Synthetic private investigation update"'));
-  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  // Not re-selected: the draft chosen during the held reload must still stand.
   await until("identified incident status selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   await until("internal visibility still selected for submission", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');

@@ -67,7 +67,7 @@ export default function IncidentDetail({ id }: { id: string }) {
         <div className="col">
           <form className="card cc" onSubmit={(e) => { e.preventDefault(); post(status, body, hidden); }}>
             <div className="cc-h"><h3>{t("Post an update")}</h3><span className="faint" style={{ fontSize: 13 }}>{hidden ? t("Visible to your team only") : t("Sent to status page subscribers")}</span></div>
-            <div className="seg">{STATES.map((s) => <i key={s} className={status === s ? "on" : ""} onClick={() => { statusDraftEdited.current = true; setStatus(s); }}>{t(s)}</i>)}</div>
+            <div className="seg">{STATES.map((s) => <i key={s} className={status === s ? "on" : ""} aria-disabled={busy} onClick={() => { if (busy) return; statusDraftEdited.current = true; setStatus(s); }}>{t(s)}</i>)}</div>
             <div className="seg" style={{ marginTop: 14 }}>
               {(["public", "internal"] as const).map((v) => <i key={v} className={(hidden ? "internal" : "public") === v ? "on" : ""} onClick={() => setInternal(v === "internal")}>{t(v === "public" ? "Public update" : "Internal note")}</i>)}
             </div>

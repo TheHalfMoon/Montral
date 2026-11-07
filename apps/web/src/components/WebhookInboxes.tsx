@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
-import { api, type HookInbox, type HookEvent } from "../lib/api";
+import { api, ApiError, type HookInbox, type HookEvent } from "../lib/api";
 
 export default function WebhookInboxes() {
   const [inboxes, setInboxes] = useState<HookInbox[] | null>(null);
@@ -10,16 +10,41 @@ export default function WebhookInboxes() {
   const [fresh, setFresh] = useState<string>("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [next, setNext] = useState<string | null>(null);
+  const [method, setMethod] = useState("");
+  const [query, setQuery] = useState("");
+  const [applied, setApplied] = useState("");
+  // Each fetch is tagged; a response for an earlier inbox or filter is dropped
+  // so a slow request can never show another inbox's payloads.
+  const fetchSeq = useRef(0);
   async function load() {
     const list = (await api.hookInboxes()).inboxes;
     setInboxes(list);
   }
   useEffect(() => { load().catch((e) => setError((e as Error).message)); }, []);
+  const fetchEvents = async (before?: string): Promise<void> => {
+    if (!selected) return;
+    const seq = ++fetchSeq.current;
+    try {
+      const d = await api.hookEvents(selected, { before, method, q: applied });
+      if (seq !== fetchSeq.current) return;
+      setEvents((prev) => before ? [...prev, ...d.events] : d.events);
+      setNext(d.next);
+    } catch (e) {
+      // A superseded request must not report errors on the inbox now shown.
+      if (seq !== fetchSeq.current) return;
+      // The older page's cursor event was evicted by retention: start over.
+      if (before && e instanceof ApiError && e.status === 410) { setNext(null); return fetchEvents(); }
+      throw e;
+    }
+  };
+  const report = (e: unknown) => setError((e as Error).message);
   useEffect(() => {
-    if (!selected) { setEvents([]); return; }
-    api.hookEvents(selected).then((d) => setEvents(d.events)).catch((e) => setError((e as Error).message));
-  }, [selected]);
-  const refreshEvents = async () => { if (selected) setEvents((await api.hookEvents(selected)).events); };
+    if (!selected) { fetchSeq.current++; setEvents([]); setNext(null); return; }
+    setEvents([]); setNext(null);
+    fetchEvents().catch(report);
+  }, [selected, method, applied]);
+  const refreshEvents = () => fetchEvents();
   const create = async (e: React.SyntheticEvent) => {
     e.preventDefault(); setBusy(true); setError(""); setFresh("");
     try {
@@ -36,7 +61,7 @@ export default function WebhookInboxes() {
     try {
       await api.deleteHookInbox(id);
       setFresh("");
-      if (selected === id) { setSelected(""); setEvents([]); }
+      if (selected === id) { setSelected(""); setEvents([]); setNext(null); }
       await load();
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
@@ -70,10 +95,18 @@ export default function WebhookInboxes() {
     {selected && <section style={{ marginTop: 24 }}>
       <div className="ph">
         <div><h2>{t("Captured events")}</h2><p className="muted">{t("Only users authorized for this Montral project can inspect event bodies.")}</p></div>
-        <button className="btn sm" onClick={() => refreshEvents().catch((e) => setError((e as Error).message))}>{t("Refresh")}</button>
+        <button className="btn sm" onClick={() => refreshEvents().catch(report)}>{t("Refresh")}</button>
       </div>
+      <form className="hook-filter" style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }} onSubmit={(e) => { e.preventDefault(); if (query.trim() === applied) fetchEvents().catch(report); else setApplied(query.trim()); }}>
+        <select className="in" aria-label={t("Method")} value={method} onChange={(e) => setMethod(e.target.value)} style={{ width: "auto" }}>
+          <option value="">{t("All methods")}</option>
+          {["POST", "PUT", "PATCH"].map((m) => <option key={m} value={m}>{m}</option>)}
+        </select>
+        <input className="in" type="search" maxLength={200} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("Search headers and body")} style={{ flex: 1, minWidth: 180 }} />
+        <button className="btn sm">{t("Search")}</button>
+      </form>
       <div className="card tbl">
-        {!events.length && <div className="tr">{t("No captured events yet.")}</div>}
+        {!events.length && <div className="tr">{method || applied ? t("No events match this filter.") : t("No captured events yet.")}</div>}
         {events.map((e) => <div className="tr" key={e.id} style={{ display: "block", padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <b>{e.method} · {e.content_type || t("Unknown type")}</b>
@@ -85,6 +118,7 @@ export default function WebhookInboxes() {
           </details>
         </div>)}
       </div>
+      {next && <button className="btn sm" style={{ marginTop: 12 }} onClick={() => fetchEvents(next).catch(report)}>{t("Load older events")}</button>}
     </section>}
   </>;
 }

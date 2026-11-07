@@ -211,7 +211,10 @@ export const api = {
   billingCheckout: (plan: "pro" | "business") => req<{ url: string; testMode: true }>("/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
   hookInboxes: () => req<{ inboxes: HookInbox[] }>("/hooks/inboxes"),
   createHookInbox: (name: string) => req<{ id: string; name: string; path: string }>("/hooks/inboxes", { method: "POST", body: JSON.stringify({ name }) }),
-  hookEvents: (id: string) => req<{ events: HookEvent[] }>(`/hooks/inboxes/${id}/events`),
+  hookEvents: (id: string, f: { before?: string; method?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v) as [string, string][]).toString();
+    return req<{ events: HookEvent[]; next: string | null }>(`/hooks/inboxes/${id}/events${qs ? "?" + qs : ""}`);
+  },
   deleteHookInbox: (id: string) => req<void>(`/hooks/inboxes/${id}`, { method: "DELETE" }),
   timeCoverage: (id: string, days: 7 | 30) => req<TimeCoverage>(`/monitors/${id}/time-coverage?days=${days}`),
   monitors: () => req<Monitor[]>("/monitors"),

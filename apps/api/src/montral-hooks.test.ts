@@ -31,7 +31,7 @@ function fixture(allowReceipt = true) {
         }
         return [{ accepted: true }];
       }
-      if (sql.startsWith("SELECT id,method,content_type,headers,body,created_at")) return events.filter((e) => e.inbox_id === args[0] && e.organization_id === args[1] && e.project_id === args[2]).map((e) => ({ ...e, method: "POST", content_type: "application/json", created_at: new Date() }));
+      if (sql.startsWith("SELECT e.id,e.method,e.content_type,e.headers,e.body,e.created_at")) return events.filter((e) => e.inbox_id === args[0] && e.organization_id === args[1] && e.project_id === args[2]).map((e) => ({ ...e, method: "POST", content_type: "application/json", created_at: new Date() }));
       if (sql.startsWith("DELETE FROM montral_hook_inbox")) {
         const i = inboxes.findIndex((r) => r.id === args[0] && r.organization_id === args[1] && r.project_id === args[2]);
         return i === -1 ? [] : [inboxes.splice(i, 1)[0]];

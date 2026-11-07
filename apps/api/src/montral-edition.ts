@@ -23,10 +23,18 @@ export const MONTRAL_TOOLS: Tool[] = [
   },
   {
     name: "list_webhook_events",
-    description: "Inspect the newest 50 captured webhook requests for an inbox in this Montral project; may contain sensitive request bodies. Never disclose event bodies to unauthorized third parties.",
-    schema: z.object({ id }),
+    description: "Inspect captured webhook requests for an inbox in this Montral project, newest first, 50 per page; may contain sensitive request bodies. Pass the returned next as before for older events (a 410 means that page was evicted: start again). Optionally filter by method or search text in headers, content type and body. Never disclose event bodies to unauthorized third parties.",
+    schema: z.object({
+      id,
+      before: z.string().uuid().optional().describe("The next value from the previous page."),
+      method: z.enum(["POST", "PUT", "PATCH"]).optional(),
+      q: z.string().max(200).optional().describe("Text to search for; wildcards are literal."),
+    }),
     readOnly: true,
-    build: (a) => ({ method: "GET", path: `/api/hooks/inboxes/${a.id}/events` }),
+    build: ({ id, ...filter }) => {
+      const qs = new URLSearchParams(Object.entries(filter).filter((e): e is [string, string] => typeof e[1] === "string" && e[1] !== "")).toString();
+      return { method: "GET", path: `/api/hooks/inboxes/${id}/events${qs ? "?" + qs : ""}` };
+    },
   },
   {
     name: "delete_webhook_inbox",

@@ -218,12 +218,20 @@ try {
   // acknowledgement, pick a draft status while it is held, then release it.
   // The late load() must not overwrite the user's draft status.
   cdpEvents.length = 0;
-  await cdp("Fetch.enable", { patterns: [
-    { urlPattern: `*/api/incidents/${incidentId}`, requestStage: "Request" },
-    { urlPattern: `*/api/incidents/${incidentId}?*`, requestStage: "Request" },
-  ] });
+  // CDP URL patterns are globs where "?" matches one character, so only the
+  // exact detail URL is intercepted (never POST .../ack).
+  await cdp("Fetch.enable", { patterns: [{ urlPattern: `*/api/incidents/${incidentId}`, requestStage: "Request" }] });
   await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Acknowledge").click()');
-  const heldReload = await until("post-acknowledgement detail reload held", () => cdpEvents.find((e) => e.method === "Fetch.requestPaused" && e.params.request.method === "GET"));
+  const released = new Set();
+  const heldReload = await until("post-acknowledgement detail reload held", async () => {
+    for (const e of cdpEvents) {
+      if (e.method !== "Fetch.requestPaused" || released.has(e.params.requestId)) continue;
+      if (e.params.request.method === "GET" && new URL(e.params.request.url).pathname === `/api/incidents/${incidentId}`) return e;
+      // Anything else that matched is released immediately.
+      released.add(e.params.requestId);
+      await cdp("Fetch.continueRequest", { requestId: e.params.requestId });
+    }
+  });
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
   await until("identified draft selected while reload is held", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   await cdp("Fetch.continueRequest", { requestId: heldReload.params.requestId });

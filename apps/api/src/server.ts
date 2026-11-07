@@ -18,6 +18,7 @@ import { migrateMontralSchema } from "./schema-migrate";
 import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks } from "./scheduler";
 import { createLocalCheckQueue } from "./local-check-queue";
+import { scrubUntrustedForwarding } from "./node-proxy-peer";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -102,6 +103,7 @@ const honoListener = getRequestListener((req) => app.fetch(req, env));
 const isApi = (url = "") => /^\/(api|hooks|internal|health|\.well-known)(\/|\?|$)/.test(url);
 
 const server = createServer((req, res) => {
+  scrubUntrustedForwarding(req, env); // Fail closed on direct/unpinned ingress
   if (isApi(req.url) || !astro || !assets) return void honoListener(req, res);
   // hashed /_astro files are immutable; sirv answers other static files and falls through for SSR routes
   assets(req, res, () => astro!(req, res, (err) => {

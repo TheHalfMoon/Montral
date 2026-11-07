@@ -28,6 +28,7 @@ services:
       INVITE_TTL_DAYS: ${INVITE_TTL_DAYS:-}
       # "true" when exactly one reverse proxy is in front: its X-Forwarded-For feeds the rate limits
       TRUST_PROXY: ${TRUST_PROXY:-}
+      TRUST_PROXY_PEER_IPS: ${TRUST_PROXY_PEER_IPS:-}
       # optional: Cloudflare Turnstile on email sign-up (set both)
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}

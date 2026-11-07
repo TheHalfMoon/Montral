@@ -52,6 +52,8 @@ export type Bindings = {
   LEGAL_LINKS?: string;
   /** "true" when exactly one reverse proxy sits in front (Docker/Node): its x-forwarded-for is then trusted for rate limits. */
   TRUST_PROXY?: string;
+  /** Node only: exact IP(s) of the trusted proxy TCP socket peer; never a CIDR. */
+  TRUST_PROXY_PEER_IPS?: string;
   /** Days a team invitation stays valid. Default 7. */
   INVITE_TTL_DAYS?: string;
   /** "true" lets monitors and alert webhooks target private, loopback and link-local addresses (default: refused). */

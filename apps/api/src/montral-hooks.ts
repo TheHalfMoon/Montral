@@ -10,6 +10,12 @@ const TOKEN = /^[0-9a-f]{64}$/;
 const MAX_BYTES = 32 * 1024;
 const MAX_INBOXES = 10;
 const listInbox = z.object({ name: z.string().trim().min(1).max(100) }).strict();
+const EVENT_PAGE = 50;
+const eventQuery = z.object({
+  before: z.string().regex(UUID).optional(),
+  method: z.enum(["POST", "PUT", "PATCH"]).optional(),
+  q: z.string().trim().max(200).optional().transform((v) => v || undefined),
+}).strict();
 /** Inbox creation only needs a name (100 chars), not unlimited JSON input. */
 const INBOX_CREATE_MAX_BYTES = 4 * 1024;
 const INBOX_CREATE_READ_MS = 10_000;
@@ -288,10 +294,31 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       "SELECT id FROM montral_hook_inbox WHERE id=$1 AND organization_id=$2 AND project_id=$3", scope,
     );
     if (!inbox.length) return c.json({ error: "Not found" }, 404);
+    // Up to 250 events are retained, so pages are keyset-ordered by
+    // (created_at, id); the cursor is the last event id the caller saw.
+    const filter = eventQuery.safeParse(c.req.query());
+    if (!filter.success) return c.json({ error: "Invalid event filter" }, 400);
+    const { before, method, q } = filter.data;
+    const params: unknown[] = [...scope];
+    let where = "e.inbox_id=$1 AND e.organization_id=$2 AND e.project_id=$3 AND e.created_at > NOW() - INTERVAL '7 days'";
+    if (before) {
+      const cursor = await db.query<{ id: string }>("SELECT id FROM montral_hook_event WHERE id=$1 AND inbox_id=$2", [before, scope[0]]);
+      // The cursor event was evicted by retention; the caller must start over.
+      if (!cursor.length) return c.json({ error: "These events are no longer retained. Refresh the list." }, 410);
+      params.push(before);
+      where += ` AND (e.created_at, e.id) < (SELECT created_at, id FROM montral_hook_event WHERE id=$${params.length})`;
+    }
+    if (method) { params.push(method); where += ` AND e.method=$${params.length}`; }
+    if (q) {
+      params.push("%" + q.replace(/[\\%_]/g, (ch) => "\\" + ch) + "%");
+      where += ` AND (e.body ILIKE $${params.length} OR e.content_type ILIKE $${params.length} OR e.headers::text ILIKE $${params.length})`;
+    }
     const rows = await db.query<HookEvent>(
-      "SELECT id,method,content_type,headers,body,created_at FROM montral_hook_event WHERE inbox_id=$1 AND organization_id=$2 AND project_id=$3 AND created_at > NOW() - INTERVAL '7 days' ORDER BY created_at DESC LIMIT 50", scope,
+      `SELECT e.id,e.method,e.content_type,e.headers,e.body,e.created_at FROM montral_hook_event e WHERE ${where} ORDER BY e.created_at DESC, e.id DESC LIMIT ${EVENT_PAGE + 1}`, params,
     );
-    return c.json({ events: rows });
+    const more = rows.length > EVENT_PAGE;
+    const events = more ? rows.slice(0, EVENT_PAGE) : rows;
+    return c.json({ events, next: more ? events[events.length - 1].id : null });
   });
   privateHooks.delete("/inboxes/:id", uuidParams, requireManager, async (c) => {
     const deleted = await c.get("database").query(

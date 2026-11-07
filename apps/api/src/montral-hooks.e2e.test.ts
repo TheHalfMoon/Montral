@@ -163,4 +163,44 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     expect(await database!.query("SELECT id FROM montral_hook_event WHERE id=$1", [eventId])).toHaveLength(0);
     expect((await a("GET", "/inboxes/" + id + "/events")).body.events).toHaveLength(0);
   });
+
+  it("pages every retained event once in keyset order, filters safely and expires stale cursors", async () => {
+    const a = await account();
+    const b = await account();
+    const id = (await a("POST", "/inboxes", { name: "Paging" })).body.id as string;
+    // 120 events, 60 of them sharing one timestamp, so ordering must break ties by id.
+    await database!.query(`INSERT INTO montral_hook_event(id,inbox_id,organization_id,project_id,method,content_type,headers,body,created_at)
+      SELECT gen_random_uuid(), h.id, h.organization_id, h.project_id,
+        CASE WHEN g % 4 = 0 THEN 'PUT' ELSE 'POST' END, 'application/json', '{}'::jsonb,
+        CASE WHEN g = 7 THEN '{"n":7,"pct":"100%"}' ELSE '{"n":' || g || '}' END,
+        CASE WHEN g <= 60 THEN NOW() - INTERVAL '1 hour' ELSE NOW() - (g || ' seconds')::interval END
+      FROM montral_hook_inbox h, generate_series(1,120) g WHERE h.id=$1`, [id]);
+    const seen: { id: string; created_at: string }[] = [];
+    let before: string | null = null;
+    for (let page = 0; page < 5; page++) {
+      const res = await a("GET", `/inboxes/${id}/events${before ? "?before=" + before : ""}`);
+      expect(res.status).toBe(200);
+      expect(res.body.events.length).toBeLessThanOrEqual(50);
+      seen.push(...res.body.events);
+      before = res.body.next;
+      if (!before) break;
+    }
+    expect(before).toBeNull();
+    expect(seen).toHaveLength(120);
+    expect(new Set(seen.map((e) => e.id)).size).toBe(120);
+    for (let k = 1; k < seen.length; k++) expect(Date.parse(seen[k - 1].created_at)).toBeGreaterThanOrEqual(Date.parse(seen[k].created_at));
+    const puts = await a("GET", `/inboxes/${id}/events?method=PUT`);
+    expect(puts.body.events).toHaveLength(30);
+    expect(puts.body.events.every((e: { method: string }) => e.method === "PUT")).toBe(true);
+    // LIKE wildcards in the search term are literals, not patterns.
+    const pct = await a("GET", `/inboxes/${id}/events?q=${encodeURIComponent("100%")}`);
+    expect(pct.body.events.map((e: { body: string }) => e.body)).toEqual(['{"n":7,"pct":"100%"}']);
+    expect((await a("GET", `/inboxes/${id}/events?q=_`)).body.events).toHaveLength(0);
+    expect((await a("GET", `/inboxes/${id}/events?method=GET`)).status).toBe(400);
+    expect((await a("GET", `/inboxes/${id}/events?before=not-a-uuid`)).status).toBe(400);
+    expect((await a("GET", `/inboxes/${id}/events?unknown=1`)).status).toBe(400);
+    expect((await a("GET", `/inboxes/${id}/events?before=${crypto.randomUUID()}`)).status).toBe(410);
+    // Another workspace cannot page someone else's inbox, even with a valid cursor.
+    expect((await b("GET", `/inboxes/${id}/events?before=${seen[10].id}`)).status).toBe(404);
+  });
 });

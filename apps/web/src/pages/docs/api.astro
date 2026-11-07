@@ -135,6 +135,19 @@ const groups: Group[] = [
     ],
   },
   {
+    id: "webhooks", en: "Webhook inboxes", zh: "Webhook 收件箱",
+    eps: [
+      { m: "GET", p: "/hooks/inboxes", en: "The project's latest 50 inboxes. Receiver URLs are never listed again.", zh: "当前项目最新的 50 个收件箱。接收地址不会再次返回。", res: `{ inboxes: [{ id, name, created_at }] }` },
+      { m: "POST", p: "/hooks/inboxes", en: "Create an inbox (owner or admin; at most 10 per project). The secret receiver path is returned only in this response; only its hash is stored. Returns 201, or 409 at the limit.", zh: "创建收件箱（需所有者或管理员；每个项目最多 10 个）。秘密接收路径仅在此响应中返回，服务端只保存其哈希。返回 201，达到上限返回 409。", req: `name  string, 1-100`, res: `{ id, name, path: "/api/hooks/receive/<id>/<token>", warning }` },
+      { m: "GET", p: "/hooks/inboxes/:id/events", en: "Captured events, newest first, 50 per page (owner or admin). Each inbox keeps up to 250 events for 7 days. Pass the returned next as before for the following page; 410 means that event was evicted, so start again. method filters by POST, PUT or PATCH; q matches text in headers, content type or body (wildcards are literal). Unknown parameters return 400.", zh: "已捕获的事件，按时间倒序，每页 50 条（需所有者或管理员）。每个收件箱保留最多 250 条、7 天。将返回的 next 作为 before 传入以获取下一页；返回 410 表示该事件已被清理，请从头开始。method 按 POST、PUT 或 PATCH 过滤；q 匹配请求头、内容类型或正文中的文本（通配符按字面处理）。未知参数返回 400。", req: `before  uuid (optional)   the next value of the previous page
+method  "POST" | "PUT" | "PATCH" (optional)
+q       string, max 200 (optional)`, res: `{ events: [{ id, method, content_type, headers, body, created_at }], next: uuid | null }` },
+      { m: "DELETE", p: "/hooks/inboxes/:id", en: "Delete an inbox and all its events (owner or admin). Returns 204.", zh: "删除收件箱及其全部事件（需所有者或管理员）。返回 204。" },
+    ],
+    noteEn: "Senders POST, PUT or PATCH to the secret receiver path without other credentials. Bodies are capped at 32 KiB and must be valid UTF-8 text (413 / 422); each inbox accepts 120 events per minute (429). Only an allowlist of headers is stored (content-type, user-agent, x-request-id, x-event-type, x-github-event, x-shopify-topic; 300 characters each), so credentials such as Authorization or Cookie are never kept. Accepted events return 202.",
+    noteZh: "发送方无需其他凭据，向秘密接收路径发送 POST、PUT 或 PATCH 请求。正文上限 32 KiB，且必须是有效的 UTF-8 文本（413 / 422）；每个收件箱每分钟接收 120 个事件（429）。仅保存白名单中的请求头（content-type、user-agent、x-request-id、x-event-type、x-github-event、x-shopify-topic，每个最多 300 字符），因此 Authorization、Cookie 等凭据不会被保存。接收成功返回 202。",
+  },
+  {
     id: "me", en: "Me and counts", zh: "当前用户与计数",
     eps: [
       { m: "GET", p: "/me", en: "The caller, the workspace and the active project.", zh: "当前调用者、工作区和当前项目。", res: `{ userId, user: { name, email, locale }, organization, projectId }` },

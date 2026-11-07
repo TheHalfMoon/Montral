@@ -217,9 +217,21 @@ try {
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
   await until("internal note visibility selected", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "Internal note" && e.classList.contains("on"))'));
   await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
+  await until("internal incident draft text exact", () => js('document.querySelector("form.card.cc textarea.in[required]")?.value === "Synthetic private investigation update"'));
   await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');
   await until("internal incident note in timeline", () => js('Array.from(document.querySelectorAll(".tl .ev")).some(e => e.textContent.includes("Synthetic private investigation update"))'));
-  await until("internal incident state persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => s.status === "identified" && !!s.acknowledgedAt && Array.isArray(s.updates) && s.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update"))`));
+  try {
+    await until("internal incident state persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => s.status === "identified" && !!s.acknowledgedAt && Array.isArray(s.updates) && s.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update"))`));
+  } catch {
+    // Only metadata from disposable synthetic content; never log incident
+    // bodies, identities, credentials, targets or provider responses.
+    let diagnostic = "unavailable";
+    try {
+      const state = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => ({ status: s.status, acknowledged: !!s.acknowledgedAt, updates: Array.isArray(s.updates) ? s.updates.slice(-3).map(u => ({ status: u.status, visibility: u.visibility, bodyExact: u.body === "Synthetic private investigation update", bodyLength: typeof u.body === "string" ? u.body.length : null })) : null }))`);
+      diagnostic = JSON.stringify(state);
+    } catch {}
+    throw new Error("Internal incident persistence mismatch (synthetic metadata only): " + diagnostic);
+  }
   const internalState = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json())`);
   if (internalState.status !== "identified" || !internalState.acknowledgedAt ||
       !internalState.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update")) {

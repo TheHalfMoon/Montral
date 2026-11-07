@@ -200,7 +200,10 @@ try {
   await js('Array.from(document.querySelectorAll(".ph-actions button")).find(b => b.textContent.includes("Declare incident")).click()');
   await until("incident declaration dialog", () => js('!!document.querySelector(".modal form input[required]")'));
   await fill(".modal form input[required]", "Synthetic browser incident");
-  await js('document.querySelector(".modal form textarea").value = "Synthetic incident created for local qualification"; document.querySelector(".modal form textarea").dispatchEvent(new Event("input", { bubbles: true }))');
+  // Type through CDP like a user; assigning .value bypasses React state and
+  // silently declared the incident without its first public update.
+  await fill(".modal form textarea", "Synthetic incident created for local qualification");
+  await until("declaration description typed", () => js('document.querySelector(".modal form textarea")?.value === "Synthetic incident created for local qualification"'));
   await js('Array.from(document.querySelectorAll(".modal form button")).find(b => b.textContent.trim() === "Declare incident").click()');
   await until("incident detail navigation", () => js('location.pathname.startsWith("/app/incidents/") && !!document.querySelector(".dh h1")'), 25000);
   const incidentId = await js('location.pathname.split("/").at(-1)');

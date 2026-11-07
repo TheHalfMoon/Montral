@@ -15,6 +15,7 @@ import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
 import { runMontralMaintenance } from "./montral-maintenance";
 import { migrateMontralSchema } from "./schema-migrate";
+import { applyWebSecurityHeaders } from "./web-security-headers";
 import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks } from "./scheduler";
 import { createLocalCheckQueue, claimsForUnstarted } from "./local-check-queue";
@@ -106,6 +107,7 @@ const isApi = (url = "") => /^\/(api|hooks|internal|health|\.well-known)(\/|\?|$
 const server = createServer((req, res) => {
   scrubUntrustedForwarding(req, env); // Fail closed on direct/unpinned ingress
   if (isApi(req.url) || !astro || !assets) return void honoListener(req, res);
+  applyWebSecurityHeaders(req.url, res);
   // hashed /_astro files are immutable; sirv answers other static files and falls through for SSR routes
   assets(req, res, () => astro!(req, res, (err) => {
     res.statusCode = err ? 500 : 404;

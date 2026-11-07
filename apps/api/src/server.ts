@@ -19,6 +19,7 @@ import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks } from "./scheduler";
 import { createLocalCheckQueue, claimsForUnstarted } from "./local-check-queue";
 import { scrubUntrustedForwarding } from "./node-proxy-peer";
+import { createNodeTickGate } from "./node-tick-gate";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -133,29 +134,31 @@ server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral: serv
 const TICK_STUCK_MS = 5 * 60_000;
 let tickStartedAt = 0; // 0 = no tick running
 let lastHookPruneAt = 0; // successful Montral maintenance completion only
-const tick = setInterval(async () => {
-  if (tickStartedAt) return; // a long tick must not overlap the next one
-  tickStartedAt = Date.now();
-  try {
+const tickGate = createNodeTickGate();
+const tick = setInterval(() => {
+  tickGate.start(async () => {
+    tickStartedAt = Date.now();
     try {
-      await runDueChecks(database.repo, queue, entitlements, { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
-    } catch {
-      console.error("monitor scheduler failed; private diagnostic suppressed");
-    }
-    // Cleanup is independent of monitor checks: a broken monitor job may not
-    // delay seven-day webhook expiry or orphaned sandbox checkout nonce cleanup.
-    if (Date.now() - lastHookPruneAt >= 5 * 60_000) {
       try {
-        await runMontralMaintenance(database);
-        lastHookPruneAt = Date.now();
+        await runDueChecks(database.repo, queue, entitlements, { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
       } catch {
-        console.error("montral maintenance failed; private diagnostic suppressed");
-        // No timestamp update: try again on the next scheduled tick.
+        console.error("monitor scheduler failed; private diagnostic suppressed");
       }
+      // Cleanup is independent of monitor checks: a broken monitor job may not
+      // delay seven-day webhook expiry or orphaned sandbox checkout nonce cleanup.
+      if (Date.now() - lastHookPruneAt >= 5 * 60_000) {
+        try {
+          await runMontralMaintenance(database);
+          lastHookPruneAt = Date.now();
+        } catch {
+          console.error("montral maintenance failed; private diagnostic suppressed");
+          // No timestamp update: try again on the next scheduled tick.
+        }
+      }
+    } finally {
+      tickStartedAt = 0;
     }
-  } finally {
-    tickStartedAt = 0;
-  }
+  });
 }, 30_000);
 const watchdog = setInterval(() => {
   // The scheduler tick can complete while local queue handlers remain hung.
@@ -179,7 +182,10 @@ const stop = () => {
   stopping = true;
   clearInterval(tick);
   clearInterval(watchdog);
-  server.close(); // stop HTTP admissions, including manual scheduler invocations
+  const activeTick = tickGate.stopAndWait();
+  const closedServer = new Promise<boolean>((resolve) => {
+    server.close((err) => resolve(!err));
+  }); // wait for admitted HTTP requests before closing their database
   const unstarted = queue.stopAndTakeUnstarted();
   // A hard bound avoids an indefinitely hung worker blocking container shutdown.
   const hardStop = setTimeout(() => {
@@ -193,8 +199,14 @@ const stop = () => {
       try { await database.repo.releaseClaims(claims); }
       catch { healthy = false; console.error("shutdown: unstarted claims could not be released"); }
     }
-    const drained = await queue.waitForRunning(5000);
-    if (!drained) {
+    const [tickResult, drainResult, ingressResult] = await Promise.allSettled([
+      activeTick, queue.waitForRunning(5000), closedServer,
+    ]);
+    if (tickResult.status !== "fulfilled" || ingressResult.status !== "fulfilled" || !ingressResult.value) {
+      healthy = false;
+      console.error("shutdown: active scheduler tick or HTTP ingress did not settle");
+    }
+    if (drainResult.status !== "fulfilled" || !drainResult.value) {
       healthy = false;
       console.error("shutdown: running check handler did not drain before deadline");
     }

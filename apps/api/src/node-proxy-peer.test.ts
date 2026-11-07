@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createServer } from "node:http";
 import { scrubUntrustedForwarding, trustedNodeProxyPeer } from "./node-proxy-peer";
 import { clientIp } from "./ratelimit";
 
@@ -39,6 +40,27 @@ describe("Node proxy socket peer authorization", () => {
     expect(trustedNodeProxyPeer("2001:db8::3", config)).toBe(false);
   });
 
+  it("scrubs spoofed forwarding on an actual loopback Node HTTP socket", async () => {
+    let trust = { TRUST_PROXY: "true", TRUST_PROXY_PEER_IPS: "192.0.2.1" };
+    const server = createServer((req, res) => {
+      const trusted = scrubUntrustedForwarding(req, trust);
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ trusted, forwarded: req.headers["x-forwarded-for"] ?? null }));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("Missing loopback socket");
+      const url = "http://127.0.0.1:" + address.port + "/";
+      const opts = { headers: { "x-forwarded-for": "203.0.113.4, 192.0.2.7" } };
+      expect(await (await fetch(url, opts)).json()).toEqual({ trusted: false, forwarded: null });
+      trust = { TRUST_PROXY: "true", TRUST_PROXY_PEER_IPS: "127.0.0.1" };
+      expect(await (await fetch(url, opts)).json()).toEqual({ trusted: true, forwarded: "203.0.113.4, 192.0.2.7" });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
   it("fails closed with missing, malformed or broad proxy configuration", () => {
     for (const conf of [
       { TRUST_PROXY: "", TRUST_PROXY_PEER_IPS: "127.0.0.1" },

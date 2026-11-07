@@ -21,7 +21,7 @@ is enabled.
 ## Regression
 Pure Node unit tests cover a direct spoofed request, trusted proxy forwarding,
 mapped IPv4, canonical IPv6, missing/malformed/broad trust configurations,
-and the actual downstream clientIp() quota-key behavior. All required hosted
+the actual downstream clientIp() quota-key behavior, and a real loopback Node HTTP socket proving forged forwarding is scrubbed before application dispatch. All required hosted
 app CI and source integrity workflows must pass on exact PR head before merge.
 
 ## Remaining release gates

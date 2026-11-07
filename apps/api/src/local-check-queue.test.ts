@@ -34,12 +34,40 @@ describe("self-hosted Node queue backpressure", () => {
     expect(seen).toEqual(["one", "two", "three"]);
   });
 
+  it("exposes the oldest running handler age without counting delayed or completed work", async () => {
+    let finishFirst!: () => void;
+    let finishSecond!: () => void;
+    const first = new Promise<void>((resolve) => { finishFirst = resolve; });
+    const second = new Promise<void>((resolve) => { finishSecond = resolve; });
+    const started: string[] = [];
+    let clock = 1000;
+    const queue = createLocalCheckQueue(async (message) => {
+      started.push(message.ids[0]);
+      await (message.ids[0] === "first" ? first : second);
+    }, { maxPending: 3, concurrency: 2, now: () => clock });
+
+    expect(queue.oldestRunningAgeMs()).toBe(0);
+    await queue.sendBatch([msg("first")]);
+    await vi.waitFor(() => expect(started).toEqual(["first"]));
+    clock = 1100;
+    await queue.sendBatch([msg("second")]);
+    await vi.waitFor(() => expect(started).toEqual(["first", "second"]));
+    clock = 1800;
+    expect(queue.oldestRunningAgeMs()).toBe(800);
+    finishFirst();
+    await vi.waitFor(() => expect(queue.pendingCount()).toBe(1));
+    expect(queue.oldestRunningAgeMs()).toBe(700);
+    finishSecond();
+    await vi.waitFor(() => expect(queue.pendingCount()).toBe(0));
+    expect(queue.oldestRunningAgeMs()).toBe(0);
+  });
   it("counts delayed timers towards the same limit, then frees capacity", async () => {
     const seen: string[] = [];
     const queue = createLocalCheckQueue(async (message) => {
       seen.push(message.ids[0]);
     }, { maxPending: 1 });
     await queue.sendBatch([msg("delayed", 0.03)]);
+    expect(queue.oldestRunningAgeMs()).toBe(0);
     expect(queue.pendingCount()).toBe(1);
     await expect(queue.sendBatch([msg("rejected")]))
       .rejects.toThrow("Local check queue capacity exceeded");

@@ -209,12 +209,14 @@ try {
   }
   await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Acknowledge").click()');
   await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
+  await until("incident acknowledgement persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => !!s.acknowledgedAt)`));
   // An internal update is never intended for outbound status-page subscribers.
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
   await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "Internal note").click()');
   await fill('form.card.cc textarea.in[required]', "Synthetic private investigation update");
   await js('Array.from(document.querySelectorAll("form.card.cc button")).find(b => b.textContent.trim() === "Publish update").click()');
   await until("internal incident note in timeline", () => js('Array.from(document.querySelectorAll(".tl .ev")).some(e => e.textContent.includes("Synthetic private investigation update"))'));
+  await until("internal incident state persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => s.status === "identified" && !!s.acknowledgedAt && Array.isArray(s.updates) && s.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update"))`));
   const internalState = await js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json())`);
   if (internalState.status !== "identified" || !internalState.acknowledgedAt ||
       !internalState.updates.some(u => u.visibility === "internal" && u.body === "Synthetic private investigation update")) {

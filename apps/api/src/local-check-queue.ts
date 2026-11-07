@@ -14,8 +14,8 @@ const MAX_SLOT_DELAY_SECONDS = 60;
 
 export function createLocalCheckQueue(
   processMessage: (message: CheckMessage) => Promise<unknown>,
-  options: { maxPending?: number; concurrency?: number } = {},
-): CheckQueue & { pendingCount(): number } {
+  options: { maxPending?: number; concurrency?: number; now?: () => number } = {},
+): CheckQueue & { pendingCount(): number; oldestRunningAgeMs(): number } {
   const maxPending = options.maxPending ?? LOCAL_CHECK_QUEUE_CAPACITY;
   const concurrency = options.concurrency ?? Math.min(LOCAL_CHECK_CONCURRENCY, maxPending);
   if (!Number.isSafeInteger(maxPending) || maxPending < 1 ||
@@ -23,6 +23,12 @@ export function createLocalCheckQueue(
     throw new Error("Invalid local check queue capacity/concurrency");
   }
 
+  // Monotonic in-flight ages let the Node process watchdog distinguish a
+  // stalled handler from an ordinary delayed queue slot. Never release a
+  // reservation on a timeout: the underlying handler may still mutate state.
+  const now = options.now ?? (() => performance.now());
+  const inFlight = new Map<number, number>();
+  let nextTaskId = 0;
   let reserved = 0;
   let running = 0;
   const ready: CheckMessage[] = [];
@@ -31,11 +37,14 @@ export function createLocalCheckQueue(
     while (running < concurrency && ready.length > 0) {
       const message = ready.shift()!;
       running++;
+      const taskId = ++nextTaskId;
+      inFlight.set(taskId, now());
       // Catch synchronous throws as well as rejected promises. A failed
       // message must release capacity without revealing private probe details.
       Promise.resolve().then(() => processMessage(message))
         .catch(() => console.error("check batch failed; private diagnostic suppressed"))
         .finally(() => {
+          inFlight.delete(taskId);
           running--;
           reserved--;
           pump();
@@ -45,6 +54,12 @@ export function createLocalCheckQueue(
 
   return {
     pendingCount: () => reserved,
+    oldestRunningAgeMs: () => {
+      if (inFlight.size === 0) return 0;
+      let oldest = Number.POSITIVE_INFINITY;
+      for (const start of inFlight.values()) oldest = Math.min(oldest, start);
+      return Math.max(0, now() - oldest);
+    },
     async sendBatch(messages) {
       // Validate *all* entries before changing the queue. Even a rejected
       // batch's first entry must not be scheduled or the scheduler would

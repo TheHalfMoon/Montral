@@ -12,9 +12,29 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const ALL_PROJECTS = "all";
 
 /** Resolves the session and the active organization; 401 if there is none. */
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+/**
+ * Cross-site request forgery guard for cookie sessions. SameSite=Lax cookies
+ * still travel with requests from sibling subdomains (same site, different
+ * origin), so an unsafe method authenticated by the session cookie must come
+ * from the web app's own origin. Browsers always send Origin on such requests;
+ * a client that sends neither Origin nor a cross-site Sec-Fetch-Site is not a
+ * browser being forged, and API keys or OAuth tokens are not ambient
+ * credentials, so neither is affected.
+ */
+export function crossOriginSessionWrite(c: Context<AppEnv>): boolean {
+  if (SAFE_METHODS.has(c.req.method)) return false;
+  const allowed = new Set([c.env.WEB_ORIGIN, new URL(c.req.url).origin].filter(Boolean));
+  const origin = c.req.header("origin");
+  if (origin) return origin === "null" || !allowed.has(origin);
+  const site = c.req.header("sec-fetch-site");
+  return site === "cross-site" || site === "same-site";
+}
+
 export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   const auth = c.get("auth");
   const session = await currentSession(auth, c.req.raw.headers);
+  if (session && crossOriginSessionWrite(c)) throw new HTTPException(403, { message: "Cross-origin request refused" });
   let userId = session?.user.id;
   let orgId = (session?.session as { activeOrganizationId?: string | null } | undefined)?.activeOrganizationId ?? undefined;
 

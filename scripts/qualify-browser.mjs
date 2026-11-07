@@ -58,6 +58,7 @@ for (const stream of [api.stdout, api.stderr]) {
 }
 let chrome;
 let ws;
+let browserCompleted = false;
 try {
   await until("Node API /health", async () => {
     if (api.exitCode !== null) throw new Error(serverLog);
@@ -273,11 +274,35 @@ try {
     'Array.from(document.querySelectorAll("a")).some(a => a.getAttribute("href") === "/forgot-password") && !document.querySelector("form.auth-fields")'
   ));
   console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic monitor, incident, webhook, disabled billing, reset-link URL privacy; anonymous routes denied");
+  browserCompleted = true;
 } finally {
   ws?.close();
-  for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGTERM");
-  await pause(800);
-  for (const child of [chrome, api]) if (child && child.exitCode === null) child.kill("SIGKILL");
+  if (chrome && chrome.exitCode === null && chrome.signalCode === null) chrome.kill("SIGTERM");
+  let shutdownFailed = false;
+  // The browser fixture is a real Node process using an isolated PostgreSQL
+  // database. A successful user journey must also demonstrate clean SIGTERM
+  // shutdown: the old 800ms SIGKILL fallback never asserted the exit code.
+  const apiAlive = api.exitCode === null && api.signalCode === null;
+  if (apiAlive) {
+    const exited = new Promise((resolveExit) => {
+      api.once("exit", (code, signal) => resolveExit({ code, signal }));
+    });
+    const sent = api.kill("SIGTERM");
+    const exit = await Promise.race([
+      exited,
+      pause(browserCompleted ? 10500 : 800).then(() => null),
+    ]);
+    if (browserCompleted) {
+      shutdownFailed = !sent || !exit || exit.code !== 0 || exit.signal !== null;
+      if (!shutdownFailed) console.log("NODE_SIGTERM_PASS: self-hosted Node exited cleanly with disposable PostgreSQL");
+    }
+  } else if (browserCompleted) {
+    shutdownFailed = true;
+  }
+  for (const child of [chrome, api]) {
+    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+  }
   await pause(250);
   await rm(chromeProfile, { recursive: true, force: true });
+  if (shutdownFailed) throw new Error("Node SIGTERM did not finish cleanly within the bounded shutdown deadline");
 }

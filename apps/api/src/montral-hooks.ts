@@ -302,11 +302,14 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const params: unknown[] = [...scope];
     let where = "e.inbox_id=$1 AND e.organization_id=$2 AND e.project_id=$3 AND e.created_at > NOW() - INTERVAL '7 days'";
     if (before) {
-      const cursor = await db.query<{ id: string }>("SELECT id FROM montral_hook_event WHERE id=$1 AND inbox_id=$2", [before, scope[0]]);
+      // Read the cursor position once, at full microsecond precision as text,
+      // so a concurrent eviction of the cursor row cannot turn the comparison
+      // into NULL and silently end paging.
+      const cursor = await db.query<{ at: string }>("SELECT created_at::text AS at FROM montral_hook_event WHERE id=$1 AND inbox_id=$2", [before, scope[0]]);
       // The cursor event was evicted by retention; the caller must start over.
       if (!cursor.length) return c.json({ error: "These events are no longer retained. Refresh the list." }, 410);
-      params.push(before);
-      where += ` AND (e.created_at, e.id) < (SELECT created_at, id FROM montral_hook_event WHERE id=$${params.length})`;
+      params.push(cursor[0].at, before);
+      where += ` AND (e.created_at, e.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
     }
     if (method) { params.push(method); where += ` AND e.method=$${params.length}`; }
     if (q) {

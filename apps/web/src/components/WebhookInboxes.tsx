@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
-import { api, type HookInbox, type HookEvent } from "../lib/api";
+import { api, ApiError, type HookInbox, type HookEvent } from "../lib/api";
 
 export default function WebhookInboxes() {
   const [inboxes, setInboxes] = useState<HookInbox[] | null>(null);
@@ -22,13 +22,21 @@ export default function WebhookInboxes() {
     setInboxes(list);
   }
   useEffect(() => { load().catch((e) => setError((e as Error).message)); }, []);
-  const fetchEvents = async (before?: string) => {
+  const fetchEvents = async (before?: string): Promise<void> => {
     if (!selected) return;
     const seq = ++fetchSeq.current;
-    const d = await api.hookEvents(selected, { before, method, q: applied });
-    if (seq !== fetchSeq.current) return;
-    setEvents((prev) => before ? [...prev, ...d.events] : d.events);
-    setNext(d.next);
+    try {
+      const d = await api.hookEvents(selected, { before, method, q: applied });
+      if (seq !== fetchSeq.current) return;
+      setEvents((prev) => before ? [...prev, ...d.events] : d.events);
+      setNext(d.next);
+    } catch (e) {
+      // A superseded request must not report errors on the inbox now shown.
+      if (seq !== fetchSeq.current) return;
+      // The older page's cursor event was evicted by retention: start over.
+      if (before && e instanceof ApiError && e.status === 410) { setNext(null); return fetchEvents(); }
+      throw e;
+    }
   };
   const report = (e: unknown) => setError((e as Error).message);
   useEffect(() => {

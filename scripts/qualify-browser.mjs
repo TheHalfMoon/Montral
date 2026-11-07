@@ -209,8 +209,13 @@ try {
     throw new Error("Manual browser incident not persisted as investigating");
   }
   await js('Array.from(document.querySelectorAll(".dh-acts button")).find(b => b.textContent.trim() === "Acknowledge").click()');
+  // Compose a desired status while the asynchronous acknowledgement refresh
+  // may still be pending; its later load() must not overwrite user draft state.
+  await js('Array.from(document.querySelectorAll("form.card.cc .seg i")).find(e => e.textContent.trim() === "identified").click()');
+  await until("identified draft selected during acknowledgement", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   await until("incident acknowledged", () => js('!Array.from(document.querySelectorAll(".dh-acts button")).some(b => b.textContent.trim() === "Acknowledge")'));
   await until("incident acknowledgement persisted in API", () => js(`fetch("/api/incidents/${incidentId}", { credentials: "same-origin" }).then(r => r.json()).then(s => !!s.acknowledgedAt)`));
+  await until("draft status survives acknowledgement reload", () => js('Array.from(document.querySelectorAll("form.card.cc .seg i")).some(e => e.textContent.trim() === "identified" && e.classList.contains("on"))'));
   // An internal update is never intended for outbound status-page subscribers.
   // Set the privacy and body first. A late incident-detail reload can reset
   // the draft status; select 'identified' last and verify the complete draft

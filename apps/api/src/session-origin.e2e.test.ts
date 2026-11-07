@@ -28,7 +28,7 @@ describe.skipIf(!url)("cookie-session cross-origin write guard (PostgreSQL)", ()
     expect(res.status).toBe(200);
     return res.headers.getSetCookie().map((v) => v.split(";")[0]).join("; ");
   }
-  const call = (cookie: string, method: string, path: string, headers: Record<string, string> = {}, body?: unknown) =>
+  const call = async (cookie: string, method: string, path: string, headers: Record<string, string> = {}, body?: unknown): Promise<Response> =>
     app.fetch(new Request(origin + "/api" + path, {
       method,
       headers: { cookie, "content-type": "application/json", ...headers },
@@ -41,13 +41,14 @@ describe.skipIf(!url)("cookie-session cross-origin write guard (PostgreSQL)", ()
     const cookie = await session();
     const before = await count(cookie);
     // A sibling subdomain is same-site, so a Lax cookie is sent: the guard must catch it.
-    for (const headers of [
+    const forged: Record<string, string>[] = [
       { origin: "https://status.localhost:8787" },
       { origin: "https://evil.example" },
       { origin: "null" },
       { "sec-fetch-site": "same-site" },
       { "sec-fetch-site": "cross-site" },
-    ]) {
+    ];
+    for (const headers of forged) {
       const res = await call(cookie, "POST", "/incidents", headers, incident);
       expect(res.status, JSON.stringify(headers)).toBe(403);
     }

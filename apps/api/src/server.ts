@@ -17,7 +17,7 @@ import { runMontralMaintenance } from "./montral-maintenance";
 import { migrateMontralSchema } from "./schema-migrate";
 import type { Bindings } from "./env";
 import { processCheckMessage, runDueChecks } from "./scheduler";
-import { createLocalCheckQueue } from "./local-check-queue";
+import { createLocalCheckQueue, claimsForUnstarted } from "./local-check-queue";
 import { scrubUntrustedForwarding } from "./node-proxy-peer";
 
 /**
@@ -173,12 +173,37 @@ const watchdog = setInterval(() => {
 }, 30_000);
 watchdog.unref();
 
+let stopping = false;
 const stop = () => {
+  if (stopping) return; // SIGTERM followed by SIGINT must not close the DB twice.
+  stopping = true;
   clearInterval(tick);
   clearInterval(watchdog);
-  server.close();
-  database.close(5).finally(() => process.exit(0));
-  setTimeout(() => process.exit(0), 8000).unref();
+  server.close(); // stop HTTP admissions, including manual scheduler invocations
+  const unstarted = queue.stopAndTakeUnstarted();
+  // A hard bound avoids an indefinitely hung worker blocking container shutdown.
+  const hardStop = setTimeout(() => {
+    console.error("shutdown: deadline exceeded; exiting for container recovery");
+    process.exit(1);
+  }, 8000);
+  void (async () => {
+    let healthy = true;
+    const claims = claimsForUnstarted(unstarted);
+    if (claims.length) {
+      try { await database.repo.releaseClaims(claims); }
+      catch { healthy = false; console.error("shutdown: unstarted claims could not be released"); }
+    }
+    const drained = await queue.waitForRunning(5000);
+    if (!drained) {
+      healthy = false;
+      console.error("shutdown: running check handler did not drain before deadline");
+    }
+    await database.close(2);
+    return healthy;
+  })().then(
+    (healthy) => { clearTimeout(hardStop); process.exit(healthy ? 0 : 1); },
+    () => { clearTimeout(hardStop); console.error("shutdown: graceful stop failed"); process.exit(1); },
+  );
 };
 process.on("SIGTERM", stop);
 process.on("SIGINT", stop);

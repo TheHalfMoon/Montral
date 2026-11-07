@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createLocalCheckQueue, LOCAL_CHECK_QUEUE_CAPACITY } from "./local-check-queue";
+import { createLocalCheckQueue, claimsForUnstarted, LOCAL_CHECK_QUEUE_CAPACITY } from "./local-check-queue";
 import type { CheckMessage } from "./scheduler";
 
 const msg = (id: string, delaySeconds = 0) => ({
@@ -110,5 +110,67 @@ describe("self-hosted Node queue backpressure", () => {
     expect(() => createLocalCheckQueue(async () => {}, { maxPending: 0 })).toThrow();
     expect(() => createLocalCheckQueue(async () => {}, { maxPending: 1, concurrency: 2 })).toThrow();
     expect(() => createLocalCheckQueue(async () => {}, { maxPending: Number.POSITIVE_INFINITY })).toThrow();
+  });
+  it("returns only ready and delayed leased work on shutdown, drains running work", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    const queue = createLocalCheckQueue(async (message) => {
+      seen.push(message.ids[0]);
+      if (message.ids[0] === "running") await blocked;
+    }, { maxPending: 3, concurrency: 1 });
+    const at = "2026-11-07T03:00:00.000Z";
+    await queue.sendBatch([
+      { body: { ids: ["running"], at: [at] } },
+      { body: { ids: ["ready"], at: [at] } },
+      { body: { ids: ["delayed"], at: [at] }, delaySeconds: 0.05 },
+    ]);
+    await vi.waitFor(() => expect(seen).toEqual(["running"]));
+    expect(queue.pendingCount()).toBe(3);
+    const unstarted = queue.stopAndTakeUnstarted();
+    expect(unstarted.map((m) => m.ids[0])).toEqual(["ready", "delayed"]);
+    expect(claimsForUnstarted(unstarted)).toEqual([
+      { id: "ready", token: new Date(at) },
+      { id: "delayed", token: new Date(at) },
+    ]);
+    expect(queue.pendingCount()).toBe(1);
+    expect(queue.stopAndTakeUnstarted()).toEqual([]);
+    await expect(queue.sendBatch([msg("new")])).rejects.toThrow("shutting down");
+    const draining = queue.waitForRunning(500);
+    release();
+    expect(await draining).toBe(true);
+    expect(queue.pendingCount()).toBe(0);
+    await new Promise((r) => setTimeout(r, 90));
+    expect(seen).toEqual(["running"]); // delayed callback was canceled
+  });
+
+  it("times out a stuck running handler without releasing or duplicating its claim", async () => {
+    let release!: () => void;
+    const blocked = new Promise<void>((resolve) => { release = resolve; });
+    const seen: string[] = [];
+    const queue = createLocalCheckQueue(async (message) => {
+      seen.push(message.ids[0]);
+      await blocked;
+    });
+    await queue.sendBatch([{ body: { ids: ["running"], at: ["2026-11-07T03:00:00.000Z"] } }]);
+    await vi.waitFor(() => expect(seen).toEqual(["running"]));
+    expect(queue.stopAndTakeUnstarted()).toEqual([]);
+    expect(queue.pendingCount()).toBe(1);
+    expect(await queue.waitForRunning(15)).toBe(false);
+    expect(queue.pendingCount()).toBe(1);
+    release();
+    await vi.waitFor(() => expect(queue.pendingCount()).toBe(0));
+    expect(await queue.waitForRunning(0)).toBe(true);
+    await expect(queue.waitForRunning(-1)).rejects.toThrow("shutdown deadline");
+  });
+
+  it("never invents missing, malformed or mismatched lease tokens on shutdown", () => {
+    const at = "2026-11-07T03:00:00.000Z";
+    expect(claimsForUnstarted([
+      { ids: ["legacy"] },
+      { ids: ["incomplete", "misaligned"], at: [at] },
+      { ids: ["malformed"], at: ["not-a-date"] },
+      { ids: ["valid"], at: [at] },
+    ])).toEqual([{ id: "valid", token: new Date(at) }]);
   });
 });

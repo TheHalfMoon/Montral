@@ -16,7 +16,7 @@ import { montralEdition } from "./montral-edition";
 import { runMontralMaintenance } from "./montral-maintenance";
 import { migrateMontralSchema } from "./schema-migrate";
 import type { Bindings } from "./env";
-import { processCheckMessage, runDueChecks, type CheckQueue } from "./scheduler";
+import { processCheckMessage, runDueChecks } from "./scheduler";
 import { createLocalCheckQueue } from "./local-check-queue";
 
 /**
@@ -82,7 +82,7 @@ const app = createApp(shared, { edition });
 // In-process Cloudflare Queue substitute. Reserve every delayed, ready and
 // running task inside one finite, atomically accepting backpressure budget.
 // On rejection runDueChecks releases the entire unsent batch's DB claims.
-const queue: CheckQueue = createLocalCheckQueue(
+const queue = createLocalCheckQueue(
   (message) => processCheckMessage(database.repo, message, entitlements),
 );
 

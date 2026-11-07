@@ -8,6 +8,7 @@ import { createServer } from "node:net";
 import { resolve } from "node:path";
 import { rm } from "node:fs/promises";
 import WebSocket from "../apps/api/node_modules/ws/index.js";
+import postgres from "../packages/db-pg/node_modules/postgres/src/index.js";
 
 const connection = process.env.TEST_DATABASE_URL;
 const executable = process.env.MONTRAL_CHROMIUM;
@@ -252,6 +253,25 @@ try {
   if (closed.status !== "resolved" || !closed.resolvedAt ||
       !closed.updates.some(u => u.status === "resolved" && u.visibility === "public")) {
     throw new Error("Manual incident resolution was not persisted as a public update");
+  }
+  // Verify the committed PostgreSQL rows directly, not only the API view: the
+  // draft-status race must have stored exactly declare -> identified (internal,
+  // chosen during the acknowledgement reload) -> resolved (public).
+  {
+    const sql = postgres(connection, { max: 1, onnotice: () => {} });
+    try {
+      const [row] = await sql`select status, acknowledged_at, resolved_at, auto from incident where id = ${incidentId}`;
+      const updates = await sql`select status, visibility, body = 'Synthetic private investigation update' as private_body from incident_update where incident_id = ${incidentId} order by created_at, id`;
+      const sequence = updates.map((u) => u.status + "/" + u.visibility).join(",");
+      if (!row || row.status !== "resolved" || !row.acknowledged_at || !row.resolved_at || row.auto) {
+        throw new Error("PostgreSQL incident row mismatch after browser journey");
+      }
+      if (sequence !== "investigating/public,identified/internal,resolved/public" || !updates[1].private_body) {
+        throw new Error("PostgreSQL incident_update sequence mismatch: " + sequence);
+      }
+    } finally {
+      await sql.end({ timeout: 5 });
+    }
   }
   await page("/app/incidents");
   await until("resolved incident in list", () => js('document.body.innerText.includes("Synthetic browser incident")'));

@@ -97,6 +97,9 @@ export const zh: Record<string, string> = {
   "Publish a status page": "发布状态页", "Give customers a place to check.": "给客户一个自助查看的地方。",
   // checks, grace, routing, maintenance
   "Response must contain (optional)": "响应内容须包含（可选）", Mode: "模式", "must contain": "必须包含", "must not contain": "必须不含",
+  "JSON assertion (optional)": "JSON 断言（可选）", "JSON assertion": "JSON 断言", "JSON path": "JSON 路径", "Expected value": "期望值",
+  equals: "等于", contains: "包含", exists: "存在",
+  "Checks one value of a JSON response, e.g. path status equals ok, or data.items[0].count equals 3. Use dot keys, [0] for array items and [\"key with space\"]. Numbers, true, false and null are compared as written. Leave the path empty to skip.": "检查 JSON 响应中的一个值，例如路径 status 等于 ok，或 data.items[0].count 等于 3。用点号分隔键，用 [0] 取数组元素，含空格等字符的键写成 [\"key with space\"]。数字、true、false 和 null 按原样比较。路径留空则不检查。",
   "Grace period": "宽限时间", None: "无", Alert: "告警渠道", "none selected = all channels": "不选 = 全部渠道",
   Maintenance: "维护窗口", "Checks keep running, but no incidents or alerts are created during a window.": "窗口内检查照常运行，但不会产生事件或告警。",
   Window: "窗口", Covers: "覆盖范围", State: "状态", "All monitors": "全部监控", "No maintenance windows.": "暂无维护窗口。",

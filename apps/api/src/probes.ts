@@ -1,5 +1,6 @@
 import { readCapped } from "./netguard";
 import { HTTP_REQUEST_CAPABILITY } from "./http-request";
+import { JSON_ASSERTION_CAPABILITY } from "./json-assertion";
 import type { Monitor, RegionResult, Repo } from "@montral/repo";
 import { runCheck, type CheckInput, type CheckOutcome } from "./checker";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signProbe } from "./probe-protocol";
@@ -126,6 +127,7 @@ async function readProbeReply(res: Response, signal: AbortSignal): Promise<unkno
  * nothing about the target, so callers must not count it as a failed check.
  */
 const CAPABILITY_TTL_MS = 30_000;
+/** Per probe URL and capability: until when a positive answer is trusted. */
 const capable = new Map<string, number>();
 /** Forgets which probes were seen supporting request bodies (tests, and a configuration reload). */
 export function resetProbeCapabilities() { capable.clear(); }
@@ -141,21 +143,29 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
     type: input.type, target: input.target, method: input.method, expectedStatus: input.expectedStatus, timeoutMs: input.timeoutMs,
     keyword: input.keyword ?? null, keywordMode: input.keywordMode ?? "contains", expectedLocation: input.expectedLocation ?? null, headers: input.headers ?? {},
     wsMessage: input.wsMessage ?? null, requestBody: input.requestBody ?? null,
+    // only sent when set, so the envelope of a monitor without one stays byte-for-byte what older probes know
+    ...(input.type === "http" && input.jsonPath ? { jsonPath: input.jsonPath, jsonExpected: input.jsonExpected ?? null, jsonMatch: input.jsonMatch ?? "equals" } : {}),
   });
   try {
     // Old probes ignore unknown fields: verify support BEFORE sending a payload. A positive answer is remembered
     // briefly so every check does not pay for a second request; a rolled-back probe is noticed within CAPABILITY_TTL_MS.
-    if (input.type === "http" && (input.requestBody || !["GET", "HEAD", "POST"].includes(input.method)) && (capable.get(probe.url) ?? 0) <= Date.now()) {
+    // A probe without the JSON capability would drop the assertion and report the bare status as a pass.
+    const needed = [
+      ...(input.type === "http" && (input.requestBody || !["GET", "HEAD", "POST"].includes(input.method)) ? [HTTP_REQUEST_CAPABILITY] : []),
+      ...(input.type === "http" && input.jsonPath && input.method !== "HEAD" ? [JSON_ASSERTION_CAPABILITY] : []),
+    ].filter((c) => (capable.get(`${probe.url}\0${c}`) ?? 0) <= Date.now());
+    if (needed.length) {
       const healthSignal = AbortSignal.timeout(5000);
       const health = await fetch(probe.url, { redirect: "manual", signal: healthSignal });
       const capabilities: unknown = health.ok ? JSON.parse(await readCapped(health, 4096, healthSignal)) : null;
       if (!health.ok) void health.body?.cancel().catch(() => {});
       const advertised = (capabilities as { capabilities?: unknown } | null)?.capabilities;
-      if (!Array.isArray(advertised) || !advertised.includes(HTTP_REQUEST_CAPABILITY)) {
-        capable.delete(probe.url);
-        return { region, unreachable: "Probe upgrade required for HTTP request bodies and methods" };
+      const missing = needed.filter((c) => !Array.isArray(advertised) || !advertised.includes(c));
+      if (missing.length) {
+        for (const c of missing) capable.delete(`${probe.url}\0${c}`);
+        return { region, unreachable: missing.includes(HTTP_REQUEST_CAPABILITY) ? "Probe upgrade required for HTTP request bodies and methods" : "Probe upgrade required for JSON assertions" };
       }
-      capable.set(probe.url, Date.now() + CAPABILITY_TTL_MS);
+      for (const c of needed) capable.set(`${probe.url}\0${c}`, Date.now() + CAPABILITY_TTL_MS);
     }
     const ts = Math.floor(Date.now() / 1000);
     // One time budget applies to both response headers and body consumption.

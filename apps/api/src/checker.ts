@@ -6,6 +6,7 @@ import type { DomainExpiry, Repo } from "@montral/repo";
 import { domainCheck } from "./domain-expiry";
 import { websocketCheck } from "./websocket";
 import { certificateCheck } from "./certificate";
+import { clip, jsonAssertionError } from "./json-assertion";
 
 export type CheckInput = {
   type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate";
@@ -18,6 +19,11 @@ export type CheckInput = {
   timeoutMs: number;
   keyword?: string | null;
   keywordMode?: string;
+  /** http: path of one value in a JSON response body (see json-assertion.ts); null or empty = no JSON assertion. */
+  jsonPath?: string | null;
+  /** http: text the value must equal or contain; ignored by "exists". */
+  jsonExpected?: string | null;
+  jsonMatch?: string | null;
   /** With a redirect status expected: where the redirect must lead (an absolute URL, or a path on the target's own site). */
   expectedLocation?: string | null;
   headers?: Record<string, string>;
@@ -37,7 +43,10 @@ export type CheckOutcome = {
   inconclusive?: boolean;
 };
 
-/** How much of a response is read when looking for a keyword. A larger body is not downloaded further. */
+/**
+ * How much of a response is read when looking for a keyword or a JSON value. A larger body is not downloaded further;
+ * with a JSON assertion it fails the check, since a cut-off document cannot be parsed.
+ */
 export const MAX_BODY_BYTES = 1_000_000;
 
 export async function runCheck(m: CheckInput, repo?: Repo): Promise<CheckOutcome> {
@@ -117,21 +126,29 @@ async function httpCheck(m: CheckInput, started: number): Promise<CheckOutcome> 
       return { ok: false, statusCode: res.status, latencyMs: Date.now() - started, error: got ? `Redirects to ${got}, expected ${want ?? m.expectedLocation}` : `Expected a redirect to ${want ?? m.expectedLocation}, but there is no Location header` };
     }
   }
-  if (!m.keyword || m.method === "HEAD") {
+  // HEAD has no body to assert on: only the status (and the redirect) counts
+  if ((!m.keyword && !m.jsonPath) || m.method === "HEAD") {
     await res.body?.cancel();
     const latencyMs = Date.now() - started;
     return { ok: statusOk, statusCode: res.status, latencyMs, error: statusOk ? undefined : `Expected ${m.expectedStatus}, got ${res.status}${where}` };
   }
-  const body = await readCapped(res, MAX_BODY_BYTES);
+  // one byte past the cap tells a body that fits from one that was cut off (which JSON.parse could not read)
+  const body = await readCapped(res, m.jsonPath ? MAX_BODY_BYTES + 1 : MAX_BODY_BYTES);
   const latencyMs = Date.now() - started;
   if (!statusOk) return { ok: false, statusCode: res.status, latencyMs, error: `Expected ${m.expectedStatus}, got ${res.status}${where}` };
-  const found = body.includes(m.keyword);
-  const wantFound = m.keywordMode !== "absent";
-  const ok = found === wantFound;
-  return {
-    ok, statusCode: res.status, latencyMs,
-    error: ok ? undefined : wantFound ? `Keyword "${m.keyword}" not found in response` : `Unexpected keyword "${m.keyword}" found in response`,
-  };
+  const fail = (error: string): CheckOutcome => ({ ok: false, statusCode: res.status, latencyMs, error });
+  // every configured assertion must pass; the first one that does not is reported
+  if (m.keyword) {
+    const found = body.includes(m.keyword);
+    const wantFound = m.keywordMode !== "absent";
+    if (found !== wantFound) return fail(wantFound ? `Keyword "${m.keyword}" not found in response` : `Unexpected keyword "${m.keyword}" found in response`);
+  }
+  if (m.jsonPath) {
+    if (new TextEncoder().encode(body).byteLength > MAX_BODY_BYTES) return fail(`Response is larger than ${MAX_BODY_BYTES} bytes; JSON path ${clip(m.jsonPath)} not checked`);
+    const error = jsonAssertionError(body, { jsonPath: m.jsonPath, jsonMatch: m.jsonMatch, jsonExpected: m.jsonExpected });
+    if (error) return fail(error);
+  }
+  return { ok: true, statusCode: res.status, latencyMs };
 }
 
 /** Cloudflare's socket API. The import fails anywhere else (Node, tests), whatever the runtime words the error as. */

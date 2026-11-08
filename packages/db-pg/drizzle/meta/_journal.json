@@ -330,6 +330,13 @@
       "when": 1794160675395,
       "tag": "0046_monitor_certificate",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1794164279617,
+      "tag": "0047_monitor_json_assertion",
+      "breakpoints": true
     }
   ]
 }

@@ -93,6 +93,11 @@ export const monitor = pgTable(
     /** http: response body must contain (or, with keywordMode "absent", must not contain) this text; websocket: the first message back */
     keyword: text("keyword"),
     keywordMode: text("keyword_mode").notNull().default("contains"),
+    /** http: path of one value in a JSON response body (dot keys, [index], ["quoted key"]); null = no JSON assertion */
+    jsonPath: text("json_path"),
+    /** http: text the value at json_path must equal or contain; unused by json_match "exists" */
+    jsonExpected: text("json_expected"),
+    jsonMatch: text("json_match").$type<"equals" | "contains" | "exists">().notNull().default("equals"),
     /** http, with a redirect status expected: where the redirect must lead (absolute URL, or a path on the target's site) */
     expectedLocation: text("expected_location"),
     /** http: extra request headers (also used for bearer / basic auth) */
@@ -119,7 +124,8 @@ export const monitor = pgTable(
     minRegionsFailing: integer("min_regions_failing").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("monitor_org_idx").on(t.organizationId), index("monitor_due_idx").on(t.nextCheckAt), uniqueIndex("monitor_import_source_unique").on(t.organizationId, t.projectId, t.importSource, t.importSourceId)],
+  (t) => [index("monitor_org_idx").on(t.organizationId), index("monitor_due_idx").on(t.nextCheckAt), uniqueIndex("monitor_import_source_unique").on(t.organizationId, t.projectId, t.importSource, t.importSourceId),
+    check("monitor_json_match_chk", sql`${t.jsonMatch} in ('equals', 'contains', 'exists')`)],
 );
 
 /** Append-only observations and configuration fences. No historical backfill from mutable status or incidents. */

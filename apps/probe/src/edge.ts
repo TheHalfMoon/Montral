@@ -94,6 +94,8 @@ export async function handleEdgeProbe(request: Request, env: EdgeEnv, fetcher: t
   const keyword = value.keyword;
   if (keyword != null && (typeof keyword !== "string" || keyword.length > 500)) return json(400, { error: "Invalid keyword" });
   if (!["contains", "absent"].includes(String(value.keywordMode ?? "contains"))) return json(400, { error: "Invalid keyword mode" });
+  // not advertised here, so the scheduler never sends one; refusing beats passing a check whose assertion was dropped
+  if (value.jsonPath != null && value.jsonPath !== "") return json(400, { error: "JSON assertions are not supported on the edge probe" });
 
   const started = Date.now();
   try {

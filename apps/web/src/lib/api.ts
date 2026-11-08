@@ -11,6 +11,8 @@ export type Monitor = {
   uptime24h?: number | null; avgLatency24h?: number | null; spark?: (number | null)[];
   dnsRecordType?: "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS"; dnsExpectedValue?: string | null; dnsMatchMode?: "exact" | "contains";
   keyword?: string | null; keywordMode?: "contains" | "absent"; expectedLocation?: string | null; wsMessage?: string | null; graceSec?: number; channelIds?: string[]; headers?: Record<string, string>;
+  /** http: one value of a JSON response body, picked by a path (dot keys, [index], ["quoted key"]) and tested */
+  jsonPath?: string | null; jsonExpected?: string | null; jsonMatch?: "equals" | "contains" | "exists";
   /** the project the monitor belongs to (the lists of the "All projects" view mix several) */
   projectId?: string | null;
   tags?: string[]; slowThresholdMs?: number; slowAlertAfter?: number;

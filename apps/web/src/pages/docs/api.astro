@@ -18,6 +18,9 @@ recoveryThreshold integer 1-10 successful runs or heartbeat pings before recover
 regions        string[], ids from GET /regions                 (default ["auto"]; http, tcp and websocket monitors only)
 keyword        string | null, max 500                        (default null)
 keywordMode    "contains" | "absent"                         (default "contains")
+jsonPath       string | null, max 200  http only: one value of the JSON response body, e.g. status, $.data.items[0].state, ["key with space"]; dot keys, [index] and ["quoted key"], at most 32 segments (default null = no JSON assertion; skipped for HEAD)
+jsonMatch      "equals" | "contains" | "exists"  (default "equals"; exists passes for any value, null included)
+jsonExpected   string | null, max 500  required for equals/contains, ignored by exists; strings compare as they are, numbers/booleans/null as JSON ("42" matches 42, "true" matches true)
 expectedLocation string | null, max 2048  with a 301/302/303/307/308 expectedStatus: the redirect is not followed; Location must equal this URL or path (default null = any)
 headers        { [name: string]: string }  http, or the websocket handshake (default {})
 wsMessage      string | null, max 2000  websocket: text sent once connected; a message must come back within timeoutMs (default null = handshake only; not a secret)
@@ -238,6 +241,14 @@ DELETE /api/push/devices/:token    204</code></pre>
   -H "x-project-id: &lt;project id&gt;" \
   -H "content-type: application/json" \
   -d '{"name":"Homepage","type":"http","target":"https://example.com","intervalSec":60}'</code></pre>
+    <h3 id="json-assertion">Check a value in a JSON response</h3>
+    <p>For a health endpoint that answers <code is:raw>{"status":"ok","data":{"items":[{"state":"ready","count":3}]}}</code>, require one value with <code>jsonPath</code>. The check fails when the body is not valid JSON, when the path is not there, or when the value does not match; status, keyword and JSON assertions must all pass. Bodies over 1 MB fail a JSON assertion, and error messages show at most 80 characters of a value.</p>
+    <pre><code is:raw>curl -X POST https://montral.invalid/api/monitors \
+  -H "x-api-key: montral_..." \
+  -H "content-type: application/json" \
+  -d '{"name":"API health","type":"http","target":"https://api.example.com/health",
+       "jsonPath":"data.items[0].state","jsonMatch":"equals","jsonExpected":"ready"}'</code></pre>
+    <p><code>"jsonExpected":"3"</code> matches the number <code>3</code> at <code>data.items[0].count</code>; <code>"jsonMatch":"exists"</code> only requires the path to be present. Clear the assertion with <code is:raw>PATCH {"jsonPath":null}</code>. Regional probes run it only once upgraded; an older probe counts as unreachable (<code>probe_unreachable</code> for a spot check) instead of passing the check without it.</p>
     <h3>List monitors</h3>
     <pre><code>curl https://montral.invalid/api/monitors \
   -H "Authorization: Bearer montral_..."</code></pre>
@@ -298,6 +309,14 @@ DELETE /api/push/devices/:token    204</code></pre>
   -H "x-project-id: &lt;project id&gt;" \
   -H "content-type: application/json" \
   -d '{"name":"Homepage","type":"http","target":"https://example.com","intervalSec":60}'</code></pre>
+    <h3 id="json-assertion-zh">校验 JSON 响应中的值</h3>
+    <p>对于返回 <code is:raw>{"status":"ok","data":{"items":[{"state":"ready","count":3}]}}</code> 的健康检查接口，可以用 <code>jsonPath</code> 要求其中一个值。响应不是合法 JSON、路径不存在或值不匹配时检测失败；状态码、关键字与 JSON 断言须全部通过。超过 1 MB 的响应无法通过 JSON 断言，错误信息中的值最多显示 80 个字符。</p>
+    <pre><code is:raw>curl -X POST https://montral.invalid/api/monitors \
+  -H "x-api-key: montral_..." \
+  -H "content-type: application/json" \
+  -d '{"name":"API health","type":"http","target":"https://api.example.com/health",
+       "jsonPath":"data.items[0].state","jsonMatch":"equals","jsonExpected":"ready"}'</code></pre>
+    <p><code>"jsonExpected":"3"</code> 可匹配 <code>data.items[0].count</code> 处的数字 <code>3</code>；<code>"jsonMatch":"exists"</code> 只要求路径存在。用 <code is:raw>PATCH {"jsonPath":null}</code> 清除断言。区域探针升级后才会执行该断言；旧版探针会被视为不可达（单次区域检测返回 <code>probe_unreachable</code>），而不会在忽略断言的情况下判定通过。</p>
     <h3>列出监控项</h3>
     <pre><code>curl https://montral.invalid/api/monitors \
   -H "Authorization: Bearer montral_..."</code></pre>

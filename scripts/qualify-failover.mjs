@@ -55,6 +55,7 @@ const targetUrl = `http://127.0.0.1:${target.address().port}/health`;
 
 let child;
 let log = "";
+const exited = (proc) => proc.exitCode !== null || proc.signalCode !== null;
 const summary = [];
 try {
   sh(["network", "create", NET]);
@@ -77,7 +78,15 @@ try {
   await primary`alter system set synchronous_standby_names = 'montral_replica'`;
   await primary`select pg_reload_conf()`;
   await until("replica synchronous", async () => (await primary`select sync_state from pg_stat_replication`)[0]?.sync_state === "sync", 30_000);
-  summary.push("setup: primary + synchronous streaming replica");
+  // Negative control: with the standby paused, a commit on the primary must not be acknowledged.
+  await primary`create table if not exists failover_probe (id serial primary key, at timestamptz default now())`;
+  sh(["pause", "montral-fo-replica"]);
+  const pending = primary`insert into failover_probe default values returning id`.then(() => "acknowledged", (e) => "failed: " + e.message);
+  const early = await Promise.race([pending, sleep(4000).then(() => "waiting")]);
+  sh(["unpause", "montral-fo-replica"]);
+  if (early !== "waiting") throw new Error("a commit was acknowledged without the synchronous standby (" + early + ")");
+  if ((await pending) !== "acknowledged") throw new Error("the commit did not complete once the standby resumed");
+  summary.push("setup: primary + synchronous streaming replica (a commit waits for the standby: verified by pausing it)");
 
   // toxiproxy in front of the primary
   sh(["run", "-d", "--name", "montral-fo-proxy", "--network", NET, "-p", `127.0.0.1:${toxiPort}:8474`, "-p", `127.0.0.1:${proxyPort}:6432`,
@@ -96,7 +105,8 @@ try {
     stdio: ["ignore", "pipe", "pipe"],
   });
   for (const s of [child.stdout, child.stderr]) { s.setEncoding("utf8"); s.on("data", (c) => { if (!/severity_local|routine:|file: '|line: '|code: '|^\s*[{}]/m.test(c)) log = (log + c).slice(-8000); }); }
-  const healthy = () => fetch(base + "/health", { signal: AbortSignal.timeout(2000) }).then((r) => r.ok, () => false);
+  // /health answers without the database; a lookup of a page that does not exist needs a working database (404 vs 5xx)
+  const healthy = () => fetch(base + "/api/public/status/failover-probe-none/summary", { signal: AbortSignal.timeout(3000) }).then((r) => r.status === 404, () => false);
   await until("server healthy", healthy, 60_000);
 
   const orgId = "failover-qa-" + crypto.randomUUID();
@@ -115,17 +125,25 @@ try {
   await toxi("/proxies/pg/toxics", "POST", { name: "blackhole_down", type: "timeout", stream: "downstream", attributes: { timeout: 0 } });
   await toxi("/proxies/pg/toxics", "POST", { name: "blackhole_up", type: "timeout", stream: "upstream", attributes: { timeout: 0 } });
   const partitionEnd = Date.now() + 45_000; // spans a scheduler tick
+  await sleep(5000);
+  // read directly from the primary (not through the proxy): nothing may be written while the path is black-holed
+  const duringStart = await okResults(primary);
+  let dbAnswered = false;
   while (Date.now() < partitionEnd) {
-    if (child.exitCode !== null) throw new Error("server exited during the network partition: " + log);
+    if (exited(child)) throw new Error("server exited during the network partition: " + log);
+    if (await healthy()) dbAnswered = true;
     await sleep(2000);
   }
+  const duringEnd = await okResults(primary);
+  if (duringEnd !== duringStart) throw new Error(`checks were recorded through a black-holed path (${duringStart} -> ${duringEnd}): the partition did not take effect`);
+  if (dbAnswered) throw new Error("a database-backed request succeeded during the partition: the partition did not take effect");
   await toxi("/proxies/pg/toxics/blackhole_down", "DELETE");
   await toxi("/proxies/pg/toxics/blackhole_up", "DELETE");
-  if (child.exitCode !== null) throw new Error("server exited when the partition healed");
+  if (exited(child)) throw new Error("server exited when the partition healed");
   await until("health after partition", healthy, 30_000);
   await until("checks resume after partition", async () => (await okResults(primary)) > okBeforePartition, CHECK_WINDOW_MS);
   if ((await incidentsOn(primary)).length !== 0) throw new Error("a network partition opened an incident for a healthy target");
-  summary.push("A: 45 s black-holed database path survived; checks resumed; no false incident");
+  summary.push("A: 45 s black-holed database path (verified: no writes and no database-backed answers during it) survived; checks resumed; no false incident");
 
   // an outage incident, committed on the primary (and, synchronously, on the replica)
   mode = "down";
@@ -147,7 +165,7 @@ try {
   if (resultsOnReplica < resultsBefore) throw new Error(`committed check results lost in failover: ${resultsOnReplica} < ${resultsBefore}`);
   await toxi("/proxies/pg", "POST", { upstream: "montral-fo-replica:5432", enabled: true });
   const failoverAt = Date.now();
-  if (child.exitCode !== null) throw new Error("server exited during failover: " + log);
+  if (exited(child)) throw new Error("server exited during failover: " + log);
   await until("health after failover", healthy, 60_000);
   // writes reach the new primary: failing checks keep being recorded, still one open incident
   await until("checks recorded on the promoted primary", async () => (await promoted`select count(*)::int as n from check_result where monitor_id = ${monitorId}`)[0].n > resultsOnReplica, CHECK_WINDOW_MS);
@@ -157,7 +175,7 @@ try {
   await until("incident resolved on the promoted primary", async () => (await incidentsOn(promoted)).every((i) => i.resolved_at), CHECK_WINDOW_MS);
   const all = await incidentsOn(promoted);
   if (all.length !== 1) throw new Error("expected exactly one incident across the failover, found " + all.length);
-  if (child.exitCode !== null) throw new Error("server exited after failover");
+  if (exited(child)) throw new Error("server exited after failover");
   summary.push(`B: primary killed, replica promoted, no committed row lost; server reconnected without restart and wrote to the new primary within ${Math.round((Date.now() - failoverAt) / 1000)} s; same single incident resolved`);
   await promoted.end({ timeout: 1 });
 

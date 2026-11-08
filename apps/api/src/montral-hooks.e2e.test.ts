@@ -235,7 +235,19 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       expect((await a("POST", `/inboxes/${id}/events/${first.id}/replay`, bad)).status, JSON.stringify(bad)).toBe(400);
     }
 
-    // With ALLOW_PRIVATE_TARGETS (self-hosted dev), the request is resent to a local endpoint.
+    // ALLOW_PRIVATE_TARGETS lets monitors reach internal services, but replay
+    // returns response bodies, so it alone must not open private targets.
+    const monitorsOnly = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: "http://127.0.0.1:9/x" }, { ALLOW_PRIVATE_TARGETS: "true" });
+    expect(monitorsOnly.status).toBe(400);
+    expect(monitorsOnly.body.code).toBe("target_not_allowed");
+    // The replay-specific opt-in still never reaches link-local or metadata addresses.
+    for (const url of ["http://169.254.169.254/latest/meta-data/", "http://[::ffff:169.254.169.254]/", "http://100.100.100.200/", "http://[fe80::1]/"]) {
+      const metadata = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url }, { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" });
+      expect(metadata.status, url).toBe(400);
+      expect(metadata.body.code, url).toBe("target_not_allowed");
+    }
+
+    // With MONTRAL_REPLAY_PRIVATE_TARGETS (self-hosted dev), the request is resent to a local endpoint.
     let seen: { method?: string; headers?: IncomingHttpHeaders; body?: string } = {};
     const sink = createServer((req, res) => {
       let body = "";
@@ -243,17 +255,19 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       req.on("end", () => {
         seen = { method: req.method, headers: req.headers, body };
         res.writeHead(req.url === "/redirect" ? 302 : 201, { "content-type": "text/plain", location: "http://169.254.169.254/" });
-        res.end("y".repeat(5000));
+        // Multibyte text: truncation must count bytes, not characters.
+        res.end("é".repeat(3000));
       });
     });
     await new Promise<void>((r) => sink.listen(0, "127.0.0.1", r));
     const sinkUrl = `http://127.0.0.1:${(sink.address() as AddressInfo).port}`;
     try {
-      const allowed = { ALLOW_PRIVATE_TARGETS: "true" };
+      const allowed = { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" };
       const replayed = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/hook" }, allowed);
       expect(replayed.status).toBe(200);
       expect(replayed.body).toMatchObject({ status: 201, contentType: "text/plain", truncated: true });
-      expect(replayed.body.body).toHaveLength(4096);
+      expect(new TextEncoder().encode(replayed.body.body).byteLength).toBe(4096);
+      expect(replayed.body.body).toBe("é".repeat(2048));
       expect(seen.method).toBe("POST");
       expect(seen.body).toBe(first.body);
       expect(seen.headers?.["content-type"]).toBe("application/json");
@@ -268,7 +282,7 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       await new Promise((r) => sink.close(r));
     }
     // A closed port is a fixed, non-revealing error.
-    const unreachable = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/gone" }, { ALLOW_PRIVATE_TARGETS: "true" });
+    const unreachable = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/gone" }, { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" });
     expect(unreachable.status).toBe(502);
     expect(JSON.stringify(unreachable.body)).not.toMatch(/127\.0\.0\.1|ECONNREFUSED/);
 

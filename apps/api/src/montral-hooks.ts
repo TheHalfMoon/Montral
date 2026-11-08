@@ -3,7 +3,8 @@ import type { AppEnv } from "./env";
 import { Hono } from "hono";
 import { requireManager, rejectInAllProjects, uuidParams } from "./middleware";
 import { allow } from "./ratelimit";
-import { BlockedTarget, checkUserAgent, guardedFetch, readCapped, urlProblem } from "./netguard";
+import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers, readCapped } from "./netguard";
+import { pinnedFetch } from "./pinnedfetch";
 import { z } from "zod";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -14,6 +15,47 @@ const listInbox = z.object({ name: z.string().trim().min(1).max(100) }).strict()
 const EVENT_PAGE = 50;
 const REPLAY_TIMEOUT_MS = 10_000;
 const REPLAY_RESPONSE_BYTES = 4 * 1024;
+/** Link-local and cloud metadata addresses: refused for replay in every configuration. */
+export function replayAddressForbidden(ip: string): boolean {
+  const a = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  // IPv4-mapped IPv6 in hex form, as the URL parser writes it: ::ffff:a9fe:a9fe
+  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
+  if (mapped) {
+    const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
+    return replayAddressForbidden(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  const v4 = /^(?:::ffff:)?(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  if (v4) {
+    const [x, y, z, w] = v4.slice(1).map(Number);
+    return (x === 169 && y === 254) || (x === 100 && y === 100 && z === 100 && w === 200) || x === 0;
+  }
+  return /^fe[89ab][0-9a-f]:/.test(a) || a === "fd00:ec2::254" || a === "::";
+}
+/**
+ * Replay's outbound request. By default only public addresses are reachable,
+ * whatever ALLOW_PRIVATE_TARGETS says: that setting lets monitors check
+ * internal services, but replay returns the response body to the caller, so
+ * it would become a way to read internal pages. A self-hosted operator can
+ * allow private development endpoints with MONTRAL_REPLAY_PRIVATE_TARGETS;
+ * link-local and metadata addresses stay refused, and the connection is
+ * pinned to the addresses that were checked.
+ */
+async function replayFetch(url: string, init: RequestInit, privateAllowed: boolean): Promise<Response> {
+  if (!privateAllowed || isWorkers()) return (await guardedFetch(url, init, { follow: false, publicOnly: true })).res;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  const literal = host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+  const dns = literal ? null : await import("node:dns/promises");
+  const addresses = literal ? [host] : (await dns!.lookup(host, { all: true })).map((r) => r.address);
+  if (!addresses.length || addresses.some(replayAddressForbidden)) throw new BlockedTarget();
+  return pinnedFetch(url, { ...init, redirect: "manual" }, addresses);
+}
+/** Text of at most `max` bytes, and whether the response was longer. */
+async function readReplayBody(res: Response, max: number, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
+  const raw = new TextEncoder().encode(await readCapped(res, max + 1, signal));
+  if (raw.byteLength <= max) return { text: new TextDecoder().decode(raw), truncated: false };
+  // Cut on a byte boundary and drop a character split by the cut.
+  return { text: new TextDecoder().decode(raw.subarray(0, max)).replace(/�$/, ""), truncated: true };
+}
 const replayTarget = z.object({
   // zod still runs refinements after .url() fails, so parse defensively here.
   url: z.string().trim().max(2048).url().refine((u) => /^https?:$/.test(URL.parse(u)?.protocol ?? ""), "http or https only"),
@@ -357,6 +399,8 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     if (incoming.oversized) return c.json({ error: "Payload too large" }, 413);
     const parsed = replayTarget.safeParse(incoming.value);
     if (!parsed.success) return c.json({ error: "Provide an http(s) url to replay to" }, 400);
+    // Replay sends requests from Montral's network; agents may not trigger it.
+    if (c.get("requestPrincipal")?.kind === "oauth") return c.json({ error: "Replay is not available to authorized agents" }, 403);
     const inboxId = c.req.param("id");
     const rows = await c.get("database").query<HookEvent>(
       "SELECT id,method,content_type,headers,body,created_at FROM montral_hook_event WHERE id=$1 AND inbox_id=$2 AND organization_id=$3 AND project_id=$4",
@@ -364,9 +408,11 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     );
     const event = rows[0];
     if (!event) return c.json({ error: "Not found" }, 404);
-    if (!(await allow(c.get("repo"), `montral:hook-replay:${inboxId}`, 20, 60))) return c.json({ error: "Too many replays" }, 429);
-    const refused = await urlProblem(parsed.data.url);
-    if (refused) return c.json({ error: refused, code: "target_not_allowed" }, 400);
+    // Per inbox and per workspace, so more inboxes or projects do not multiply it.
+    const repo = c.get("repo");
+    if (!(await allow(repo, `montral:hook-replay:${inboxId}`, 20, 60)) || !(await allow(repo, `montral:hook-replay-org:${c.get("orgId")}`, 60, 60))) {
+      return c.json({ error: "Too many replays" }, 429);
+    }
     const headers: Record<string, string> = { "user-agent": checkUserAgent(), "x-montral-replay": event.id };
     for (const [name, value] of Object.entries(event.headers ?? {})) {
       if (name !== "user-agent" && typeof value === "string") headers[name] = value;
@@ -375,15 +421,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const signal = AbortSignal.timeout(REPLAY_TIMEOUT_MS);
     const started = Date.now();
     try {
-      const { res } = await guardedFetch(parsed.data.url, { method: event.method, headers, body: event.body, signal }, { follow: false });
-      const text = await readCapped(res, REPLAY_RESPONSE_BYTES + 1, signal);
-      return c.json({
-        status: res.status,
-        contentType: res.headers.get("content-type"),
-        body: text.slice(0, REPLAY_RESPONSE_BYTES),
-        truncated: text.length > REPLAY_RESPONSE_BYTES,
-        durationMs: Date.now() - started,
-      });
+      const res = await replayFetch(parsed.data.url, { method: event.method, headers, body: event.body, signal }, c.env.MONTRAL_REPLAY_PRIVATE_TARGETS === "true");
+      const { text, truncated } = await readReplayBody(res, REPLAY_RESPONSE_BYTES, signal);
+      return c.json({ status: res.status, contentType: res.headers.get("content-type"), body: text, truncated, durationMs: Date.now() - started });
     } catch (error) {
       if (error instanceof BlockedTarget) return c.json({ error: error.message, code: "target_not_allowed" }, 400);
       // Fixed messages only: network errors can echo internal addresses.

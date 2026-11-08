@@ -8,7 +8,7 @@ jobs:
   monorepo:
     name: Typecheck, tests and production builds
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       TEST_DATABASE_URL: postgres://montral:montral-local-test@127.0.0.1:5432/montral_ci
     services:
@@ -109,6 +109,16 @@ jobs:
           psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_browser_ci'
           trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_browser_ci WITH (FORCE)"' EXIT
           MONTRAL_CHROMIUM="$browser" TEST_DATABASE_URL="$browser_db" node scripts/qualify-browser.mjs
+      # SIGTERM success says nothing about SIGKILL or database loss: qualify
+      # those separately against a real Node process and disposable database.
+      - name: Qualify SIGKILL, database outage and two-worker recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          crash_db="${TEST_DATABASE_URL%/*}/montral_test_crash_ci"
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_crash_ci'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_crash_ci WITH (FORCE)"' EXIT
+          TEST_DATABASE_URL="$crash_db" node scripts/qualify-crash-recovery.mjs
       - name: Qualify automatic incident and SMTP alert delivery to local sink
         run: node scripts/qualify-smtp.mjs
       - name: Qualify Node SMTP failure log privacy with synthetic local peer

@@ -19,6 +19,10 @@ scripts with no policy at all.
   Styles keep `unsafe-inline` for the sample uptime bars' `style` attributes.
 - The script refuses inline event handlers and `javascript:` URLs, and
   `--check` fails CI when a page is edited without refreshing the policy.
+- After the move, `apps/web/public/landing.js` is the source of truth for the
+  page script (edit it directly); `--check` covers the HTML and its policy.
+  `.gitattributes` keeps these files LF so hashes and the check are stable on
+  Windows checkouts.
 - Framing, `base-uri`, `object-src` and form targets are also sent as headers
   by the Node server (`web-security-headers.ts`).
 

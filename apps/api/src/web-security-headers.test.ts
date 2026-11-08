@@ -25,10 +25,11 @@ describe("web security headers", () => {
     expect(csp).toContain("form-action 'self'");
     expect(csp).not.toMatch(/script-src|default-src/);
   });
-  it("sets headers on a real Node response without overriding a handler's own value", async () => {
+  it("sets headers on a real Node response and lets a later handler value win", async () => {
     const server = createServer((req, res) => {
-      if (req.url?.startsWith("/reset-password")) res.setHeader("referrer-policy", "no-referrer");
+      // Same order as server.ts: defaults first, then the page handler.
       applyWebSecurityHeaders(req.url, res);
+      if (req.url?.startsWith("/reset-password")) res.setHeader("referrer-policy", "no-referrer");
       res.end("ok");
     });
     await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));

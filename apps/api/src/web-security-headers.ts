@@ -19,10 +19,12 @@ export function webSecurityHeaders(path: string): Record<string, string> {
   };
 }
 
-/** Sets the headers unless a handler already chose its own value (e.g. a stricter referrer policy). */
+/**
+ * Called before the static/SSR handlers run, so these are defaults: a handler
+ * that sets the same header later (for example a stricter referrer policy)
+ * replaces the value.
+ */
 export function applyWebSecurityHeaders(url: string | undefined, res: ServerResponse): void {
   const path = (url ?? "/").split("?")[0];
-  for (const [name, value] of Object.entries(webSecurityHeaders(path))) {
-    if (!res.hasHeader(name)) res.setHeader(name, value);
-  }
+  for (const [name, value] of Object.entries(webSecurityHeaders(path))) res.setHeader(name, value);
 }

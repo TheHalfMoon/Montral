@@ -86,51 +86,6 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
   <script>import "../lib/boot";</script>
   <script>import { registerServiceWorker } from "../lib/pwa";
     registerServiceWorker();</script>
-  <script is:inline>
-    // delegated, bound once: the DOM is swapped on soft navigation but `document` survives
-    if (!window.__montralApp) {
-      window.__montralApp = 1;
-      var shut = function () {
-        var m = document.getElementById("me-menu"), b = document.getElementById("me-btn");
-        if (m) m.hidden = true;
-        if (b) b.setAttribute("aria-expanded", "false");
-      };
-      document.addEventListener("click", function (e) {
-        var el = e.target.closest ? e.target : e.target.parentElement;
-        var app = document.getElementById("app");
-        if (el.closest("#menu-btn, #tab-more")) return app.classList.toggle("open");
-        if (el.closest("#scrim")) return app.classList.remove("open");
-        if (el.closest("#me-btn")) {
-          var m = document.getElementById("me-menu");
-          m.hidden = !m.hidden;
-          return document.getElementById("me-btn").setAttribute("aria-expanded", String(!m.hidden));
-        }
-        if (el.closest(".signout")) {
-          return fetch("/api/auth/sign-out", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" })
-            .then(function () { location.href = (/^\/zh-Hans(\/|$)/.test(location.pathname) ? "/zh-Hans" : "") + "/login"; });
-        }
-        shut();
-      });
-      var counts = function () {
-        fetch("/api/counts", { credentials: "include" }).then(function (r) { return r.ok ? r.json() : null; }).then(function (c) {
-          if (!c) return;
-          document.querySelectorAll("[data-count]").forEach(function (el) {
-            var k = el.getAttribute("data-count"), n = c[k];
-            if (n == null) return;
-            el.textContent = n;
-            el.hidden = !(n > 0);
-            el.className = k === "incidents" && n > 0 ? "cnt" : "";
-          });
-        }).catch(function () {});
-      };
-      // lib/boot.ts paints the first counts; refresh after create/resolve actions
-      window.addEventListener("montral:changed", counts);
-      document.addEventListener("keydown", function (e) {
-        if (e.key !== "Escape") return;
-        shut();
-        var app = document.getElementById("app");
-        if (app) app.classList.remove("open");
-      });
-    }
-  </script>
+  <!-- Bundled (served from 'self') rather than is:inline: Astro's CSP hashes do not cover an inline script here. -->
+  <script>import "../lib/app-shell";</script>
 </Base>

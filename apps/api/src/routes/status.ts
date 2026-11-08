@@ -7,6 +7,11 @@ import { langFromHeader, tr } from "../mail-i18n";
 import type { AppEnv } from "../env";
 import type { Plan } from "../entitlements";
 import { currentSession } from "../auth";
+import {
+  accessCookie, hashPagePassword, hasAccessGrant, MAX_ACTIVE_SHARE_LINKS, newShareToken, redeemShareToken,
+  SHARE_LINK_DEFAULT_HOURS, SHARE_LINK_MAX_HOURS, verifyPagePassword,
+} from "../status-access";
+import type { StatusPage } from "@montral/repo";
 import { requireManager, uuidParams } from "../middleware";
 import { clientIp } from "../ratelimit";
 import { sharedCache, waitUntilOf } from "../sharedcache";
@@ -34,8 +39,11 @@ const pageBody = z.object({
   uptimeWarnPct: z.number().min(1).max(100).optional(),
   // public MCP tools may serve this page
   mcpEnabled: z.boolean().optional(),
-  // "members": only signed-in members of the workspace see the page and its feeds
-  visibility: z.enum(["public", "members"]).optional(),
+  // "members": only signed-in members of the workspace see the page and its feeds;
+  // "password": members, plus anyone who unlocks it with the page password or a share link
+  visibility: z.enum(["public", "members", "password"]).optional(),
+  // sets (or replaces) the page password; never returned. Replacing it signs every outside visitor out.
+  password: z.string().min(8).max(200).optional(),
   // hours before maintenance starts that subscribers are reminded; 0 = never
   maintenanceReminderHours: z.number().int().min(0).max(168).optional(),
   monitorIds: z.array(z.string().uuid()).optional(),
@@ -47,6 +55,9 @@ const thresholdsProblem = (c: Context<AppEnv>, ok: number, warn: number) =>
   warn < ok ? null : c.json({ error: "The amber threshold must be below the green one" }, 400);
 const toComponents = (v: { monitorIds?: string[]; components?: { monitorId: string; groupName?: string }[] }) =>
   v.components ?? (v.monitorIds ?? []).map((monitorId) => ({ monitorId }));
+
+/** What the management API returns for a page: the password hash never leaves the server. */
+const toClient = ({ accessPasswordHash, ...page }: StatusPage) => ({ ...page, hasPassword: !!accessPasswordHash });
 
 /** The stored flag counts only while the plan allows it: after a downgrade the page shows Montral again, and the flag is kept. */
 async function brandingHidden(c: Context<AppEnv>, page: { hideBranding: boolean; organizationId: string }) {
@@ -83,21 +94,22 @@ export const statusPages = new Hono<AppEnv>()
       purgePublicStatus();
     }
   })
-  .get("/", async (c) => c.json(await c.get("repo").listStatusPages(c.get("orgId"), c.get("projectId"))))
+  .get("/", async (c) => c.json((await c.get("repo").listStatusPages(c.get("orgId"), c.get("projectId"))).map(toClient)))
   .post(
     "/",
     zValidator("json", z.object({ slug: z.string().regex(/^[a-z0-9-]{3,40}$/) }).and(pageBody.partial({ title: true }).required({ title: true }))),
     async (c) => {
       const repo = c.get("repo");
-      const { monitorIds, components, ...v } = c.req.valid("json");
+      const { monitorIds, components, password, ...v } = c.req.valid("json");
+      if (v.visibility === "password" && !password) return c.json({ error: "A password-protected page needs a password" }, 400);
       const denied = await brandingProblem(c, v.hideBranding);
       if (denied) return denied;
       const bad = thresholdsProblem(c, v.uptimeOkPct ?? 99.9, v.uptimeWarnPct ?? 98);
       if (bad) return bad;
       if (await repo.slugTaken(v.slug)) return c.json({ error: "That slug is already taken" }, 409);
-      const page = await repo.createStatusPage(c.get("orgId"), c.get("projectId"), v);
+      const page = await repo.createStatusPage(c.get("orgId"), c.get("projectId"), { ...v, ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}) });
       await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
-      return c.json(page, 201);
+      return c.json(toClient(page), 201);
     },
   )
   .get("/:id", uuidParams, async (c) => {
@@ -108,21 +120,83 @@ export const statusPages = new Hono<AppEnv>()
     const plan = await c.get("entitlements").plan(c.get("orgId"));
     // what the editor needs to know about the plan: may this page hide the brand, and where to upgrade if not
     const branding = { allowed: brandingAllowed(plan), upgradeUrl: brandingAllowed(plan) ? undefined : plan?.upgradeUrl };
-    return c.json({ ...page, monitorIds: comps.map((x) => x.monitorId), components: comps, branding });
+    return c.json({ ...toClient(page), monitorIds: comps.map((x) => x.monitorId), components: comps, branding });
   })
   .patch("/:id", uuidParams, requireManager, zValidator("json", pageBody.partial()), async (c) => {
     const repo = c.get("repo");
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!page) return c.json({ error: "Not found" }, 404);
-    const { monitorIds, components, ...v } = c.req.valid("json");
+    const { monitorIds, components, password, ...v } = c.req.valid("json");
+    if ((v.visibility ?? page.visibility) === "password" && !password && !page.accessPasswordHash) {
+      return c.json({ error: "A password-protected page needs a password" }, 400);
+    }
     // a page that already hides the brand can still be edited after a downgrade; only turning it on is refused
     const denied = await brandingProblem(c, v.hideBranding && !page.hideBranding ? true : undefined);
     if (denied) return denied;
     const bad = thresholdsProblem(c, v.uptimeOkPct ?? page.uptimeOkPct, v.uptimeWarnPct ?? page.uptimeWarnPct);
     if (bad) return bad;
-    await repo.updateStatusPage(page.id, v);
+    // A new password, or any change of visibility, signs out everyone outside the workspace: an old unlock cookie
+    // must not come back to life when a page returns to password mode, and anyone who subscribed while the page was
+    // public is not a current subscriber of the protected page.
+    const visibilityChanged = v.visibility !== undefined && v.visibility !== page.visibility;
+    await repo.updateStatusPage(page.id, {
+      ...v,
+      ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}),
+      ...(password || visibilityChanged ? { accessVersion: page.accessVersion + 1 } : {}),
+    });
     if (monitorIds || components) await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
     return c.json({ ok: true });
+  })
+  // Sign out everyone outside the workspace: existing password and share-link cookies stop working; links still work.
+  .post("/:id/access/revoke", uuidParams, requireManager, async (c) => {
+    const repo = c.get("repo");
+    const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!page) return c.json({ error: "Not found" }, 404);
+    await repo.updateStatusPage(page.id, { accessVersion: page.accessVersion + 1 });
+    return c.json({ ok: true });
+  })
+  .get("/:id/share-links", uuidParams, requireManager, async (c) => {
+    const page = await c.get("repo").getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!page) return c.json({ error: "Not found" }, 404);
+    const links = await c.get("database").query<{ id: string; label: string | null; created_at: Date; expires_at: Date; revoked_at: Date | null; last_used_at: Date | null }>(
+      "SELECT id, label, created_at, expires_at, revoked_at, last_used_at FROM status_page_share_link WHERE status_page_id = $1 ORDER BY created_at DESC LIMIT 200",
+      [page.id],
+    );
+    return c.json(links.map((l) => ({ id: l.id, label: l.label, createdAt: l.created_at, expiresAt: l.expires_at, revokedAt: l.revoked_at, lastUsedAt: l.last_used_at })));
+  })
+  // A share link opens a non-public page for whoever holds it, until it expires or is revoked. Its URL is shown once.
+  .post(
+    "/:id/share-links",
+    uuidParams,
+    requireManager,
+    zValidator("json", z.object({ label: z.string().trim().max(80).optional(), expiresInHours: z.number().int().min(1).max(SHARE_LINK_MAX_HOURS).optional() }).strict()),
+    async (c) => {
+      const page = await c.get("repo").getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+      if (!page) return c.json({ error: "Not found" }, 404);
+      if (page.visibility === "public") return c.json({ error: "A public page needs no share link" }, 400);
+      const { label, expiresInHours } = c.req.valid("json");
+      const db = c.get("database");
+      const { token, hash } = await newShareToken();
+      const expiresAt = new Date(Date.now() + (expiresInHours ?? SHARE_LINK_DEFAULT_HOURS) * 3_600_000);
+      // the database function locks the page row before counting, so concurrent requests cannot exceed the cap
+      const rows = await db.query<{ id: string | null }>(
+        "SELECT montral_create_share_link($1::uuid, $2::text, $3::text, $4::text, $5::timestamptz, $6::int) AS id",
+        [page.id, hash, label || null, c.get("userId"), expiresAt.toISOString(), MAX_ACTIVE_SHARE_LINKS],
+      );
+      if (!rows[0]?.id) return c.json({ error: `A page can have at most ${MAX_ACTIVE_SHARE_LINKS} active share links` }, 409);
+      const origin = appUrl() || new URL(c.req.url).origin;
+      c.header("cache-control", "no-store");
+      return c.json({ id: rows[0].id, label: label || null, expiresAt, url: `${origin}/api/public/status/_/access?t=${token}`, warning: "This link is shown only once. Anyone who has it can open the page until it expires or is revoked." }, 201);
+    },
+  )
+  .delete("/:id/share-links/:sid", uuidParams, requireManager, async (c) => {
+    const page = await c.get("repo").getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!page) return c.json({ error: "Not found" }, 404);
+    const rows = await c.get("database").query<{ id: string }>(
+      "UPDATE status_page_share_link SET revoked_at = coalesce(revoked_at, now()) WHERE id = $1 AND status_page_id = $2 RETURNING id",
+      [c.req.param("sid"), page.id],
+    );
+    return rows[0] ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
   })
   .get("/:id/subscribers", uuidParams, requireManager, async (c) => {
     const repo = c.get("repo");
@@ -217,6 +291,9 @@ async function rssFeed(c: Context<AppEnv>) {
   return c.body(xml, 200, { "content-type": "application/rss+xml; charset=utf-8", "cache-control": "public, max-age=60" });
 }
 
+/** Failed unlocks a page tolerates per hour before refusing all unlocks (share links and members are unaffected). */
+const UNLOCK_PAGE_FAILURES = 100;
+
 /** A members-only page is readable only through a browser session of a current member of its workspace. */
 async function memberOfPageWorkspace(c: Context<AppEnv>, organizationId: string): Promise<boolean> {
   const session = await currentSession(c.get("auth"), c.req.raw.headers);
@@ -233,22 +310,26 @@ async function statusAccess(c: Context<AppEnv>, next: () => Promise<void>) {
   const slug = c.req.param("slug");
   if (!slug || slug === "_") return next();
   const page = await c.get("repo").statusPageBySlug(slug);
-  const membersOnly = page?.visibility === "members";
+  const membersOnly = page?.visibility === "members" || page?.visibility === "password";
   if (!policy && !membersOnly) return next();
   // No shared response is safe for a restricted page, including not-found/errors.
   c.set("statusResponsePrivate", true);
   c.header("cache-control", "private, no-store");
   if (!page) return c.json({ error: "Not found" }, 404);
   if (membersOnly) {
-    let member: boolean;
-    try { member = await memberOfPageWorkspace(c, page.organizationId); }
+    let allowed: boolean;
+    try { allowed = (await memberOfPageWorkspace(c, page.organizationId)) || (await hasAccessGrant(c, page)); }
     catch {
-      console.error("status page membership check unavailable");
+      console.error("status page access check unavailable");
       return c.json({ error: "Unavailable" }, 503);
     }
-    if (!member) {
+    if (!allowed) {
       c.header("x-robots-tag", "noindex, nofollow");
-      return c.json({ error: "Not found" }, 404);
+      // A password page announces itself so the visitor can unlock it (its title and content stay hidden); a
+      // members-only page is indistinguishable from one that does not exist.
+      return page.visibility === "password"
+        ? c.json({ error: "This status page is password protected", locked: true }, 401)
+        : c.json({ error: "Not found" }, 404);
     }
   }
   if (policy) {
@@ -499,7 +580,7 @@ export const publicStatus = new Hono<AppEnv>()
     const shown = new Set((await repo.pageComponents(page.id)).map((x) => x.monitorId));
     const chosen = [...new Set(monitorIds ?? [])].filter((id) => shown.has(id));
     const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-    const row = await repo.addSubscriber({ pageId: page.id, email, token, locale: langFromHeader(c.req.header("accept-language")), monitorIds: chosen });
+    const row = await repo.addSubscriber({ pageId: page.id, email, token, locale: langFromHeader(c.req.header("accept-language")), monitorIds: chosen, accessVersion: page.accessVersion });
     // Always the same answer, so the endpoint does not reveal who is subscribed. A pending address gets its confirmation
     // again (the first link may be lost); a confirmed one gets nothing, so the form cannot be used to mail a stranger.
     if (row.confirmed) return c.json({ ok: true });
@@ -526,6 +607,51 @@ export const publicStatus = new Hono<AppEnv>()
   })
   // Confirming stays a GET so the link in the mail works in one click; it only ever sets a flag, so repeating it (or a mail
   // scanner opening it) changes nothing further. Unsubscribing is different: GET shows a page, and only a POST acts.
+  // Unlock a password page. Every failure (wrong password, unknown slug, a page that is not password-protected, a
+  // malformed body) is the same 401, and an unknown page still pays for one PBKDF2 verification, so the answer does not
+  // reveal which slugs exist. Limited per client and per page.
+  .post("/_/unlock", subscriptionTokenPrivacy, subscriptionBodyGuard, async (c) => {
+    const repo = c.get("repo");
+    const refused = () => c.json({ error: "Incorrect password" }, 401);
+    // Only the web app's own form may unlock: a cross-site form post (text/plain, foreign Origin) would plant an
+    // attacker-chosen page grant in the visitor's browser.
+    const origin = c.req.header("origin");
+    if (!/^application\/json\b/i.test(c.req.header("content-type") ?? "") || (origin && origin !== c.env.WEB_ORIGIN && origin !== new URL(c.req.url).origin)) {
+      return c.json({ error: "Unlock requests must come from this site" }, 403);
+    }
+    const body = (await c.req.json().catch(() => null)) as { slug?: unknown; password?: unknown } | null;
+    const slug = typeof body?.slug === "string" && /^[a-z0-9-]{3,40}$/.test(body.slug) ? body.slug : null;
+    const password = typeof body?.password === "string" && body.password.length <= 200 ? body.password : null;
+    if (!slug || !password) return refused();
+    const ip = clientIp(c);
+    // Per client: every attempt counts. Per page: an attempt takes a slot atomically before the (slow) password check
+    // and gives it back on success, so only failures stay counted (visitors who know the password are not locked out
+    // by frequent correct unlocks) and concurrent guesses cannot all pass a count that is read before they finish.
+    const pageKey = `sp-unlock:fail:${slug}`;
+    const ok = (!ip || (await repo.withinLimit(`sp-unlock:ip:${ip}`, 20, 900))) &&
+      (!ip || (await repo.withinLimit(`sp-unlock:ip:${ip}:${slug}`, 8, 900))) &&
+      (await repo.withinLimit(pageKey, UNLOCK_PAGE_FAILURES, 3600));
+    if (!ok) return c.json({ error: "Too many attempts, try again later" }, 429);
+    const page = await repo.statusPageBySlug(slug);
+    const target = page?.visibility === "password" ? page : null;
+    if (!(await verifyPagePassword(password, target?.accessPasswordHash ?? null)) || !target) return refused();
+    await c.get("database").query("UPDATE rate_limit SET count = greatest(count - 1, 0) WHERE key = $1", [pageKey]);
+    c.header("set-cookie", await accessCookie(c.env, target, null, new Date(Date.now() + 12 * 3_600_000)));
+    return c.body(null, 204);
+  })
+  // A share link: trade the token for an access cookie and land on the page, with the token gone from the address bar.
+  .get("/_/access", subscriptionTokenPrivacy, async (c) => {
+    const repo = c.get("repo");
+    const ip = clientIp(c);
+    if (ip && !(await repo.withinLimit(`sp-link:ip:${ip}`, 30, 900))) return c.json({ error: "Too many attempts, try again later" }, 429);
+    const grant = await redeemShareToken(c.get("database"), c.req.query("t") ?? "");
+    const page = grant ? await repo.statusPageBySlug(grant.slug) : null;
+    if (!grant || !page || page.visibility === "public") {
+      return c.text("This link is invalid, has expired or was revoked. Ask the page owner for a new one.", 404);
+    }
+    c.header("set-cookie", await accessCookie(c.env, page, grant.linkId, grant.expiresAt));
+    return c.redirect(`/status/${page.slug}`, 303);
+  })
   .get("/_/confirm", async (c) => {
     const slug = await c.get("repo").confirmSubscriber(c.req.query("token") ?? "");
     return c.redirect(slug ? `${appUrl()}/status/${slug}?subscribed=1` : `${appUrl()}/`);

@@ -369,7 +369,28 @@ try {
   if (await js("window.__cspBypassed === true")) throw new Error("Injected inline script executed despite CSP");
   const unexpected = cspViolations.slice(0, before).concat(cspViolations.slice(before + 1));
   if (unexpected.length) throw new Error("CSP violations during the journey: " + unexpected.slice(0, 5).join(" | "));
+  const cspCheckedUpTo = cspViolations.length;
   console.log(`CSP_PASS: hashed script-src enforced on the journey's pages and the SSR status page; ${before} unexpected violations`);
+  // Password page: an outside visitor sees only the lock form (never the title), unlocks it, and then sees the page.
+  const lockedSlug = "pw-" + Math.random().toString(36).slice(2, 10);
+  const madeLocked = await js(`fetch("/api/status-pages", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: ${JSON.stringify(lockedSlug)}, title: "Partner-only status", visibility: "password", password: "browser-partner-pass" }) }).then(r => r.status)`);
+  if (madeLocked !== 201) throw new Error("Password status page not created: " + madeLocked);
+  // Sign out in this browser so the visitor is an outsider, then come back to the page.
+  await js('fetch("/api/auth/sign-out", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" }).then(r => r.status)');
+  await page("/status/" + lockedSlug);
+  await until("password form shown", () => js('!!document.querySelector("form#unlock input[type=password]")'));
+  if (await js('document.body.innerText.includes("Partner-only status")')) throw new Error("Locked page leaked its title");
+  await fill("form#unlock input[type=password]", "not-the-password");
+  await js('document.querySelector("form#unlock button").click()');
+  await until("wrong password rejected", () => js('document.getElementById("unlock-msg").textContent.length > 0'));
+  if (await js('document.body.innerText.includes("Partner-only status")')) throw new Error("Wrong password opened the page");
+  await fill("form#unlock input[type=password]", "browser-partner-pass");
+  await js('document.querySelector("form#unlock button").click()');
+  await until("unlocked page shows its title", () => js('document.body.innerText.includes("Partner-only status")'), 25000);
+  if (await js('document.cookie.includes("montral_sa_")')) throw new Error("Status access cookie is readable by page script");
+  console.log("STATUS_PASSWORD_PASS: locked form without title, wrong password refused, correct password unlocks; access cookie HttpOnly");
+  const lateViolations = cspViolations.slice(cspCheckedUpTo);
+  if (lateViolations.length) throw new Error("CSP violations on access pages: " + lateViolations.slice(0, 5).join(" | "));
   console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic monitor, incident, webhook, disabled billing, reset-link URL privacy; anonymous routes denied");
   browserCompleted = true;
 } finally {

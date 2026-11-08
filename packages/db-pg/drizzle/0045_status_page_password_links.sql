@@ -1,0 +1,37 @@
+CREATE TABLE "status_page_share_link" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"status_page_id" uuid NOT NULL,
+	"token_hash" text NOT NULL,
+	"label" text,
+	"created_by" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"expires_at" timestamp with time zone NOT NULL,
+	"revoked_at" timestamp with time zone,
+	"last_used_at" timestamp with time zone
+);
+--> statement-breakpoint
+ALTER TABLE "status_page" DROP CONSTRAINT "status_page_visibility_chk";--> statement-breakpoint
+ALTER TABLE "status_page" ADD COLUMN "access_password_hash" text;--> statement-breakpoint
+ALTER TABLE "status_page" ADD COLUMN "access_version" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "status_subscriber" ADD COLUMN "access_version" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "status_page_share_link" ADD CONSTRAINT "status_page_share_link_status_page_id_status_page_id_fk" FOREIGN KEY ("status_page_id") REFERENCES "public"."status_page"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "status_page_share_link" ADD CONSTRAINT "status_page_share_link_created_by_user_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."user"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "status_page_share_link_token_idx" ON "status_page_share_link" USING btree ("token_hash");--> statement-breakpoint
+CREATE INDEX "status_page_share_link_page_idx" ON "status_page_share_link" USING btree ("status_page_id");--> statement-breakpoint
+ALTER TABLE "status_page" ADD CONSTRAINT "status_page_password_chk" CHECK ("status_page"."visibility" <> 'password' or "status_page"."access_password_hash" is not null);--> statement-breakpoint
+ALTER TABLE "status_page" ADD CONSTRAINT "status_page_visibility_chk" CHECK ("status_page"."visibility" in ('public', 'members', 'password'));--> statement-breakpoint
+-- The active-link cap holds under concurrency: the page row lock serializes creators, and the count is a separate
+-- statement taken after the lock (READ COMMITTED gives each statement a fresh snapshot).
+CREATE OR REPLACE FUNCTION montral_create_share_link(p_page uuid, p_hash text, p_label text, p_creator text, p_expires timestamptz, p_cap integer)
+RETURNS uuid LANGUAGE plpgsql AS $montral$
+DECLARE v_id uuid;
+BEGIN
+  PERFORM 1 FROM status_page WHERE id = p_page FOR UPDATE;
+  IF (SELECT count(*) FROM status_page_share_link WHERE status_page_id = p_page AND revoked_at IS NULL AND expires_at > now()) >= p_cap THEN
+    RETURN NULL;
+  END IF;
+  INSERT INTO status_page_share_link (status_page_id, token_hash, label, created_by, expires_at)
+  VALUES (p_page, p_hash, p_label, p_creator, p_expires) RETURNING id INTO v_id;
+  RETURN v_id;
+END;
+$montral$;

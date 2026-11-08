@@ -1,7 +1,7 @@
 import { adoptProject, backToAll, navigate } from "../lib/nav";
 import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
-import { api, type Monitor, type StatusPage, type Subscriber } from "../lib/api";
+import { api, type Monitor, type StatusPage, type Subscriber, type ShareLink } from "../lib/api";
 
 export default function StatusPages() {
   const [pages, setPages] = useState<StatusPage[] | null>(null);
@@ -106,11 +106,14 @@ export function StatusPageEditor({ id }: { id: string }) {
   };
   const groups = [...new Set(shown.map((c) => c.groupName))];
   const overall = shown.some((c) => byId.get(c.monitorId)!.status === "down") ? "outage" : shown.some((c) => byId.get(c.monitorId)!.status === "degraded") ? "degraded" : "operational";
+  const [newPassword, setNewPassword] = useState("");
   async function save() {
     setPending("save");
     setErr("");
     try {
-      await api.updateStatusPage(id, { title: page!.title, theme: page!.theme, showLatency: page!.showLatency, externalUrl: (page!.externalUrl ?? "").trim(), hideBranding: !!page!.hideBranding, uptimeOkPct: page!.uptimeOkPct ?? 99.9, uptimeWarnPct: page!.uptimeWarnPct ?? 98, mcpEnabled: page!.mcpEnabled !== false, visibility: page!.visibility ?? "public", maintenanceReminderHours: page!.maintenanceReminderHours ?? 24, components: comps } as Partial<StatusPage>);
+      if (page!.visibility === "password" && !page!.hasPassword && newPassword.length < 8) throw new Error(t("Set a password of at least 8 characters."));
+      await api.updateStatusPage(id, { title: page!.title, theme: page!.theme, showLatency: page!.showLatency, externalUrl: (page!.externalUrl ?? "").trim(), hideBranding: !!page!.hideBranding, uptimeOkPct: page!.uptimeOkPct ?? 99.9, uptimeWarnPct: page!.uptimeWarnPct ?? 98, mcpEnabled: page!.mcpEnabled !== false, visibility: page!.visibility ?? "public", ...(newPassword ? { password: newPassword } : {}), maintenanceReminderHours: page!.maintenanceReminderHours ?? 24, components: comps } as Partial<StatusPage>);
+      if (newPassword) { setNewPassword(""); setPage({ ...page!, hasPassword: true }); }
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
     } catch (e) {
@@ -172,20 +175,29 @@ export function StatusPageEditor({ id }: { id: string }) {
           <div className="card cc">
             <div className="cc-h"><h3>{t("Who can see this page")}</h3></div>
             <div className="seg" role="radiogroup" aria-label={t("Who can see this page")}>
-              {(["public", "members"] as const).map((v) => (
+              {(["public", "password", "members"] as const).map((v) => (
                 <i key={v} role="radio" tabIndex={0} aria-checked={(page.visibility ?? "public") === v} className={(page.visibility ?? "public") === v ? "on" : ""}
                   onClick={() => setPage({ ...page, visibility: v })}
                   onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPage({ ...page, visibility: v }); } }}>
-                  {t(v === "public" ? "Anyone with the link" : "Workspace members only")}
+                  {t(v === "public" ? "Anyone with the link" : v === "password" ? "Password or share link" : "Workspace members only")}
                 </i>
               ))}
             </div>
             <small className="faint" style={{ display: "block", marginTop: 8 }}>
               {(page.visibility ?? "public") === "members"
-                ? t("Only people signed in to this workspace can open the page, its feeds, badge and llms.txt; everyone else gets “not found”. Embeds and the public MCP tools stop working, and incident and maintenance emails go only to subscribers who are verified workspace members.")
-                : t("Anyone with the link can open the page, subscribe, and read its feeds, badge and llms.txt.")}
+                ? t("Only people signed in to this workspace can open the page, its feeds, badge and llms.txt; everyone else gets “not found”. Share links can still let specific people in. Embeds and the public MCP tools stop working, and incident and maintenance emails go only to subscribers who are verified workspace members.")
+                : page.visibility === "password"
+                  ? t("Workspace members, and anyone with the password or a share link, can open the page. Others see a password form, never the title or content. Embeds and the public MCP tools stop working. Changing the password signs everyone out, and only people who subscribed after that keep getting emails.")
+                  : t("Anyone with the link can open the page, subscribe, and read its feeds, badge and llms.txt.")}
             </small>
+            {page.visibility === "password" && (
+              <label className="fld" style={{ marginTop: 12 }}>{page.hasPassword ? t("New password (leave empty to keep the current one)") : t("Page password")}
+                <input className="in" type="password" autoComplete="new-password" minLength={8} maxLength={200} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder={t("At least 8 characters")} />
+              </label>
+            )}
           </div>
+
+          {(page.visibility ?? "public") !== "public" && <AccessPanel id={id} />}
 
           <div className="card cc">
             <div className="cc-h"><h3>{t("Uptime and notifications")}</h3></div>
@@ -302,6 +314,75 @@ function Subscribers({ pageId }: { pageId: string }) {
           }}>{removing === s.id ? t("Removing…") : t("Remove")}</button>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** Share links and "sign everyone out" for a page that is not public. */
+function AccessPanel({ id }: { id: string }) {
+  const [links, setLinks] = useState<ShareLink[] | null>(null);
+  const [label, setLabel] = useState("");
+  const [hours, setHours] = useState(168);
+  const [fresh, setFresh] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const load = () => api.shareLinks(id).then(setLinks).catch((e) => setErr((e as Error).message));
+  useEffect(() => { void load(); }, [id]);
+  const now = Date.now();
+  const active = (l: ShareLink) => !l.revokedAt && Date.parse(l.expiresAt) > now;
+  const run = async (f: () => Promise<void>) => {
+    setBusy(true); setErr(""); setNote("");
+    try { await f(); } catch (e) { setErr((e as Error).message); }
+    setBusy(false);
+  };
+  const durations: [number, string][] = [[24, "1 day"], [168, "7 days"], [720, "30 days"], [2160, "90 days"], [8760, "1 year"]];
+  return (
+    <div className="card cc">
+      <div className="cc-h"><h3>{t("Share links")}</h3><span className="faint" style={{ fontSize: 13 }}>{links ? links.filter(active).length : ""}</span></div>
+      <p className="muted" style={{ marginBottom: 12 }}>{t("A share link opens this page for whoever holds it, without a password or an account, until it expires or you revoke it. Save the page as non-public first.")}</p>
+      <form style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }} onSubmit={(e) => {
+        e.preventDefault();
+        void run(async () => {
+          const r = await api.createShareLink(id, { label: label.trim() || undefined, expiresInHours: hours });
+          setFresh(r.url);
+          setLabel("");
+          await load();
+        });
+      }}>
+        <label className="fld" style={{ flex: 1, minWidth: 160 }}>{t("Label")}<input className="in" maxLength={80} value={label} onChange={(e) => setLabel(e.target.value)} placeholder={t("e.g. Customer support")} /></label>
+        <label className="fld">{t("Expires after")}
+          <select className="in" value={hours} onChange={(e) => setHours(Number(e.target.value))}>
+            {durations.map(([h, l]) => <option key={h} value={h}>{t(l)}</option>)}
+          </select>
+        </label>
+        <button className="btn" disabled={busy}>{t("Create link")}</button>
+      </form>
+      {fresh && <div className="card fresh" role="status" style={{ marginTop: 12 }}>
+        <b>{t("Copy this link now. It will never be shown again.")}</b>
+        <div className="fresh-r"><code className="mono" style={{ overflowWrap: "anywhere" }}>{fresh}</code>
+          <button type="button" className="btn sm" onClick={() => navigator.clipboard?.writeText(fresh)}>{t("Copy")}</button></div>
+      </div>}
+      {err && <p className="err" role="alert">{err}</p>}
+      {links && links.length > 0 && <div className="tbl" style={{ marginTop: 12 }}>
+        {links.map((l) => (
+          <div className="tr" key={l.id} style={{ gridTemplateColumns: "2fr 1fr auto" }}>
+            <span>{l.label || t("Unnamed link")}<br /><small className="faint">{l.lastUsedAt ? `${t("Last used")} ${new Date(l.lastUsedAt).toLocaleString()}` : t("Never used")}</small></span>
+            <span className="muted">{l.revokedAt ? t("Revoked") : active(l) ? `${t("Expires")} ${new Date(l.expiresAt).toLocaleDateString()}` : t("Expired")}</span>
+            {active(l)
+              ? <button className="btn sm" disabled={busy} onClick={() => { if (confirm(t("Revoke this link? Anyone using it loses access at once."))) void run(async () => { await api.revokeShareLink(id, l.id); await load(); }); }}>{t("Revoke")}</button>
+              : <span />}
+          </div>
+        ))}
+      </div>}
+      <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+        <button type="button" className="btn sm" disabled={busy} onClick={() => {
+          if (confirm(t("Sign out everyone outside the workspace? They need the password or a share link again."))) {
+            void run(async () => { await api.revokeStatusAccess(id); setNote(t("Everyone outside the workspace was signed out.")); });
+          }
+        }}>{t("Sign everyone out")}</button>
+        {note && <span className="faint" role="status">{note}</span>}
+      </div>
     </div>
   );
 }

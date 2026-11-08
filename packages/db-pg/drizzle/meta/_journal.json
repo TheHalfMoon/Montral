@@ -316,6 +316,13 @@
       "when": 1794105437282,
       "tag": "0044_status_page_visibility",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1794148269849,
+      "tag": "0045_status_page_password_links",
+      "breakpoints": true
     }
   ]
 }

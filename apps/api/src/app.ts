@@ -306,10 +306,28 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
-    console.error("Unhandled API error; private diagnostics suppressed");
+    console.error(`Unhandled API error (${errorClass(err)}); private diagnostics suppressed`);
     return c.json({ error: "Internal error" }, 500);
   });
   return app;
+}
+
+/**
+ * A classifier that is safe to log: a PostgreSQL SQLSTATE (e.g. 53300 too_many_connections, 40P01 deadlock) or a Node
+ * system code (ECONNRESET), else the error's constructor name. Never the message, which can carry credentials,
+ * targets or personal data.
+ */
+export function errorClass(err: unknown): string {
+  try {
+    const code = (err as { code?: unknown } | null)?.code;
+    // SQLSTATEs, Node system codes, and postgres.js connection codes such as CONNECTION_CLOSED
+    if (typeof code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z_]{2,30}|[A-Z]+(?:_[A-Z]+){1,4})$/.test(code)) return code;
+    const name = (err as { constructor?: { name?: unknown } } | null)?.constructor?.name;
+    return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "unknown";
+  } catch {
+    // a throwing getter or a Proxy must not turn the error handler itself into a failure
+    return "unknown";
+  }
 }
 
 export type AppType = ReturnType<typeof createApp>;

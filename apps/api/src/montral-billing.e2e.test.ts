@@ -226,8 +226,9 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
           body: JSON.stringify({ plan: "pro" }),
         }), config as never),
       ));
-      expect(responses.filter(x => x.status === 201)).toHaveLength(1);
-      expect(responses.filter(x => x.status === 409)).toHaveLength(7);
+      // Report every status on failure: a flaky run once returned one non-409 that was never identified.
+      const statuses = responses.map(x => x.status).sort();
+      expect(statuses, "checkout statuses").toEqual([201, 409, 409, 409, 409, 409, 409, 409]);
       expect(providerCalls).toBe(1);
       expect(await db!.query(
         "SELECT id FROM montral_billing_intent WHERE organization_id=$1 AND consumed_at IS NULL AND expires_at>NOW()", [org],

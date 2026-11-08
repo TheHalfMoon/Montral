@@ -254,9 +254,18 @@ export function hostPort(target: string, defaultPort: number): { hostname: strin
   return port > 0 && port < 65536 ? { hostname: m[1].replace(/^\[|\]$/g, ""), port } : null;
 }
 
+/** `host` or `host:port` and nothing else (no scheme, path, user info or spaces): the host and port, or null. */
+export function strictHostPort(target: string, defaultPort: number): { hostname: string; port: number } | null {
+  if (/^[a-z]+:\/\//i.test(target.trim())) return null;
+  const hp = hostPort(target, defaultPort);
+  return hp && /^[^\s/?#@\\]+$/.test(hp.hostname) ? hp : null;
+}
+
 /** Why a monitor target is refused, or null. Used when a monitor is created or its target changes. */
 export async function targetProblem(type: string, target: string): Promise<string | null> {
   if (type === "domain") { try { domainName(target); return null; } catch (e) { return (e as Error).message; } }
+  // a certificate check has no scheme or path to report on later: a malformed target is refused up front
+  if (type === "certificate" && !strictHostPort(target, 443)) return "Target must be host or host:port";
   if (allowPrivate || type === "heartbeat" || type === "dns") return null;
   let host: string | undefined;
   if (type === "http" || type === "websocket") {

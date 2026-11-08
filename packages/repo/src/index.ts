@@ -11,7 +11,7 @@ export const ROLLUP_RETENTION_DAYS = 400;
 export const PUSH_DEVICE_STALE_DAYS = 180;
 export const DEFAULT_ALERT_LOG_DAYS = 30;
 
-export type MonitorType = "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain";
+export type MonitorType = "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate";
 export type MonitorStatus = "pending" | "up" | "degraded" | "down" | "paused";
 export type IncidentStatus = "investigating" | "identified" | "monitoring" | "resolved";
 export type IncidentSeverity = "minor" | "major";
@@ -47,6 +47,7 @@ export interface Monitor {
   /** Immutable import provenance; scoped to this organization and project. */
   importSource?: string | null;
   importSourceId?: string | null;
+  /** Expiry warning window in days for domain and certificate monitors (the name predates certificate checks). */
   domainExpiryWarnDays?: number;
   domainExpiry?: DomainExpiry | null;
   id: string;

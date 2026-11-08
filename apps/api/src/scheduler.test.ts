@@ -2,6 +2,7 @@ import type { Monitor, Repo } from "@montral/repo";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureProbes } from "./probes";
 import { resetSelfCheck } from "./selfcheck";
+import { configureNetGuard } from "./netguard";
 import { unmetered, type Entitlements } from "./entitlements";
 import { MESSAGE_SIZE, checkOne, resolveIncident, nextAfter, processCheckMessage, runDueChecks, slotOf, type CheckMessage } from "./scheduler";
 
@@ -337,6 +338,28 @@ describe("checkOne", () => {
   });
 });
 
+describe("certificate monitors", () => {
+  afterEach(() => configureNetGuard({}));
+  // a refused loopback port: a real failed check, never inconclusive (the target is private)
+  const cert = (over: Partial<Monitor> = {}) => hb({ type: "certificate", target: "127.0.0.1:1", timeoutMs: 2000, regions: [], failureThreshold: 3, ...over });
+
+  it("marks a failing certificate degraded below the failure threshold, like domain", async () => {
+    configureNetGuard({ ALLOW_PRIVATE_TARGETS: "true" });
+    const { repo, incidents, states } = fakeRepo();
+    await checkOne(repo, cert());
+    expect(incidents).toHaveLength(0);
+    expect(states.at(-1)).toMatchObject({ status: "degraded", consecutiveFailures: 1 });
+  });
+
+  it("titles the incident from the failure once the threshold is reached", async () => {
+    configureNetGuard({ ALLOW_PRIVATE_TARGETS: "true" });
+    const { repo, incidents, states } = fakeRepo();
+    await checkOne(repo, cert({ failureThreshold: 1 }));
+    expect(incidents.map((i) => i.title)).toEqual(["API: certificate invalid"]);
+    expect(states.at(-1)).toMatchObject({ status: "down" });
+  });
+});
+
 describe("checkOne noise rules", () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -366,6 +389,12 @@ describe("checkOne noise rules", () => {
   });
   it("never suppresses a service incident because a registration monitor is internally down", async () => {
     const { repo, incidents } = fakeRepo({ monitors: [{ ...parent("down"), type: "domain" }] });
+    await checkOne(repo, hb({ dependsOnMonitorId: "parent" }));
+    expect(incidents.map((i) => i.title)).toEqual(["API is down"]);
+  });
+
+  it("never suppresses a service incident because a certificate monitor is internally down", async () => {
+    const { repo, incidents } = fakeRepo({ monitors: [{ ...parent("down"), type: "certificate" }] });
     await checkOne(repo, hb({ dependsOnMonitorId: "parent" }));
     expect(incidents.map((i) => i.title)).toEqual(["API is down"]);
   });

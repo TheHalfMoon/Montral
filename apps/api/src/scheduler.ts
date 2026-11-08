@@ -4,6 +4,10 @@ import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
 import { measure } from "./probes";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
+import { certificateIncidentTitle } from "./certificate";
+
+/** Monitors that watch an expiry date (domain registration, TLS certificate) rather than whether a service answers. */
+const expiryCheck = (m: Pick<Monitor, "type">) => m.type === "domain" || m.type === "certificate";
 
 const CONCURRENCY = 20;
 
@@ -219,10 +223,11 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
     return;
   }
   const failures = out.ok ? 0 : m.consecutiveFailures + 1;
-  const slow = m.type !== "domain" && out.ok && !!out.latencyMs && out.latencyMs > m.slowThresholdMs;
+  // expiry checks (domain, certificate) watch a date: their latency says nothing about the service
+  const slow = !expiryCheck(m) && out.ok && !!out.latencyMs && out.latencyMs > m.slowThresholdMs;
   // a failed check neither extends nor ends a slow streak
   const slowCount = !out.ok ? m.consecutiveSlow : slow ? m.consecutiveSlow + 1 : 0;
-  const status = out.ok ? (m.status === "down" && !recovery.ready ? "down" : slow ? "degraded" : "up") : failures >= m.failureThreshold ? "down" : m.type === "domain" ? "degraded" : m.status;
+  const status = out.ok ? (m.status === "down" && !recovery.ready ? "down" : slow ? "degraded" : "up") : failures >= m.failureThreshold ? "down" : expiryCheck(m) ? "degraded" : m.status;
   const goingDown = status === "down" && m.status !== "down";
   const recovering = out.ok && m.status === "down" && recovery.ready;
   // a slow streak inside a maintenance window or under a down dependency opens nothing, however long it gets
@@ -276,8 +281,8 @@ const SUPPRESSED_DEPENDENCY = "suppressed: the monitor it depends on is down";
 async function dependencyDown(repo: Repo, m: Monitor) {
   if (!m.dependsOnMonitorId) return false;
   const [parent] = await repo.monitorsByIds([m.dependsOnMonitorId]);
-  // Registration dates (including expired or unknown dates) do not prove the service is unavailable.
-  return parent?.type !== "domain" && parent?.status === "down";
+  // Registration and certificate dates (including expired or unknown dates) do not prove the service is unavailable.
+  return !!parent && !expiryCheck(parent) && parent.status === "down";
 }
 
 /** The short "why did this open" line stored on an incident. */
@@ -316,7 +321,7 @@ async function openIncident(repo: Repo, m: Monitor, reason: string, evaluationNo
   // a monitor that flaps (down, up, down…) gets one down alert per window, not one per flip
   const recent = await repo.hadIncidentSince(m.id, new Date(Date.now() - FLAP_WINDOW_MS));
   const inc = await repo.openAutoIncident(
-    { organizationId: m.organizationId, monitorId: m.id, title: m.type === "domain" ? `${m.name}: ${m.domainExpiry?.state === "unknown" ? "domain expiry unknown" : m.domainExpiry?.state === "expired" ? "registration date passed" : "domain renewal needed"}` : `${m.name} is down`, auto: true, evaluationNote },
+    { organizationId: m.organizationId, monitorId: m.id, title: m.type === "domain" ? `${m.name}: ${m.domainExpiry?.state === "unknown" ? "domain expiry unknown" : m.domainExpiry?.state === "expired" ? "registration date passed" : "domain renewal needed"}` : m.type === "certificate" ? certificateIncidentTitle(m.name, reason) : `${m.name} is down`, auto: true, evaluationNote },
     { status: "investigating", body: `${consecutive(m)} consecutive failed checks. ${reason}` },
   );
   if (!inc) return; // a concurrent check opened it

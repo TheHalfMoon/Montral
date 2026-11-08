@@ -323,6 +323,13 @@
       "when": 1794148269849,
       "tag": "0045_status_page_password_links",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1794160675395,
+      "tag": "0046_monitor_certificate",
+      "breakpoints": true
     }
   ]
 }

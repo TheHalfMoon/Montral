@@ -10,7 +10,7 @@ import { regionLocked, toggleRegion } from "../lib/regions";
 import { isAllProjects } from "../lib/scope";
 import { ProjectBadge, ProjectStrip, ScopeChip, useProjects } from "./AllProjects";
 
-const TYPE_LABEL: Record<Monitor["type"], string> = { http: "HTTP", tcp: "TCP", dns: "DNS", heartbeat: "CRON", postgres: "PG", mysql: "MYSQL", redis: "REDIS", websocket: "WS", domain: "DOMAIN" };
+const TYPE_LABEL: Record<Monitor["type"], string> = { http: "HTTP", tcp: "TCP", dns: "DNS", heartbeat: "CRON", postgres: "PG", mysql: "MYSQL", redis: "REDIS", websocket: "WS", domain: "DOMAIN", certificate: "CERT" };
 
 export function Spark({ data, status }: { data: (number | null)[]; status: string }) {
   const pts = data.filter((v): v is number => v != null);
@@ -68,7 +68,7 @@ function IntervalTag({ monitor, onChanged }: { monitor: Monitor; onChanged: (sec
             <>
               <b>{t("Check every")}</b>
               {INTERVALS.map(([v, l]) => {
-                const locked = (monitor.type === "domain" && (v < 3600 || v > 86400)) || (v < floor && v < monitor.intervalSec);
+                const locked = ((monitor.type === "domain" || monitor.type === "certificate") && (v < 3600 || v > 86400)) || (v < floor && v < monitor.intervalSec);
                 return <button type="button" key={v} className={`iv-opt${v === monitor.intervalSec ? " on" : ""}`} disabled={locked || v === monitor.intervalSec} title={locked ? t("Not available on your plan") : undefined} onClick={() => { setMsg(null); setPick(v); }}>{t(l)}</button>;
               })}
             </>
@@ -381,20 +381,20 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
         <label className="fld">{t("Name")}<input className="in" required autoFocus value={f.name} onChange={(e) => set("name", e.target.value)} placeholder={t("Production API")} /></label>
         <div className="fld">{t("Type")}
           <div className="type-grid">
-            {([["http", "HTTP(S)", "Status code and keyword checks on a URL."], ["websocket", "WebSocket", "Handshake, with an optional message and reply check."], ["tcp", "TCP port", "Open a connection to host:port."], ["dns", "DNS", "Resolve a hostname."], ["domain", "Domain expiry", "Check the registry expiration date of an explicit registered domain."], ["postgres", "PostgreSQL", "Checks that a PostgreSQL server answers."], ["mysql", "MySQL / MariaDB", "Checks that the server sends its handshake."], ["redis", "Redis", "Sends PING and expects PONG."], ["heartbeat", "Heartbeat (cron)", "Your job pings us on schedule."]] as const).map(([id, label, desc]) => (
-              <button type="button" key={id} disabled={!!monitor && monitor.type !== id} className={`type-c ${f.type === id ? "on" : ""}`} onClick={() => { set("type", id); if (id === "domain") { set("intervalSec", 86400); set("failureThreshold", 1); } if (!monitor && (f.target === "https://" || f.target === "wss://" || f.target === "")) set("target", id === "http" ? "https://" : id === "websocket" ? "wss://" : ""); }}>
+            {([["http", "HTTP(S)", "Status code and keyword checks on a URL."], ["websocket", "WebSocket", "Handshake, with an optional message and reply check."], ["tcp", "TCP port", "Open a connection to host:port."], ["dns", "DNS", "Resolve a hostname."], ["domain", "Domain expiry", "Check the registry expiration date of an explicit registered domain."], ["certificate", "TLS certificate", "Check the TLS certificate a host presents: trust, hostname and expiry."], ["postgres", "PostgreSQL", "Checks that a PostgreSQL server answers."], ["mysql", "MySQL / MariaDB", "Checks that the server sends its handshake."], ["redis", "Redis", "Sends PING and expects PONG."], ["heartbeat", "Heartbeat (cron)", "Your job pings us on schedule."]] as const).map(([id, label, desc]) => (
+              <button type="button" key={id} disabled={!!monitor && monitor.type !== id} className={`type-c ${f.type === id ? "on" : ""}`} onClick={() => { set("type", id); if (id === "domain") { set("intervalSec", 86400); set("failureThreshold", 1); } if (id === "certificate") set("intervalSec", 3600); if (!monitor && (f.target === "https://" || f.target === "wss://" || f.target === "")) set("target", id === "http" ? "https://" : id === "websocket" ? "wss://" : ""); }}>
                 <b>{t(label)}</b><small>{t(desc)}</small>
               </button>
             ))}
           </div>
         </div>
-        {f.type === "domain" && <label className="fld">{t("Warn before expiry (days)")}
+        {(f.type === "domain" || f.type === "certificate") && <label className="fld">{t("Warn before expiry (days)")}
           <input className="in mono" type="number" min={1} max={365} value={f.domainExpiryWarnDays} onChange={(e) => set("domainExpiryWarnDays", Number(e.target.value))} />
-          <span className="muted">{t("Enter the registered domain, not a URL or subdomain. Missing registry dates are unknown, never healthy. Daily checks are recommended; intervals below one hour are raised.")}</span>
+          <span className="muted">{t(f.type === "domain" ? "Enter the registered domain, not a URL or subdomain. Missing registry dates are unknown, never healthy. Daily checks are recommended; intervals below one hour are raised." : "Enter a host or host:port (port 443 by default). Fails when the certificate is untrusted, does not match the host, or expires within this many days. Needs the self-hosted Node runtime; intervals are kept between one hour and one day.")}</span>
         </label>}
         {f.type !== "heartbeat" && (
-          <label className="fld">{t(f.type === "http" || f.type === "websocket" ? "URL" : ["tcp", "postgres", "mysql", "redis"].includes(f.type) ? "Host:port" : "Hostname")}
-            <input className="in mono" required value={f.target} onChange={(e) => set("target", e.target.value)} placeholder={({ postgres: "db.example.com:5432", mysql: "db.example.com:3306", redis: "cache.example.com:6379", tcp: "example.com:443", websocket: "wss://example.com/socket" } as Record<string, string>)[f.type] ?? ""} />
+          <label className="fld">{t(f.type === "http" || f.type === "websocket" ? "URL" : ["tcp", "postgres", "mysql", "redis"].includes(f.type) ? "Host:port" : f.type === "certificate" ? "Host or host:port" : "Hostname")}
+            <input className="in mono" required value={f.target} onChange={(e) => set("target", e.target.value)} placeholder={({ postgres: "db.example.com:5432", mysql: "db.example.com:3306", redis: "cache.example.com:6379", tcp: "example.com:443", certificate: "example.com", websocket: "wss://example.com/socket" } as Record<string, string>)[f.type] ?? ""} />
           </label>
         )}
         <div className="fld">{t("Check every")}

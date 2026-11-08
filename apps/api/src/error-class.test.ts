@@ -12,5 +12,9 @@ describe("errorClass", () => {
     expect(errorClass({ code: "53300 extra" })).toBe("Object");
     expect(errorClass(null)).toBe("unknown");
     expect(errorClass(Object.create(null))).toBe("unknown");
+    expect(errorClass({ get code() { throw new Error("boom"); } })).toBe("unknown");
+    expect(errorClass(new Proxy({}, { get() { throw new Error("trap"); } }))).toBe("unknown");
+    expect(errorClass({ code: "CONNECTION_CLOSED" })).toBe("CONNECTION_CLOSED");
+    expect(errorClass({ code: "lowercase_code" })).toBe("Object");
   });
 });

@@ -80,6 +80,11 @@ export interface Monitor {
   heartbeatToken: string | null;
   keyword: string | null;
   keywordMode: string;
+  /** http: path of one value in a JSON response body; null = no JSON assertion (see apps/api/src/json-assertion.ts) */
+  jsonPath?: string | null;
+  /** http: text the value must equal or contain; ignored by jsonMatch "exists" */
+  jsonExpected?: string | null;
+  jsonMatch?: "equals" | "contains" | "exists";
   expectedLocation: string | null;
   headers: Record<string, string>;
   /** websocket: text sent once the connection is open; null = only the handshake (and a greeting, with a keyword) */
@@ -104,7 +109,7 @@ export interface Monitor {
 export type MonitorInput = Pick<
   Monitor,
   | "name" | "type" | "target" | "method" | "requestBody" | "domainExpiryWarnDays" | "expectedStatus" | "intervalSec" | "timeoutMs" | "failureThreshold" | "recoveryThreshold" | "regions"
-  | "dnsRecordType" | "dnsExpectedValue" | "dnsMatchMode" | "keyword" | "keywordMode" | "expectedLocation" | "headers" | "wsMessage" | "graceSec" | "channelIds" | "tags" | "slowThresholdMs" | "slowAlertAfter"
+  | "dnsRecordType" | "dnsExpectedValue" | "dnsMatchMode" | "keyword" | "keywordMode" | "jsonPath" | "jsonExpected" | "jsonMatch" | "expectedLocation" | "headers" | "wsMessage" | "graceSec" | "channelIds" | "tags" | "slowThresholdMs" | "slowAlertAfter"
   | "dependsOnMonitorId" | "minRegionsFailing"
 >;
 export type ImportMonitor = { source: string; sourceId: string; input: NewMonitor };

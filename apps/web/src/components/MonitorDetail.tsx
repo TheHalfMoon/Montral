@@ -204,6 +204,7 @@ export default function MonitorDetail({ id }: { id: string }) {
               {(m.type === "domain" || m.type === "certificate") && <div><span>{t("Warn before expiry (days)")}</span><b className="mono">{m.domainExpiryWarnDays ?? 30}</b></div>}
               {m.type === "websocket" && m.wsMessage && <div><span>{t("Message sent")}</span><b className="mono">{m.wsMessage}</b></div>}
               {m.keyword && <div><span>{t("Keyword")}</span><b className="mono">{m.keywordMode === "absent" ? "≠ " : ""}{m.keyword}</b></div>}
+              {m.type === "http" && m.jsonPath && <div><span>{t("JSON assertion")} · {t(m.jsonMatch ?? "equals")}</span><b className="mono">{m.jsonPath}{m.jsonMatch !== "exists" ? `: ${m.jsonExpected ?? ""}` : ""}</b></div>}
               {m.type === "heartbeat" && <div><span>{t("Grace period")}</span><b className="mono">{every(m.graceSec ?? 0)}</b></div>}
             </div>
           </div>

@@ -14,6 +14,7 @@ import { isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID } from "../regions";
 
 import { HTTP_METHODS, MAX_REQUEST_BODY_BYTES, requestBodyProblem } from "../http-request";
+import { JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, MAX_JSON_PATH_LENGTH, jsonPathProblem } from "../json-assertion";
 
 const fields = {
   name: z.string().min(1).max(120).describe("Display name shown in the dashboard, alerts and status-page components."),
@@ -31,6 +32,10 @@ const fields = {
   regions: z.array(z.string().regex(REGION_ID)).min(1).transform((r) => [...new Set(r)]).describe("Region ids from list_regions. auto uses this deployment; explicit regions work for HTTP, TCP and WebSocket only. A supplied list replaces the existing one."),
   keyword: z.string().max(500).nullable().describe("HTTP response-body text, or for WebSocket the first message received, to test; null disables keyword matching."),
   keywordMode: z.enum(["contains", "absent"]).describe("Whether the HTTP response body (or the WebSocket message) must contain keyword or must not contain it."),
+  // blank means "no JSON assertion"; the syntax is checked by jsonAssertionProblem, so a bad path gets a plain { error }
+  jsonPath: z.string().max(MAX_JSON_PATH_LENGTH).transform((v) => v || null).nullable().describe("HTTP only: path of one value in the JSON response body, such as status, $.data.items[0].state or [\"key with space\"]. Dot keys, [index] and [\"quoted key\"] only, at most 32 segments. Null or empty string disables the JSON assertion; HEAD requests skip it."),
+  jsonExpected: z.string().max(MAX_JSON_EXPECTED_LENGTH).nullable().describe("HTTP only: text the value at jsonPath must equal or contain. Strings compare as they are; numbers, booleans, null, objects and arrays compare as compact JSON, so \"true\" matches true and \"42\" matches 42. Required for equals and contains; ignored by exists."),
+  jsonMatch: z.enum(JSON_MATCH_MODES).describe("How the value at jsonPath is tested: equals (whole value), contains (substring of its text form) or exists (present, any value including null)."),
   // an absolute http(s) URL or a path; blank means "any destination"
   expectedLocation: z.string().trim().max(2048).refine((v) => v === "" || v.startsWith("/") || /^https?:\/\/\S+$/i.test(v), "Use a full http(s) URL or a path starting with /").transform((v) => v || null).nullable().describe("For an expected HTTP redirect (3xx), require this Location URL or path; null or empty string accepts any destination."),
   headers: z.record(z.string().max(100), z.string().max(2000)).describe("HTTP (or WebSocket handshake) request headers; replaces the header map. An empty object removes all custom headers. Existing masked values preserve stored secrets."),
@@ -66,6 +71,9 @@ const body = z.object({
   regions: fields.regions.default(["auto"]),
   keyword: fields.keyword.default(null),
   keywordMode: fields.keywordMode.default("contains"),
+  jsonPath: fields.jsonPath.default(null),
+  jsonExpected: fields.jsonExpected.default(null),
+  jsonMatch: fields.jsonMatch.default("equals"),
   expectedLocation: fields.expectedLocation.default(null),
   headers: fields.headers.default({}),
   wsMessage: fields.wsMessage.default(null),
@@ -124,7 +132,21 @@ export const monitorPatchSchema = patchBody;
 
 const DNS_DEFAULTS = { dnsRecordType: "A", dnsExpectedValue: null, dnsMatchMode: "exact" } as const;
 
-const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : v.type === "certificate" && isWorkers() ? `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : requestBodyProblem(v);
+/**
+ * What is wrong with a monitor's JSON assertion, or null. Only HTTP monitors have one, its path must parse, and equals /
+ * contains need something to compare with ("" is a value; null is not).
+ */
+export function jsonAssertionProblem(v: { type: string; method?: string | null; jsonPath?: string | null; jsonExpected?: string | null; jsonMatch?: string | null }): string | null {
+  if (v.type !== "http") return v.jsonPath || v.jsonExpected != null ? "JSON assertions are supported for HTTP monitors only" : null;
+  // a HEAD response has no body: the assertion would be skipped and the monitor pass on its status alone
+  if (v.jsonPath && (v.method ?? "GET").toUpperCase() === "HEAD") return "A JSON assertion needs a response body; HEAD requests have none";
+  const badPath = jsonPathProblem(v.jsonPath);
+  if (badPath) return badPath;
+  if (v.jsonPath && (v.jsonMatch ?? "equals") !== "exists" && v.jsonExpected == null) return "jsonExpected is required when jsonMatch is equals or contains";
+  return null;
+}
+
+const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : v.type === "certificate" && isWorkers() ? `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : requestBodyProblem(v) ?? jsonAssertionProblem(v);
 
 /** Types whose expiry is checked rather than their availability: an interval of 1 hour to 1 day is enough and is enforced. */
 const EXPIRY_TYPES: readonly string[] = ["domain", "certificate"];
@@ -366,6 +388,13 @@ export const monitors = new Hono<AppEnv>()
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
       if (!current) return c.json({ error: "Not found" }, 404);
       if (current.type !== "dns") Object.assign(v, DNS_DEFAULTS);
+    }
+    // judged on the stored assertion with the named fields changed, like keyword: a lone jsonMatch must still make sense
+    if (v.jsonPath !== undefined || v.jsonExpected !== undefined || v.jsonMatch !== undefined || v.method !== undefined) {
+      const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+      if (!current) return c.json({ error: "Not found" }, 404);
+      const invalid = jsonAssertionProblem({ ...current, ...v, type: current.type });
+      if (invalid) return c.json({ error: invalid }, 400);
     }
     // Retaining stored headers or a body also retains their access rights: only managers may change the request around them.
     if (v.headers !== undefined || v.target !== undefined || v.method !== undefined || v.wsMessage !== undefined || v.requestBody !== undefined) {

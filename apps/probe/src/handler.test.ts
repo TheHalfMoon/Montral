@@ -22,7 +22,7 @@ async function signed(body: unknown, o: { secret?: string; ts?: number } = {}) {
 describe("probe handler", () => {
   it("answers a health GET without credentials", async () => {
     const res = await handleProbe(new Request("http://probe/"), { secret, region: "fra1" });
-    expect(await res.json()).toMatchObject({ ok: true, region: "fra1", capabilities: ["http-request-body-v1"] });
+    expect(await res.json()).toMatchObject({ ok: true, region: "fra1", capabilities: ["http-request-body-v1", "http-json-assertion-v1"] });
   });
 
   it("is not an open proxy: unsigned, wrongly signed and stale requests are refused", async () => {
@@ -54,6 +54,14 @@ describe("probe handler", () => {
     expect(parseCheck({ ...check, method: "POST", requestBody: "你".repeat(5462) })).toHaveProperty("error");
     expect(parseCheck({ ...check, method: "POST", requestBody: 123 })).toHaveProperty("error");
     expect(parseCheck({ ...check, type: "tcp", method: "POST", requestBody: "secret" })).toHaveProperty("error");
+  });
+
+  it("carries a JSON assertion through and refuses one it could not run", () => {
+    expect(parseCheck({ ...check, jsonPath: "data.items[0].state", jsonExpected: "ready", jsonMatch: "contains" })).toMatchObject({ input: { jsonPath: "data.items[0].state", jsonExpected: "ready", jsonMatch: "contains" } });
+    expect(parseCheck(check)).toMatchObject({ input: { jsonPath: null, jsonExpected: null, jsonMatch: "equals" } });
+    for (const bad of [{ jsonPath: "a[*]" }, { jsonPath: 5 }, { jsonPath: "a", jsonMatch: "regex" }, { jsonPath: "a", jsonExpected: "x".repeat(501) }, { jsonPath: "a", jsonExpected: 1 }]) {
+      expect(parseCheck({ ...check, ...bad })).toHaveProperty("error");
+    }
   });
 
   it("will not be aimed at a private address", async () => {

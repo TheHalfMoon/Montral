@@ -234,5 +234,10 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
     "tag": "0046_monitor_certificate",
     "when": 1794160675395,
     "sql": "ALTER TYPE \"public\".\"monitor_type\" ADD VALUE 'certificate';"
+  },
+  {
+    "tag": "0047_monitor_json_assertion",
+    "when": 1794164279617,
+    "sql": "ALTER TABLE \"monitor\" ADD COLUMN \"json_path\" text;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"json_expected\" text;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"json_match\" text DEFAULT 'equals' NOT NULL;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD CONSTRAINT \"monitor_json_match_chk\" CHECK (\"monitor\".\"json_match\" in ('equals', 'contains', 'exists'));"
   }
 ];

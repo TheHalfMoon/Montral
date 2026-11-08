@@ -190,3 +190,85 @@ describe("redirect checks", () => {
     expect((await check("/new", { expectedStatus: 200, expectedLocation: "/nowhere" })).ok).toBe(true);
   });
 });
+
+describe("http JSON assertions", () => {
+  const heads: string[] = [];
+  const server = createServer((req, res) => {
+    if (req.method === "HEAD") heads.push(req.url ?? "");
+    const json = (v: unknown) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify(v)); };
+    if (req.url === "/health") return json({ status: "ok", data: { items: [{ state: "ready", count: 3, live: true, note: null }] }, "key with space": "yes" });
+    if (req.url === "/html") return res.end("<h1>hello world</h1>");
+    if (req.url === "/fail") { res.statusCode = 503; return json({ status: "ok" }); }
+    if (req.url === "/long") return json({ status: "x".repeat(10_000) });
+    if (req.url === "/big") {
+      // valid JSON only once all 2 MB arrive: the first megabyte alone is a cut-off document
+      res.write('{"pad":"' + "a".repeat(MAX_BODY_BYTES));
+      res.end("a".repeat(1_000_000) + '","status":"ok"}');
+      return;
+    }
+    if (req.url === "/edge") {
+      // exactly MAX_BODY_BYTES of valid JSON
+      const shell = '{"status":"ok","pad":""}';
+      return json({ status: "ok", pad: "p".repeat(MAX_BODY_BYTES - shell.length) });
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+  let base = "";
+  beforeAll(async () => {
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  });
+  afterAll(() => void server.close());
+  const check = (over: Partial<CheckInput> & { path?: string }) =>
+    runCheck({ type: "http", target: base + (over.path ?? "/health"), method: "GET", expectedStatus: 200, timeoutMs: 3000, ...over });
+
+  it("passes when the value equals the expected text", async () => {
+    expect(await check({ jsonPath: "status", jsonExpected: "ok" })).toMatchObject({ ok: true, statusCode: 200 });
+    expect(await check({ jsonPath: "$.data.items[0].state", jsonMatch: "equals", jsonExpected: "ready" })).toMatchObject({ ok: true });
+    expect(await check({ jsonPath: '["key with space"]', jsonExpected: "yes" })).toMatchObject({ ok: true });
+  });
+  it("fails on a wrong value and says what it found", async () => {
+    expect(await check({ jsonPath: "data.items[0].state", jsonExpected: "stopped" })).toMatchObject({ ok: false, statusCode: 200, error: 'JSON path data.items[0].state is "ready", expected "stopped"' });
+  });
+  it("fails on a missing path", async () => {
+    expect(await check({ jsonPath: "data.x", jsonExpected: "1" })).toMatchObject({ ok: false, error: "JSON path data.x not found" });
+    expect(await check({ jsonPath: "data.items[1].state", jsonMatch: "exists" })).toMatchObject({ ok: false, error: "JSON path data.items[1].state not found" });
+  });
+  it("fails on a body that is not JSON", async () => {
+    expect(await check({ path: "/html", jsonPath: "status", jsonExpected: "ok" })).toMatchObject({ ok: false, error: "Response is not valid JSON" });
+  });
+  it("supports contains and exists", async () => {
+    expect((await check({ jsonPath: "data.items[0].state", jsonMatch: "contains", jsonExpected: "ead" })).ok).toBe(true);
+    expect(await check({ jsonPath: "data.items[0].state", jsonMatch: "contains", jsonExpected: "zzz" })).toMatchObject({ ok: false, error: 'JSON path data.items[0].state is "ready", which does not contain "zzz"' });
+    expect((await check({ jsonPath: "data.items[0]", jsonMatch: "contains", jsonExpected: '"count":3' })).ok).toBe(true);
+    // exists ignores jsonExpected, and a JSON null is still there
+    expect((await check({ jsonPath: "data.items[0].note", jsonMatch: "exists", jsonExpected: "anything" })).ok).toBe(true);
+  });
+  it("compares numbers and booleans by their JSON text", async () => {
+    expect((await check({ jsonPath: "data.items[0].count", jsonExpected: "3" })).ok).toBe(true);
+    expect(await check({ jsonPath: "data.items[0].count", jsonExpected: "4" })).toMatchObject({ ok: false, error: 'JSON path data.items[0].count is 3, expected "4"' });
+    expect((await check({ jsonPath: "data.items[0].live", jsonExpected: "true" })).ok).toBe(true);
+    expect((await check({ jsonPath: "data.items[0].live", jsonExpected: "false" })).ok).toBe(false);
+    expect((await check({ jsonPath: "data.items[0].note", jsonExpected: "null" })).ok).toBe(true);
+  });
+  it("needs status, keyword and JSON assertions to pass together", async () => {
+    expect((await check({ jsonPath: "status", jsonExpected: "ok", keyword: "ready" })).ok).toBe(true);
+    expect(await check({ jsonPath: "status", jsonExpected: "ok", keyword: "absent-text" })).toMatchObject({ ok: false, error: 'Keyword "absent-text" not found in response' });
+    expect(await check({ jsonPath: "status", jsonExpected: "bad", keyword: "ready" })).toMatchObject({ ok: false, error: 'JSON path status is "ok", expected "bad"' });
+    expect(await check({ path: "/fail", jsonPath: "status", jsonExpected: "ok" })).toMatchObject({ ok: false, statusCode: 503, error: "Expected 200, got 503" });
+  });
+  it("shows at most 80 characters of a value in the error", async () => {
+    const r = await check({ path: "/long", jsonPath: "status", jsonExpected: "short" });
+    expect(r.ok).toBe(false);
+    expect(r.error).toMatch(/^JSON path status is "x{78}…, expected "short"$/);
+  });
+  it("fails a body over the read cap instead of parsing a cut-off document", async () => {
+    expect(await check({ path: "/big", jsonPath: "status", jsonExpected: "ok" })).toMatchObject({ ok: false, error: `Response is larger than ${MAX_BODY_BYTES} bytes; JSON path status not checked` });
+    expect((await check({ path: "/edge", jsonPath: "status", jsonExpected: "ok" })).ok).toBe(true);
+  });
+  it("ignores the JSON assertion for HEAD", async () => {
+    expect(await check({ path: "/html", method: "HEAD", jsonPath: "status", jsonExpected: "ok" })).toMatchObject({ ok: true, statusCode: 200 });
+    expect(heads).toContain("/html");
+  });
+});

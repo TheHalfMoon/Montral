@@ -296,6 +296,7 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
     name: monitor?.name ?? "", type: monitor?.type ?? ("http" as Monitor["type"]), target: monitor?.target ?? "https://",
     requestBody: monitor?.requestBody ?? "", domainExpiryWarnDays: monitor?.domainExpiryWarnDays ?? 30, method: monitor?.method ?? "GET", intervalSec: monitor?.intervalSec ?? 60, expectedStatus: monitor?.expectedStatus ?? 200, expectedLocation: monitor?.expectedLocation ?? "", failureThreshold: monitor?.failureThreshold ?? 3,
     keyword: monitor?.keyword ?? "", wsMessage: monitor?.wsMessage ?? "", keywordMode: monitor?.keywordMode ?? ("contains" as "contains" | "absent"),
+    jsonPath: monitor?.jsonPath ?? "", jsonExpected: monitor?.jsonExpected ?? "", jsonMatch: monitor?.jsonMatch ?? ("equals" as "equals" | "contains" | "exists"),
     dnsRecordType: monitor?.dnsRecordType ?? "A", dnsExpectedValue: monitor?.dnsExpectedValue ?? "", dnsMatchMode: monitor?.dnsMatchMode ?? "exact",
     recoveryThreshold: monitor?.recoveryThreshold ?? 1,
     graceSec: monitor?.graceSec ?? 0, channelIds: monitor?.channelIds ?? ([] as string[]),
@@ -356,7 +357,12 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
       const { regions, dnsRecordType, dnsExpectedValue, dnsMatchMode, ...rest } = f;
       // only http, tcp and websocket checks can run from a region; leaving the field out keeps the stored value
       const probed = PROBED.includes(f.type) && places.length > 1;
-      const payload = { ...rest, requestBody: f.type === "http" && !["GET", "HEAD"].includes(f.method) && f.requestBody ? f.requestBody : null, ...(f.type === "dns" ? { dnsRecordType, dnsExpectedValue, dnsMatchMode } : {}), ...(probed ? { regions } : {}), tags, headers, keyword: (f.type === "http" || f.type === "websocket") && f.keyword ? f.keyword : null, wsMessage: f.type === "websocket" && f.wsMessage ? f.wsMessage : null, expectedLocation: f.type === "http" && REDIRECTS.includes(f.expectedStatus) && f.expectedLocation.trim() ? f.expectedLocation.trim() : null };
+      // http only; an empty path clears the assertion, and a blank expected value is "not given" (the API then asks for one)
+      const jsonPath = f.type === "http" ? f.jsonPath.trim() : "";
+      const jsonAssertion = jsonPath
+        ? { jsonPath, jsonMatch: f.jsonMatch, jsonExpected: f.jsonMatch !== "exists" && f.jsonExpected !== "" ? f.jsonExpected : null }
+        : { jsonPath: null, jsonMatch: "equals" as const, jsonExpected: null };
+      const payload = { ...rest, requestBody: f.type === "http" && !["GET", "HEAD"].includes(f.method) && f.requestBody ? f.requestBody : null, ...(f.type === "dns" ? { dnsRecordType, dnsExpectedValue, dnsMatchMode } : {}), ...(probed ? { regions } : {}), tags, headers, keyword: (f.type === "http" || f.type === "websocket") && f.keyword ? f.keyword : null, wsMessage: f.type === "websocket" && f.wsMessage ? f.wsMessage : null, expectedLocation: f.type === "http" && REDIRECTS.includes(f.expectedStatus) && f.expectedLocation.trim() ? f.expectedLocation.trim() : null, ...jsonAssertion };
       if (monitor) {
         const { type: _t, ...patch } = payload;
         await api.updateMonitor(monitor.id, patch);
@@ -466,6 +472,19 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
             <label className="fld">{t("Mode")}
               <Select className="in" value={f.keywordMode as string} onChange={(v) => set("keywordMode", v as "contains" | "absent")} options={[{ value: "contains", label: t("must contain") }, { value: "absent", label: t("must not contain") }]} />
             </label>
+          </div>
+        )}
+        {f.type === "http" && (
+          <div className="fld">
+            {t("JSON assertion (optional)")}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 130px", gap: 10, marginTop: 6 }}>
+              <input className="in mono" value={f.jsonPath} onChange={(e) => set("jsonPath", e.target.value)} placeholder="data.items[0].state" maxLength={200} aria-label={t("JSON path")} />
+              <Select className="in" value={f.jsonMatch as string} onChange={(v) => set("jsonMatch", v as "equals" | "contains" | "exists")} options={[{ value: "equals", label: t("equals") }, { value: "contains", label: t("contains") }, { value: "exists", label: t("exists") }]} />
+            </div>
+            {f.jsonMatch !== "exists" && (
+              <input className="in mono" style={{ marginTop: 8 }} value={f.jsonExpected} onChange={(e) => set("jsonExpected", e.target.value)} placeholder="ok" maxLength={500} aria-label={t("Expected value")} />
+            )}
+            <span className="muted" style={{ fontSize: 12.5, fontWeight: 400 }}>{t("Checks one value of a JSON response, e.g. path status equals ok, or data.items[0].count equals 3. Use dot keys, [0] for array items and [\"key with space\"]. Numbers, true, false and null are compared as written. Leave the path empty to skip.")}</span>
           </div>
         )}
         {(f.type === "http" || f.type === "websocket") && (

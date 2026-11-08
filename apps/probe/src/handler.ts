@@ -1,5 +1,6 @@
 import { HTTP_METHODS, HTTP_REQUEST_CAPABILITY, requestBodyProblem } from "../../api/src/http-request";
 import { runCheck, type CheckInput } from "../../api/src/checker";
+import { JSON_ASSERTION_CAPABILITY, JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, jsonPathProblem } from "../../api/src/json-assertion";
 import { targetProblem } from "../../api/src/netguard";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbe } from "../../api/src/probe-protocol";
 
@@ -39,11 +40,20 @@ export function parseCheck(raw: unknown): { input: CheckInput } | { error: strin
   if (entries.length > 50 || entries.some(([k, v]) => typeof v !== "string" || k.length > 100 || v.length > 2000)) return { error: "headers are not acceptable" };
   const wsMessage = o.wsMessage ?? null;
   if (wsMessage !== null && (typeof wsMessage !== "string" || wsMessage.length > 2000)) return { error: "wsMessage must be a string" };
+  const jsonPath = o.jsonPath ?? null;
+  if (jsonPath !== null && typeof jsonPath !== "string") return { error: "jsonPath must be a string" };
+  const badPath = jsonPathProblem(jsonPath);
+  if (badPath) return { error: badPath };
+  const jsonExpected = o.jsonExpected ?? null;
+  if (jsonExpected !== null && (typeof jsonExpected !== "string" || jsonExpected.length > MAX_JSON_EXPECTED_LENGTH)) return { error: "jsonExpected must be a string" };
+  const jsonMatch = o.jsonMatch ?? "equals";
+  if (!(JSON_MATCH_MODES as readonly unknown[]).includes(jsonMatch)) return { error: "jsonMatch must be equals, contains or exists" };
   return {
     input: {
       type: o.type, target: o.target, method, expectedStatus: expectedStatus as number, timeoutMs: timeoutMs as number,
       keyword: keyword as string | null, keywordMode, expectedLocation: expectedLocation as string | null, headers: Object.fromEntries(entries) as Record<string, string>,
       wsMessage: wsMessage as string | null, requestBody,
+      jsonPath: jsonPath as string | null, jsonExpected: jsonExpected as string | null, jsonMatch: jsonMatch as string,
     },
   };
 }
@@ -54,7 +64,7 @@ export function parseCheck(raw: unknown): { input: CheckInput } | { error: strin
  * function is deployed to.
  */
 export async function handleProbe(req: Request, o: { secret: string | undefined; region?: string }): Promise<Response> {
-  if (req.method === "GET") return json(200, { ok: true, region: o.region ?? null, capabilities: [HTTP_REQUEST_CAPABILITY] });
+  if (req.method === "GET") return json(200, { ok: true, region: o.region ?? null, capabilities: [HTTP_REQUEST_CAPABILITY, JSON_ASSERTION_CAPABILITY] });
   if (req.method !== "POST") return json(405, { error: "POST a check to this endpoint" });
   if (!o.secret) return json(503, { error: "Probe has no PROBE_SECRET configured" });
   if (Number(req.headers.get("content-length")) > MAX_BODY_BYTES) return json(413, { error: "Request too large" });

@@ -50,6 +50,12 @@ describe("Montral Cloudflare edge probe", () => {
     const missing = await handleEdgeProbe(await signed({ ...payload, keyword: "missing" }), env, okFetch as never);
     expect(await missing.json()).toMatchObject({ ok: false });
   });
+  it("refuses a JSON assertion it does not advertise instead of passing without it", async () => {
+    okFetch.mockClear();
+    const r = await handleEdgeProbe(await signed({ ...payload, jsonPath: "status", jsonExpected: "ok" }), env, okFetch as never);
+    expect(r.status).toBe(400);
+    expect(okFetch).not.toHaveBeenCalled();
+  });
   it("rejects unsupported methods, private types, oversized payloads, and secret headers", async () => {
     const notHttp = await handleEdgeProbe(await signed({ ...payload, type: "tcp" }), env, okFetch as never);
     expect(notHttp.status).toBe(400);

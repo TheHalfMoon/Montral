@@ -1,0 +1,31 @@
+name: Montral failover qualification
+# Real multi-node infrastructure qualification (PostgreSQL primary + synchronous replica, Toxiproxy) on disposable
+# containers. Separate from the main CI job because it needs the Docker daemon and several minutes of wall time.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  failover:
+    name: Network partition and primary promotion
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build Node API
+        run: pnpm --filter @montral/api build:node
+      - name: Pull qualification images
+        run: docker pull postgres:17 && docker pull ghcr.io/shopify/toxiproxy:2.9.0
+      - name: Qualify partition and failover
+        run: node scripts/qualify-failover.mjs

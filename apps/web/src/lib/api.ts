@@ -70,7 +70,8 @@ export type MonthlyReviewInput = {
   acknowledgment: "I_verified_external_provider_evidence";
 };
 
-export type StatusPage = { id: string; projectId?: string | null; slug: string; title: string; theme: "light" | "dark" | "auto"; showLatency: boolean; externalUrl?: string | null; hideBranding?: boolean; uptimeOkPct?: number; uptimeWarnPct?: number; mcpEnabled?: boolean; maintenanceReminderHours?: number; visibility?: "public" | "members"; branding?: { allowed: boolean; upgradeUrl?: string }; monitorIds?: string[]; components?: { monitorId: string; groupName: string | null }[] };
+export type ShareLink = { id: string; label: string | null; createdAt: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null };
+export type StatusPage = { id: string; projectId?: string | null; slug: string; title: string; theme: "light" | "dark" | "auto"; showLatency: boolean; externalUrl?: string | null; hideBranding?: boolean; uptimeOkPct?: number; uptimeWarnPct?: number; mcpEnabled?: boolean; maintenanceReminderHours?: number; visibility?: "public" | "members" | "password"; hasPassword?: boolean; password?: string; branding?: { allowed: boolean; upgradeUrl?: string }; monitorIds?: string[]; components?: { monitorId: string; groupName: string | null }[] };
 
 // Requests started as soon as the page's HTML is parsed (lib/boot.ts), in parallel with the JS bundles loading:
 // the first GET for a path is answered by that in-flight request, so a page load is HTML (static) + one parallel API round.
@@ -209,6 +210,11 @@ export type TimeCoverage = {
 export const api = {
   billingStatus: () => req<BillingStatus>("/billing"),
   billingCheckout: (plan: "pro" | "business") => req<{ url: string; testMode: true }>("/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
+  revokeStatusAccess: (id: string) => req<{ ok: true }>(`/status-pages/${id}/access/revoke`, { method: "POST" }),
+  shareLinks: (id: string) => req<ShareLink[]>(`/status-pages/${id}/share-links`),
+  createShareLink: (id: string, b: { label?: string; expiresInHours?: number }) =>
+    req<{ id: string; label: string | null; expiresAt: string; url: string; warning: string }>(`/status-pages/${id}/share-links`, { method: "POST", body: JSON.stringify(b) }),
+  revokeShareLink: (id: string, linkId: string) => req<void>(`/status-pages/${id}/share-links/${linkId}`, { method: "DELETE" }),
   hookInboxes: () => req<{ inboxes: HookInbox[] }>("/hooks/inboxes"),
   createHookInbox: (name: string) => req<{ id: string; name: string; path: string }>("/hooks/inboxes", { method: "POST", body: JSON.stringify({ name }) }),
   hookEvents: (id: string, f: { before?: string; method?: string; q?: string } = {}) => {

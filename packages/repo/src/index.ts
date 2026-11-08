@@ -329,11 +329,15 @@ export interface StatusPage {
   /** hours before maintenance starts that subscribers are reminded; 0 = never */
   maintenanceReminderHours: number;
   /** "public": anyone; "members": only signed-in members of the page's workspace */
-  visibility: "public" | "members";
+  visibility: "public" | "members" | "password";
+  /** PBKDF2 hash of the page password; internal, never sent to clients */
+  accessPasswordHash: string | null;
+  /** bumped to sign every outside visitor out */
+  accessVersion: number;
   createdAt: Date;
 }
-export type NewStatusPage = { slug: string; title: string; theme?: string; showLatency?: boolean; externalUrl?: string | null; hideBranding?: boolean; visibility?: StatusPage["visibility"] };
-export type StatusPagePatch = Partial<Pick<StatusPage, "title" | "theme" | "showLatency" | "externalUrl" | "hideBranding" | "uptimeOkPct" | "uptimeWarnPct" | "mcpEnabled" | "maintenanceReminderHours" | "visibility">>;
+export type NewStatusPage = { slug: string; title: string; theme?: string; showLatency?: boolean; externalUrl?: string | null; hideBranding?: boolean; visibility?: StatusPage["visibility"]; accessPasswordHash?: string | null };
+export type StatusPagePatch = Partial<Pick<StatusPage, "title" | "theme" | "showLatency" | "externalUrl" | "hideBranding" | "uptimeOkPct" | "uptimeWarnPct" | "mcpEnabled" | "maintenanceReminderHours" | "visibility" | "accessPasswordHash" | "accessVersion">>;
 export type PageComponentInput = { monitorId: string; groupName?: string };
 export interface Subscriber {
   id: string;
@@ -662,7 +666,7 @@ export interface Repo {
    * Adds the address, or finds the row it already has. `token` is the stored one (the given token only for a new row).
    * A pending row takes the newest locale and component choice; a confirmed row is never changed, whoever asks again.
    */
-  addSubscriber(s: { pageId: string; email: string; token: string; locale: string; monitorIds?: string[] }): Promise<{ locale: string | null; token: string; confirmed: boolean; created: boolean }>;
+  addSubscriber(s: { pageId: string; email: string; token: string; locale: string; monitorIds?: string[]; accessVersion?: number }): Promise<{ locale: string | null; token: string; confirmed: boolean; created: boolean }>;
   /** Maintenance windows touching the page (its monitors', plus workspace-wide ones) that end after `since`, active/upcoming first, closest to now first. */
   pageMaintenance(page: StatusPage, o: { since?: Date; limit: number }): Promise<MaintenanceWindow[]>;
   /** Windows that start within their page's reminder lead time, each claimed once per page; claimed rows come back with their subscribers. */

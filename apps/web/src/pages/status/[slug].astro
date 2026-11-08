@@ -26,6 +26,8 @@ const [{ status, data, privateResponse }, hist, maint] = await Promise.all([
 ]);
 // a policy that is down answers 503: show that, not a missing page
 if (status === 503) return new Response("Unavailable", { status: 503, headers: { "cache-control": "private, no-store" } });
+// a password-protected page the visitor has not unlocked: show the password form instead (no title or content)
+if (status === 401) return Astro.rewrite(`/locked-status?slug=${encodeURIComponent(slug ?? "")}`);
 if (status === 404 || !data) return new Response("Not found", { status: 404, headers: { "cache-control": "private, no-store" } });
 const history = hist.data ?? { items: [], next: null };
 // windows that are running or still ahead; finished ones are not news

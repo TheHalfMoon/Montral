@@ -405,14 +405,40 @@ export const statusPage = pgTable(
     mcpEnabled: boolean("mcp_enabled").notNull().default(true),
     /** subscribers get a reminder this many hours before maintenance starts; 0 turns it off */
     maintenanceReminderHours: integer("maintenance_reminder_hours").notNull().default(24),
-    /** "public": anyone; "members": only signed-in members of the page's workspace (everyone else gets 404) */
-    visibility: text("visibility", { enum: ["public", "members"] }).notNull().default("public"),
+    /**
+     * "public": anyone; "members": only signed-in members of the page's workspace (everyone else gets 404);
+     * "password": members, or anyone who unlocks it with the page password or a share link.
+     */
+    visibility: text("visibility", { enum: ["public", "members", "password"] }).notNull().default("public"),
+    /** PBKDF2 hash of the page password ("pbkdf2-sha256$iterations$salt$hash"); never returned by the API */
+    accessPasswordHash: text("access_password_hash"),
+    /** bumped to sign every visitor out: access cookies carry the version they were issued for */
+    accessVersion: integer("access_version").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("status_page_slug_idx").on(t.slug),
-    check("status_page_visibility_chk", sql`${t.visibility} in ('public', 'members')`),
+    check("status_page_visibility_chk", sql`${t.visibility} in ('public', 'members', 'password')`),
+    check("status_page_password_chk", sql`${t.visibility} <> 'password' or ${t.accessPasswordHash} is not null`),
   ],
+);
+
+/** Revocable, expiring links that let someone outside the workspace open a non-public status page. */
+export const statusPageShareLink = pgTable(
+  "status_page_share_link",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    statusPageId: uuid("status_page_id").notNull().references(() => statusPage.id, { onDelete: "cascade" }),
+    /** SHA-256 of the link's secret token; the token itself is shown once and never stored */
+    tokenHash: text("token_hash").notNull(),
+    label: text("label"),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("status_page_share_link_token_idx").on(t.tokenHash), index("status_page_share_link_page_idx").on(t.statusPageId)],
 );
 
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */
@@ -435,6 +461,8 @@ export const statusSubscriber = pgTable(
     locale: text("locale"),
     /** components (monitors) the subscriber wants mail about; empty = all of the page */
     monitorIds: uuid("monitor_ids").array().notNull().default([]),
+    /** the page's access version when they last subscribed: a password page mails only current-version subscribers */
+    accessVersion: integer("access_version").notNull().default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [uniqueIndex("status_subscriber_page_email_idx").on(t.statusPageId, t.email), uniqueIndex("status_subscriber_token_idx").on(t.token)],

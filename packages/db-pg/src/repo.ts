@@ -28,11 +28,13 @@ const inScope = (scope: Scope, col: Parameters<typeof inArray>[0]): SQL | undefi
 
 /** True when the last "resolved" update of the incident was written by a person (not by the checks); survives the account being deleted. */
 /**
- * A members-only page mails only subscribers who are verified members of its
- * workspace: anyone else (an earlier public-page subscriber, a former member)
- * must not receive incident or maintenance content of a private page.
+ * Who may be mailed a page's incident and maintenance content: anyone for a public page; for a password page, a
+ * subscriber who subscribed under the current access version (changing the password or signing everyone out stops
+ * mail to the rest); and always verified members of the page's workspace. A members-only page reaches members only.
  */
-const subscriberMayReceive: SQL = sql`(${schema.statusPage.visibility} = 'public' or exists (
+const subscriberMayReceive: SQL = sql`(${schema.statusPage.visibility} = 'public'
+  or (${schema.statusPage.visibility} = 'password' and ${schema.statusSubscriber.accessVersion} = ${schema.statusPage.accessVersion})
+  or exists (
   select 1 from member m join "user" u on u.id = m.user_id
   where m.organization_id = ${schema.statusPage.organizationId} and u.email_verified and lower(u.email) = lower(${schema.statusSubscriber.email})))`;
 const resolvedByPerson = (incidentId: Parameters<typeof inArray>[0]): SQL =>
@@ -1484,7 +1486,7 @@ export function createRepo(db: Db): Repo {
       const monitorIds = s.monitorIds ?? [];
       const [row] = await db
         .insert(schema.statusSubscriber)
-        .values({ statusPageId: s.pageId, email: s.email, token: s.token, locale: s.locale, monitorIds })
+        .values({ statusPageId: s.pageId, email: s.email, token: s.token, locale: s.locale, monitorIds, accessVersion: s.accessVersion ?? 0 })
         .onConflictDoNothing()
         .returning();
       if (row) return { locale: row.locale, token: row.token, confirmed: false, created: true };
@@ -1497,10 +1499,15 @@ export function createRepo(db: Db): Repo {
       if (!old.confirmedAt) {
         const [fresh] = await db
           .update(schema.statusSubscriber)
-          .set({ locale: s.locale, monitorIds })
+          .set({ locale: s.locale, monitorIds, accessVersion: s.accessVersion ?? 0 })
           .where(and(eq(schema.statusSubscriber.id, old.id), isNull(schema.statusSubscriber.confirmedAt)))
           .returning();
         if (fresh) return { locale: fresh.locale, token: fresh.token, confirmed: false, created: false };
+      }
+      // A confirmed subscriber who subscribes again, from someone who can open the page now, is current again for a
+      // password page (only the version moves forward; nothing else about a confirmed row changes and no mail is sent).
+      if (old.confirmedAt && s.accessVersion !== undefined && s.accessVersion > old.accessVersion) {
+        await db.update(schema.statusSubscriber).set({ accessVersion: s.accessVersion }).where(eq(schema.statusSubscriber.id, old.id));
       }
       return { locale: old.locale, token: old.token, confirmed: !!old.confirmedAt, created: false };
     },
@@ -1551,7 +1558,9 @@ export function createRepo(db: Db): Repo {
               select 1 from status_subscriber s
               where s.status_page_id = ${schema.statusPage.id} and s.confirmed_at is not null
                 -- same rule as subscriberMayReceive: an outsider on a members-only page is nobody to remind
-                and (${schema.statusPage.visibility} = 'public' or exists (
+                and (${schema.statusPage.visibility} = 'public'
+                  or (${schema.statusPage.visibility} = 'password' and s.access_version = ${schema.statusPage.accessVersion})
+                  or exists (
                   select 1 from member m join "user" u on u.id = m.user_id
                   where m.organization_id = ${schema.statusPage.organizationId} and u.email_verified and lower(u.email) = lower(s.email)))
                 and (cardinality(s.monitor_ids) = 0 or exists (

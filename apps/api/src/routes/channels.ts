@@ -8,7 +8,7 @@ import { isManager, requireManager, uuidParams } from "../middleware";
 import { urlProblem } from "../netguard";
 import { maskConfig, restoreConfig, sameJson } from "../secrets";
 
-const TYPES = ["email", "slack", "telegram", "webhook", "pagerduty", "lark", "push", "discord", "teams", "ntfy"] as const;
+const TYPES = ["email", "slack", "telegram", "webhook", "pagerduty", "lark", "push", "discord", "teams", "ntfy", "googlechat", "mattermost", "gotify", "pushover"] as const;
 type ChannelType = (typeof TYPES)[number];
 
 const url = z.string().trim().max(2000).url().refine((u) => /^https?:\/\//i.test(u), "Must be an http(s) URL");
@@ -25,6 +25,29 @@ const CONFIG: Record<ChannelType, z.ZodType<Record<string, unknown>>> = {
     token: z.string().trim().max(500).regex(/^[\x20-\x7E]*$/, "Use printable ASCII characters only").transform((v) => v || undefined).optional(),
     priority: z.enum(["1", "2", "3", "4", "5"]).default("3"),
   }).refine((v) => !v.token || v.url.toLowerCase().startsWith("https://"), { path: ["token"], message: "An access token is only sent to an https:// server" }),
+  /** an incoming webhook of a Chat space: always https://chat.googleapis.com/v1/spaces/<space>/messages?key=…&token=… */
+  googlechat: z.object({
+    url: url.refine((v) => {
+      const u = new URL(v);
+      return u.protocol === "https:" && u.host === "chat.googleapis.com" && /^\/v1\/spaces\/[^/]+\/messages$/.test(u.pathname) && u.searchParams.has("key") && u.searchParams.has("token") && !u.username && !u.password && !u.hash;
+    }, "Use the webhook URL Google Chat gives you (https://chat.googleapis.com/v1/spaces/…/messages?key=…&token=…)"),
+  }),
+  /** self-hosted: any server the SSRF guard allows, http included; the hook id in the path is the credential */
+  mattermost: z.object({
+    url: url.refine((v) => { const u = new URL(v); return /\/hooks\/[A-Za-z0-9]+$/.test(u.pathname) && !u.username && !u.password && !u.hash; }, "Use the incoming webhook URL (https://<your server>/hooks/<id>)"),
+  }),
+  /** the server's base URL (a reverse-proxy path prefix is fine); the token travels in a header, so only to https */
+  gotify: z.object({
+    url: url.refine((v) => { const u = new URL(v); return !u.search && !u.hash && !u.username && !u.password && !/\/message\/?$/.test(u.pathname); }, "Use the server URL without /message, a query or credentials")
+      .refine((v) => v.toLowerCase().startsWith("https://"), "An application token is only sent to an https:// server"),
+    token: z.string().trim().min(1).max(200).regex(/^[\x21-\x7E]+$/, "Use the application token as shown in Gotify"),
+  }),
+  /** Pushover's app tokens and user/group keys are 30 letters and digits; devices are comma-separated names of up to 25 */
+  pushover: z.object({
+    token: z.string().trim().regex(/^[A-Za-z0-9]{30}$/, "Use the 30-character application token"),
+    userKey: z.string().trim().regex(/^[A-Za-z0-9]{30}$/, "Use the 30-character user or group key"),
+    device: z.string().trim().max(200).regex(/^([A-Za-z0-9_-]{1,25}(,[A-Za-z0-9_-]{1,25})*)?$/, "Use device names (letters, digits, _ or -), comma-separated").transform((v) => v || undefined).optional(),
+  }),
   webhook: z.object({ url }),
   lark: z.object({ url, secret: z.string().max(200).optional() }),
   telegram: z.object({ botToken: z.string().trim().min(1).max(200), chatId: z.string().trim().min(1).max(100) }),
@@ -32,7 +55,8 @@ const CONFIG: Record<ChannelType, z.ZodType<Record<string, unknown>>> = {
   /** every member's registered phones; nothing to configure */
   push: z.object({}),
 };
-const parseConfig = (type: ChannelType, config: unknown) => CONFIG[type].safeParse(config);
+/** Exported for unit tests of the per-type settings. */
+export const parseConfig = (type: ChannelType, config: unknown) => CONFIG[type].safeParse(config);
 const configError = (e: z.ZodError) => `Invalid channel settings: ${e.issues.map((i) => `${i.path.join(".") || "config"} ${i.message}`).join("; ")}`;
 
 /** A webhook-style URL must point at a public address (see netguard.ts). */

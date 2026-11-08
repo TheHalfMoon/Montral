@@ -8,6 +8,10 @@ const TYPES: { id: Channel["type"]; label: string; desc: string }[] = [
   { id: "discord", label: "Discord", desc: "Send alerts through a Discord channel webhook." },
   { id: "teams", label: "Microsoft Teams", desc: "Send alerts to a Teams Workflow webhook set to “Anyone” authentication; messages are capped at 4000 characters." },
   { id: "ntfy", label: "ntfy", desc: "Publish alerts to an ntfy topic." },
+  { id: "googlechat", label: "Google Chat", desc: "Post to a Google Chat space through an incoming webhook." },
+  { id: "mattermost", label: "Mattermost", desc: "Post to a Mattermost channel through an incoming webhook." },
+  { id: "gotify", label: "Gotify", desc: "Push alerts to your Gotify server with an application token." },
+  { id: "pushover", label: "Pushover", desc: "Push alerts to Pushover devices; down alerts use high priority." },
   { id: "slack", label: "Slack", desc: "Post to a channel with an incoming webhook." },
   { id: "lark", label: "Lark / Feishu", desc: "Post to a group with a custom bot." },
   { id: "email", label: "Email", desc: "Send alerts to an address or on-call alias." },
@@ -24,6 +28,10 @@ const ICONS: Record<Channel["type"], React.ReactNode> = {
   discord: svg(<><rect x="3" y="5" width="18" height="14" rx="5" /><path d="M8 11h.01M16 11h.01M8 15c2 1 6 1 8 0" /></>),
   teams: svg(<><rect x="3" y="5" width="18" height="14" rx="3" /><path d="M8 9h8M12 9v6" /></>),
   ntfy: svg(<><path d="M6 16V9a6 6 0 0 1 12 0v7l2 2H4l2-2M10 21h4" /></>),
+  googlechat: svg(<path d="M4 5h16v11H9l-5 4V5z" />),
+  mattermost: svg(<><circle cx="12" cy="12" r="8" /><path d="M9 14l3-6 3 6" /></>),
+  gotify: svg(<><path d="M6 16V9a6 6 0 0 1 12 0v7l2 2H4l2-2" /><path d="M10 21h4M12 3v2" /></>),
+  pushover: svg(<><circle cx="12" cy="12" r="8" /><path d="M10 16V8h3a2.5 2.5 0 0 1 0 5h-3" /></>),
   slack: svg(<path d="M9 4L7 20M17 4l-2 16M4 9h16M3.5 15h16" />),
   lark: svg(<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />),
   email: svg(<><rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" /></>),
@@ -33,11 +41,11 @@ const ICONS: Record<Channel["type"], React.ReactNode> = {
   webhook: svg(<><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" /><path d="M14 10a4 4 0 0 0-5.7 0l-3 3A4 4 0 0 0 11 18.7l1-1" /></>),
 };
 const REPEATS = [5, 10, 15, 30, 60];
-const dest = (c: Channel) => c.type === "push" ? t("App on members' phones") : c.type === "ntfy" ? `${(c.config.url ?? "").replace(/^https?:\/\//, "").split("/")[0]}/${c.config.topic ?? ""}` : c.config.url?.replace(/^https?:\/\//, "") ?? c.config.to ?? (c.config.chatId ? `chat ${c.config.chatId}` : c.config.routingKey ? "routing key ••••" : "");
+const dest = (c: Channel) => c.type === "push" ? t("App on members' phones") : c.type === "ntfy" ? `${(c.config.url ?? "").replace(/^https?:\/\//, "").split("/")[0]}/${c.config.topic ?? ""}` : c.type === "pushover" ? `Pushover${c.config.device ? ` · ${c.config.device}` : ""}` : c.config.url?.replace(/^https?:\/\//, "") ?? c.config.to ?? (c.config.chatId ? `chat ${c.config.chatId}` : c.config.routingKey ? "routing key ••••" : "");
 
 export default function Alerting() {
   const [items, setItems] = useState<Channel[] | null>(null);
-  const [f, setF] = useState({ type: "slack" as Channel["type"], name: "", url: "", to: "", botToken: "", chatId: "", routingKey: "", secret: "", topic: "", token: "", priority: "3", auto: false });
+  const [f, setF] = useState({ type: "slack" as Channel["type"], name: "", url: "", to: "", botToken: "", chatId: "", routingKey: "", secret: "", topic: "", token: "", priority: "3", userKey: "", device: "", auto: false });
   const [err, setErr] = useState("");
   const [busy, run] = useBusy();
   const [removing, setRemoving] = useState("");
@@ -63,12 +71,12 @@ export default function Alerting() {
   const load = () => api.channels().then(setItems);
   useEffect(() => { load(); loadLog(); api.config().then((c) => setPush(!!c.push?.apns)).catch(() => {}); api.settings().then((s) => setDays(s.alertLogRetentionDays)).catch(() => {}); api.me().then((m) => { setProjectId(m.projectId); return api.projectAlerting(m.projectId).then(setRules); }).catch(() => {}); }, []);
 
-  const blank = { type: "slack" as Channel["type"], name: "", url: "", to: "", botToken: "", chatId: "", routingKey: "", secret: "", topic: "", token: "", priority: "3", auto: false };
+  const blank = { type: "slack" as Channel["type"], name: "", url: "", to: "", botToken: "", chatId: "", routingKey: "", secret: "", topic: "", token: "", priority: "3", userKey: "", device: "", auto: false };
   const openAdd = () => { setErr(""); setEditId(""); setF(blank); setAdding(true); };
   const openEdit = (c: Channel) => {
     setErr("");
     setEditId(c.id);
-    setF({ ...blank, type: c.type, name: c.name, url: c.config.url ?? "", to: c.config.to ?? "", botToken: c.config.botToken ?? "", chatId: c.config.chatId ?? "", routingKey: c.config.routingKey ?? "", secret: c.config.secret ?? "", topic: c.config.topic ?? "", token: c.config.token ?? "", priority: c.config.priority ?? "3", auto: !!c.autoEnable });
+    setF({ ...blank, type: c.type, name: c.name, url: c.config.url ?? "", to: c.config.to ?? "", botToken: c.config.botToken ?? "", chatId: c.config.chatId ?? "", routingKey: c.config.routingKey ?? "", secret: c.config.secret ?? "", topic: c.config.topic ?? "", token: c.config.token ?? "", priority: c.config.priority ?? "3", userKey: c.config.userKey ?? "", device: c.config.device ?? "", auto: !!c.autoEnable });
     setAdding(true);
   };
   async function add(e: React.SyntheticEvent) {
@@ -80,6 +88,8 @@ export default function Alerting() {
         : f.type === "telegram" ? { botToken: f.botToken, chatId: f.chatId }
         : f.type === "pagerduty" ? { routingKey: f.routingKey }
         : f.type === "ntfy" ? { url: f.url || "https://ntfy.sh", topic: f.topic, token: f.token, priority: f.priority }
+        : f.type === "gotify" ? { url: f.url, token: f.token }
+        : f.type === "pushover" ? { token: f.token, userKey: f.userKey, device: f.device }
         : f.type === "push" ? {}
         : f.type === "lark" ? { url: f.url, ...(f.secret ? { secret: f.secret } : {}) }
         : { url: f.url };
@@ -225,14 +235,27 @@ export default function Alerting() {
               ))}
             </div>}
             <label className="fld">{t("Name")}<input className="in" required value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder={f.type === "push" ? t("Mobile app") : "#ops-alerts"} /></label>
-            {(f.type === "slack" || f.type === "webhook" || f.type === "lark" || f.type === "discord" || f.type === "teams") && (
-              <label className="fld">{t("Webhook URL")}<input className="in mono" type="url" required value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} placeholder={f.type === "discord" ? "https://discord.com/api/webhooks/…" : f.type === "teams" ? "https://…/workflows/…" : f.type === "lark" ? "https://open.larksuite.com/open-apis/bot/v2/hook/…" : "https://hooks.slack.com/services/…"} /></label>
+            {(f.type === "slack" || f.type === "webhook" || f.type === "lark" || f.type === "discord" || f.type === "teams" || f.type === "googlechat" || f.type === "mattermost") && (
+              <label className="fld">{t("Webhook URL")}<input className="in mono" type="url" required value={f.url} onChange={(e) => setF({ ...f, url: e.target.value })} placeholder={f.type === "discord" ? "https://discord.com/api/webhooks/…" : f.type === "googlechat" ? "https://chat.googleapis.com/v1/spaces/…/messages?key=…&token=…" : f.type === "mattermost" ? "https://mattermost.example.com/hooks/…" : f.type === "teams" ? "https://…/workflows/…" : f.type === "lark" ? "https://open.larksuite.com/open-apis/bot/v2/hook/…" : "https://hooks.slack.com/services/…"} /></label>
             )}
             {f.type === "ntfy" && <>
               <label className="fld">{t("ntfy server URL")}<input className="in" type="url" value={f.url} placeholder="https://ntfy.sh" onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
               <label className="fld">{t("Topic")}<input className="in" required pattern="[A-Za-z0-9_-]{1,64}" value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} /></label>
               <label className="fld">{t("Access token (optional)")}<input className="in" type="password" value={f.token} onChange={(e) => setF({ ...f, token: e.target.value })} /></label>
               <label className="fld">{t("Notification priority")}<select className="in" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })}>{["1", "2", "3", "4", "5"].map((p) => <option key={p} value={p}>{p}</option>)}</select></label>
+            </>}
+            {f.type === "googlechat" && <p className="muted" style={{ margin: 0 }}>{t("In the space, open Apps & integrations, add a webhook and copy its URL.")}</p>}
+            {f.type === "mattermost" && <p className="muted" style={{ margin: 0 }}>{t("Create it under Integrations › Incoming Webhooks. Posts appear as Montral where the server lets integrations override usernames.")}</p>}
+            {f.type === "gotify" && <>
+              <label className="fld">{t("Gotify server URL")}<input className="in mono" type="url" required value={f.url} placeholder="https://gotify.example.com" onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
+              <label className="fld">{t("Application token")}<input className="in mono" type="password" required value={f.token} placeholder="AbCdEf123456789" onChange={(e) => setF({ ...f, token: e.target.value })} /></label>
+              <p className="muted" style={{ margin: 0 }}>{t("Create an application in Gotify and paste its token. Down alerts are sent with priority 8, recoveries with 4.")}</p>
+            </>}
+            {f.type === "pushover" && <>
+              <label className="fld">{t("Application API token")}<input className="in mono" type="password" required pattern="[A-Za-z0-9]{30}" value={f.token} placeholder={t("30 letters and digits")} onChange={(e) => setF({ ...f, token: e.target.value })} /></label>
+              <label className="fld">{t("User or group key")}<input className="in mono" type="password" required pattern="[A-Za-z0-9]{30}" value={f.userKey} placeholder={t("30 letters and digits")} onChange={(e) => setF({ ...f, userKey: e.target.value })} /></label>
+              <label className="fld">{t("Devices (optional)")}<input className="in mono" value={f.device} placeholder="iphone,desktop" onChange={(e) => setF({ ...f, device: e.target.value })} /></label>
+              <p className="muted" style={{ margin: 0 }}>{t("Leave devices empty to reach every device of the user or group.")}</p>
             </>}
             {f.type === "lark" && (
               <label className="fld">{t("Signing secret (optional)")}<input className="in mono" value={f.secret} onChange={(e) => setF({ ...f, secret: e.target.value })} /></label>

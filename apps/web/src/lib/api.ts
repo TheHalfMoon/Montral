@@ -59,7 +59,7 @@ export type Incident = {
   deliveries?: AlertDelivery[];
 };
 
-export type Channel = { id: string; type: "slack" | "webhook" | "email" | "telegram" | "pagerduty" | "lark" | "push" | "discord" | "teams" | "ntfy"; name: string; config: { url?: string; secret?: string; to?: string; chatId?: string; botToken?: string; routingKey?: string; topic?: string; token?: string; priority?: string }; enabled: boolean; autoEnable?: boolean; projectId?: string | null };
+export type Channel = { id: string; type: "slack" | "webhook" | "email" | "telegram" | "pagerduty" | "lark" | "push" | "discord" | "teams" | "ntfy" | "googlechat" | "mattermost" | "gotify" | "pushover"; name: string; config: { url?: string; secret?: string; to?: string; chatId?: string; botToken?: string; routingKey?: string; topic?: string; token?: string; priority?: string; userKey?: string; device?: string }; enabled: boolean; autoEnable?: boolean; projectId?: string | null };
 export type WorkspaceSettings = { alertLogRetentionDays: number; checkRetentionDays: number; monthlyReport: boolean };
 /** Staged owner-only internal operations: no recipient email or provider evidence is returned. */
 export type MonthlyReconciliationSummary = { pending: number; unresolved: number; confirmed: number };

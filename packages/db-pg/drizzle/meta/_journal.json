@@ -337,6 +337,13 @@
       "when": 1794164279617,
       "tag": "0047_monitor_json_assertion",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1794166004534,
+      "tag": "0048_channel_more_types",
+      "breakpoints": true
     }
   ]
 }

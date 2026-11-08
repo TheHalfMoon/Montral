@@ -11,7 +11,7 @@ import Doc from "../layouts/Doc.astro";
       <li><strong>Account data:</strong> your email address and name, and a hash of your password (we never store the password itself). If you sign in with GitHub, we receive your GitHub profile name, email and account identifier.</li>
       <li><strong>Session data:</strong> when you sign in, a session record is created with a random token, expiry, and the IP address and user agent of the device.</li>
       <li><strong>Workspace content you enter:</strong> workspaces, projects, monitors (names, target URLs and hosts, headers, keywords), check results (status, latency, status code, error text), incidents and updates, maintenance windows, status pages, and team membership.</li>
-      <li><strong>Alert channel configuration:</strong> the destinations you configure for alerts, such as email addresses, Slack or generic webhook URLs, Telegram bot tokens and chat IDs, and PagerDuty routing keys. Treat these as secrets and use dedicated webhooks and bots.</li>
+      <li><strong>Alert channel configuration:</strong> the destinations you configure for alerts, such as email addresses, Slack, Google Chat, Mattermost or generic webhook URLs, Telegram bot tokens and chat IDs, Gotify and Pushover tokens and keys, and PagerDuty routing keys. Treat these as secrets and use dedicated webhooks and bots.</li>
       <li><strong>Alert delivery log:</strong> a record of which alerts were sent to which channel and whether delivery succeeded.</li>
       <li><strong>API keys:</strong> keys you create to call the API, with the workspace and projects they are limited to.</li>
       <li><strong>Status page subscribers:</strong> if you subscribe to someone's public status page, we store your email address, preferred language and a confirmation token so we can email you about incidents.</li>
@@ -41,7 +41,7 @@ import Doc from "../layouts/Doc.astro";
     <ul>
       <li><strong>Cloudflare</strong> runs the application on Cloudflare Workers, connects to the database through Hyperdrive, and sends transactional email (sign-in, password reset, invitations, alerts, subscription confirmations) through Cloudflare Email Service.</li>
       <li><strong>The database provider</strong> hosts the Postgres database that stores the data described above.</li>
-      <li><strong>Destinations you configure:</strong> when an alert fires, we send its content (monitor name, target, incident title) to the Slack, Telegram, PagerDuty, webhook or email destination you set up. Those services have their own policies.</li>
+      <li><strong>Destinations you configure:</strong> when an alert fires, we send its content (monitor name, target, incident title) to the Slack, Telegram, PagerDuty, webhook, email or other chat or push destination you set up. Those services have their own policies.</li>
     </ul>
 
     <h2>Retention</h2>
@@ -77,7 +77,7 @@ import Doc from "../layouts/Doc.astro";
       <li><strong>账户数据：</strong>你的邮箱、姓名和密码哈希（我们不会保存密码明文）。如果使用 GitHub 登录，我们会获得你的 GitHub 名称、邮箱和账号标识。</li>
       <li><strong>会话数据：</strong>登录时会创建会话记录，包含随机令牌、有效期，以及设备的 IP 地址和 User Agent。</li>
       <li><strong>你录入的工作区内容：</strong>工作区、项目、监控项（名称、目标地址、请求头、关键字）、检测结果（状态、延迟、状态码、错误信息）、事件及更新、维护窗口、状态页和团队成员。</li>
-      <li><strong>告警渠道配置：</strong>你设置的告警目的地，例如邮箱地址、Slack 或自定义 Webhook 地址、Telegram 机器人令牌与聊天 ID、PagerDuty 路由密钥。请将它们视为机密，并使用专用的 Webhook 和机器人。</li>
+      <li><strong>告警渠道配置：</strong>你设置的告警目的地，例如邮箱地址、Slack、Google Chat、Mattermost 或自定义 Webhook 地址、Telegram 机器人令牌与聊天 ID、Gotify 与 Pushover 令牌和密钥、PagerDuty 路由密钥。请将它们视为机密，并使用专用的 Webhook 和机器人。</li>
       <li><strong>告警投递日志：</strong>记录哪些告警发送到了哪个渠道，以及是否发送成功。</li>
       <li><strong>API 密钥：</strong>你为调用 API 创建的密钥，以及其限定的工作区和项目。</li>
       <li><strong>状态页订阅者：</strong>如果你订阅了某个公开状态页，我们会保存你的邮箱、语言偏好和确认令牌，以便就事件向你发送邮件。</li>
@@ -107,7 +107,7 @@ import Doc from "../layouts/Doc.astro";
     <ul>
       <li><strong>Cloudflare</strong>：应用运行在 Cloudflare Workers 上，通过 Hyperdrive 连接数据库，并通过 Cloudflare Email Service 发送事务性邮件（登录、重置密码、邀请、告警、订阅确认）。</li>
       <li><strong>数据库服务商</strong>：托管存放上述数据的 Postgres 数据库。</li>
-      <li><strong>你配置的目的地：</strong>告警触发时，我们会把内容（监控名称、目标、事件标题）发送到你设置的 Slack、Telegram、PagerDuty、Webhook 或邮箱，这些服务有各自的隐私政策。</li>
+      <li><strong>你配置的目的地：</strong>告警触发时，我们会把内容（监控名称、目标、事件标题）发送到你设置的 Slack、Telegram、PagerDuty、Webhook、邮箱或其他聊天与推送目的地，这些服务有各自的隐私政策。</li>
     </ul>
 
     <h2>保留期限</h2>

@@ -20,6 +20,9 @@ describe("HTTP notification response cancellation must not hold deliveries open"
     { name: "custom webhook failure", type: "webhook", config: { url: "https://hooks.example/alerts" }, status: 502, expected: "rejected" },
     { name: "ntfy", type: "ntfy", config: { url: "https://notify.example/message", topic: "synthetic" }, status: 200, expected: "accepted" },
     { name: "ntfy failure", type: "ntfy", config: { url: "https://notify.example/message", topic: "synthetic" }, status: 502, expected: "rejected" },
+    { name: "Google Chat", type: "googlechat", config: { url: "https://chat.googleapis.com/v1/spaces/S/messages?key=k&token=t" }, status: 200, expected: "accepted" },
+    { name: "Mattermost failure", type: "mattermost", config: { url: "https://mm.example/hooks/synthetic" }, status: 503, expected: "rejected" },
+    { name: "Gotify", type: "gotify", config: { url: "https://gotify.example", token: "synthetic" }, status: 200, expected: "accepted" },
   ])("does not stall $name when response cancellation never settles", async ({ type, config, status, expected }) => {
     let cancellations = 0;
     vi.stubGlobal("fetch", vi.fn(async () => new Response(new ReadableStream<Uint8Array>({
@@ -41,6 +44,7 @@ describe("provider application acknowledgements have a bounded body-read deadlin
   it.each([
     { name: "Telegram", type: "telegram", config: { botToken: "synthetic-token", chatId: "42" } },
     { name: "Lark", type: "lark", config: { url: "https://open.larksuite.com/open-apis/bot/v2/hook/synthetic" } },
+    { name: "Pushover", type: "pushover", config: { token: "a".repeat(30), userKey: "u".repeat(30) } },
   ])("rejects a $name HTTP 200 that never delivers its acknowledgement body", async ({ type, config }) => {
     const realTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation(() => realTimeout(30));

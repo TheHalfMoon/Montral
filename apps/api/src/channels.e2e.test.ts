@@ -59,6 +59,23 @@ describe.skipIf(!url)("alert channels: auto-enable and in-use deletion", () => {
     expect(cleared.body.config).toEqual({ url: "https://ntfy.sh", topic: "ops", priority: "3" });
     expect((await call("DELETE", `/channels/${tokened.body.id}`)).status).toBe(204);
     expect((await call("DELETE", `/channels/${ntfy.body.id}`)).status).toBe(204);
+    const chat = await call("POST", "/channels", { type: "googlechat", name: "Chat", config: { url: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t", ignored: "drop" } });
+    expect(chat.status).toBe(201);
+    expect(chat.body.config).toEqual({ url: "https://chat.googleapis.com/v1/spaces/AAAA/messages?key=k&token=t" });
+    expect((await call("POST", "/channels", { type: "googlechat", name: "Elsewhere", config: { url: "https://example.com/v1/spaces/AAAA/messages?key=k&token=t" } })).status).toBe(400);
+    const mm = await call("POST", "/channels", { type: "mattermost", name: "MM", config: { url: "https://mm.example.com/hooks/abc123" } });
+    expect(mm.status).toBe(201);
+    const refused = await call("POST", "/channels", { type: "mattermost", name: "Private", config: { url: "http://127.0.0.1/hooks/abc123" } });
+    expect(refused).toMatchObject({ status: 400, body: { code: "target_not_allowed" } });
+    const gotify = await call("POST", "/channels", { type: "gotify", name: "Gotify", config: { url: "https://gotify.example.com", token: "AsyntheticTok3n" } });
+    expect(gotify.body.config).toEqual({ url: "https://gotify.example.com", token: "AsyntheticTok3n" });
+    expect((await call("POST", "/channels", { type: "gotify", name: "Plain", config: { url: "http://gotify.example.com", token: "t" } })).status).toBe(400);
+    const pushover = await call("POST", "/channels", { type: "pushover", name: "Pushover", config: { token: "a".repeat(30), userKey: "u".repeat(30), device: "" } });
+    expect(pushover.body.config).toEqual({ token: "a".repeat(30), userKey: "u".repeat(30) });
+    expect((await call("POST", "/channels", { type: "pushover", name: "No key", config: { token: "a".repeat(30) } })).status).toBe(400);
+    // the stored credentials are kept when a manager saves the placeholders back
+    expect((await call("PATCH", `/channels/${pushover.body.id}`, { config: { token: "••••••••", userKey: "••••••••", device: "phone" } })).body.config).toEqual({ token: "a".repeat(30), userKey: "u".repeat(30), device: "phone" });
+    for (const c of [chat, mm, gotify, pushover]) expect((await call("DELETE", `/channels/${c.body.id}`)).status).toBe(204);
     const monitor = { name: "Site", type: "http", target: "https://example.com" };
 
     const plain = (await call("POST", "/channels", { type: "email", name: "Plain", config: { to: "a@example.com" } })).body;

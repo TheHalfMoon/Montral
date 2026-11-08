@@ -2,9 +2,14 @@ name: Montral failover qualification
 # Real multi-node infrastructure qualification (PostgreSQL primary + synchronous replica, Toxiproxy) on disposable
 # containers. Separate from the main CI job because it needs the Docker daemon and several minutes of wall time.
 on:
+  # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:

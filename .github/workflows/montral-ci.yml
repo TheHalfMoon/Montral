@@ -1,7 +1,12 @@
 name: Montral app CI
 on:
+  # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
   push:
+    branches: [main]
   pull_request:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 permissions:
   contents: read
 jobs:

@@ -211,7 +211,11 @@ export const googleChatText = (text: string) => capChars(text.replace(/</g, "‹
  * the post or inject a link, and the length stays well under Mattermost's 16383-character post limit, past which the
  * server would split the alert into several posts.
  */
-export const mattermostText = (text: string) => teamsText(text);
+/**
+ * Mattermost text: Teams-style Markdown escaping, plus a zero-width space after every "@", so a monitor or incident name
+ * such as "API @all" cannot notify a whole channel (@channel, @all, @here) or ping a user on every alert.
+ */
+export const mattermostText = (text: string) => teamsText(text.replace(/@/g, "@​"));
 
 /** The incident in the app, for providers that can open a link from the notification; a channel test (or a server without
  * an absolute app URL configured) has none, since a relative link would open nowhere. */

@@ -62,6 +62,13 @@ describe("Google Chat", () => {
 });
 
 describe("Mattermost", () => {
+  it("cannot be used to notify a whole channel or ping users from a monitor name", () => {
+    for (const mention of ["@channel", "@all", "@here", "@alice"]) {
+      const out = mattermostText(`API ${mention} is down`);
+      expect(out, mention).not.toContain(mention);
+      expect(out, mention).toContain("@​" + mention.slice(1));
+    }
+  });
   it("posts escaped Markdown text with the Montral username", async () => {
     const fetch = stub(() => new Response("ok"));
     await deliver({ type: "mattermost", config: { url: MM_URL } }, ev, "🔴 [api](https://x) *is* down");

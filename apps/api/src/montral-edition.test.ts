@@ -20,7 +20,13 @@ describe("Montral MCP webhook tools", () => {
     expect(events.schema.safeParse({ id: inbox, before: "nope" }).success).toBe(false);
     expect(events.schema.safeParse({ id: "../x" }).success).toBe(false);
   });
-  it("marks the inbox deletion as destructive", () => {
+  it("marks inbox and event deletion as destructive and never exposes replay to agents", () => {
     expect(tool("delete_webhook_inbox").destructive).toBe(true);
+    const del = tool("delete_webhook_event");
+    expect(del.destructive).toBe(true);
+    expect(del.build(del.schema.parse({ id: inbox, eventId: inbox }))).toEqual({ method: "DELETE", path: `/api/hooks/inboxes/${inbox}/events/${inbox}` });
+    expect(del.schema.safeParse({ id: inbox, eventId: "../../x" }).success).toBe(false);
+    // Replay sends outbound requests; it stays a human action in the app.
+    expect(MONTRAL_TOOLS.some((t) => /replay/.test(t.name))).toBe(false);
   });
 });

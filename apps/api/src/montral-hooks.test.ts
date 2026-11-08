@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { capturedHeaders, fingerprint, mountMontralHooks, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
+import { capturedHeaders, fingerprint, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
 function fixture(allowReceipt = true) {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string }> = [];
@@ -324,5 +324,18 @@ describe("Montral webhook security", () => {
     expect(res.status).toBe(403);
     const eventRead = await f.app.request("/api/hooks/inboxes/00000000-0000-4000-8000-000000000000/events");
     expect(eventRead.status).toBe(403);
+  });
+});
+
+describe("webhook replay address guard", () => {
+  it("refuses link-local and cloud metadata addresses in every spelling", () => {
+    for (const ip of ["169.254.169.254", "169.254.0.1", "::ffff:169.254.169.254", "::ffff:a9fe:a9fe", "[::ffff:a9fe:a9fe]", "100.100.100.200", "fe80::1", "FEBF::1", "fd00:ec2::254", "0.0.0.0", "::", "::a9fe:a9fe", "64:ff9b::a9fe:a9fe", "::ffff:6464:64c8"]) {
+      expect(replayAddressForbidden(ip), ip).toBe(true);
+    }
+  });
+  it("leaves ordinary private development addresses to the operator's opt-in", () => {
+    for (const ip of ["127.0.0.1", "10.0.0.5", "192.168.1.10", "::1", "fd12::1", "93.184.216.34"]) {
+      expect(replayAddressForbidden(ip), ip).toBe(false);
+    }
   });
 });

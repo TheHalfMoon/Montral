@@ -37,6 +37,9 @@ services:
       CRON_SECRET: ${CRON_SECRET:-}
       # "true" lets monitors and alert webhooks target private / internal addresses (127.x, 10.x, 192.168.x, compose service names)
       ALLOW_PRIVATE_TARGETS: ${ALLOW_PRIVATE_TARGETS:-}
+      # "true" lets webhook replay reach private development endpoints (never link-local / metadata addresses).
+      # Separate from ALLOW_PRIVATE_TARGETS because replay returns response bodies to the user.
+      MONTRAL_REPLAY_PRIVATE_TARGETS: ${MONTRAL_REPLAY_PRIVATE_TARGETS:-}
       # User-Agent of HTTP checks (default: Montral/0.1 (+https://github.com/TheHalfMoon/Montral))
       CHECK_USER_AGENT: ${CHECK_USER_AGENT:-}
       # reference URLs of the offline self-check; unset = defaults, set but empty = self-check off (no colon on purpose)

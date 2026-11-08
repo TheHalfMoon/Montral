@@ -37,6 +37,14 @@ export const MONTRAL_TOOLS: Tool[] = [
     },
   },
   {
+    name: "delete_webhook_event",
+    description: "Permanently remove one captured webhook request from an inbox. Requires manager role.",
+    schema: z.object({ id, eventId: z.string().uuid().describe("Captured event UUID from list_webhook_events.") }),
+    destructive: true,
+    idempotent: true,
+    build: (a) => ({ method: "DELETE", path: `/api/hooks/inboxes/${a.id}/events/${a.eventId}` }),
+  },
+  {
     name: "delete_webhook_inbox",
     description: "Permanently remove an inbox and all captured events. Requires manager role.",
     schema: z.object({ id }),

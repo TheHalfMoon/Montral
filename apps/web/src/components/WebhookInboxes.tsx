@@ -115,10 +115,47 @@ export default function WebhookInboxes() {
           <details style={{ marginTop: 8 }}><summary>{t("Inspect request")}</summary>
             <b>{t("Headers")}</b><pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(e.headers, null, 2)}</pre>
             <b>{t("Body")}</b><pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{e.body}</pre>
+            <EventActions inbox={selected} event={e} onDeleted={() => setEvents((prev) => prev.filter((x) => x.id !== e.id))} />
           </details>
         </div>)}
       </div>
       {next && <button className="btn sm" style={{ marginTop: 12 }} onClick={() => fetchEvents(next).catch(report)}>{t("Load older events")}</button>}
     </section>}
   </>;
+}
+
+type ReplayResult = Awaited<ReturnType<typeof api.replayHookEvent>>;
+
+/** Delete one captured request, or resend it to a development endpoint. */
+function EventActions({ inbox, event, onDeleted }: { inbox: string; event: HookEvent; onDeleted: () => void }) {
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<ReplayResult | null>(null);
+  const [error, setError] = useState("");
+  const replay = async (e: React.SyntheticEvent) => {
+    e.preventDefault(); setBusy(true); setError(""); setResult(null);
+    try { setResult(await api.replayHookEvent(inbox, event.id, url.trim())); }
+    catch (x) { setError((x as Error).message); }
+    finally { setBusy(false); }
+  };
+  const remove = async () => {
+    if (!confirm(t("Delete this captured request? This cannot be undone."))) return;
+    setBusy(true); setError("");
+    try { await api.deleteHookEvent(inbox, event.id); onDeleted(); }
+    catch (x) { setError((x as Error).message); setBusy(false); }
+  };
+  return <div style={{ marginTop: 12, display: "grid", gap: 8 }}>
+    <form className="hook-replay" style={{ display: "flex", gap: 8, flexWrap: "wrap" }} onSubmit={replay}>
+      <input className="in" type="url" required maxLength={2048} value={url} onChange={(x) => setUrl(x.target.value)}
+        placeholder={t("https://your-dev-endpoint.example/webhook")} aria-label={t("Replay to URL")} style={{ flex: 1, minWidth: 200 }} />
+      <button className="btn sm" disabled={busy || !url.trim()}>{busy ? t("Sending…") : t("Replay")}</button>
+      <button type="button" className="btn sm" disabled={busy} onClick={remove}>{t("Delete event")}</button>
+    </form>
+    <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Sends this request's method, body and stored headers to the URL. Private and internal addresses are refused, redirects are not followed, and nothing about the replay is stored.")}</p>
+    {error && <p className="err" role="alert">{error}</p>}
+    {result && <div role="status">
+      <b>{t("Response")} {result.status}</b> <span className="muted">· {result.durationMs} ms{result.truncated ? " · " + t("first 4 KiB") : ""}</span>
+      <pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.body || t("(empty body)")}</pre>
+    </div>}
+  </div>;
 }

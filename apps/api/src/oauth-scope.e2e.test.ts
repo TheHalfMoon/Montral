@@ -134,6 +134,11 @@ describe.skipIf(!url)("an agent sees only what the user authorized", () => {
     expect((await agent("GET", "/hooks/inboxes")).body.inboxes.map((i: any) => i.id)).toEqual([alphaHookId]);
     expect((await agent("GET", `/hooks/inboxes/${betaHookId}/events`)).status).toBe(404);
     expect((await agent("POST", "/hooks/inboxes", { name: "Wrong project" }, { "x-project-id": beta })).status).toBe(403);
+    // Replay sends requests from Montral's network: never on an agent's behalf,
+    // even through REST with a write grant. A session caller gets past this rule.
+    const someEvent = crypto.randomUUID();
+    expect((await agent("POST", `/hooks/inboxes/${alphaHookId}/events/${someEvent}/replay`, { url: "https://example.com/" })).status).toBe(403);
+    expect((await ada("POST", `/hooks/inboxes/${alphaHookId}/events/${someEvent}/replay`, { url: "https://example.com/" }, { "x-project-id": alpha })).status).toBe(404);
     // API keys are independently scoped to the same selected project; metadata supplied by
     // a client must never expand the org/project access that the server resolves.
     const keyResponse = await req("/api/auth/api-key/create", {

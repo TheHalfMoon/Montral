@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createServer, type IncomingHttpHeaders } from "node:http";
+import type { AddressInfo } from "node:net";
 import { openDatabase } from "@montral/db-pg";
 import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
@@ -30,12 +32,12 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     }), env as never);
     expect(res.status).toBe(200);
     const cookies = res.headers.getSetCookie().map((v) => v.split(";")[0]).join("; ");
-    return async (method: string, path: string, payload?: unknown) => {
+    return async (method: string, path: string, payload?: unknown, extraEnv: Record<string, string> = {}) => {
       const response = await app.fetch(new Request(origin + "/api/hooks" + path, {
         method,
         headers: { origin, cookie: cookies, "content-type": "application/json" },
         body: payload === undefined ? undefined : JSON.stringify(payload),
-      }), env as never);
+      }), { ...env, ...extraEnv } as never);
       return { status: response.status, body: await response.json().catch(() => null) as any };
     };
   }
@@ -202,5 +204,95 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     expect((await a("GET", `/inboxes/${id}/events?before=${crypto.randomUUID()}`)).status).toBe(410);
     // Another workspace cannot page someone else's inbox, even with a valid cursor.
     expect((await b("GET", `/inboxes/${id}/events?before=${seen[10].id}`)).status).toBe(404);
+  });
+
+  it("deletes single events and replays them only to allowed targets, scoped to the inbox owner", async () => {
+    const a = await account();
+    const b = await account();
+    const created = await a("POST", "/inboxes", { name: "Replay" });
+    const { id, path } = created.body as { id: string; path: string };
+    expect((await submit(path, '{"order":1}')).status).toBe(202);
+    expect((await submit(path, '{"order":2}')).status).toBe(202);
+    const listed = (await a("GET", `/inboxes/${id}/events`)).body.events as { id: string; body: string }[];
+    expect(listed).toHaveLength(2);
+    const [second, first] = listed;
+
+    // Another workspace can neither delete nor replay, even with valid ids.
+    expect((await b("DELETE", `/inboxes/${id}/events/${first.id}`)).status).toBe(404);
+    expect((await b("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: "https://example.com/" })).status).toBe(404);
+    // An event id from another inbox is not found under this one.
+    const otherInbox = (await a("POST", "/inboxes", { name: "Other" })).body.id as string;
+    expect((await a("DELETE", `/inboxes/${otherInbox}/events/${first.id}`)).status).toBe(404);
+    expect((await a("DELETE", `/inboxes/${id}/events/not-a-uuid`)).status).toBe(404);
+
+    // SSRF: loopback, private and metadata targets are refused without the operator opt-in.
+    for (const url of ["http://127.0.0.1:9/x", "http://169.254.169.254/latest/meta-data/", "http://10.0.0.1/", "http://localhost/"]) {
+      const refused = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url });
+      expect(refused.status, url).toBe(400);
+      expect(refused.body.code, url).toBe("target_not_allowed");
+    }
+    for (const bad of [{ url: "file:///etc/passwd" }, { url: "ftp://example.com/" }, { url: "not a url" }, {}, { url: "https://example.com", extra: 1 }]) {
+      expect((await a("POST", `/inboxes/${id}/events/${first.id}/replay`, bad)).status, JSON.stringify(bad)).toBe(400);
+    }
+
+    // ALLOW_PRIVATE_TARGETS lets monitors reach internal services, but replay
+    // returns response bodies, so it alone must not open private targets.
+    const monitorsOnly = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: "http://127.0.0.1:9/x" }, { ALLOW_PRIVATE_TARGETS: "true" });
+    expect(monitorsOnly.status).toBe(400);
+    expect(monitorsOnly.body.code).toBe("target_not_allowed");
+    // The replay-specific opt-in still never reaches link-local or metadata addresses.
+    for (const url of ["http://169.254.169.254/latest/meta-data/", "http://[::ffff:169.254.169.254]/", "http://100.100.100.200/", "http://[fe80::1]/"]) {
+      const metadata = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url }, { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" });
+      expect(metadata.status, url).toBe(400);
+      expect(metadata.body.code, url).toBe("target_not_allowed");
+    }
+
+    // With MONTRAL_REPLAY_PRIVATE_TARGETS (self-hosted dev), the request is resent to a local endpoint.
+    let seen: { method?: string; headers?: IncomingHttpHeaders; body?: string } = {};
+    const sink = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => { body += c; });
+      req.on("end", () => {
+        seen = { method: req.method, headers: req.headers, body };
+        if (req.url === "/binary") { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(Buffer.alloc(100, 0xff)); return; }
+        res.writeHead(req.url === "/redirect" ? 302 : 201, { "content-type": "text/plain", location: "http://169.254.169.254/" });
+        // Multibyte text: truncation must count bytes, not characters.
+        res.end("é".repeat(3000));
+      });
+    });
+    await new Promise<void>((r) => sink.listen(0, "127.0.0.1", r));
+    const sinkUrl = `http://127.0.0.1:${(sink.address() as AddressInfo).port}`;
+    try {
+      const allowed = { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" };
+      const replayed = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/hook" }, allowed);
+      expect(replayed.status).toBe(200);
+      expect(replayed.body).toMatchObject({ status: 201, contentType: "text/plain", truncated: true });
+      expect(new TextEncoder().encode(replayed.body.body).byteLength).toBe(4096);
+      expect(replayed.body.body).toBe("é".repeat(2048));
+      expect(seen.method).toBe("POST");
+      expect(seen.body).toBe(first.body);
+      expect(seen.headers?.["content-type"]).toBe("application/json");
+      expect(seen.headers?.["x-event-type"]).toBe("test");
+      expect(seen.headers?.["x-montral-replay"]).toBe(first.id);
+      // The sender's credential was never stored, so it cannot be replayed.
+      expect(seen.headers?.authorization).toBeUndefined();
+      // Truncation is decided on bytes received, not on decoded text.
+      const binary = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/binary" }, allowed);
+      expect(binary.body).toMatchObject({ status: 200, truncated: false });
+      // Redirects are reported, never followed.
+      const redirected = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/redirect" }, allowed);
+      expect(redirected.body.status).toBe(302);
+    } finally {
+      await new Promise((r) => sink.close(r));
+    }
+    // A closed port is a fixed, non-revealing error.
+    const unreachable = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/gone" }, { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" });
+    expect(unreachable.status).toBe(502);
+    expect(JSON.stringify(unreachable.body)).not.toMatch(/127\.0\.0\.1|ECONNREFUSED/);
+
+    expect((await a("DELETE", `/inboxes/${id}/events/${first.id}`)).status).toBe(204);
+    expect((await a("DELETE", `/inboxes/${id}/events/${first.id}`)).status).toBe(404);
+    const remaining = (await a("GET", `/inboxes/${id}/events`)).body.events as { id: string }[];
+    expect(remaining.map((e) => e.id)).toEqual([second.id]);
   });
 });

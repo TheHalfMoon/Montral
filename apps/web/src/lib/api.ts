@@ -216,6 +216,9 @@ export const api = {
     return req<{ events: HookEvent[]; next: string | null }>(`/hooks/inboxes/${id}/events${qs ? "?" + qs : ""}`);
   },
   deleteHookInbox: (id: string) => req<void>(`/hooks/inboxes/${id}`, { method: "DELETE" }),
+  deleteHookEvent: (inbox: string, event: string) => req<void>(`/hooks/inboxes/${inbox}/events/${event}`, { method: "DELETE" }),
+  replayHookEvent: (inbox: string, event: string, url: string) =>
+    req<{ status: number; contentType: string | null; body: string; truncated: boolean; durationMs: number }>(`/hooks/inboxes/${inbox}/events/${event}/replay`, { method: "POST", body: JSON.stringify({ url }) }),
   timeCoverage: (id: string, days: 7 | 30) => req<TimeCoverage>(`/monitors/${id}/time-coverage?days=${days}`),
   monitors: () => req<Monitor[]>("/monitors"),
   monitor: (id: string) => req<Monitor & { results: CheckResult[]; regionStats: RegionStat[] }>(`/monitors/${id}`),

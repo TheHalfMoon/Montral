@@ -3,6 +3,8 @@ import type { AppEnv } from "./env";
 import { Hono } from "hono";
 import { requireManager, rejectInAllProjects, uuidParams } from "./middleware";
 import { allow } from "./ratelimit";
+import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers } from "./netguard";
+import { pinnedFetch } from "./pinnedfetch";
 import { z } from "zod";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -11,6 +13,77 @@ const MAX_BYTES = 32 * 1024;
 const MAX_INBOXES = 10;
 const listInbox = z.object({ name: z.string().trim().min(1).max(100) }).strict();
 const EVENT_PAGE = 50;
+const REPLAY_TIMEOUT_MS = 10_000;
+const REPLAY_RESPONSE_BYTES = 4 * 1024;
+/** Link-local and cloud metadata addresses: refused for replay in every configuration. */
+export function replayAddressForbidden(ip: string): boolean {
+  const a = ip.toLowerCase().replace(/^\[|\]$/g, "");
+  // IPv4 embedded in IPv6 as the URL parser writes it: mapped (::ffff:a9fe:a9fe),
+  // compatible (::a9fe:a9fe) and NAT64 (64:ff9b::a9fe:a9fe).
+  const mapped = /^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
+  if (mapped) {
+    const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
+    return replayAddressForbidden(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
+  }
+  const v4 = /^(?:::ffff:)?(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(a);
+  if (v4) {
+    const [x, y, z, w] = v4.slice(1).map(Number);
+    return (x === 169 && y === 254) || (x === 100 && y === 100 && z === 100 && w === 200) || x === 0;
+  }
+  return /^fe[89ab][0-9a-f]:/.test(a) || a === "fd00:ec2::254" || a === "::";
+}
+/**
+ * Replay's outbound request. By default only public addresses are reachable,
+ * whatever ALLOW_PRIVATE_TARGETS says: that setting lets monitors check
+ * internal services, but replay returns the response body to the caller, so
+ * it would become a way to read internal pages. A self-hosted operator can
+ * allow private development endpoints with MONTRAL_REPLAY_PRIVATE_TARGETS;
+ * link-local and metadata addresses stay refused, and the connection is
+ * pinned to the addresses that were checked.
+ */
+async function replayFetch(url: string, init: RequestInit, privateAllowed: boolean): Promise<Response> {
+  if (!privateAllowed || isWorkers()) return (await guardedFetch(url, init, { follow: false, publicOnly: true })).res;
+  const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+  const literal = host.includes(":") || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+  const dns = literal ? null : await import("node:dns/promises");
+  const addresses = literal ? [host] : (await dns!.lookup(host, { all: true })).map((r) => r.address);
+  if (!addresses.length || addresses.some(replayAddressForbidden)) throw new BlockedTarget();
+  return pinnedFetch(url, { ...init, redirect: "manual" }, addresses);
+}
+/** At most `max` raw bytes as text, and whether the response was longer; decided on bytes, so binary bodies are not misreported. */
+async function readReplayBody(res: Response, max: number, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
+  if (!res.body) return { text: "", truncated: false };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let truncated = false;
+  const aborted = new Promise<never>((_, reject) => {
+    const stop = () => reject(new DOMException("Response body read timed out", "TimeoutError"));
+    if (signal.aborted) stop(); else signal.addEventListener("abort", stop, { once: true });
+  });
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      const room = max - size;
+      if (value.byteLength > room) { chunks.push(value.subarray(0, room)); size = max; truncated = true; break; }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    // Best effort: a peer that never settles cancellation must not hold the request.
+    void reader.cancel().catch(() => {});
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) { bytes.set(c, at); at += c.byteLength; }
+  // stream: true leaves a multibyte character split by the cap undecoded instead of inventing U+FFFD.
+  return { text: new TextDecoder().decode(bytes, { stream: truncated }), truncated };
+}
+const replayTarget = z.object({
+  // zod still runs refinements after .url() fails, so parse defensively here.
+  url: z.string().trim().max(2048).url().refine((u) => /^https?:$/.test(URL.parse(u)?.protocol ?? ""), "http or https only"),
+}).strict();
 const eventQuery = z.object({
   before: z.string().regex(UUID).optional(),
   method: z.enum(["POST", "PUT", "PATCH"]).optional(),
@@ -322,6 +395,66 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const more = rows.length > EVENT_PAGE;
     const events = more ? rows.slice(0, EVENT_PAGE) : rows;
     return c.json({ events, next: more ? events[events.length - 1].id : null });
+  });
+  // One captured event; `sid` so the shared UUID validation covers it too.
+  privateHooks.delete("/inboxes/:id/events/:sid", uuidParams, requireManager, async (c) => {
+    const removed = await c.get("database").query<{ id: string }>(
+      "DELETE FROM montral_hook_event WHERE id=$1 AND inbox_id=$2 AND organization_id=$3 AND project_id=$4 RETURNING id",
+      [c.req.param("sid"), c.req.param("id"), c.get("orgId"), c.get("projectId")],
+    );
+    return removed.length ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
+  });
+  /**
+   * Development replay: resend one captured request to a URL the manager
+   * supplies. Outbound requests get the same SSRF protection as monitor
+   * checks (private, loopback and metadata targets refused unless the
+   * operator set ALLOW_PRIVATE_TARGETS; DNS pinned), redirects are not
+   * followed, and only the stored allowlisted headers are sent. Nothing about
+   * the replay is stored.
+   */
+  privateHooks.post("/inboxes/:id/events/:sid/replay", uuidParams, requireManager, async (c) => {
+    let incoming: Awaited<ReturnType<typeof readInboxCreation>>;
+    try {
+      incoming = await readInboxCreation(c.req.raw);
+    } catch (error) {
+      if (error instanceof InboxCreationTimeoutError) return c.json({ error: error.message }, 408);
+      throw error;
+    }
+    if (incoming.oversized) return c.json({ error: "Payload too large" }, 413);
+    const parsed = replayTarget.safeParse(incoming.value);
+    if (!parsed.success) return c.json({ error: "Provide an http(s) url to replay to" }, 400);
+    // Replay sends requests from Montral's network; agents may not trigger it.
+    if (c.get("requestPrincipal")?.kind === "oauth") return c.json({ error: "Replay is not available to authorized agents" }, 403);
+    const inboxId = c.req.param("id");
+    const rows = await c.get("database").query<HookEvent>(
+      "SELECT id,method,content_type,headers,body,created_at FROM montral_hook_event WHERE id=$1 AND inbox_id=$2 AND organization_id=$3 AND project_id=$4",
+      [c.req.param("sid"), inboxId, c.get("orgId"), c.get("projectId")],
+    );
+    const event = rows[0];
+    if (!event) return c.json({ error: "Not found" }, 404);
+    // Per inbox and per workspace, so more inboxes or projects do not multiply it.
+    const repo = c.get("repo");
+    if (!(await allow(repo, `montral:hook-replay:${inboxId}`, 20, 60)) || !(await allow(repo, `montral:hook-replay-org:${c.get("orgId")}`, 60, 60))
+      || !(await allow(repo, `montral:hook-replay-user:${c.get("userId")}`, 60, 60))) {
+      return c.json({ error: "Too many replays" }, 429);
+    }
+    const headers: Record<string, string> = { "user-agent": checkUserAgent(), "x-montral-replay": event.id };
+    for (const [name, value] of Object.entries(event.headers ?? {})) {
+      if (name !== "user-agent" && typeof value === "string") headers[name] = value;
+    }
+    if (event.content_type) headers["content-type"] = event.content_type;
+    const signal = AbortSignal.timeout(REPLAY_TIMEOUT_MS);
+    const started = Date.now();
+    try {
+      const res = await replayFetch(parsed.data.url, { method: event.method, headers, body: event.body, signal }, c.env.MONTRAL_REPLAY_PRIVATE_TARGETS === "true");
+      const { text, truncated } = await readReplayBody(res, REPLAY_RESPONSE_BYTES, signal);
+      return c.json({ status: res.status, contentType: res.headers.get("content-type"), body: text, truncated, durationMs: Date.now() - started });
+    } catch (error) {
+      if (error instanceof BlockedTarget) return c.json({ error: error.message, code: "target_not_allowed" }, 400);
+      // Fixed messages only: network errors can echo internal addresses.
+      if (signal.aborted) return c.json({ error: "The target did not answer within 10 seconds" }, 504);
+      return c.json({ error: "Could not reach the target" }, 502);
+    }
   });
   privateHooks.delete("/inboxes/:id", uuidParams, requireManager, async (c) => {
     const deleted = await c.get("database").query(

@@ -16,6 +16,8 @@ export type Bindings = {
   GITHUB_CLIENT_SECRET?: string;
   /** All billing is fail-closed and restricted to provider TEST MODE in the private preview. */
   MONTRAL_METERING_ENABLED?: string;
+  /** Self-hosted development only: let webhook replay reach private addresses (never link-local or metadata). */
+  MONTRAL_REPLAY_PRIVATE_TARGETS?: string;
   /** Staged owner-only evidence review: OFF by default, and metered edition only. No dispatch enabled. */
   MONTRAL_RECONCILIATION_ENABLED?: string;
   /** Emergency transition guard: prevent new monthly digest claims, without silencing monitors or alert deliveries. OFF by default. */

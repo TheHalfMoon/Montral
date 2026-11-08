@@ -13,15 +13,15 @@ non-local or non-`montral_test_*` database. CI runs it on every push.
 
 - **A. SIGKILL with a check in flight.** The target hangs, a scheduled check
   reaches it, and the server is SIGKILLed. No result is recorded for the
-  killed run. After restart, the abandoned claim (whose `next_check_at` was
-  already advanced) is picked up by a later tick without operator action, a
+  killed run. The killed run itself is lost (at-most-once start); after
+  restart a later tick claims the monitor again without operator action, a
   newer run generation starts, and the monitor reaches `up`.
 - **B. SIGKILL during an outage.** An auto incident is open; the server is
   killed mid-check and restarted while the outage continues. The same single
   incident stays open, the monitor stays `down`, and recovery resolves it.
 - **C. Database loss.** All server connections are terminated every 2 s and
   new ones refused (`ALLOW_CONNECTIONS false`) for 40 s, spanning a
-  scheduler tick. The process stays up, `/health` and the API answer
+  scheduler tick. The process must stay up (an exit fails the run), `/health` and the API answer
   afterwards, checks resume, and no incident is opened for a healthy target.
 - **D. Two workers.** A second Node process joins on the same database during
   an outage. Results recorded equal runs started (claims use `SKIP LOCKED`,

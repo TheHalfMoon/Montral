@@ -69,6 +69,7 @@ const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
 let child;
 let log = "";
+const spawned = [];
 function spawnServer(p) {
   const origin = `http://127.0.0.1:${p}`;
   const proc = spawn(process.execPath, [resolve("apps/api/dist/server.mjs")], {
@@ -88,16 +89,25 @@ function spawnServer(p) {
     },
     stdio: ["ignore", "pipe", "pipe"],
   });
+  spawned.push(proc); // killed in finally even if startup never completes
+  let exited = null;
+  proc.once("exit", (code, signal) => { exited = { code, signal }; });
   for (const s of [proc.stdout, proc.stderr]) {
     s.setEncoding("utf8");
     // PostgreSQL NOTICE objects from idempotent migrations are noise here.
     s.on("data", (c) => { if (!/severity_local|routine:|file: '|line: '|code: '|^\s*[{}]/m.test(c)) log = (log + `[${p}] ` + c).slice(-6000); });
   }
-  return until("server /health on " + p, async () => {
-    if (proc.exitCode !== null) throw new Error("server exited " + proc.exitCode + ": " + log);
-    const r = await fetch(origin + "/health", { signal: AbortSignal.timeout(1500) });
-    return r.ok && proc;
-  }, 40_000);
+  const deadline = Date.now() + 40_000;
+  return (async () => {
+    while (Date.now() < deadline) {
+      // A crash at startup fails immediately instead of after the timeout.
+      if (exited) throw new Error(`server on ${p} exited during startup ${JSON.stringify(exited)}: ${log}`);
+      const ok = await fetch(origin + "/health", { signal: AbortSignal.timeout(1500) }).then((r) => r.ok, () => false);
+      if (ok) return proc;
+      await sleep(250);
+    }
+    throw new Error(`server on ${p} did not become healthy within 40s: ${log}`);
+  })();
 }
 async function startServer() {
   log = "";
@@ -161,7 +171,7 @@ try {
   // Kill while the next outage check is in flight, then keep failing.
   setMode("hang");
   const beforeB = requests;
-  await until("an outage check in flight", () => requests > beforeB, 45_000);
+  await until("an outage check in flight", () => requests > beforeB, CHECK_WINDOW_MS);
   await sigkill();
   setMode("down");
   await startServer();
@@ -190,16 +200,15 @@ try {
     await admin.unsafe(`alter database "${dbName}" allow_connections true`);
   }
   // Our own fixture client was disconnected too; postgres.js reconnects lazily.
-  if (child.exitCode !== null) {
-    summary.push("C: process exited during the database outage (exit " + child.exitCode + "); restarting as the container would");
-    await startServer();
-  }
+  // Surviving the outage in-process is the claim: an exit here is a failure.
+  if (child.exitCode !== null || child.signalCode !== null) throw new Error(`server exited during the database outage (code ${child.exitCode}, signal ${child.signalCode})`);
   await until("health endpoint after database outage", async () => (await fetch(base + "/health", { signal: AbortSignal.timeout(1500) })).ok, 20_000);
   await until("checks resume after database outage", async () => (await results()).filter((r) => r.ok).length > okBefore, CHECK_WINDOW_MS);
   const db = await fetch(base + "/api/config", { signal: AbortSignal.timeout(3000) });
   if (!db.ok) throw new Error("API not serving after database outage: " + db.status);
   if ((await incidents()).length !== 1) throw new Error("database outage created an incident for a healthy target");
-  if (!summary.some((s) => s.startsWith("C:"))) summary.push("C: process survived a 40s database outage and resumed checks");
+  if (child.exitCode !== null) throw new Error("server exited after the database outage");
+  summary.push("C: process survived a 40s database outage and resumed checks");
 
   }
   // ── D. two workers on one database during an outage ───────────────────────
@@ -237,7 +246,7 @@ try {
   console.error("server log tail:\n" + log.split("\n").slice(-25).join("\n"));
   throw error;
 } finally {
-  for (const proc of [child, second]) if (proc && proc.exitCode === null) proc.kill("SIGKILL");
+  for (const proc of spawned) if (proc.exitCode === null && proc.signalCode === null) proc.kill("SIGKILL");
   setMode("up");
   target.close();
   await admin.unsafe(`alter database "${dbName}" allow_connections true`).catch(() => {});

@@ -3,7 +3,7 @@ import type { AppEnv } from "./env";
 import { Hono } from "hono";
 import { requireManager, rejectInAllProjects, uuidParams } from "./middleware";
 import { allow } from "./ratelimit";
-import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers, readCapped } from "./netguard";
+import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers } from "./netguard";
 import { pinnedFetch } from "./pinnedfetch";
 import { z } from "zod";
 
@@ -18,8 +18,9 @@ const REPLAY_RESPONSE_BYTES = 4 * 1024;
 /** Link-local and cloud metadata addresses: refused for replay in every configuration. */
 export function replayAddressForbidden(ip: string): boolean {
   const a = ip.toLowerCase().replace(/^\[|\]$/g, "");
-  // IPv4-mapped IPv6 in hex form, as the URL parser writes it: ::ffff:a9fe:a9fe
-  const mapped = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
+  // IPv4 embedded in IPv6 as the URL parser writes it: mapped (::ffff:a9fe:a9fe),
+  // compatible (::a9fe:a9fe) and NAT64 (64:ff9b::a9fe:a9fe).
+  const mapped = /^(?:::ffff:|::|64:ff9b::)([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(a);
   if (mapped) {
     const [hi, lo] = [parseInt(mapped[1], 16), parseInt(mapped[2], 16)];
     return replayAddressForbidden(`${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`);
@@ -49,12 +50,35 @@ async function replayFetch(url: string, init: RequestInit, privateAllowed: boole
   if (!addresses.length || addresses.some(replayAddressForbidden)) throw new BlockedTarget();
   return pinnedFetch(url, { ...init, redirect: "manual" }, addresses);
 }
-/** Text of at most `max` bytes, and whether the response was longer. */
+/** At most `max` raw bytes as text, and whether the response was longer; decided on bytes, so binary bodies are not misreported. */
 async function readReplayBody(res: Response, max: number, signal: AbortSignal): Promise<{ text: string; truncated: boolean }> {
-  const raw = new TextEncoder().encode(await readCapped(res, max + 1, signal));
-  if (raw.byteLength <= max) return { text: new TextDecoder().decode(raw), truncated: false };
-  // Cut on a byte boundary and drop a character split by the cut.
-  return { text: new TextDecoder().decode(raw.subarray(0, max)).replace(/�$/, ""), truncated: true };
+  if (!res.body) return { text: "", truncated: false };
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  let truncated = false;
+  const aborted = new Promise<never>((_, reject) => {
+    const stop = () => reject(new DOMException("Response body read timed out", "TimeoutError"));
+    if (signal.aborted) stop(); else signal.addEventListener("abort", stop, { once: true });
+  });
+  try {
+    for (;;) {
+      const { done, value } = await Promise.race([reader.read(), aborted]);
+      if (done) break;
+      const room = max - size;
+      if (value.byteLength > room) { chunks.push(value.subarray(0, room)); size = max; truncated = true; break; }
+      chunks.push(value);
+      size += value.byteLength;
+    }
+  } finally {
+    // Best effort: a peer that never settles cancellation must not hold the request.
+    void reader.cancel().catch(() => {});
+  }
+  const bytes = new Uint8Array(size);
+  let at = 0;
+  for (const c of chunks) { bytes.set(c, at); at += c.byteLength; }
+  // stream: true leaves a multibyte character split by the cap undecoded instead of inventing U+FFFD.
+  return { text: new TextDecoder().decode(bytes, { stream: truncated }), truncated };
 }
 const replayTarget = z.object({
   // zod still runs refinements after .url() fails, so parse defensively here.
@@ -410,7 +434,8 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     if (!event) return c.json({ error: "Not found" }, 404);
     // Per inbox and per workspace, so more inboxes or projects do not multiply it.
     const repo = c.get("repo");
-    if (!(await allow(repo, `montral:hook-replay:${inboxId}`, 20, 60)) || !(await allow(repo, `montral:hook-replay-org:${c.get("orgId")}`, 60, 60))) {
+    if (!(await allow(repo, `montral:hook-replay:${inboxId}`, 20, 60)) || !(await allow(repo, `montral:hook-replay-org:${c.get("orgId")}`, 60, 60))
+      || !(await allow(repo, `montral:hook-replay-user:${c.get("userId")}`, 60, 60))) {
       return c.json({ error: "Too many replays" }, 429);
     }
     const headers: Record<string, string> = { "user-agent": checkUserAgent(), "x-montral-replay": event.id };

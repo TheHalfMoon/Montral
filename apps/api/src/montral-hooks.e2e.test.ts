@@ -254,6 +254,7 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
         seen = { method: req.method, headers: req.headers, body };
+        if (req.url === "/binary") { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(Buffer.alloc(100, 0xff)); return; }
         res.writeHead(req.url === "/redirect" ? 302 : 201, { "content-type": "text/plain", location: "http://169.254.169.254/" });
         // Multibyte text: truncation must count bytes, not characters.
         res.end("é".repeat(3000));
@@ -275,6 +276,9 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       expect(seen.headers?.["x-montral-replay"]).toBe(first.id);
       // The sender's credential was never stored, so it cannot be replayed.
       expect(seen.headers?.authorization).toBeUndefined();
+      // Truncation is decided on bytes received, not on decoded text.
+      const binary = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/binary" }, allowed);
+      expect(binary.body).toMatchObject({ status: 200, truncated: false });
       // Redirects are reported, never followed.
       const redirected = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/redirect" }, allowed);
       expect(redirected.body.status).toBe(302);

@@ -329,7 +329,7 @@ describe("Montral webhook security", () => {
 
 describe("webhook replay address guard", () => {
   it("refuses link-local and cloud metadata addresses in every spelling", () => {
-    for (const ip of ["169.254.169.254", "169.254.0.1", "::ffff:169.254.169.254", "::ffff:a9fe:a9fe", "[::ffff:a9fe:a9fe]", "100.100.100.200", "fe80::1", "FEBF::1", "fd00:ec2::254", "0.0.0.0", "::"]) {
+    for (const ip of ["169.254.169.254", "169.254.0.1", "::ffff:169.254.169.254", "::ffff:a9fe:a9fe", "[::ffff:a9fe:a9fe]", "100.100.100.200", "fe80::1", "FEBF::1", "fd00:ec2::254", "0.0.0.0", "::", "::a9fe:a9fe", "64:ff9b::a9fe:a9fe", "::ffff:6464:64c8"]) {
       expect(replayAddressForbidden(ip), ip).toBe(true);
     }
   });

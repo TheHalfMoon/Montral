@@ -23,7 +23,8 @@ the main workflow of a webhook inspector.
     the checked addresses. Workers is always public-only.
   - Redirects are not followed (`follow: false`), so a public endpoint cannot
     bounce the replay inward. 10 s deadline (504), 4 KiB response cap measured
-    in bytes, 20 replays per minute per inbox and 60 per workspace, strict
+    in bytes, 20 replays per minute per inbox, 60 per workspace and 60 per user,
+    strict
     request schema.
   - Network errors return fixed messages so internal addresses do not leak.
   - Nothing about the replay is stored. OAuth/MCP agents get 403 on the REST
@@ -35,7 +36,10 @@ the main workflow of a webhook inspector.
 ## Independent review
 The first version honoured `ALLOW_PRIVATE_TARGETS` (internal read-back),
 rate-limited per inbox only (bypass with more inboxes), allowed OAuth agents
-via REST, and measured truncation in characters. All four were fixed.
+via REST, and measured truncation in characters. All four were fixed. A
+re-review then found truncation decided on decoded text (binary replies
+misreported); the body is now capped on raw bytes. Compatible and NAT64
+IPv6 spellings of metadata addresses and a per-user limit were added.
 
 ## Evidence
 `montral-hooks.e2e.test.ts` (PostgreSQL) covers cross-workspace 404s for

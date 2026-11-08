@@ -5,8 +5,8 @@
  */
 export const MASK = "••••••••";
 
-/** Channel settings that are credentials (the URL of a Slack or Lark hook is one: whoever has it can post). */
-const SECRET_KEYS = new Set(["url", "secret", "botToken", "routingKey", "token", "topic"]);
+/** Channel settings that are credentials (the URL of a Slack, Lark, Google Chat or Mattermost hook is one: whoever has it can post; so is a Pushover user key). */
+const SECRET_KEYS = new Set(["url", "secret", "botToken", "routingKey", "token", "topic", "userKey"]);
 
 const maskUrl = (u: string) => {
   try {

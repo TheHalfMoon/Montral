@@ -170,6 +170,92 @@ async function postLark(url: string, text: string, secret?: string) {
   }
 }
 
+/**
+ * POST JSON to a destination whose URL or headers carry a credential, without following redirects: a 3xx is a failure, so
+ * neither the token header nor the alert body can be bounced to a host nobody configured. Errors name the host only.
+ */
+async function postDirect(url: string, body: unknown, headers: Record<string, string> = {}) {
+  const init = json(body);
+  let res: Response;
+  try {
+    res = (await guardedFetch(url, { ...init, headers: { ...init.headers, ...headers } }, { follow: false })).res;
+  } catch (e) {
+    const name = (e as Error).name;
+    throw new Error(name === "BlockedTarget" ? (e as Error).message : name === "TimeoutError" ? `${hostOf(url)} timed out` : `Could not reach ${hostOf(url)}`);
+  }
+  return res;
+}
+
+/** postDirect for providers whose 2xx is the acknowledgement; the body is never read, so it cannot echo into errors. */
+async function postAcked(url: string, body: unknown, headers?: Record<string, string>) {
+  const res = await postDirect(url, body, headers);
+  void res.body?.cancel().catch(() => {}); // best-effort, as in post(): a hostile stream must not stall delivery
+  if (!res.ok) throw new Error(`${hostOf(url)} responded HTTP ${res.status}`);
+}
+
+/** At most `max` code points, a trailing `…` included when cut; a surrogate pair (emoji) is never split. */
+export function capChars(text: string, max: number): string {
+  const points = Array.from(text);
+  return points.length <= max ? text : `${points.slice(0, max - 1).join("")}…`;
+}
+
+/**
+ * Google Chat text for an incoming webhook (Chat markup syntax). `<…>` is link and mention syntax there (`<users/all>`
+ * pings the whole space), so angle brackets from monitor names or titles become look-alike ‹ › and can neither mention
+ * nor inject a link. Chat documents no escape for * _ ~ `, which only format. Capped like Teams at 4000 characters.
+ */
+export const googleChatText = (text: string) => capChars(text.replace(/</g, "‹").replace(/>/g, "›"), 4000);
+
+/**
+ * Mattermost posts are Markdown: control characters are backslash-escaped (as for Teams) so a monitor name cannot format
+ * the post or inject a link, and the length stays well under Mattermost's 16383-character post limit, past which the
+ * server would split the alert into several posts.
+ */
+export const mattermostText = (text: string) => teamsText(text);
+
+/** The incident in the app, for providers that can open a link from the notification; a channel test (or a server without
+ * an absolute app URL configured) has none, since a relative link would open nowhere. */
+const incidentLink = (ev: Event) => (ev.test || !/^https?:\/\//i.test(appUrl()) ? undefined : `${appUrl().replace(/\/+$/, "")}/app/incidents/${ev.incident.id}`);
+
+/**
+ * Gotify: POST <server>/message with the application token in X-Gotify-Key (never in the query string, where proxies
+ * log it). Android shows 8–10 with sound and vibration and 4–7 with sound only, so a down alert (and its repeats and
+ * escalations) is 8 and a recovery or test is 4.
+ */
+export function gotifyRequest(base: string, token: string, ev: Event, text: string) {
+  const down = ev.kind !== "incident.resolved" && !ev.test;
+  const link = incidentLink(ev);
+  return {
+    url: `${base.replace(/\/+$/, "")}/message`,
+    headers: { "x-gotify-key": token },
+    body: { title: "Montral", message: capChars(text, 4000), priority: down ? 8 : 4, ...(link ? { extras: { "client::notification": { click: { url: link } } } } : {}) },
+  };
+}
+
+/**
+ * Pushover message: the body is capped at its 1024-character limit; priority 1 (high: bypasses quiet hours) for a down
+ * alert or escalation, 0 for a recovery or test. Emergency priority (2) is not used: it needs retry/expire receipts.
+ */
+export function pushoverBody(cfg: { token?: string; userKey?: string; device?: string }, ev: Event, text: string) {
+  const link = incidentLink(ev);
+  return {
+    token: cfg.token, user: cfg.userKey, ...(cfg.device ? { device: cfg.device } : {}),
+    title: "Montral", message: capChars(text, 1024),
+    priority: ev.kind !== "incident.resolved" && !ev.test ? 1 : 0,
+    ...(link ? { url: link, url_title: "View incident" } : {}),
+  };
+}
+
+/** Pushover acknowledges with `status: 1`; anything else (an HTML proxy page, a 200 without it) is not delivery. */
+async function postPushover(body: ReturnType<typeof pushoverBody>) {
+  const res = await postDirect("https://api.pushover.net/1/messages.json", body);
+  const data: unknown = await readCapped(res, 64 * 1024, AbortSignal.timeout(SEND_TIMEOUT_MS)).then((t) => JSON.parse(t) as unknown).catch(() => null);
+  const ack = data && typeof data === "object" && !Array.isArray(data) ? data as Record<string, unknown> : null;
+  if (res.ok && ack?.status === 1) return;
+  // the `errors` array can repeat the token or user key it rejects: only the HTTP status is kept
+  throw new Error(`Pushover responded HTTP ${res.status}${res.ok ? " (missing or invalid acknowledgement)" : ""}`);
+}
+
 const domainHeading = (ev: Event, opened = ev.kind !== "incident.resolved") => !opened ? "{name}: domain expiry verified" : (!ev.monitor.domainExpiry || ev.monitor.domainExpiry.state === "unknown") ? "{name}: domain expiry unknown" : ev.monitor.domainExpiry?.state === "expired" ? "{name}: registration date passed" : "{name}: domain renewal needed";
 const alertText = (ev: Event) => ev.monitor.type === "domain"
   ? `${tag(ev)}${domainHeading(ev).replace("{name}", ev.monitor.name)} — ${ev.kind === "incident.resolved" ? ev.monitor.target : ev.reason ?? ev.monitor.domainExpiry?.error ?? ev.incident.title}`
@@ -550,6 +636,25 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
       if (!res.ok) throw new Error(`${hostOf(cfg.url!)} responded HTTP ${res.status}`);
       break;
     }
+    case "googlechat":
+      need(cfg.url, "webhook URL");
+      await postAcked(cfg.url!, { text: googleChatText(text) });
+      break;
+    case "mattermost":
+      need(cfg.url, "webhook URL");
+      // `username` only applies where the server lets integrations override it; elsewhere Mattermost ignores it
+      await postAcked(cfg.url!, { text: mattermostText(text), username: "Montral" });
+      break;
+    case "gotify": {
+      need(cfg.url && cfg.token, "server URL or application token");
+      const r = gotifyRequest(cfg.url!, cfg.token!, ev, text);
+      await postAcked(r.url, r.body, r.headers);
+      break;
+    }
+    case "pushover":
+      need(cfg.token && cfg.userKey, "application token or user key");
+      await postPushover(pushoverBody(cfg, ev, text));
+      break;
     case "lark":
       need(cfg.url, "webhook URL");
       await postLark(cfg.url!, text, cfg.secret || undefined);

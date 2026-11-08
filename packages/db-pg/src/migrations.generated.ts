@@ -239,5 +239,10 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
     "tag": "0047_monitor_json_assertion",
     "when": 1794164279617,
     "sql": "ALTER TABLE \"monitor\" ADD COLUMN \"json_path\" text;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"json_expected\" text;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"json_match\" text DEFAULT 'equals' NOT NULL;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD CONSTRAINT \"monitor_json_match_chk\" CHECK (\"monitor\".\"json_match\" in ('equals', 'contains', 'exists'));"
+  },
+  {
+    "tag": "0048_channel_more_types",
+    "when": 1794166004534,
+    "sql": "ALTER TYPE \"public\".\"channel_type\" ADD VALUE 'googlechat';--> statement-breakpoint\nALTER TYPE \"public\".\"channel_type\" ADD VALUE 'mattermost';--> statement-breakpoint\nALTER TYPE \"public\".\"channel_type\" ADD VALUE 'gotify';--> statement-breakpoint\nALTER TYPE \"public\".\"channel_type\" ADD VALUE 'pushover';"
   }
 ];

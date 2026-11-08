@@ -23,7 +23,7 @@ noted in brackets, verified against the code, not marketing copy.
 | Database (Postgres/MySQL/Redis) | Y | Y | N | N | N | N | N |
 | Browser / multi-step | N | N | $ | N | N | P | N |
 | Multi-region | Y (edge probes) | N | ? | Y | Y | P | n/a |
-| Alert channels | 10 (email, Slack, Telegram, Lark, Discord, Teams, ntfy, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
+| Alert channels | 14 (email, Slack, Telegram, Lark, Discord, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
 | SMS / voice | N | via providers | Y | ? | Y | via providers | N |
 | Manual incidents + timeline | Y | N | Y | Y | P | P | n/a |
 | Acknowledge | Y | N | Y | ? | ? | N | n/a |

@@ -26,6 +26,17 @@ export interface ChangelogEntry {
 
 /** Community entries, newest first within a day. Cloud-only entries are added by changelog-cloud.ts. */
 export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
+  { id: "more-alert-channels", date: "2026-11-09", edition: "community",
+    title: { en: "Google Chat, Mattermost, Gotify and Pushover alerts", zh: "Google Chat、Mattermost、Gotify 与 Pushover 告警" },
+    summary: { en: "Four more places to receive monitor alerts.", zh: "新增四种接收监控告警的渠道。" },
+    points: [
+      { en: "Google Chat and Mattermost post to an incoming webhook; text that would mention people, add links or format the message is neutralized.", zh: "Google Chat 和 Mattermost 通过传入 Webhook 发布；会提及他人、插入链接或改变格式的文本都会被中和。" },
+      { en: "Gotify sends down alerts at priority 8 and recoveries at 4; the application token travels in a header and only to https servers.", zh: "Gotify 以优先级 8 发送故障告警、以优先级 4 发送恢复通知；应用令牌放在请求头中，且只发送到 https 服务器。" },
+      { en: "Pushover sends down alerts and escalations at high priority with a link to the incident, recoveries at normal priority, optionally to chosen devices.", zh: "Pushover 以高优先级发送故障告警和升级通知并附带事件链接，以普通优先级发送恢复通知，可指定设备。" },
+      { en: "Webhook URLs, tokens and user keys are masked for members, redirects are never followed, and the same delivery history and retries apply.", zh: "Webhook 地址、令牌和用户密钥对成员遮蔽，不会跟随重定向，并沿用相同的投递记录与重试。" },
+    ],
+    link: { href: "/docs/api", label: { en: "Read the channels API docs", zh: "阅读告警渠道 API 文档" } },
+  },
   {
     id: "domain-registration-expiry", date: "2026-10-29", edition: "community",
     title: { en: "Domain registration expiry", zh: "域名注册到期检测" },

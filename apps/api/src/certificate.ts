@@ -120,7 +120,10 @@ export async function certificateCheck(m: Pick<CheckInput, "target" | "timeoutMs
   return { ...certificateVerdict(hostname, result.cert, m.domainExpiryWarnDays), latencyMs };
 }
 
-/** What an incident about a failing certificate monitor is called, from the check's error. */
+/** What an incident about a failing certificate monitor is called, from the check's error: an expiring certificate, a
+ * rejected certificate or handshake, or a server that could not be reached at all (which says nothing about the cert). */
 export function certificateIncidentTitle(name: string, reason: string | undefined): string {
-  return `${name}: ${reason && / expires in \d+ days? \(/.test(reason) ? "certificate expires soon" : "certificate invalid"}`;
+  if (reason && / expires in \d+ days? \(/.test(reason)) return `${name}: certificate expires soon`;
+  if (reason && /^(?:Certificate for |TLS handshake with )/.test(reason)) return `${name}: certificate invalid`;
+  return `${name}: unreachable`;
 }

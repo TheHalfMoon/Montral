@@ -61,8 +61,11 @@ describe("certificate verdict", () => {
     expect(certificateIncidentTitle("Site", "Certificate for example.com expires in 1 day (2026-11-10, issued by R11)")).toBe("Site: certificate expires soon");
     expect(certificateIncidentTitle("Site", "Certificate for example.com has expired (2026-11-08)")).toBe("Site: certificate invalid");
     expect(certificateIncidentTitle("Site", "Certificate for example.com does not match the hostname")).toBe("Site: certificate invalid");
-    expect(certificateIncidentTitle("Site", "ECONNREFUSED")).toBe("Site: certificate invalid");
-    expect(certificateIncidentTitle("Site", undefined)).toBe("Site: certificate invalid");
+    expect(certificateIncidentTitle("Site", "TLS handshake with example.com failed")).toBe("Site: certificate invalid");
+    // a server that is simply down is not a certificate problem
+    expect(certificateIncidentTitle("Site", "ECONNREFUSED")).toBe("Site: unreachable");
+    expect(certificateIncidentTitle("Site", "Connection timed out")).toBe("Site: unreachable");
+    expect(certificateIncidentTitle("Site", undefined)).toBe("Site: unreachable");
   });
 });
 
@@ -157,7 +160,12 @@ describe("certificate checks over TLS", () => {
 
   beforeAll(() => {
     configureNetGuard({ ALLOW_PRIVATE_TARGETS: "true" });
-    try { pki = makePki(); } catch { pki = null; }
+    try { pki = makePki(); } catch (e) {
+      // Locally the real-TLS cases may skip without openssl; in CI they must run, so a broken fixture fails loudly.
+      if (process.env.CI) throw new Error("certificate test fixtures (openssl) failed in CI: " + (e as Error).message);
+      console.warn("certificate TLS cases skipped: openssl unavailable (" + (e as Error).message + ")");
+      pki = null;
+    }
   });
   afterAll(async () => {
     configureNetGuard({});

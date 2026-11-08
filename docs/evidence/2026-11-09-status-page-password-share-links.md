@@ -15,11 +15,15 @@ accounts, and there was no way to expire or revoke such access.
   password, unknown slug, public or members-only page, malformed body) is the
   same `401 {"error":"Incorrect password"}`; an unknown page still runs one
   PBKDF2 verification against a fixed hash, so neither body nor timing tells
-  slugs apart. Limits: 8 per client and slug and 20 per client per 15 min,
-  100 per page per hour. Responses are `no-store`, `no-referrer`.
+  slugs apart. Only JSON from the site's own origin is accepted (a cross-site
+  form cannot plant a grant). Limits: 8 per client and slug and 20 per client
+  per 15 min (every attempt counts), and 100 *failed* unlocks per page per hour
+  (successes never count, so visitors who know the password are not locked out
+  by frequent legitimate use). Responses are `no-store`, `no-referrer`.
 - Share links (`status_page_share_link`): 256-bit random token, only its
   SHA-256 stored, URL shown once, expiry 1 h to 1 year (default 7 days), at
-  most 50 active per page (enforced inside the INSERT), revocable. Following
+  most 50 active per page (enforced by `montral_create_share_link`, which locks
+  the page row before counting), revocable. Following
   `/api/public/status/_/access?t=…` sets the access cookie and `303`s to
   `/status/<slug>`, so the token leaves the address bar.
 - Both paths end in one signed cookie per page (`montral_sa_<page id>`):
@@ -29,8 +33,9 @@ accounts, and there was no way to expire or revoke such access.
   version and expiry; a link grant also checks its link is unrevoked and
   unexpired (revocation is immediate); a password grant only opens a page that
   is still password-protected.
-- A new password or "sign everyone out" (`POST /status-pages/:id/access/revoke`)
-  bumps `access_version`, invalidating every outside grant.
+- A new password, any visibility change, or "sign everyone out"
+  (`POST /status-pages/:id/access/revoke`) bumps `access_version`, invalidating
+  every outside grant (and making earlier subscribers non-current).
 - Locked password pages answer `401 {locked: true}` without title or content;
   members-only pages stay indistinguishable from missing ones (404). The SSR
   page rewrites to an unlock form; its script lives in `src/inline/` so the
@@ -40,6 +45,15 @@ accounts, and there was no way to expire or revoke such access.
   subscribed while they had access), and to verified workspace members.
   Rotating the password or signing everyone out stops mail to earlier
   subscribers until they subscribe again with access.
+
+## Independent review
+No authentication bypass was found. Fixed findings: returning a page to
+password mode without a new password revived old unlock cookies and let
+subscribers from a public interval receive mail (now any visibility change
+bumps the version); every unlock attempt counted toward the per-page limit, so
+anyone could lock visitors out (now only failures count); unlock accepted
+cross-site form posts (now JSON from the own origin only); and the share-link
+cap could be exceeded concurrently (now a row-locking database function).
 
 ## Evidence
 - `status-access.test.ts` (unit): salted hashes, right/wrong/empty
@@ -55,7 +69,11 @@ accounts, and there was no way to expire or revoke such access.
   limit (9th attempt 429, even with the right password), share-link
   creation rules, token not stored or listed, 303 without the token,
   revocation and expiry ending both the cookie and the URL, malformed tokens,
-  cross-workspace 404s, and version-based subscriber mail.
+  cross-workspace 404s, version-based subscriber mail, the visibility round
+  trip, failure-only page limits (seeded budget: 100 refuses even the right
+  password, 99 allows it; successes leave no count), 403 for text/plain and
+  foreign-Origin unlocks without a cookie, and exactly 50 of 60 concurrent
+  share-link creations succeeding.
 - `qualify-browser.mjs` (real Chromium): an outsider sees the lock form
   without the title, a wrong password is refused, the right one unlocks the
   page, the access cookie is not readable by page script, and no CSP

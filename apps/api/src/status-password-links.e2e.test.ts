@@ -19,7 +19,7 @@ describe.skipIf(!url)("password-protected status pages and share links (PostgreS
   beforeAll(async () => { await migrateMontralSchema(database!, montralEdition); });
   afterAll(async () => { await database?.close(1); });
 
-  const call = (path: string, init: RequestInit & { cookie?: string; extraEnv?: Record<string, string> } = {}) =>
+  const call = async (path: string, init: RequestInit & { cookie?: string; extraEnv?: Record<string, string> } = {}): Promise<Response> =>
     app.fetch(new Request(origin + path, {
       ...init,
       redirect: "manual",
@@ -189,4 +189,64 @@ describe.skipIf(!url)("password-protected status pages and share links (PostgreS
     await call(`/api/public/status/${s}/subscribe`, { method: "POST", cookie: renewed, body: JSON.stringify({ email: "partner@example.com" }) });
     expect(await recipients()).toEqual(["partner@example.com"]);
   });
+
+  it("signs outsiders out on any visibility change, so a page returning to password mode does not revive old access", async () => {
+    const owner = await signUp();
+    const s = slug("round");
+    const page = await json(await call("/api/status-pages", { method: "POST", cookie: owner, body: JSON.stringify({ slug: s, title: "Round trip", visibility: "password", password: "round-trip-pass" }) }));
+    const me = await json(await call("/api/me", { cookie: owner }));
+    const [monitor] = await database!.query<{ id: string }>(
+      "INSERT INTO monitor (organization_id, project_id, name, type, target) VALUES ($1, $2, 'Round QA', 'heartbeat', 'synthetic') RETURNING id",
+      [me.organization.id, me.projectId],
+    );
+    await database!.query("INSERT INTO status_page_component (status_page_id, monitor_id) VALUES ($1, $2)", [page.id, monitor.id]);
+    const unlocked = cookieOf(await unlock(s, "round-trip-pass"));
+    // While public, a stranger subscribes; then the page goes back behind the same password.
+    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "public" }) });
+    expect((await call(`/api/public/status/${s}/subscribe`, { method: "POST", body: JSON.stringify({ email: "stranger@example.com" }) })).status).toBe(200);
+    await database!.query("UPDATE status_subscriber SET confirmed_at = now() WHERE status_page_id = $1", [page.id]);
+    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "password" }) });
+    expect((await database!.repo.subscribersFor(me.organization.id, monitor.id)).map((x) => x.email)).toEqual([]);
+    expect((await call(`/api/public/status/${s}`, { cookie: unlocked })).status).toBe(401);
+    // password -> members -> password: the earlier unlock cookie stays dead
+    const fresh = cookieOf(await unlock(s, "round-trip-pass"));
+    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "members" }) });
+    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "password" }) });
+    expect((await call(`/api/public/status/${s}`, { cookie: fresh })).status).toBe(401);
+  });
+
+  it("counts only failed unlocks against the page, and refuses cross-site unlock requests", async () => {
+    const owner = await signUp();
+    const s = slug("fail");
+    await call("/api/status-pages", { method: "POST", cookie: owner, body: JSON.stringify({ slug: s, title: "Failures", visibility: "password", password: "only-failures-count" }) });
+    // Successful unlocks never add to the page's failure count.
+    for (let i = 0; i < 3; i++) expect((await unlock(s, "only-failures-count")).status).toBe(204);
+    expect(await database!.query("SELECT 1 FROM rate_limit WHERE key = $1", [`sp-unlock:fail:${s}`])).toHaveLength(0);
+    expect((await unlock(s, "wrong-once")).status).toBe(401);
+    expect((await database!.query<{ count: number }>("SELECT count FROM rate_limit WHERE key = $1", [`sp-unlock:fail:${s}`]))[0].count).toBe(1);
+    // A page that reached its hourly failure budget refuses even the right password, without verifying it.
+    await database!.query("UPDATE rate_limit SET count = 100 WHERE key = $1", [`sp-unlock:fail:${s}`]);
+    expect((await unlock(s, "only-failures-count")).status).toBe(429);
+    await database!.query("UPDATE rate_limit SET count = 99 WHERE key = $1", [`sp-unlock:fail:${s}`]);
+    expect((await unlock(s, "only-failures-count")).status).toBe(204);
+    // Cross-site: a text/plain form post or a foreign Origin cannot plant a page grant.
+    const plain = await call("/api/public/status/_/unlock", { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify({ slug: s, password: "only-failures-count" }) });
+    expect(plain.status).toBe(403);
+    expect(plain.headers.getSetCookie()).toEqual([]);
+    const foreign = await call("/api/public/status/_/unlock", { method: "POST", headers: { origin: "https://evil.example" }, body: JSON.stringify({ slug: s, password: "only-failures-count" }) });
+    expect(foreign.status).toBe(403);
+    expect(foreign.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("never exceeds the active share-link cap under concurrent creation", async () => {
+    const owner = await signUp();
+    const s = slug("cap");
+    const page = await json(await call("/api/status-pages", { method: "POST", cookie: owner, body: JSON.stringify({ slug: s, title: "Cap", visibility: "members" }) }));
+    const statuses = await Promise.all(Array.from({ length: 60 }, () =>
+      call(`/api/status-pages/${page.id}/share-links`, { method: "POST", cookie: owner, body: "{}" }).then((r) => r.status)));
+    expect(statuses.filter((x) => x === 201)).toHaveLength(50);
+    expect(statuses.filter((x) => x === 409)).toHaveLength(10);
+    const [{ n }] = await database!.query<{ n: number }>("SELECT count(*)::int AS n FROM status_page_share_link WHERE status_page_id = $1 AND revoked_at IS NULL", [page.id]);
+    expect(n).toBe(50);
+  }, 30_000);
 });

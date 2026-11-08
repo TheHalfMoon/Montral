@@ -135,8 +135,15 @@ export const statusPages = new Hono<AppEnv>()
     if (denied) return denied;
     const bad = thresholdsProblem(c, v.uptimeOkPct ?? page.uptimeOkPct, v.uptimeWarnPct ?? page.uptimeWarnPct);
     if (bad) return bad;
-    // a new password signs out everyone who unlocked the page with the old one (and their link-free cookies)
-    await repo.updateStatusPage(page.id, { ...v, ...(password ? { accessPasswordHash: await hashPagePassword(password), accessVersion: page.accessVersion + 1 } : {}) });
+    // A new password, or any change of visibility, signs out everyone outside the workspace: an old unlock cookie
+    // must not come back to life when a page returns to password mode, and anyone who subscribed while the page was
+    // public is not a current subscriber of the protected page.
+    const visibilityChanged = v.visibility !== undefined && v.visibility !== page.visibility;
+    await repo.updateStatusPage(page.id, {
+      ...v,
+      ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}),
+      ...(password || visibilityChanged ? { accessVersion: page.accessVersion + 1 } : {}),
+    });
     if (monitorIds || components) await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
     return c.json({ ok: true });
   })
@@ -171,15 +178,12 @@ export const statusPages = new Hono<AppEnv>()
       const db = c.get("database");
       const { token, hash } = await newShareToken();
       const expiresAt = new Date(Date.now() + (expiresInHours ?? SHARE_LINK_DEFAULT_HOURS) * 3_600_000);
-      // the cap is checked in the insert itself, so concurrent requests cannot exceed it
-      const rows = await db.query<{ id: string }>(
-        `INSERT INTO status_page_share_link (status_page_id, token_hash, label, created_by, expires_at)
-         SELECT $1, $2, $3, $4, $5
-         WHERE (SELECT count(*) FROM status_page_share_link WHERE status_page_id = $1 AND revoked_at IS NULL AND expires_at > now()) < $6
-         RETURNING id`,
+      // the database function locks the page row before counting, so concurrent requests cannot exceed the cap
+      const rows = await db.query<{ id: string | null }>(
+        "SELECT montral_create_share_link($1::uuid, $2::text, $3::text, $4::text, $5::timestamptz, $6::int) AS id",
         [page.id, hash, label || null, c.get("userId"), expiresAt, MAX_ACTIVE_SHARE_LINKS],
       );
-      if (!rows[0]) return c.json({ error: `A page can have at most ${MAX_ACTIVE_SHARE_LINKS} active share links` }, 409);
+      if (!rows[0]?.id) return c.json({ error: `A page can have at most ${MAX_ACTIVE_SHARE_LINKS} active share links` }, 409);
       const origin = appUrl() || new URL(c.req.url).origin;
       c.header("cache-control", "no-store");
       return c.json({ id: rows[0].id, label: label || null, expiresAt, url: `${origin}/api/public/status/_/access?t=${token}`, warning: "This link is shown only once. Anyone who has it can open the page until it expires or is revoked." }, 201);
@@ -285,6 +289,17 @@ async function rssFeed(c: Context<AppEnv>) {
   const origin = appUrl() || new URL(c.req.url).origin;
   const xml = buildRss({ title: page.title, link: `${origin}/status/${page.slug}`, incidents: incidents.map(toPublic), maintenance });
   return c.body(xml, 200, { "content-type": "application/rss+xml; charset=utf-8", "cache-control": "public, max-age=60" });
+}
+
+/** Failed unlocks a page tolerates per hour before refusing all unlocks (share links and members are unaffected). */
+const UNLOCK_PAGE_FAILURES = 100;
+/** Whether `key` has reached `limit` in its current window, without counting this request (see Repo.withinLimit). */
+async function limitReached(db: import("@montral/repo").Database, key: string, limit: number, windowSec: number): Promise<boolean> {
+  const rows = await db.query<{ count: number }>(
+    "SELECT count FROM rate_limit WHERE key = $1 AND window_start >= now() - make_interval(secs => $2)",
+    [key, windowSec],
+  );
+  return (rows[0]?.count ?? 0) >= limit;
 }
 
 /** A members-only page is readable only through a browser session of a current member of its workspace. */
@@ -606,18 +621,30 @@ export const publicStatus = new Hono<AppEnv>()
   .post("/_/unlock", subscriptionTokenPrivacy, subscriptionBodyGuard, async (c) => {
     const repo = c.get("repo");
     const refused = () => c.json({ error: "Incorrect password" }, 401);
+    // Only the web app's own form may unlock: a cross-site form post (text/plain, foreign Origin) would plant an
+    // attacker-chosen page grant in the visitor's browser.
+    const origin = c.req.header("origin");
+    if (!/^application\/json\b/i.test(c.req.header("content-type") ?? "") || (origin && origin !== c.env.WEB_ORIGIN && origin !== new URL(c.req.url).origin)) {
+      return c.json({ error: "Unlock requests must come from this site" }, 403);
+    }
     const body = (await c.req.json().catch(() => null)) as { slug?: unknown; password?: unknown } | null;
     const slug = typeof body?.slug === "string" && /^[a-z0-9-]{3,40}$/.test(body.slug) ? body.slug : null;
     const password = typeof body?.password === "string" && body.password.length <= 200 ? body.password : null;
     if (!slug || !password) return refused();
     const ip = clientIp(c);
+    // Per client: every attempt counts. Per page: only failed attempts count, so visitors who know the password are
+    // not locked out by someone else's successful or merely frequent unlocks; a guessing attack still stops.
+    const pageKey = `sp-unlock:fail:${slug}`;
     const ok = (!ip || (await repo.withinLimit(`sp-unlock:ip:${ip}`, 20, 900))) &&
       (!ip || (await repo.withinLimit(`sp-unlock:ip:${ip}:${slug}`, 8, 900))) &&
-      (await repo.withinLimit(`sp-unlock:page:${slug}`, 100, 3600));
+      !(await limitReached(c.get("database"), pageKey, UNLOCK_PAGE_FAILURES, 3600));
     if (!ok) return c.json({ error: "Too many attempts, try again later" }, 429);
     const page = await repo.statusPageBySlug(slug);
     const target = page?.visibility === "password" ? page : null;
-    if (!(await verifyPagePassword(password, target?.accessPasswordHash ?? null)) || !target) return refused();
+    if (!(await verifyPagePassword(password, target?.accessPasswordHash ?? null)) || !target) {
+      await repo.withinLimit(pageKey, UNLOCK_PAGE_FAILURES, 3600);
+      return refused();
+    }
     c.header("set-cookie", await accessCookie(c.env, target, null, new Date(Date.now() + 12 * 3_600_000)));
     return c.body(null, 204);
   })

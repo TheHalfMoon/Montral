@@ -19,4 +19,19 @@ ALTER TABLE "status_page_share_link" ADD CONSTRAINT "status_page_share_link_crea
 CREATE UNIQUE INDEX "status_page_share_link_token_idx" ON "status_page_share_link" USING btree ("token_hash");--> statement-breakpoint
 CREATE INDEX "status_page_share_link_page_idx" ON "status_page_share_link" USING btree ("status_page_id");--> statement-breakpoint
 ALTER TABLE "status_page" ADD CONSTRAINT "status_page_password_chk" CHECK ("status_page"."visibility" <> 'password' or "status_page"."access_password_hash" is not null);--> statement-breakpoint
-ALTER TABLE "status_page" ADD CONSTRAINT "status_page_visibility_chk" CHECK ("status_page"."visibility" in ('public', 'members', 'password'));
+ALTER TABLE "status_page" ADD CONSTRAINT "status_page_visibility_chk" CHECK ("status_page"."visibility" in ('public', 'members', 'password'));--> statement-breakpoint
+-- The active-link cap holds under concurrency: the page row lock serializes creators, and the count is a separate
+-- statement taken after the lock (READ COMMITTED gives each statement a fresh snapshot).
+CREATE OR REPLACE FUNCTION montral_create_share_link(p_page uuid, p_hash text, p_label text, p_creator text, p_expires timestamptz, p_cap integer)
+RETURNS uuid LANGUAGE plpgsql AS $montral$
+DECLARE v_id uuid;
+BEGIN
+  PERFORM 1 FROM status_page WHERE id = p_page FOR UPDATE;
+  IF (SELECT count(*) FROM status_page_share_link WHERE status_page_id = p_page AND revoked_at IS NULL AND expires_at > now()) >= p_cap THEN
+    RETURN NULL;
+  END IF;
+  INSERT INTO status_page_share_link (status_page_id, token_hash, label, created_by, expires_at)
+  VALUES (p_page, p_hash, p_label, p_creator, p_expires) RETURNING id INTO v_id;
+  RETURN v_id;
+END;
+$montral$;

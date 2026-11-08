@@ -202,16 +202,18 @@ describe.skipIf(!url)("password-protected status pages and share links (PostgreS
     await database!.query("INSERT INTO status_page_component (status_page_id, monitor_id) VALUES ($1, $2)", [page.id, monitor.id]);
     const unlocked = cookieOf(await unlock(s, "round-trip-pass"));
     // While public, a stranger subscribes; then the page goes back behind the same password.
-    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "public" }) });
+    expect((await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "public" }) })).status).toBe(200);
     expect((await call(`/api/public/status/${s}/subscribe`, { method: "POST", body: JSON.stringify({ email: "stranger@example.com" }) })).status).toBe(200);
     await database!.query("UPDATE status_subscriber SET confirmed_at = now() WHERE status_page_id = $1", [page.id]);
-    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "password" }) });
+    // while public the stranger is a recipient (so the empty list below is caused by the switch, not a no-op subscribe)
+    expect((await database!.repo.subscribersFor(me.organization.id, monitor.id)).map((x) => x.email)).toEqual(["stranger@example.com"]);
+    expect((await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "password" }) })).status).toBe(200);
     expect((await database!.repo.subscribersFor(me.organization.id, monitor.id)).map((x) => x.email)).toEqual([]);
     expect((await call(`/api/public/status/${s}`, { cookie: unlocked })).status).toBe(401);
     // password -> members -> password: the earlier unlock cookie stays dead
     const fresh = cookieOf(await unlock(s, "round-trip-pass"));
-    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "members" }) });
-    await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "password" }) });
+    expect((await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "members" }) })).status).toBe(200);
+    expect((await call(`/api/status-pages/${page.id}`, { method: "PATCH", cookie: owner, body: JSON.stringify({ visibility: "password" }) })).status).toBe(200);
     expect((await call(`/api/public/status/${s}`, { cookie: fresh })).status).toBe(401);
   });
 
@@ -219,16 +221,23 @@ describe.skipIf(!url)("password-protected status pages and share links (PostgreS
     const owner = await signUp();
     const s = slug("fail");
     await call("/api/status-pages", { method: "POST", cookie: owner, body: JSON.stringify({ slug: s, title: "Failures", visibility: "password", password: "only-failures-count" }) });
-    // Successful unlocks never add to the page's failure count.
+    // Successful unlocks give their slot back: they leave no failure counted.
+    const failures = async () => (await database!.query<{ count: number }>("SELECT count FROM rate_limit WHERE key = $1", [`sp-unlock:fail:${s}`]))[0]?.count ?? 0;
     for (let i = 0; i < 3; i++) expect((await unlock(s, "only-failures-count")).status).toBe(204);
-    expect(await database!.query("SELECT 1 FROM rate_limit WHERE key = $1", [`sp-unlock:fail:${s}`])).toHaveLength(0);
+    expect(await failures()).toBe(0);
     expect((await unlock(s, "wrong-once")).status).toBe(401);
-    expect((await database!.query<{ count: number }>("SELECT count FROM rate_limit WHERE key = $1", [`sp-unlock:fail:${s}`]))[0].count).toBe(1);
+    expect(await failures()).toBe(1);
     // A page that reached its hourly failure budget refuses even the right password, without verifying it.
     await database!.query("UPDATE rate_limit SET count = 100 WHERE key = $1", [`sp-unlock:fail:${s}`]);
     expect((await unlock(s, "only-failures-count")).status).toBe(429);
     await database!.query("UPDATE rate_limit SET count = 99 WHERE key = $1", [`sp-unlock:fail:${s}`]);
     expect((await unlock(s, "only-failures-count")).status).toBe(204);
+    expect(await failures()).toBe(99);
+    // Concurrent wrong guesses cannot overshoot the budget: each takes its slot before the slow check.
+    await database!.query("UPDATE rate_limit SET count = 95 WHERE key = $1", [`sp-unlock:fail:${s}`]);
+    const burst = await Promise.all(Array.from({ length: 20 }, (_, i) => unlock(s, `burst-${i}`).then((r) => r.status)));
+    expect(burst.filter((x) => x === 401)).toHaveLength(5);
+    expect(burst.filter((x) => x === 429)).toHaveLength(15);
     // Cross-site: a text/plain form post or a foreign Origin cannot plant a page grant.
     const plain = await call("/api/public/status/_/unlock", { method: "POST", headers: { "content-type": "text/plain" }, body: JSON.stringify({ slug: s, password: "only-failures-count" }) });
     expect(plain.status).toBe(403);

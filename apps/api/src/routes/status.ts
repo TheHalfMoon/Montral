@@ -293,14 +293,6 @@ async function rssFeed(c: Context<AppEnv>) {
 
 /** Failed unlocks a page tolerates per hour before refusing all unlocks (share links and members are unaffected). */
 const UNLOCK_PAGE_FAILURES = 100;
-/** Whether `key` has reached `limit` in its current window, without counting this request (see Repo.withinLimit). */
-async function limitReached(db: import("@montral/repo").Database, key: string, limit: number, windowSec: number): Promise<boolean> {
-  const rows = await db.query<{ count: number }>(
-    "SELECT count FROM rate_limit WHERE key = $1 AND window_start >= now() - make_interval(secs => $2)",
-    [key, windowSec],
-  );
-  return (rows[0]?.count ?? 0) >= limit;
-}
 
 /** A members-only page is readable only through a browser session of a current member of its workspace. */
 async function memberOfPageWorkspace(c: Context<AppEnv>, organizationId: string): Promise<boolean> {
@@ -632,19 +624,18 @@ export const publicStatus = new Hono<AppEnv>()
     const password = typeof body?.password === "string" && body.password.length <= 200 ? body.password : null;
     if (!slug || !password) return refused();
     const ip = clientIp(c);
-    // Per client: every attempt counts. Per page: only failed attempts count, so visitors who know the password are
-    // not locked out by someone else's successful or merely frequent unlocks; a guessing attack still stops.
+    // Per client: every attempt counts. Per page: an attempt takes a slot atomically before the (slow) password check
+    // and gives it back on success, so only failures stay counted (visitors who know the password are not locked out
+    // by frequent correct unlocks) and concurrent guesses cannot all pass a count that is read before they finish.
     const pageKey = `sp-unlock:fail:${slug}`;
     const ok = (!ip || (await repo.withinLimit(`sp-unlock:ip:${ip}`, 20, 900))) &&
       (!ip || (await repo.withinLimit(`sp-unlock:ip:${ip}:${slug}`, 8, 900))) &&
-      !(await limitReached(c.get("database"), pageKey, UNLOCK_PAGE_FAILURES, 3600));
+      (await repo.withinLimit(pageKey, UNLOCK_PAGE_FAILURES, 3600));
     if (!ok) return c.json({ error: "Too many attempts, try again later" }, 429);
     const page = await repo.statusPageBySlug(slug);
     const target = page?.visibility === "password" ? page : null;
-    if (!(await verifyPagePassword(password, target?.accessPasswordHash ?? null)) || !target) {
-      await repo.withinLimit(pageKey, UNLOCK_PAGE_FAILURES, 3600);
-      return refused();
-    }
+    if (!(await verifyPagePassword(password, target?.accessPasswordHash ?? null)) || !target) return refused();
+    await c.get("database").query("UPDATE rate_limit SET count = greatest(count - 1, 0) WHERE key = $1", [pageKey]);
     c.header("set-cookie", await accessCookie(c.env, target, null, new Date(Date.now() + 12 * 3_600_000)));
     return c.body(null, 204);
   })

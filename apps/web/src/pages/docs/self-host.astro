@@ -216,7 +216,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li>In the status page editor, open <strong>Custom domain</strong>, enter the hostname and save. Only owners and admins can do this.</li>
       <li>Create the TXT record shown: name <code>_montral-challenge.status.example.com</code>, value <code>montral-verify=…</code>, exactly as given.</li>
       <li>Press <strong>Verify</strong>. Montral looks the record up from the server and needs an exact match. Saving the domain again, even the same name, issues a new value and needs a new verification.</li>
-      <li>A domain verified for one page cannot be claimed by another page or workspace. An unverified claim does not block anyone: whoever proves the DNS record first gets the domain.</li>
+      <li>DNS decides who holds a domain. Any page may name it, but only a page whose TXT record is published holds it, and only one page holds a domain at a time. When a domain changes hands, its new owner publishes their record and verifies: the domain moves to their page and the former page loses it, without that page's cooperation.</li>
     </ul>
     <h3>2. Point the domain at your proxy</h3>
     <p>Add an <code>A</code>/<code>AAAA</code> or <code>CNAME</code> record for the hostname that points at your proxy, then add a site for it. With Caddy, which obtains the certificate itself and keeps the <code>Host</code> header by default:</p>
@@ -231,7 +231,8 @@ status.example.com {
     <h3>What the domain serves</h3>
     <ul>
       <li><code>/</code> is the status page. <code>/rss.xml</code>, <code>/maintenance.ics</code>, <code>/badge.svg</code> and <code>/llms.txt</code> are its feeds, and <code>/api/public/status/&lt;slug&gt;/…</code> keeps working for the page's own requests.</li>
-      <li>Every other path is <code>404</code>: the app, sign-in and sign-up, the private API, webhook receivers, docs and other pages. The domain never serves the signed-in app, and sign-in cookies are never read there.</li>
+      <li>A hostname that reaches the server but is neither the app's own address nor a verified status domain gets <code>404</code> on every path, so a domain pointed at your server before verification, or after its page or domain was removed, never shows the app or its sign-in. IP addresses, <code>localhost</code> and single-label names (such as compose service names) still reach the app.</li>
+      <li>On a verified domain, every other path is <code>404</code>: the app, sign-in and sign-up, the private API, webhook receivers, docs and other pages. The domain never serves the signed-in app, and sign-in cookies are never read there.</li>
       <li>Public pages work as usual. Password pages show the password form, and unlocking sets an access cookie for that domain only. Members-only pages answer <code>404</code> on the custom domain, because sign-in lives on the main address. Share links still point at the main address.</li>
       <li>Changes made through the API apply at once on the server that handled them. With several servers, others pick a change up within 60 seconds.</li>
     </ul>

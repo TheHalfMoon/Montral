@@ -1,13 +1,20 @@
 import cloudflare from "@astrojs/cloudflare";
 import node from "@astrojs/node";
 import react from "@astrojs/react";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import { listPrecache, stampWorker } from "./src/sw/stamp.mjs";
 
 const API = process.env.API_ORIGIN ?? "http://localhost:8787";
+// Inline scripts live in src/inline/ and are rendered byte-for-byte (`set:html` of a ?raw import), so their CSP hashes
+// can be computed here once and hold on every page, static or server-rendered. Astro does not hash is:inline scripts.
+const INLINE_DIR = new URL("./src/inline/", import.meta.url);
+const inlineScriptHashes = readdirSync(INLINE_DIR)
+  .filter((f) => f.endsWith(".js"))
+  .map((f) => `sha256-${createHash("sha256").update(readFileSync(new URL(f, INLINE_DIR))).digest("base64")}`);
 // DEPLOY_TARGET=node builds the Docker flavour: a Node handler that apps/api serves next to /api (no Cloudflare bindings)
 const NODE = process.env.DEPLOY_TARGET === "node";
 
@@ -34,6 +41,19 @@ export default defineConfig({
   build: { format: "file" }, // /app is served from app.html: no redirect to /app/
   trailingSlash: "never",
   prefetch: false, // the back office is a client-routed SPA; public pages are single hops
+  // Content Security Policy as a <meta> on every page: Astro hashes each script it renders (bundled and is:inline,
+  // including per-request SSR scripts), so injected markup cannot run script. Styles keep 'unsafe-inline' because React
+  // and the pages render style="" attributes. Framing, base-uri and form targets are also sent as HTTP headers by the
+  // Node server (web-security-headers.ts), which a <meta> policy cannot express.
+  security: {
+    csp: {
+      algorithm: "SHA-256",
+      directives: ["object-src 'none'", "base-uri 'self'"],
+      // Cloudflare Turnstile is the only third-party script (the sign-up challenge, when configured)
+      scriptDirective: { resources: ["'self'", "https://challenges.cloudflare.com"], hashes: inlineScriptHashes },
+      styleDirective: { resources: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"] },
+    },
+  },
   server: { port: 4321 },
   vite: {
     // the runtime image ships no node_modules: inline every dependency into the server build

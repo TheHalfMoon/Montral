@@ -1,4 +1,6 @@
 ---
+// rendered byte-for-byte; its CSP hash is computed in astro.config.mjs
+import notFoundScript from "../inline/not-found.js?raw";
 import Base from "../layouts/Base.astro";
 // Unknown URLs. The page is static, so the missing path is filled in by a small script.
 const days = Array.from({ length: 90 }, (_, i) => i === 89);
@@ -29,11 +31,7 @@ const days = Array.from({ length: 90 }, (_, i) => i === 89);
       <a class="nf-btn ghost" href="/services"><span lang="en">Check if a service is down</span><span lang="zh-CN">查看服务是否宕机</span></a>
     </div>
   </main>
-  <script is:inline>
-    var p = location.pathname.replace(/^\/zh-Hans(?=\/|$)/, "") || "/";
-    if (p.length > 60) p = p.slice(0, 57) + "...";
-    ["nf-path", "nf-path-zh"].forEach(function (id) { var e = document.getElementById(id); if (e) e.textContent = p; });
-  </script>
+  <script is:inline set:html={notFoundScript} />
 </Base>
 
 <style>

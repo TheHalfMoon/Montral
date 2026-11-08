@@ -48,6 +48,8 @@ jobs:
         run: pnpm --filter @montral/probe build:edge
       - name: Build self-hosted Node web
         run: DEPLOY_TARGET=node pnpm --filter @montral/web build
+      - name: Every inline script on built pages is allowed by its page's CSP hash
+        run: node scripts/verify-csp-hashes.mjs apps/web/dist/client
       - name: Web tests with built production routes
         run: pnpm --filter @montral/web test
       - name: Smoke-test running Node API and web against PostgreSQL

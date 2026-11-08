@@ -82,8 +82,10 @@ try {
   let nextId = 0;
   const pending = new Map();
   const cdpEvents = [];
+  const cspViolations = [];
   ws.on("message", (raw) => {
     const msg = JSON.parse(String(raw));
+    if (msg.method === "Runtime.bindingCalled" && msg.params.name === "__montralCspViolation") cspViolations.push(msg.params.payload);
     if (msg.method) cdpEvents.push(msg);
     if (!msg.id || !pending.has(msg.id)) return;
     const { ok, fail } = pending.get(msg.id);
@@ -112,6 +114,9 @@ try {
   }
   await cdp("Page.enable");
   await cdp("Runtime.enable");
+  // Every Content Security Policy violation on every page of the journey is reported here and fails the run.
+  await cdp("Runtime.addBinding", { name: "__montralCspViolation" });
+  await cdp("Page.addScriptToEvaluateOnNewDocument", { source: `addEventListener("securitypolicyviolation", function (e) { try { __montralCspViolation(JSON.stringify({ directive: e.violatedDirective, blocked: e.blockedURI, path: location.pathname, sample: (e.sample || "").slice(0, 60) })); } catch (x) {} });` });
   // Check that a browser without auth cannot read private webhook/billing state.
   for (const path of ["/api/hooks/inboxes", "/api/billing"]) {
     const unauth = await fetch(base + path);
@@ -335,6 +340,24 @@ try {
   await until("missing reset link fails closed", () => js(
     'Array.from(document.querySelectorAll("a")).some(a => a.getAttribute("href") === "/forgot-password") && !document.querySelector("form.auth-fields")'
   ));
+  // The server-rendered status page carries a per-request inline script (define:vars); its hash must match too.
+  const statusSlug = "csp-" + Math.random().toString(36).slice(2, 10);
+  const madePage = await js(`fetch("/api/status-pages", { method: "POST", credentials: "same-origin", headers: { "content-type": "application/json" }, body: JSON.stringify({ slug: ${JSON.stringify(statusSlug)}, title: "CSP qualification" }) }).then(r => r.status)`);
+  if (madePage !== 201) throw new Error("Status page for CSP check not created: " + madePage);
+  await page("/status/" + statusSlug);
+  await until("status page rendered", () => js('document.body.innerText.includes("CSP qualification")'));
+  await page("/app");
+  await until("app shell for CSP check", () => js('!!document.querySelector("nav")'));
+  // The policy is present and enforced: an injected inline script must not run.
+  const policy = await js('document.querySelector("meta[http-equiv=content-security-policy]")?.content || ""');
+  if (!/script-src 'self'[^;]*'sha256-/.test(policy) || /script-src[^;]*'unsafe-inline'/.test(policy)) throw new Error("Script CSP missing or allows unsafe-inline: " + policy.slice(0, 160));
+  const before = cspViolations.length;
+  await js('(() => { const s = document.createElement("script"); s.textContent = "window.__cspBypassed = true"; document.head.appendChild(s); })()');
+  await until("injected inline script reported as blocked", () => cspViolations.length > before);
+  if (await js("window.__cspBypassed === true")) throw new Error("Injected inline script executed despite CSP");
+  const unexpected = cspViolations.slice(0, before).concat(cspViolations.slice(before + 1));
+  if (unexpected.length) throw new Error("CSP violations during the journey: " + unexpected.slice(0, 5).join(" | "));
+  console.log(`CSP_PASS: hashed script-src enforced on the journey's pages and the SSR status page; ${before} unexpected violations`);
   console.log("BROWSER_E2E_PASS: real Chromium signup, synthetic monitor, incident, webhook, disabled billing, reset-link URL privacy; anonymous routes denied");
   browserCompleted = true;
 } finally {

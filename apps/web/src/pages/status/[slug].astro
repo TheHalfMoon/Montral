@@ -1,4 +1,6 @@
 ---
+// rendered byte-for-byte; its CSP hash is computed in astro.config.mjs
+import statusSubscribeScript from "../../inline/status-subscribe.js?raw";
 export const prerender = false;
 import Base from "../../layouts/Base.astro";
 import { apiFetch, PRODUCT_URL } from "../../lib/server";
@@ -48,6 +50,8 @@ const base = `${Astro.url.origin}`;
 const canon = `${base}${zhPage ? "/zh-Hans" : ""}/status/${slug}`;
 
 const t = (x: string) => translate((Astro.locals.lang ?? "en"), x);
+// read by the subscribe script (src/inline/status-subscribe.js) from a JSON block, so the script itself stays constant
+const subscribeVars = { slug, sending: t("Subscribing…"), ok: t("Check your inbox to confirm your subscription."), bad: t("Could not subscribe. Try again."), slow: t("Too many attempts. Please try again later.") };
 const headline = t({ operational: "Everything is running smoothly.", degraded: "Some systems are degraded.", outage: "We’re experiencing an outage.", unknown: "Some component states are unknown." }[data.overall]);
 const overallText = (o: string) => (o === "operational" ? t("All systems operational") : o === "outage" ? t("Major outage") : o === "unknown" ? t("Status unknown") : t("Partial degradation"));
 const groupNames = [...new Set(data.components.map((c) => c.group || "Services"))];
@@ -202,23 +206,7 @@ Astro.response.headers.set("cache-control", privateResponse || hist.privateRespo
     <footer class="pub-wrap pub-foot">
       {!hideBrand && <span>{t("Powered by")} <a href={PRODUCT_URL}>Montral</a></span>}
     </footer>
-    <script is:inline data-astro-rerun define:vars={{ slug, sending: t("Subscribing…"), ok: t("Check your inbox to confirm your subscription."), bad: t("Could not subscribe. Try again."), slow: t("Too many attempts. Please try again later.") }}>
-      document.getElementById("sub").addEventListener("submit", async (e) => {
-        e.preventDefault();
-        const msg = document.getElementById("sub-msg");
-        const btn = e.target.querySelector("button");
-        const label = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = sending;
-        msg.textContent = "";
-        try {
-          const r = await fetch(`/api/public/status/${slug}/subscribe`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ email: e.target.email.value, monitorIds: [...e.target.querySelectorAll("input[name=monitorId]:checked")].map((x) => x.value) }) });
-          msg.textContent = r.ok ? ok : r.status === 429 ? slow : bad;
-          if (r.ok) e.target.reset();
-        } catch { msg.textContent = bad; }
-        btn.disabled = false;
-        btn.textContent = label;
-      });
-    </script>
+    <script type="application/json" id="sub-vars" set:html={JSON.stringify(subscribeVars).replace(/</g, "\\u003c")} />
+    <script is:inline set:html={statusSubscribeScript} />
   </div>
 </Base>

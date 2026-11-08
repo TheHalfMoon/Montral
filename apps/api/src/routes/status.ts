@@ -218,8 +218,8 @@ export const statusPages = new Hono<AppEnv>()
     return rows[0] ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
   })
   // Set (or replace) the page's custom domain. Always starts unverified with a fresh TXT value, so moving a domain or
-  // setting it again needs DNS proof again. Only a verified domain is exclusive: another page's unverified claim does
-  // not block this one (whoever proves DNS first wins), but a domain verified elsewhere is refused.
+  // setting it again needs DNS proof again. Naming a domain another page holds is allowed: DNS decides, and the domain
+  // moves only when this page proves its own TXT record (see /verify).
   .put("/:id/domain", uuidParams, requireManager, zValidator("json", z.object({ domain: z.string().max(300) }).strict()), async (c) => {
     const unsupported = domainsUnsupported(c);
     if (unsupported) return unsupported;

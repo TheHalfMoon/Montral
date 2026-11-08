@@ -133,7 +133,7 @@ Single-host Docker topologies are what the evidence covers.
 | Password pages: PBKDF2-SHA256 at 100k iterations, constant-shape 401, timing-safe dummy hash | #21 |
 | Access cookie: HMAC-signed, bound to page, access version and link, expiry of at most 12 h; revoke-all bumps the version | #21 |
 | Share links: only a SHA-256 token hash is stored; cap enforced under a row lock; revocable | #21 |
-| Unlock rate limits: per IP and per page, atomic, refunded on success | #21 |
+| Unlock rate limits: per-IP limits (20 and 8 per page per 15 min, never refunded) and an atomic per-page failure limit refunded on a correct password | #21 |
 | Subscriber mail respects page visibility and access version | #21 |
 | Custom domains: TXT proof, no app, sign-in or cookies on status domains, unknown hosts 404 | #29 |
 | Log privacy: unhandled errors log only a safe class; provider errors are categorised | #20, earlier evidence |

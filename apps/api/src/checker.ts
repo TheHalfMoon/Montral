@@ -5,10 +5,12 @@ import { requestBodyProblem } from "./http-request";
 import type { DomainExpiry, Repo } from "@montral/repo";
 import { domainCheck } from "./domain-expiry";
 import { websocketCheck } from "./websocket";
+import { certificateCheck } from "./certificate";
 
 export type CheckInput = {
-  type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain";
+  type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate";
   target: string;
+  /** domain and certificate: fail when the expiry date is this many days away or closer (default 30). */
   domainExpiryWarnDays?: number;
   method: string;
   requestBody?: string | null;
@@ -50,6 +52,7 @@ export async function runCheck(m: CheckInput, repo?: Repo): Promise<CheckOutcome
       case "mysql": return await mysqlCheck(m, started);
       case "redis": return await redisCheck(m, started);
       case "websocket": return await websocketCheck(m, started);
+      case "certificate": return await certificateCheck(m, started);
       default: return { ok: true };
     }
   } catch (e) {

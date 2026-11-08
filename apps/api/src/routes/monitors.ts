@@ -6,7 +6,8 @@ import { z } from "zod";
 import type { AppEnv } from "../env";
 import { ALL_PROJECTS, cookieValue, isManager, listedProjects, requireManager, uuidParams } from "../middleware";
 import { creditCost } from "../entitlements";
-import { targetProblem } from "../netguard";
+import { isWorkers, targetProblem } from "../netguard";
+import { WORKERS_UNSUPPORTED } from "../certificate";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
 import { checkOne, nextAfter } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
@@ -16,13 +17,13 @@ import { HTTP_METHODS, MAX_REQUEST_BODY_BYTES, requestBodyProblem } from "../htt
 
 const fields = {
   name: z.string().min(1).max(120).describe("Display name shown in the dashboard, alerts and status-page components."),
-  type: z.enum(["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain"]).describe("Check protocol; immutable after creation. HTTP checks a URL, WebSocket checks the handshake (and optionally a reply), heartbeat waits for incoming pings, and other types check a service."),
-  target: z.string().max(2048).describe("HTTP: absolute http(s) URL. WebSocket: ws:// or wss:// URL. TCP: host:port. DNS: hostname. Domain: explicit registered domain, without scheme or path; not a subdomain. Database/Redis: connection URL for that protocol. Heartbeat: leave empty. Public targets only by default."),
-  domainExpiryWarnDays: z.number().int().min(1).max(365).describe("Domain registration only: fail when expiration is this many days away; unknown dates also fail explicitly."),
+  type: z.enum(["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate"]).describe("Check protocol; immutable after creation. HTTP checks a URL, WebSocket checks the handshake (and optionally a reply), certificate checks the TLS certificate a host presents (self-hosted Node runtime only), heartbeat waits for incoming pings, and other types check a service."),
+  target: z.string().max(2048).describe("HTTP: absolute http(s) URL. WebSocket: ws:// or wss:// URL. TCP: host:port. DNS: hostname. Domain: explicit registered domain, without scheme or path; not a subdomain. Certificate: host or host:port (default port 443). Database/Redis: connection URL for that protocol. Heartbeat: leave empty. Public targets only by default."),
+  domainExpiryWarnDays: z.number().int().min(1).max(365).describe("Domain and certificate monitors: fail when the registration or certificate expiration is this many days away or closer; unknown domain dates also fail explicitly."),
   method: z.enum(HTTP_METHODS).describe("HTTP request method; ignored for other monitor types."),
   requestBody: z.string().max(MAX_REQUEST_BODY_BYTES).nullable().describe("HTTP request body, up to 16384 UTF-8 bytes; unavailable with GET or HEAD. Set Content-Type using headers. Null clears it. Masked values preserve stored secrets on update; owners and admins can read bodies."),
   expectedStatus: z.number().int().min(100).max(599).describe("HTTP response status that counts as healthy; an expected 3xx is checked without following the redirect."),
-  intervalSec: z.number().int().min(60).max(86400).describe("Seconds between checks, or the expected heartbeat period. Domain checks are raised to at least 3600 seconds; daily checks are recommended. Hosted plans may require a longer interval."),
+  intervalSec: z.number().int().min(60).max(86400).describe("Seconds between checks, or the expected heartbeat period. Domain and certificate checks are bounded to 3600-86400 seconds; daily domain checks are recommended. Hosted plans may require a longer interval."),
   timeoutMs: z.number().int().min(1000).max(30000).describe("Maximum duration of a check in milliseconds; for domain checks, each IANA/registry request has this timeout and shared cache locks wait at most 3 seconds."),
   failureThreshold: z.number().int().min(1).max(10).describe("Consecutive failed checks required before opening an incident."),
   recoveryThreshold: z.number().int().min(1).max(10).describe("Consecutive successful runs (or heartbeat pings) required to recover from down. Default 1; a multi-region vote counts once. Does not delay latency-only recovery."),
@@ -123,7 +124,11 @@ export const monitorPatchSchema = patchBody;
 
 const DNS_DEFAULTS = { dnsRecordType: "A", dnsExpectedValue: null, dnsMatchMode: "exact" } as const;
 
-const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : requestBodyProblem(v);
+const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : v.type === "certificate" && isWorkers() ? `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : requestBodyProblem(v);
+
+/** Types whose expiry is checked rather than their availability: an interval of 1 hour to 1 day is enough and is enforced. */
+const EXPIRY_TYPES: readonly string[] = ["domain", "certificate"];
+const expiryInterval = (sec: number) => Math.min(86400, Math.max(sec, 3600));
 
 const newMonitor = (v: z.infer<typeof body>) => ({
   ...v,
@@ -280,9 +285,9 @@ async function importMonitors(c: Context<AppEnv>, preview: boolean) {
     const regions = usable.length ? usable : [AUTO];
     if (JSON.stringify(v.regions) !== JSON.stringify(regions)) row.warnings.push("Regions adjusted to this deployment and plan");
     v.regions = regions;
-    if (v.type === "domain") {
-      const bounded = Math.min(86400, Math.max(v.intervalSec, 3600));
-      if (bounded !== v.intervalSec) { v.intervalSec = bounded; row.warnings.push("Interval adjusted to the 1 hour to 1 day range for domain checks"); }
+    if (EXPIRY_TYPES.includes(v.type)) {
+      const bounded = expiryInterval(v.intervalSec);
+      if (bounded !== v.intervalSec) { v.intervalSec = bounded; row.warnings.push(`Interval adjusted to the 1 hour to 1 day range for ${v.type} checks`); }
     }
     if (v.type !== "heartbeat" && v.intervalSec < (plan?.minIntervalSec ?? 0)) { v.intervalSec = plan!.minIntervalSec; row.warnings.push("Interval raised to the plan minimum"); }
     Object.assign(row, { source: source.data, sourceId, type: v.type, intervalSec: v.intervalSec, regions: v.regions });
@@ -318,7 +323,7 @@ export const monitors = new Hono<AppEnv>()
     const v = c.req.valid("json");
     const invalid = creationProblem(v);
     if (invalid) return c.json({ error: invalid }, 400);
-    if (v.type === "domain") v.intervalSec = Math.min(86400, Math.max(v.intervalSec, 3600));
+    if (EXPIRY_TYPES.includes(v.type)) v.intervalSec = expiryInterval(v.intervalSec);
     const blocked = await refuseTarget(c, v.type, v.target);
     if (blocked) return blocked;
     const badRegion = await regionProblem(c, v.type, v.regions);
@@ -403,7 +408,7 @@ export const monitors = new Hono<AppEnv>()
     if (v.intervalSec !== undefined || v.paused === false) {
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
       if (current) {
-        if (current.type === "domain" && v.intervalSec !== undefined) v.intervalSec = Math.min(86400, Math.max(v.intervalSec, 3600));
+        if (EXPIRY_TYPES.includes(current.type) && v.intervalSec !== undefined) v.intervalSec = expiryInterval(v.intervalSec);
         // only a faster interval is checked against the plan's floor; leaving an older, faster one in place is fine
         const faster = v.intervalSec !== undefined && v.intervalSec < current.intervalSec && current.type !== "heartbeat";
         const resuming = v.paused === false && current.status === "paused";

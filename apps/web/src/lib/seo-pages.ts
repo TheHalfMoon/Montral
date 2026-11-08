@@ -48,8 +48,8 @@ export const MONTRAL = {
   ),
   selfHost: l("Yes, the same code as the hosted service, no feature limits", "支持，与托管服务是同一份代码，没有功能限制"),
   types: l(
-    "HTTP and HTTPS (expected status, keyword must or must not appear, custom headers), TCP, DNS, heartbeat, PostgreSQL, MySQL / MariaDB and Redis reachability",
-    "HTTP / HTTPS（预期状态码、关键字必须出现或不得出现、自定义请求头）、TCP、DNS、心跳、PostgreSQL、MySQL / MariaDB 与 Redis 连通性",
+    "HTTP and HTTPS (expected status, keyword must or must not appear, custom headers), TCP, DNS, heartbeat, PostgreSQL, MySQL / MariaDB and Redis reachability, domain registration expiry, and TLS certificate expiry and validity (Node runtime only, not on Cloudflare Workers)",
+    "HTTP / HTTPS（预期状态码、关键字必须出现或不得出现、自定义请求头）、TCP、DNS、心跳、PostgreSQL、MySQL / MariaDB 与 Redis 连通性、域名注册到期，以及 TLS 证书到期与有效性（仅 Node 运行时，Cloudflare Workers 上不可用）",
   ),
   regions: l(
     "HTTP, TCP and WebSocket monitors can be checked from several regions; a run fails when most answering regions fail. Self-hosters run their own probes",
@@ -72,7 +72,7 @@ export const MONTRAL = {
 
 /** What Montral cannot do today. Every item was checked: there is no code path for it. */
 export const MONTRAL_GAPS: L[] = [
-  l("No TLS certificate expiry monitoring.", "不监控 TLS 证书到期。"),
+  l("TLS certificate checks need the Node runtime (the Docker image); a Cloudflare Workers deployment cannot run them.", "TLS 证书检测需要 Node 运行时（Docker 镜像）；部署在 Cloudflare Workers 上时无法运行。"),
   l("No ICMP ping monitor; use a TCP or HTTP check instead.", "没有 ICMP ping 监控；可改用 TCP 或 HTTP 检测。"),
   l("No browser-based or multi-step transaction checks, and no real user monitoring.", "没有基于浏览器或多步骤的事务检测，也没有真实用户监控。"),
   l("No SMS or phone-call alerts and no on-call rotation schedules. Escalation works by channel and by minutes unacknowledged.", "没有短信或电话告警，也没有值班排班表。升级按告警渠道和未确认的分钟数进行。"),
@@ -84,8 +84,8 @@ const importStep = l(
   "在 Montral 的监控页用导入按钮上传 JSON 文件，或发送到 POST /api/monitors/import。每个文件最多 500 个监控项。无法导入的条目会连同原因一并列出，其余照常创建。",
 );
 const fieldsStep = l(
-  "The importer reads name (or friendly_name), target (or url, hostname, host), interval in seconds, and type (http, https, keyword, tcp, port, dns, heartbeat, postgres, mysql, redis). Intervals below 60 seconds are raised to 60.",
-  "导入时会识别 name（或 friendly_name）、target（或 url、hostname、host）、以秒为单位的 interval，以及 type（http、https、keyword、tcp、port、dns、heartbeat、postgres、mysql、redis）。小于 60 秒的间隔会提升到 60 秒。",
+  "The importer reads name (or friendly_name), target (or url, hostname, host), interval in seconds, and type (http, https, keyword, tcp, port, dns, heartbeat, postgres, mysql, redis, domain, certificate). Intervals below 60 seconds are raised to 60.",
+  "导入时会识别 name（或 friendly_name）、target（或 url、hostname、host）、以秒为单位的 interval，以及 type（http、https、keyword、tcp、port、dns、heartbeat、postgres、mysql、redis、domain、certificate）。小于 60 秒的间隔会提升到 60 秒。",
 );
 const channelsStep = l(
   "Alert channels, status pages and incident history are not imported. Add your channels under Alerting, then create a status page and pick the monitors for it.",
@@ -113,8 +113,8 @@ const faqImport = (name: string): Faq => ({
 const faqGaps = (name: string): Faq => ({
   q: l(`What does ${name} do that Montral does not?`, `${name} 有哪些 Montral 没有的功能？`),
   a: l(
-    "Montral has no TLS certificate expiry monitoring, no ICMP ping monitor, no browser or multi-step checks, and no SMS, phone-call or on-call schedule features. If you rely on one of those, check whether the other tool covers it before you switch.",
-    "Montral 没有 TLS 证书到期监控、ICMP ping 监控、浏览器或多步骤检测，也没有短信、电话告警或值班排班功能。如果你依赖其中之一，切换前请先确认。",
+    "Montral has no ICMP ping monitor, no browser or multi-step checks, and no SMS, phone-call or on-call schedule features. Its TLS certificate checks run only on the Node runtime, not on Cloudflare Workers. If you rely on one of those, check whether the other tool covers it before you switch.",
+    "Montral 没有 ICMP ping 监控、浏览器或多步骤检测，也没有短信、电话告警或值班排班功能；其 TLS 证书检测只能在 Node 运行时中运行，Cloudflare Workers 上不可用。如果你依赖其中之一，切换前请先确认。",
   ),
 });
 const faqPricing = (name: string): Faq => ({
@@ -305,16 +305,16 @@ export const TOOLS: Tool[] = [
       { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("Closed source", "闭源") },
       { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
       { topic: l("Uptime checks", "可用性检测"), montral: MONTRAL.types, them: l("Website and server uptime checks; see their site for the full list", "网站与服务器可用性检测；完整列表见其官网") },
-      { topic: l("SSL and domain monitoring", "SSL 与域名监控"), montral: l("Not available. Montral does not watch certificate or domain expiry", "不提供。Montral 不监控证书或域名到期"), them: l("Offered", "提供") },
+      { topic: l("SSL and domain monitoring", "SSL 与域名监控"), montral: l("Domain registration expiry with a 1 to 365 day warning; TLS certificate expiry, trust and hostname checks with the same warning, on the Node runtime only (not on Cloudflare Workers)", "域名注册到期，可设 1 至 365 天预警；TLS 证书到期、信任链与主机名检测，预警设置相同，仅限 Node 运行时（Cloudflare Workers 上不可用）"), them: l("Offered", "提供") },
       { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
     ],
     theyHave: [
-      l("SSL certificate and domain expiry monitoring. Montral has neither.", "SSL 证书和域名到期监控。Montral 两者都没有。"),
+      l("SSL certificate and domain monitoring in a hosted service. Montral warns about both too, but its certificate checks need the Node runtime and do not run on Cloudflare Workers.", "托管服务中的 SSL 证书与域名监控。Montral 也会对两者预警，但其证书检测需要 Node 运行时，不能在 Cloudflare Workers 上运行。"),
       l("Page speed testing. Montral records response time only.", "页面速度测试。Montral 只记录响应时间。"),
     ],
     bestThem: [
-      l("You want certificate and domain expiry warnings from the same tool that checks uptime.", "你希望在检测可用性的同一个工具里收到证书和域名到期提醒。"),
+      l("You want certificate expiry warnings from a hosted service without running Montral on Node yourself.", "你希望由托管服务提供证书到期提醒，而不必自己在 Node 上运行 Montral。"),
       l("You want a hosted service with a free tier to start with.", "你想先从有免费档的托管服务开始。"),
     ],
     bestUs: [
@@ -326,7 +326,7 @@ export const TOOLS: Tool[] = [
       l("List your uptime tests as JSON with a name, a url or hostname, the interval in seconds and the type.", "把可用性测试整理成 JSON，每项包含名称、url 或 hostname、以秒为单位的间隔和类型。"),
       fieldsStep,
       importStep,
-      l("Keep a separate reminder for certificate and domain renewals, since Montral will not warn you about them.", "请另外设置证书和域名续期的提醒，Montral 不会就此预警。"),
+      l("Recreate SSL and domain checks as certificate and domain monitors and choose how many days ahead to be warned. Certificate monitors need the Node runtime.", "把 SSL 与域名检测重建为 certificate 和 domain 监控项，并设置提前多少天预警。证书监控需要 Node 运行时。"),
       parallelStep,
     ],
     faq: [
@@ -335,8 +335,8 @@ export const TOOLS: Tool[] = [
       {
         q: l("Does Montral warn me before an SSL certificate expires?", "Montral 会在 SSL 证书到期前提醒我吗？"),
         a: l(
-          "No. An HTTPS monitor fails once the certificate is rejected, but there is no advance warning. Track renewals with your certificate provider or another tool.",
-          "不会。证书被拒绝后，HTTPS 监控才会失败，但没有提前预警。请通过证书提供方或其他工具跟踪续期。",
+          "Yes, with a certificate monitor on the Node runtime: it fails when the certificate expires within the days you choose (1 to 365, default 30), and also when it is expired, untrusted or issued for another hostname. A Cloudflare Workers deployment cannot run these checks; there an HTTPS monitor only fails once the certificate is rejected.",
+          "会，前提是在 Node 运行时中使用 certificate 监控：证书在你设定的天数内（1 至 365 天，默认 30 天）到期时检测失败，证书已过期、不受信任或签发给其他主机名时也会失败。部署在 Cloudflare Workers 上时无法运行这类检测，只有证书被拒绝后 HTTPS 监控才会失败。",
         ),
       },
       faqPricing("StatusCake"),
@@ -367,12 +367,12 @@ export const TOOLS: Tool[] = [
       { topic: l("Teams and automation", "团队与自动化"), montral: l(`${MONTRAL.team.en}; ${MONTRAL.automation.en}`, `${MONTRAL.team.zh}；${MONTRAL.automation.zh}`), them: l("Check its docs for user management and API coverage", "用户管理与 API 覆盖范围请查看其文档") },
     ],
     theyHave: [
-      l("More monitor types, among them ping and TLS certificate expiry, which Montral lacks.", "更多监控类型，包括 ping 和 TLS 证书到期，这些 Montral 都没有。"),
+      l("More monitor types, among them ICMP ping, which Montral lacks.", "更多监控类型，例如 Montral 没有的 ICMP ping。"),
       l("A large community and a long history as a self-hosted tool.", "庞大的社区和作为自托管工具的长期积累。"),
     ],
     bestThem: [
       l("You want a single self-hosted instance with the broadest set of monitor types and notification options.", "你想要一个自托管实例，监控类型和通知方式越全越好。"),
-      l("You need ping or certificate expiry monitoring.", "你需要 ping 或证书到期监控。"),
+      l("You need ICMP ping monitoring.", "你需要 ICMP ping 监控。"),
     ],
     bestUs: [
       l("You want the same monitor checked from several places, using probes you run in the regions you care about.", "你想让同一个监控项从多个地点检测，探针由你部署在关心的区域。"),
@@ -384,7 +384,7 @@ export const TOOLS: Tool[] = [
       l("Write your Kuma monitors as a JSON list with a name, a url or hostname, the interval in seconds and the type. Montral does not read Kuma's backup file directly.", "把 Kuma 的监控项整理成 JSON 列表，每项包含名称、url 或 hostname、以秒为单位的间隔和类型。Montral 不能直接读取 Kuma 的备份文件。"),
       fieldsStep,
       importStep,
-      l("Ping, certificate expiry and other types Montral does not have are skipped with a reason; replace ping with a TCP or HTTP check where that makes sense.", "Montral 不支持的 ping、证书到期等类型会连同原因被跳过；合适时可用 TCP 或 HTTP 检测代替 ping。"),
+      l("Ping and other types Montral does not have are skipped with a reason; replace ping with a TCP or HTTP check where that makes sense. Certificate expiry settings are not carried over: add a certificate monitor for each host that needs the warning.", "Montral 不支持的 ping 等类型会连同原因被跳过；合适时可用 TCP 或 HTTP 检测代替 ping。证书到期设置不会被迁移：请为需要预警的每个主机添加 certificate 监控项。"),
       l("Monitors that point at private addresses are refused unless you set ALLOW_PRIVATE_TARGETS=true on your instance. Read the self-host docs before turning that on.", "指向内网地址的监控项会被拒绝，除非你在自己的实例上设置 ALLOW_PRIVATE_TARGETS=true。开启前请先阅读自托管文档。"),
       channelsStep,
     ],
@@ -392,8 +392,8 @@ export const TOOLS: Tool[] = [
       {
         q: l("Is Montral a drop-in replacement for Uptime Kuma?", "Montral 能直接替换 Uptime Kuma 吗？"),
         a: l(
-          "For HTTP, TCP, DNS, heartbeat and database reachability checks, largely yes. It has no ping or certificate expiry monitor, and Kuma's backup file cannot be imported directly, so plan for a small conversion step.",
-          "对于 HTTP、TCP、DNS、心跳和数据库连通性检测，基本可以。它没有 ping 和证书到期监控，也不能直接导入 Kuma 的备份文件，需要做一步简单的格式转换。",
+          "For HTTP, TCP, DNS, heartbeat, database reachability and certificate expiry checks, largely yes; certificate checks need the Node runtime, which a Docker install uses. It has no ping monitor, and Kuma's backup file cannot be imported directly, so plan for a small conversion step.",
+          "对于 HTTP、TCP、DNS、心跳、数据库连通性和证书到期检测，基本可以；证书检测需要 Node 运行时，Docker 部署即是如此。它没有 ping 监控，也不能直接导入 Kuma 的备份文件，需要做一步简单的格式转换。",
         ),
       },
       faqImport("Uptime Kuma"),
@@ -495,7 +495,7 @@ export const SEGMENTS: Segment[] = [
     limits: [
       l("Checks run at most once a minute.", "检测最快每分钟一次。"),
       l("No synthetic browser tests for sign-in or checkout flows.", "不支持针对登录或结账流程的浏览器合成测试。"),
-      l("No TLS certificate expiry warning; track renewals separately.", "没有 TLS 证书到期预警，请另行跟踪续期。"),
+      l("TLS certificate expiry warnings need the Node runtime; on Cloudflare Workers track renewals separately.", "TLS 证书到期预警需要 Node 运行时；部署在 Cloudflare Workers 上时请另行跟踪续期。"),
     ],
     faq: [
       {
@@ -668,7 +668,7 @@ export const SEGMENTS: Segment[] = [
     ),
     limits: [
       l("Checks are single requests; Montral cannot walk through a cart and payment flow.", "检测针对单个请求；Montral 无法走完购物车和支付流程。"),
-      l("No TLS certificate expiry warning; keep a renewal reminder for your store's certificate.", "没有 TLS 证书到期预警；请为店铺证书另设续期提醒。"),
+      l("TLS certificate expiry warnings need the Node runtime; on Cloudflare Workers keep a renewal reminder for your store's certificate.", "TLS 证书到期预警需要 Node 运行时；部署在 Cloudflare Workers 上时请为店铺证书另设续期提醒。"),
       l("Checks run at most once a minute.", "检测最快每分钟一次。"),
     ],
     faq: [
@@ -689,8 +689,8 @@ export const SEGMENTS: Segment[] = [
       {
         q: l("Does Montral monitor my SSL certificate expiry?", "Montral 会监控 SSL 证书到期吗？"),
         a: l(
-          "No. Set a renewal reminder with your certificate provider or use another tool for it. An HTTPS monitor fails once the certificate is rejected.",
-          "不会。请在证书提供方处设置续期提醒，或使用其他工具。证书被拒绝后，HTTPS 监控才会失败。",
+          "Yes, on the Node runtime. Add a certificate monitor for the store's hostname and choose how many days before expiry to be warned (default 30); it also fails when the certificate is untrusted or does not match the hostname. On Cloudflare Workers these checks cannot run, so keep a renewal reminder with your certificate provider; there an HTTPS monitor fails only once the certificate is rejected.",
+          "会，在 Node 运行时中可以。为店铺主机名添加 certificate 监控项，并设置到期前多少天提醒（默认 30 天）；证书不受信任或与主机名不符时也会检测失败。部署在 Cloudflare Workers 上时无法运行这类检测，请在证书提供方处设置续期提醒；在那里，只有证书被拒绝后 HTTPS 监控才会失败。",
         ),
       },
     ],
@@ -760,7 +760,7 @@ export const SEGMENTS: Segment[] = [
     limits: [
       l("No on-call rotation schedules or phone-call paging; escalation is by channel and minutes unacknowledged.", "没有值班排班表和电话告警；升级按渠道和未确认的分钟数进行。"),
       l("Database monitors check reachability only.", "数据库监控只检查连通性。"),
-      l("No TLS certificate expiry or ICMP ping monitors.", "没有 TLS 证书到期和 ICMP ping 监控。"),
+      l("No ICMP ping monitors; TLS certificate monitors need the Node runtime and do not run on Cloudflare Workers.", "没有 ICMP ping 监控；TLS 证书监控需要 Node 运行时，不能在 Cloudflare Workers 上运行。"),
       l("Multi-region covers HTTP, TCP and WebSocket monitors only.", "多区域检测仅适用于 HTTP、TCP 和 WebSocket 监控。"),
     ],
     faq: [

@@ -10,6 +10,9 @@ describe("effectiveRegions", () => {
     expect(effectiveRegions({ type: "http", regions: ["eu-central", "eu-central", "us-east"] })).toEqual(["eu-central", "us-east"]);
     expect(effectiveRegions({ type: "postgres", regions: ["eu-central"] })).toEqual(["auto"]);
     expect(effectiveRegions({ type: "heartbeat", regions: ["eu-central"] })).toEqual(["auto"]);
+    // expiry checks run from this deployment only, like domain
+    expect(effectiveRegions({ type: "domain", regions: ["eu-central"] })).toEqual(["auto"]);
+    expect(effectiveRegions({ type: "certificate", regions: ["eu-central"] })).toEqual(["auto"]);
   });
 });
 

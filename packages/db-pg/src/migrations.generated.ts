@@ -219,5 +219,10 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
     "tag": "0043_unknown_dagger",
     "when": 1793474804027,
     "sql": "CREATE TABLE \"monthly_report_content\" (\n\t\"organization_id\" text NOT NULL,\n\t\"report_month\" text NOT NULL,\n\t\"workspace_name\" text NOT NULL,\n\t\"components\" jsonb NOT NULL,\n\t\"created_at\" timestamp with time zone DEFAULT now() NOT NULL,\n\tCONSTRAINT \"monthly_report_content_pk\" PRIMARY KEY(\"organization_id\",\"report_month\"),\n\tCONSTRAINT \"monthly_report_content_month_chk\" CHECK (\"monthly_report_content\".\"report_month\" ~ '^[0-9]{4}-(0[1-9]|1[0-2])$'),\n\tCONSTRAINT \"monthly_report_content_components_chk\" CHECK (jsonb_typeof(\"monthly_report_content\".\"components\")='array' and jsonb_array_length(\"monthly_report_content\".\"components\")>0),\n\tCONSTRAINT \"monthly_report_content_name_chk\" CHECK (length(trim(\"monthly_report_content\".\"workspace_name\")) > 0)\n);\n--> statement-breakpoint\nALTER TABLE \"monthly_report_content\" ADD CONSTRAINT \"monthly_report_content_organization_id_organization_id_fk\" FOREIGN KEY (\"organization_id\") REFERENCES \"public\".\"organization\"(\"id\") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint\n-- Reports are immutable once frozen, even if a caller bypasses the Repo API.\n-- DELETE remains allowed for data-retention and workspace cascade erasure.\nCREATE FUNCTION montral_monthly_content_no_update() RETURNS trigger\nLANGUAGE plpgsql AS $montral$\nBEGIN\n  RAISE EXCEPTION 'monthly report content is immutable';\nEND;\n$montral$;\n--> statement-breakpoint\nCREATE TRIGGER montral_monthly_content_no_update_trigger\nBEFORE UPDATE ON monthly_report_content FOR EACH ROW\nEXECUTE FUNCTION montral_monthly_content_no_update();\n"
+  },
+  {
+    "tag": "0044_status_page_visibility",
+    "when": 1794105437282,
+    "sql": "ALTER TABLE \"status_page\" ADD COLUMN \"visibility\" text DEFAULT 'public' NOT NULL;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD CONSTRAINT \"status_page_visibility_chk\" CHECK (\"status_page\".\"visibility\" in ('public', 'members'));"
   }
 ];

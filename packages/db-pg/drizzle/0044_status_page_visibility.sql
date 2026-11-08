@@ -1,0 +1,2 @@
+ALTER TABLE "status_page" ADD COLUMN "visibility" text DEFAULT 'public' NOT NULL;--> statement-breakpoint
+ALTER TABLE "status_page" ADD CONSTRAINT "status_page_visibility_chk" CHECK ("status_page"."visibility" in ('public', 'members'));

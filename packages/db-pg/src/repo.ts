@@ -27,6 +27,14 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const inScope = (scope: Scope, col: Parameters<typeof inArray>[0]): SQL | undefined => (scope ? inArray(col, scope) : undefined);
 
 /** True when the last "resolved" update of the incident was written by a person (not by the checks); survives the account being deleted. */
+/**
+ * A members-only page mails only subscribers who are verified members of its
+ * workspace: anyone else (an earlier public-page subscriber, a former member)
+ * must not receive incident or maintenance content of a private page.
+ */
+const subscriberMayReceive: SQL = sql`(${schema.statusPage.visibility} = 'public' or exists (
+  select 1 from member m join "user" u on u.id = m.user_id
+  where m.organization_id = ${schema.statusPage.organizationId} and u.email_verified and lower(u.email) = lower(${schema.statusSubscriber.email})))`;
 const resolvedByPerson = (incidentId: Parameters<typeof inArray>[0]): SQL =>
   sql`coalesce((select u.by_person from incident_update u where u.incident_id = ${incidentId} and u.status = 'resolved' order by u.created_at desc limit 1), false)`;
 
@@ -1262,7 +1270,7 @@ export function createRepo(db: Db): Repo {
       if (!monitorId) {
         const pid = projectId ?? null;
         const pageProject = sql`coalesce(${schema.statusPage.projectId}, (select p.id from project p where p.organization_id = ${schema.statusPage.organizationId} order by p.created_at, p.id limit 1))`;
-        return base.where(and(eq(schema.statusPage.organizationId, orgId), isNotNull(schema.statusSubscriber.confirmedAt), sql`${pageProject} is not distinct from ${pid}::uuid`));
+        return base.where(and(eq(schema.statusPage.organizationId, orgId), isNotNull(schema.statusSubscriber.confirmedAt), sql`${pageProject} is not distinct from ${pid}::uuid`, subscriberMayReceive));
       }
       return base
         .innerJoin(
@@ -1274,6 +1282,7 @@ export function createRepo(db: Db): Repo {
             isNotNull(schema.statusSubscriber.confirmedAt),
             // a subscriber who picked components only hears about those
             or(sql`cardinality(${schema.statusSubscriber.monitorIds}) = 0`, sql`${monitorId} = any(${schema.statusSubscriber.monitorIds})`),
+            subscriberMayReceive,
           ),
         );
     },
@@ -1558,10 +1567,11 @@ export function createRepo(db: Db): Repo {
       for (const { w, p } of due) {
         const affected = w.monitorIds.length ? new Set(w.monitorIds) : null;
         const shown = new Set(await pageMonitorIds(p.id));
-        const subs = await db
-          .select()
+        const subs = (await db
+          .select({ s: schema.statusSubscriber })
           .from(schema.statusSubscriber)
-          .where(and(eq(schema.statusSubscriber.statusPageId, p.id), isNotNull(schema.statusSubscriber.confirmedAt)));
+          .innerJoin(schema.statusPage, eq(schema.statusPage.id, schema.statusSubscriber.statusPageId))
+          .where(and(eq(schema.statusSubscriber.statusPageId, p.id), isNotNull(schema.statusSubscriber.confirmedAt), subscriberMayReceive))).map((r) => r.s);
         const subscribers = subs
           .filter((x) => !x.monitorIds.length || x.monitorIds.some((m) => shown.has(m) && (!affected || affected.has(m))))
           .map((x) => ({ email: x.email, locale: x.locale, token: x.token, slug: p.slug, title: p.title, hideBranding: p.hideBranding, monitorIds: x.monitorIds }));

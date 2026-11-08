@@ -24,7 +24,10 @@ export default function StatusPages() {
             <div className="card sp-card" key={p.id}>
               <div className="sp-h">
                 <h3>{p.title}</h3>
-                <span className="chip">{t(p.theme === "auto" ? "Auto" : p.theme === "dark" ? "Dark" : "Light")}</span>
+                <span style={{ display: "flex", gap: 6 }}>
+                  {p.visibility === "members" && <span className="chip" title={t("Only signed-in workspace members can open this page")}>{t("Private")}</span>}
+                  <span className="chip">{t(p.theme === "auto" ? "Auto" : p.theme === "dark" ? "Dark" : "Light")}</span>
+                </span>
               </div>
               <a className="mono sp-url" href={`/status/${p.slug}`} target="_blank">/status/{p.slug} ↗</a>
               <p className="faint" style={{ fontSize: 13 }}>{p.monitorIds?.length ?? 0} {t("components")}</p>
@@ -107,7 +110,7 @@ export function StatusPageEditor({ id }: { id: string }) {
     setPending("save");
     setErr("");
     try {
-      await api.updateStatusPage(id, { title: page!.title, theme: page!.theme, showLatency: page!.showLatency, externalUrl: (page!.externalUrl ?? "").trim(), hideBranding: !!page!.hideBranding, uptimeOkPct: page!.uptimeOkPct ?? 99.9, uptimeWarnPct: page!.uptimeWarnPct ?? 98, mcpEnabled: page!.mcpEnabled !== false, maintenanceReminderHours: page!.maintenanceReminderHours ?? 24, components: comps } as Partial<StatusPage>);
+      await api.updateStatusPage(id, { title: page!.title, theme: page!.theme, showLatency: page!.showLatency, externalUrl: (page!.externalUrl ?? "").trim(), hideBranding: !!page!.hideBranding, uptimeOkPct: page!.uptimeOkPct ?? 99.9, uptimeWarnPct: page!.uptimeWarnPct ?? 98, mcpEnabled: page!.mcpEnabled !== false, visibility: page!.visibility ?? "public", maintenanceReminderHours: page!.maintenanceReminderHours ?? 24, components: comps } as Partial<StatusPage>);
       setSaved(true);
       setTimeout(() => setSaved(false), 1800);
     } catch (e) {
@@ -167,6 +170,24 @@ export function StatusPageEditor({ id }: { id: string }) {
           </div>
 
           <div className="card cc">
+            <div className="cc-h"><h3>{t("Who can see this page")}</h3></div>
+            <div className="seg" role="radiogroup" aria-label={t("Who can see this page")}>
+              {(["public", "members"] as const).map((v) => (
+                <i key={v} role="radio" tabIndex={0} aria-checked={(page.visibility ?? "public") === v} className={(page.visibility ?? "public") === v ? "on" : ""}
+                  onClick={() => setPage({ ...page, visibility: v })}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPage({ ...page, visibility: v }); } }}>
+                  {t(v === "public" ? "Anyone with the link" : "Workspace members only")}
+                </i>
+              ))}
+            </div>
+            <small className="faint" style={{ display: "block", marginTop: 8 }}>
+              {(page.visibility ?? "public") === "members"
+                ? t("Only people signed in to this workspace can open the page, its feeds, badge and llms.txt; everyone else gets “not found”. Embeds and the public MCP tools stop working, and incident and maintenance emails go only to subscribers who are verified workspace members.")
+                : t("Anyone with the link can open the page, subscribe, and read its feeds, badge and llms.txt.")}
+            </small>
+          </div>
+
+          <div className="card cc">
             <div className="cc-h"><h3>{t("Uptime and notifications")}</h3></div>
             <div className="fld">{t("Uptime bar colors")}
               <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -214,7 +235,7 @@ export function StatusPageEditor({ id }: { id: string }) {
             {monitors.length === 0 && <p className="muted">{t("Create a monitor first.")}</p>}
           </div>
 
-          <Embed slug={page.slug} />
+          <Embed slug={page.slug} restricted={page.visibility === "members"} />
           <Subscribers pageId={id} />
         </div>
 
@@ -286,7 +307,7 @@ function Subscribers({ pageId }: { pageId: string }) {
 }
 
 /** Copy-paste snippets for showing this page's state on another site. */
-function Embed({ slug }: { slug: string }) {
+function Embed({ slug, restricted }: { slug: string; restricted?: boolean }) {
   const origin = typeof location === "undefined" ? "" : location.origin;
   const [copied, setCopied] = useState("");
   const items = [
@@ -301,6 +322,7 @@ function Embed({ slug }: { slug: string }) {
     <div className="card cc">
       <div className="cc-h"><h3>{t("Embed")}</h3><a className="btn sm" href="/docs/embed" target="_blank">{t("Docs")}</a></div>
       <p className="muted" style={{ marginBottom: 12 }}>{t("Show this page's live state on your own site or README.")}</p>
+      {restricted && <p className="err" role="note" style={{ marginBottom: 12 }}>{t("This page is private: embeds and the image badge show “not found” to everyone outside the workspace. Make the page public to use them.")}</p>}
       {items.map((i) => (
         <div key={i.k} style={{ marginBottom: 12 }}>
           <div className="faint" style={{ fontSize: 13, marginBottom: 4 }}>{i.label}</div>

@@ -1,4 +1,4 @@
-// Builds one landing page per language from public/index.html (English, with the dictionaries in its inline script):
+// Builds one landing page per language from public/index.html (English; the dictionaries live in public/landing.js):
 // public/zh-Hans.html, public/ja.html, public/es.html. Real files per language so crawlers get the translated text,
 // <html lang>, canonical and hreflang without running JavaScript. Run by `predev` / `prebuild`.
 import { readFileSync, writeFileSync, rmSync, readdirSync } from "node:fs";
@@ -12,10 +12,13 @@ const src = readFileSync(join(root, "index.html"), "utf8");
 // so a self-hosted copy never claims to be a duplicate of someone else's domain.
 const ORIGIN = (process.env.SITE_ORIGIN ?? "").replace(/\/+$/, "");
 
-const start = src.indexOf("var T={");
-const end = src.indexOf("\n}};", start);
-if (start < 0 || end < 0) throw new Error("dictionary not found in public/index.html");
-const T = new Function(`${src.slice(start, end + 4)}; return T;`)();
+// The page script (with the dictionaries) is served as /landing.js so the pages can run under a strict script CSP
+// (scripts/landing-csp.mjs); the generated pages inherit that policy and script tag from index.html.
+const script = readFileSync(join(root, "landing.js"), "utf8");
+const start = script.indexOf("var T={");
+const end = script.indexOf("\n}};", start);
+if (start < 0 || end < 0) throw new Error("dictionary not found in public/landing.js");
+const T = new Function(`${script.slice(start, end + 4)}; return T;`)();
 
 const LOCALES = [
   { code: "zh-CN", file: "zh-Hans", path: "/zh-Hans", hreflang: "zh-Hans" },

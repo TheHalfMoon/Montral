@@ -355,7 +355,8 @@ describe("certificate monitors", () => {
     configureNetGuard({ ALLOW_PRIVATE_TARGETS: "true" });
     const { repo, incidents, states } = fakeRepo();
     await checkOne(repo, cert({ failureThreshold: 1 }));
-    expect(incidents.map((i) => i.title)).toEqual(["API: certificate invalid"]);
+    // a refused port says nothing about the certificate: the title says the server could not be reached
+    expect(incidents.map((i) => i.title)).toEqual(["API: unreachable"]);
     expect(states.at(-1)).toMatchObject({ status: "down" });
   });
 });

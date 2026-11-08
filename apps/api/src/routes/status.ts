@@ -181,7 +181,7 @@ export const statusPages = new Hono<AppEnv>()
       // the database function locks the page row before counting, so concurrent requests cannot exceed the cap
       const rows = await db.query<{ id: string | null }>(
         "SELECT montral_create_share_link($1::uuid, $2::text, $3::text, $4::text, $5::timestamptz, $6::int) AS id",
-        [page.id, hash, label || null, c.get("userId"), expiresAt, MAX_ACTIVE_SHARE_LINKS],
+        [page.id, hash, label || null, c.get("userId"), expiresAt.toISOString(), MAX_ACTIVE_SHARE_LINKS],
       );
       if (!rows[0]?.id) return c.json({ error: `A page can have at most ${MAX_ACTIVE_SHARE_LINKS} active share links` }, 409);
       const origin = appUrl() || new URL(c.req.url).origin;

@@ -611,4 +611,16 @@ export const zh: Record<string, string> = {
   "This page belongs to a single project. Choose one to continue.": "此页面属于单个项目，请选择一个项目继续。",
   "No open incidents": "没有未解决事件",
   "Choose a project to add the first one.": "请选择一个项目来添加第一个监控。",
+
+  // status page custom domain
+  "Custom domain": "自定义域名", Verified: "已验证", "Not verified": "未验证", "Save domain": "保存域名", Value: "值",
+  "Verify again": "重新验证", "Checking DNS…": "正在检查 DNS…",
+  "Custom domains need the self-hosted server. This deployment does not support them.": "自定义域名需要自托管服务器，当前部署不支持。",
+  "Serve this page on your own hostname, such as status.example.com. Montral does not issue certificates: your reverse proxy (Caddy, nginx) terminates TLS for the domain and forwards it to Montral with the original Host header.": "在你自己的主机名（如 status.example.com）上提供此页面。Montral 不签发证书：由你的反向代理（Caddy、nginx）为该域名终止 TLS，并携带原始 Host 头转发给 Montral。",
+  "Saved. Create the TXT record below, then verify.": "已保存。请创建下方的 TXT 记录，然后验证。",
+  "Remove the custom domain? The page stops being served there at once.": "移除自定义域名？该域名会立即停止提供此页面。",
+  "Members-only pages are never served on a custom domain, because sign-in lives on the main address. The domain answers “not found” until the page is public or password-protected.": "仅成员可见的页面不会在自定义域名上提供，因为登录只在主地址进行。在页面改为公开或密码保护之前，该域名会返回“未找到”。",
+  "Keep this DNS record. Setting the domain again needs a new one.": "请保留此 DNS 记录。重新设置域名需要新的记录。",
+  "Create this DNS record at your DNS provider:": "请在你的 DNS 服务商处创建以下记录：",
+  "Verified. Montral serves the page on this domain as soon as your reverse proxy forwards it.": "已验证。只要你的反向代理转发该域名，Montral 就会在其上提供此页面。",
 };

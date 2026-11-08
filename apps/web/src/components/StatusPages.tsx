@@ -247,6 +247,7 @@ export function StatusPageEditor({ id }: { id: string }) {
             {monitors.length === 0 && <p className="muted">{t("Create a monitor first.")}</p>}
           </div>
 
+          <CustomDomain page={page} onChange={(p) => setPage({ ...page, ...p })} />
           <Embed slug={page.slug} restricted={page.visibility === "members"} />
           <Subscribers pageId={id} />
         </div>
@@ -383,6 +384,84 @@ function AccessPanel({ id }: { id: string }) {
         }}>{t("Sign everyone out")}</button>
         {note && <span className="faint" role="status">{note}</span>}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The page's own hostname: save it, publish the TXT record shown, then verify. Saving takes effect at once and always
+ * needs a new verification; only a verified domain is served (by the self-hosted server, behind the operator's proxy).
+ */
+function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Partial<StatusPage>) => void }) {
+  const [domain, setDomain] = useState(page.customDomain ?? "");
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+  const [note, setNote] = useState("");
+  const [copied, setCopied] = useState("");
+  const run = async (what: string, f: () => Promise<void>) => {
+    setBusy(what); setErr(""); setNote("");
+    try { await f(); } catch (e) {
+      const x = e as Error & { code?: string };
+      setErr(x.code === "custom_domain_unsupported" ? t("Custom domains need the self-hosted server. This deployment does not support them.") : x.message);
+    }
+    setBusy("");
+  };
+  const record = page.customDomainRecord;
+  const verified = !!page.customDomain && !!page.customDomainVerifiedAt;
+  const copy = async (k: string, v: string) => { try { await navigator.clipboard.writeText(v); setCopied(k); setTimeout(() => setCopied(""), 1500); } catch {} };
+  return (
+    <div className="card cc">
+      <div className="cc-h"><h3>{t("Custom domain")}</h3>
+        {page.customDomain && <span className={`pill ${verified ? "up" : "pending"}`}>{verified ? t("Verified") : t("Not verified")}</span>}
+      </div>
+      <p className="muted" style={{ marginBottom: 12 }}>{t("Serve this page on your own hostname, such as status.example.com. Montral does not issue certificates: your reverse proxy (Caddy, nginx) terminates TLS for the domain and forwards it to Montral with the original Host header.")}</p>
+      <form style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }} onSubmit={(e) => {
+        e.preventDefault();
+        void run("save", async () => {
+          const r = await api.setStatusDomain(page.id, domain.trim());
+          setDomain(r.customDomain);
+          onChange({ customDomain: r.customDomain, customDomainVerifiedAt: null, customDomainRecord: r.customDomainRecord });
+          setNote(t("Saved. Create the TXT record below, then verify."));
+        });
+      }}>
+        <label className="fld" style={{ flex: 1, minWidth: 200 }}>{t("Hostname")}
+          <input className="in mono" inputMode="url" autoComplete="off" spellCheck={false} maxLength={253} placeholder="status.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
+        </label>
+        <button className="btn" disabled={!!busy || !domain.trim()}>{busy === "save" ? t("Saving…") : t("Save domain")}</button>
+        {page.customDomain && <button type="button" className="btn danger-l" disabled={!!busy} onClick={() => {
+          if (!confirm(t("Remove the custom domain? The page stops being served there at once."))) return;
+          void run("remove", async () => {
+            await api.clearStatusDomain(page.id);
+            setDomain("");
+            onChange({ customDomain: null, customDomainVerifiedAt: null, customDomainRecord: null });
+          });
+        }}>{busy === "remove" ? t("Removing…") : t("Remove")}</button>}
+      </form>
+      {page.visibility === "members" && page.customDomain && (
+        <p className="err" role="note" style={{ marginTop: 12 }}>{t("Members-only pages are never served on a custom domain, because sign-in lives on the main address. The domain answers “not found” until the page is public or password-protected.")}</p>
+      )}
+      {record && (
+        <div style={{ marginTop: 12 }}>
+          <div className="faint" style={{ fontSize: 13, marginBottom: 6 }}>{verified ? t("Keep this DNS record. Setting the domain again needs a new one.") : t("Create this DNS record at your DNS provider:")}</div>
+          {([["name", t("Name"), record.name], ["value", t("Value"), record.value]] as const).map(([k, label, v]) => (
+            <div key={k} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 8 }}>
+              <span className="faint" style={{ width: 56, fontSize: 13, paddingTop: 8 }}>{k === "name" ? `TXT ${label}` : label}</span>
+              <code className="mono" style={{ flex: 1, minWidth: 0, wordBreak: "break-all", fontSize: 12, padding: "8px 10px", border: "1px solid var(--line)", borderRadius: 8 }}>{v}</code>
+              <button type="button" className="btn sm" onClick={() => void copy(k, v)}>{copied === k ? t("Copied") : t("Copy")}</button>
+            </div>
+          ))}
+          <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
+            <button type="button" className="btn sm primary" disabled={!!busy} onClick={() => void run("verify", async () => {
+              const r = await api.verifyStatusDomain(page.id);
+              onChange({ customDomainVerifiedAt: r.customDomainVerifiedAt });
+              setNote(t("Verified. Montral serves the page on this domain as soon as your reverse proxy forwards it."));
+            })}>{busy === "verify" ? t("Checking DNS…") : verified ? t("Verify again") : t("Verify")}</button>
+            {verified && <a className="mono" href={`https://${page.customDomain}/`} target="_blank" rel="noopener">{page.customDomain} ↗</a>}
+          </div>
+        </div>
+      )}
+      {note && <p className="faint" role="status" style={{ marginTop: 10 }}>{note}</p>}
+      {err && <p className="err" role="alert" style={{ marginTop: 10 }}>{err}</p>}
     </div>
   );
 }

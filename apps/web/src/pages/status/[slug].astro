@@ -48,8 +48,16 @@ function slots(days: { day: string; uptime: number }[]) {
 const notice = Astro.url.searchParams.get("subscribed") ? "You’re subscribed. We’ll email you about incidents." : Astro.url.searchParams.get("unsubscribed") ? "You’ve been unsubscribed." : "";
 
 const zhPage = Astro.request.headers.get("x-montral-lang") === "zh-CN";
-const base = `${Astro.url.origin}`;
-const canon = `${base}${zhPage ? "/zh-Hans" : ""}/status/${slug}`;
+// Served on the page's verified custom domain: the self-hosted router (apps/api/src/custom-domain-node.ts) removes this
+// header from every incoming request and sets it only after checking the host, and says so in MONTRAL_STATUS_DOMAINS.
+// Anywhere else (Workers) the header is ignored. Links then name that domain and its root paths, never a raw Host.
+const proc = typeof process !== "undefined" ? process.env : undefined;
+const domainHeader = proc?.MONTRAL_STATUS_DOMAINS === "node" ? Astro.request.headers.get("x-montral-status-domain") : null;
+const customDomain = domainHeader && /^[a-z0-9.-]{1,253}$/.test(domainHeader) ? domainHeader : null;
+const base = customDomain ? `${/^http:/i.test(proc?.WEB_ORIGIN ?? "") ? "http" : "https"}://${customDomain}` : `${Astro.url.origin}`;
+const home = customDomain ? "/" : `/status/${slug}`;
+const feed = (file: string) => (customDomain ? `/${file}` : `/api/public/status/${slug}/${file}`);
+const canon = customDomain ? `${base}/` : `${base}${zhPage ? "/zh-Hans" : ""}/status/${slug}`;
 
 const t = (x: string) => translate((Astro.locals.lang ?? "en"), x);
 // read by the subscribe script (src/inline/status-subscribe.js) from a JSON block, so the script itself stays constant
@@ -75,10 +83,10 @@ Astro.response.headers.set("cache-control", privateResponse || hist.privateRespo
   <Fragment slot="head">
     {!hideBrand && <meta name="generator" content="montral.invalid" />}
     <link rel="canonical" href={canon} />
-    <link rel="alternate" type="application/rss+xml" title={`${data.page.title} status`} href={`${base}/api/public/status/${slug}/rss.xml`} />
-    <link rel="alternate" hreflang="en" href={`${base}/status/${slug}`} />
-    <link rel="alternate" hreflang="zh-Hans" href={`${base}/zh-Hans/status/${slug}`} />
-    <link rel="alternate" hreflang="x-default" href={`${base}/status/${slug}`} />
+    <link rel="alternate" type="application/rss+xml" title={`${data.page.title} status`} href={`${base}${feed("rss.xml")}`} />
+    {!customDomain && <link rel="alternate" hreflang="en" href={`${base}/status/${slug}`} />}
+    {!customDomain && <link rel="alternate" hreflang="zh-Hans" href={`${base}/zh-Hans/status/${slug}`} />}
+    {!customDomain && <link rel="alternate" hreflang="x-default" href={`${base}/status/${slug}`} />}
   </Fragment>
   <div class="pub">
     <header class="pub-top"><div class="pub-wrap pub-top-in">
@@ -176,8 +184,8 @@ Astro.response.headers.set("cache-control", privateResponse || hist.privateRespo
             ))}
           </div>
           <div class="pub-pager">
-            {before && <a href={`/status/${slug}`}>{t("Newest")}</a>}
-            {history.next && <a href={`/status/${slug}?before=${encodeURIComponent(history.next)}`}>{t("Older incidents")}</a>}
+            {before && <a href={home}>{t("Newest")}</a>}
+            {history.next && <a href={`${home}?before=${encodeURIComponent(history.next)}`}>{t("Older incidents")}</a>}
           </div>
         </div>
 
@@ -197,9 +205,9 @@ Astro.response.headers.set("cache-control", privateResponse || hist.privateRespo
             </form>
             <p id="sub-msg" class="muted" role="status"></p>
             <p class="faint" style="font-size:13px">{t("Lost your link? Enter your address again and we’ll send a new one.")}</p>
-            <a href={`/api/public/status/${slug}/rss.xml`} class="pub-rss">RSS</a>
-            <a href={`/api/public/status/${slug}/maintenance.ics`} class="pub-rss">{t("Maintenance calendar")}</a>
-            <a href={`/api/public/status/${slug}/llms.txt`} class="pub-rss">llms.txt</a>
+            <a href={feed("rss.xml")} class="pub-rss">RSS</a>
+            <a href={feed("maintenance.ics")} class="pub-rss">{t("Maintenance calendar")}</a>
+            <a href={feed("llms.txt")} class="pub-rss">llms.txt</a>
           </section>
         </aside>
       </div>

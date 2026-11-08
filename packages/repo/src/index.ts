@@ -320,7 +320,12 @@ export interface StatusPage {
   projectId: string | null;
   slug: string;
   title: string;
+  /** hostname the self-hosted server serves this page on, once verified (see customDomainVerifiedAt) */
   customDomain: string | null;
+  /** TXT value expected at `_montral-challenge.<customDomain>` */
+  customDomainToken: string | null;
+  /** null until the TXT record matched; only verified domains are routed */
+  customDomainVerifiedAt: Date | null;
   theme: string;
   showLatency: boolean;
   /** optional website the page header links to (http/https) */

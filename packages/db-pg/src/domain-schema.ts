@@ -400,7 +400,15 @@ export const statusPage = pgTable(
     projectId: projectRef(),
     slug: text("slug").notNull(),
     title: text("title").notNull(),
+    /**
+     * A hostname (lowercase FQDN) the page is served on by the self-hosted Node server, once DNS proves control of it:
+     * a TXT record `_montral-challenge.<domain>` holding `customDomainToken`. Unverified domains are never routed.
+     */
     customDomain: text("custom_domain"),
+    /** the TXT value that proves control of `customDomain`; replaced whenever the domain is set (public once in DNS) */
+    customDomainToken: text("custom_domain_token"),
+    /** when the TXT record last matched; null = not verified (setting the domain again resets it) */
+    customDomainVerifiedAt: timestamp("custom_domain_verified_at", { withTimezone: true }),
     theme: text("theme").notNull().default("light"),
     showLatency: boolean("show_latency").notNull().default(true),
     externalUrl: text("external_url"),
@@ -425,6 +433,8 @@ export const statusPage = pgTable(
   },
   (t) => [
     uniqueIndex("status_page_slug_idx").on(t.slug),
+    // Only a verified domain is exclusive: an unverified claim cannot squat a name its owner later proves in DNS.
+    uniqueIndex("status_page_custom_domain_verified_idx").on(t.customDomain).where(sql`${t.customDomainVerifiedAt} is not null`),
     check("status_page_visibility_chk", sql`${t.visibility} in ('public', 'members', 'password')`),
     check("status_page_password_chk", sql`${t.visibility} <> 'password' or ${t.accessPasswordHash} is not null`),
   ],

@@ -34,7 +34,7 @@ noted in brackets, verified against the code, not marketing copy.
 | Members-only page | Y (#18) | N | $ (SSO) | $ | ? | P | n/a |
 | Password page | Y (#21, in CI) | N | $ | Y | $ | P | n/a |
 | Expiring share links | Y (#21, in CI) | N | ? | ? | ? | N | n/a |
-| Custom domain | N (column only) | Y | Y | Y | $ | self-host | $ |
+| Custom domain | P (Node/Docker only; verified TXT, branch pending) | Y | Y | Y | $ | self-host | $ |
 | Subscribers | Y (email) | N | Y | Y | Y | N | n/a |
 | Maintenance windows | Y (recurring) | Y | Y | Y | Y | Y | n/a |
 | Badges / embed | Y | Y | ? | ? | ? | Y | n/a |
@@ -75,7 +75,7 @@ merged; "next" items are the planned order.
 2. **JSON body assertions** (JSONPath-style): expected baseline; low cost. Next.
 3. **More alert channels** (Google Chat, Mattermost, Pushover, Gotify): low cost,
    high switching value from Kuma/Gatus users.
-4. **Custom domains for status pages**: the column exists but nothing routes it.
+4. **Custom domains for status pages**: implemented for the self-hosted Node server (TXT verification, host routing; Workers refused); branch pending PR. See `docs/evidence/2026-11-09-custom-domains.md`.
 5. **Ping / ICMP**: needs raw sockets or the system `ping`; not possible on
    Workers. Evaluate for Node only.
 6. **Terraform provider / config-as-code**: valued by GitOps teams; large.

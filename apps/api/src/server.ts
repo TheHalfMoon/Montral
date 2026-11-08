@@ -21,6 +21,8 @@ import { processCheckMessage, runDueChecks } from "./scheduler";
 import { createLocalCheckQueue, claimsForUnstarted } from "./local-check-queue";
 import { scrubUntrustedForwarding } from "./node-proxy-peer";
 import { createNodeTickGate } from "./node-tick-gate";
+import { appHosts, lookupCustomDomain } from "./custom-domain";
+import { routeCustomDomain, STATUS_DOMAIN_HEADER } from "./custom-domain-node";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -43,6 +45,8 @@ env.BETTER_AUTH_URL ||= env.WEB_ORIGIN || `http://localhost:${port}`;
 env.WEB_ORIGIN ||= env.BETTER_AUTH_URL;
 // SSR pages of the web build call the API over loopback
 process.env.API_ORIGIN ||= `http://127.0.0.1:${port}`;
+// tells the web build's SSR that this router strips and sets the custom-domain header (custom-domain-node.ts)
+process.env.MONTRAL_STATUS_DOMAINS = "node";
 
 // SMTP (any provider; RESEND_API_KEY is a shortcut for Resend): either one SMTP_URL (smtps://user:pass@host:465, smtp://host:587?...) or discrete SMTP_HOST/PORT/USER/PASS/SECURE
 const smtpConfig = env.SMTP_URL
@@ -104,15 +108,34 @@ try {
 const honoListener = getRequestListener((req) => app.fetch(req, env));
 const isApi = (url = "") => /^\/(api|hooks|internal|health|\.well-known)(\/|\?|$)/.test(url);
 
-const server = createServer((req, res) => {
-  scrubUntrustedForwarding(req, env); // Fail closed on direct/unpinned ingress
+const ownHosts = appHosts(env);
+const finish = (res: ServerResponse) => (err?: unknown) => {
+  res.statusCode = err ? 500 : 404;
+  res.end(err ? "Internal error" : "Not found");
+};
+/** The app itself: API routes to Hono, everything else to the web build. */
+function serveApp(req: IncomingMessage, res: ServerResponse) {
   if (isApi(req.url) || !astro || !assets) return void honoListener(req, res);
   applyWebSecurityHeaders(req.url, res);
   // hashed /_astro files are immutable; sirv answers other static files and falls through for SSR routes
-  assets(req, res, () => astro!(req, res, (err) => {
-    res.statusCode = err ? 500 : 404;
-    res.end(err ? "Internal error" : "Not found");
-  }));
+  assets(req, res, () => astro!(req, res, finish(res)));
+}
+
+const server = createServer((req, res) => {
+  const trustedPeer = scrubUntrustedForwarding(req, env); // Fail closed on direct/unpinned ingress
+  delete req.headers[STATUS_DOMAIN_HEADER]; // only the custom-domain router below may set it
+  // A verified status page domain serves that page and nothing else; any other host is the app.
+  routeCustomDomain(req, res, {
+    trustedPeer,
+    ownHosts,
+    lookup: (host) => lookupCustomDomain((sql, params) => database.query(sql, params), host),
+    api: (q, s) => void honoListener(q, s),
+    page: (q, s) => (astro ? astro(q, s, finish(s)) : finish(s)()),
+    asset: (q, s) => (assets ? assets(q, s, () => finish(s)()) : finish(s)()),
+  }).then(
+    (handled) => { if (!handled) serveApp(req, res); },
+    () => { if (!res.headersSent) finish(res)(true); },
+  );
 });
 
 // retry: on a fresh `docker compose up` Postgres may still be starting

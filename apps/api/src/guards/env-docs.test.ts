@@ -18,7 +18,8 @@ const minus = (a: Iterable<string>, ...rest: Iterable<string>[]) => {
 
 /** Variables the app sets or reads for its own plumbing; never configured by an operator through compose. */
 // SITE_ORIGIN is read only when the web app is built (the hosted build sets it for canonical links)
-const INTERNAL = ["API_ORIGIN", "DEPLOY_TARGET", "DEV", "PROD", "SITE_ORIGIN", "VITEST", "WEB_DIST"];
+// MONTRAL_STATUS_DOMAINS is set by server.ts itself for the web build's SSR (custom-domain routing is active)
+const INTERNAL = ["API_ORIGIN", "DEPLOY_TARGET", "DEV", "MONTRAL_STATUS_DOMAINS", "PROD", "SITE_ORIGIN", "VITEST", "WEB_DIST"];
 /** Cloudflare bindings, not environment variables. */
 const BINDINGS_ONLY = ["CHECK_QUEUE", "EMAIL", "HYPERDRIVE"];
 /** Read from the environment but wired through compose itself (`ports`, the DATABASE_URL built from the Postgres password). */

@@ -136,8 +136,10 @@ const DNS_DEFAULTS = { dnsRecordType: "A", dnsExpectedValue: null, dnsMatchMode:
  * What is wrong with a monitor's JSON assertion, or null. Only HTTP monitors have one, its path must parse, and equals /
  * contains need something to compare with ("" is a value; null is not).
  */
-export function jsonAssertionProblem(v: { type: string; jsonPath?: string | null; jsonExpected?: string | null; jsonMatch?: string | null }): string | null {
+export function jsonAssertionProblem(v: { type: string; method?: string | null; jsonPath?: string | null; jsonExpected?: string | null; jsonMatch?: string | null }): string | null {
   if (v.type !== "http") return v.jsonPath || v.jsonExpected != null ? "JSON assertions are supported for HTTP monitors only" : null;
+  // a HEAD response has no body: the assertion would be skipped and the monitor pass on its status alone
+  if (v.jsonPath && (v.method ?? "GET").toUpperCase() === "HEAD") return "A JSON assertion needs a response body; HEAD requests have none";
   const badPath = jsonPathProblem(v.jsonPath);
   if (badPath) return badPath;
   if (v.jsonPath && (v.jsonMatch ?? "equals") !== "exists" && v.jsonExpected == null) return "jsonExpected is required when jsonMatch is equals or contains";
@@ -388,7 +390,7 @@ export const monitors = new Hono<AppEnv>()
       if (current.type !== "dns") Object.assign(v, DNS_DEFAULTS);
     }
     // judged on the stored assertion with the named fields changed, like keyword: a lone jsonMatch must still make sense
-    if (v.jsonPath !== undefined || v.jsonExpected !== undefined || v.jsonMatch !== undefined) {
+    if (v.jsonPath !== undefined || v.jsonExpected !== undefined || v.jsonMatch !== undefined || v.method !== undefined) {
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
       if (!current) return c.json({ error: "Not found" }, 404);
       const invalid = jsonAssertionProblem({ ...current, ...v, type: current.type });

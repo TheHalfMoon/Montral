@@ -166,3 +166,25 @@ describe("JSON assertions on remote probes", () => {
     } finally { vi.unstubAllGlobals(); configureProbes({}); resetProbeCapabilities(); }
   });
 });
+
+describe("JSON assertion review cases", () => {
+  it("never matches a number out of double range (it would stringify as null)", () => {
+    expect(jsonValueMatches(Infinity, "equals", "null")).toBe(false);
+    expect(jsonValueMatches(-Infinity, "contains", "nu")).toBe(false);
+    expect(jsonAssertionError('{"v":1e400}', { jsonPath: "v", jsonMatch: "equals", jsonExpected: "null" })).toBe("JSON path v holds a number out of range");
+    expect(jsonAssertionError('{"v":-1e400}', { jsonPath: "v", jsonMatch: "exists" })).toBeNull();
+  });
+  it("fails a value nested too deeply to compare with a clear reason, not a stack overflow message", () => {
+    const deep = '{"v":' + "[".repeat(200_000) + "]".repeat(200_000) + "}";
+    const error = jsonAssertionError(deep, { jsonPath: "v", jsonMatch: "equals", jsonExpected: "x" });
+    expect(error === null).toBe(false);
+    expect(error).not.toMatch(/call stack/i);
+  });
+  it("refuses a JSON assertion on a HEAD monitor instead of skipping it", () => {
+    expect(jsonAssertionProblem({ type: "http", method: "HEAD", jsonPath: "status", jsonMatch: "exists" })).toMatch(/HEAD/);
+    expect(jsonAssertionProblem({ type: "http", method: "head", jsonPath: "status", jsonMatch: "exists" })).toMatch(/HEAD/);
+    expect(jsonAssertionProblem({ type: "http", method: "GET", jsonPath: "status", jsonMatch: "exists" })).toBeNull();
+    // a HEAD monitor without an assertion is still fine
+    expect(jsonAssertionProblem({ type: "http", method: "HEAD" })).toBeNull();
+  });
+});

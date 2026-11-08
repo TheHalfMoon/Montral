@@ -116,6 +116,8 @@ export const clip = (s: string): string => (s.length > SHOWN ? `${s.slice(0, SHO
 export function jsonValueMatches(value: unknown, match: JsonMatch, expected: string | null | undefined): boolean {
   if (value === undefined) return false;
   if (match === "exists") return true;
+  // a number outside double range parses to ±Infinity, which JSON.stringify would turn into "null"
+  if (typeof value === "number" && !Number.isFinite(value)) return false;
   const form = jsonStringForm(value);
   return match === "contains" ? form.includes(expected ?? "") : form === (expected ?? "");
 }
@@ -135,9 +137,18 @@ export function jsonAssertionError(body: string, a: JsonAssertion): string | nul
   const path = clip(a.jsonPath);
   if (value === undefined) return `JSON path ${path} not found`;
   const match = (JSON_MATCH_MODES as readonly string[]).includes(a.jsonMatch ?? "") ? (a.jsonMatch as JsonMatch) : "equals";
-  if (jsonValueMatches(value, match, a.jsonExpected)) return null;
-  // JSON.stringify shows a string value quoted and a number bare, so "42" and 42 can be told apart in the message
-  const got = clip(JSON.stringify(value) ?? String(value));
+  if (match !== "exists" && typeof value === "number" && !Number.isFinite(value)) return `JSON path ${path} holds a number out of range`;
+  let matched: boolean;
+  let got: string;
+  try {
+    matched = jsonValueMatches(value, match, a.jsonExpected);
+    // JSON.stringify shows a string value quoted and a number bare, so "42" and 42 can be told apart in the message
+    got = matched ? "" : clip(JSON.stringify(value) ?? String(value));
+  } catch {
+    // JSON.parse accepts nesting that JSON.stringify cannot walk back (stack overflow): fail with a clear reason
+    return `JSON path ${path} holds a value too deeply nested to compare`;
+  }
+  if (matched) return null;
   const want = clip(JSON.stringify(a.jsonExpected ?? ""));
   return match === "contains" ? `JSON path ${path} is ${got}, which does not contain ${want}` : `JSON path ${path} is ${got}, expected ${want}`;
 }

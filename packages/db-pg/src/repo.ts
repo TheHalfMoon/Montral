@@ -1550,6 +1550,10 @@ export function createRepo(db: Db): Repo {
             sql`exists (
               select 1 from status_subscriber s
               where s.status_page_id = ${schema.statusPage.id} and s.confirmed_at is not null
+                -- same rule as subscriberMayReceive: an outsider on a members-only page is nobody to remind
+                and (${schema.statusPage.visibility} = 'public' or exists (
+                  select 1 from member m join "user" u on u.id = m.user_id
+                  where m.organization_id = ${schema.statusPage.organizationId} and u.email_verified and lower(u.email) = lower(s.email)))
                 and (cardinality(s.monitor_ids) = 0 or exists (
                   select 1 from status_page_component c
                   where c.status_page_id = ${schema.statusPage.id} and c.visible and c.monitor_id = any(s.monitor_ids)

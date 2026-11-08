@@ -26,13 +26,22 @@ status page off the internet.
 - The editor marks private pages and warns that embeds and the image badge
   stop working.
 
+## Independent review
+The reminder window selection still counted outside subscribers of a
+members-only page, so such a window was selected every tick, never claimed,
+and could crowd other pages' reminders out of the 20-per-call limit. The
+selection now applies the same member rule. (The selection is unordered and
+shared across the database, so crowding itself is not asserted by a test.)
+
 ## Evidence
 `status-visibility.e2e.test.ts` (PostgreSQL): for all nine slug routes,
 anonymous and non-member sessions get `404` + `private, no-store` with no page
 content, members get `200` + `private, no-store` + `Vary: Cookie`; subscribe
 and API-key requests get `404`; invalid visibility is `400`; switching back to
 public restores anonymous access and public caching. Subscriber selection is
-checked for both notification paths, including unverified members.
+checked for both notification paths, including unverified members, and for
+maintenance reminders (outsider-only: nothing sent, window unclaimed; a
+verified member: reminded alone).
 
 ## Limits
 - A refused request is a `404` with `private, no-store`, while a missing slug on

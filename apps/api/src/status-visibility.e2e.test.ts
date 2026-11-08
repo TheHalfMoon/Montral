@@ -107,4 +107,33 @@ describe.skipIf(!url)("members-only status pages (PostgreSQL)", () => {
     expect(await recipients()).toEqual([owner.email]);
     expect(await manualRecipients()).toEqual([owner.email]);
   });
+
+  it("reminds only verified members about a members-only page's maintenance, never outside subscribers", async () => {
+    const owner = await signUp();
+    const slug = `private-maint-${crypto.randomUUID().slice(0, 8)}`;
+    const page = (await (await call("/api/status-pages", { method: "POST", cookie: owner.cookie, body: JSON.stringify({ slug, title: "Private maintenance", visibility: "members" }) })).json()) as { id: string; visibility: string };
+    expect(page.visibility).toBe("members");
+    await database!.query(
+      "INSERT INTO status_subscriber (status_page_id, email, token, confirmed_at) VALUES ($1, 'outsider-maint@example.com', $2, now())",
+      [page.id, crypto.randomUUID().replace(/-/g, "")],
+    );
+    const [w] = await database!.query<{ id: string }>(
+      "INSERT INTO maintenance_window (organization_id, project_id, name, starts_at, ends_at) VALUES ($1, $2, 'Upgrade', now() + interval '1 hour', now() + interval '2 hours') RETURNING id",
+      [owner.orgId, owner.projectId],
+    );
+    const mine = async () => (await database!.repo.claimMaintenanceReminders(500)).filter((r) => r.window.id === w.id);
+    // Only an outsider follows the page: nothing is sent and the window stays unclaimed.
+    expect(await mine()).toEqual([]);
+    const claimed = await database!.query("SELECT 1 FROM maintenance_reminder WHERE maintenance_id = $1", [w.id]);
+    expect(claimed).toHaveLength(0);
+    // A verified member subscribes: the reminder goes to the member only.
+    await database!.query('UPDATE "user" SET email_verified = true WHERE lower(email) = lower($1)', [owner.email]);
+    await database!.query(
+      "INSERT INTO status_subscriber (status_page_id, email, token, confirmed_at) VALUES ($1, $2, $3, now())",
+      [page.id, owner.email, crypto.randomUUID().replace(/-/g, "")],
+    );
+    const sent = await mine();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].subscribers.map((x) => x.email)).toEqual([owner.email]);
+  });
 });

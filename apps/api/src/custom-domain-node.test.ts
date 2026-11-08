@@ -106,10 +106,13 @@ describe("custom domain routing over Node HTTP", () => {
     expect(app.body).toMatchObject({ target: "app", domain: null });
   });
 
-  it("a domain that is not verified (no lookup hit) is not routed: the request is the app's", async () => {
-    const res = await call("/login", { host: "pending.acme.example" });
-    expect(target(res)).toBe("app");
-    expect(lookups).toEqual(["pending.acme.example"]);
+  it("a hostname that is not a verified domain (no lookup hit) gets 404, never the app's sign-in", async () => {
+    for (const path of ["/login", "/", "/app", "/api/auth/sign-in/email"]) {
+      const res = await call(path, { host: "pending.acme.example" });
+      expect(res.status, path).toBe(404);
+      expect(target(res), path).not.toBe("app");
+    }
+    expect(lookups.every((h) => h === "pending.acme.example")).toBe(true);
   });
 
   it("the app's own host, IP literals and localhost never touch the lookup", async () => {

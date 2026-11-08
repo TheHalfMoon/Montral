@@ -124,3 +124,19 @@ it, verified it or routed requests by it (GAP-MATRIX: "N (column only)").
   and reaches the others within the 60 s cache lifetime.
 - No periodic re-verification: a domain stays verified until it is set again
   or removed, even if the TXT record is later deleted.
+
+## Independent review
+No host-header bypass was found. Fixed findings:
+- **Takeover by DNS proof.** A verified domain used to stay claimed after DNS
+  changed hands. Setting a domain no longer checks for a holder; proving the
+  TXT record for one's own token releases the domain from any other page and
+  verifies this one (a concurrent race answers 409; retrying settles it). Only
+  the DNS owner can publish records, so only they can move a domain.
+- **No app on foreign hostnames.** A hostname pointed at the instance that is
+  neither the app's own nor a verified domain (before verification, or after
+  the page or domain is removed) now gets 404 instead of Montral's sign-in.
+  IP literals, `localhost` and single-label names still reach the app.
+- **Real wiring.** `scripts/smoke-node.mjs` (CI) now drives the built server:
+  a verified domain serves only its page (`/app`, `/login`, `/api/me`,
+  `/api/auth/get-session` 404), an unverified hostname 404s, and the app's own
+  address still serves `/app`.

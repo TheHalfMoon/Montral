@@ -42,7 +42,8 @@ export function candidateHost(req: Pick<IncomingMessage, "headers">, trustedPeer
 }
 
 /**
- * Serves a request addressed to a verified custom domain; resolves false when the host is not one (the caller then
+ * Serves a request addressed to a verified custom domain, and answers 404 for any other hostname that is not the app's
+ * own; resolves false only for the app's own hosts, IP literals, localhost and single-label names (the caller then
  * serves the app as usual). The request is rewritten in place to the route customDomainRoute chose: its URL, and
  * credentials cut down to the page's own access cookie (no session, Authorization or API key reaches the app from a
  * custom domain). A lookup failure answers 503 rather than falling back to the app on a host that may be a status domain.
@@ -59,7 +60,13 @@ export async function routeCustomDomain(req: IncomingMessage, res: ServerRespons
     notFound(res, 503);
     return true;
   }
-  if (!site) return false;
+  // A hostname that is neither the app's own nor a verified status domain (one pointed here before verification, or
+  // after its page or domain was removed) gets a 404, never the app: Montral's sign-in must not appear under someone
+  // else's name. IP literals, localhost and single-label names never get here (candidateHost), so local access works.
+  if (!site) {
+    notFound(res);
+    return true;
+  }
   const route = customDomainRoute(req.method, req.url, site);
   if (route.kind === "not_found") {
     notFound(res);

@@ -98,7 +98,7 @@ describe.skipIf(!url)("status page custom domains (PostgreSQL)", () => {
     expect((await verify(page.id, owner.cookie)).status).toBe(400);
   });
 
-  it("another workspace cannot claim or touch a verified domain; an unverified claim does not block its owner", async () => {
+  it("DNS decides who holds a domain: a proven TXT record takes it over; nobody can touch another workspace's page", async () => {
     const owner = await signUp();
     const other = await signUp();
     const mine = await newPage(owner.cookie);
@@ -108,14 +108,23 @@ describe.skipIf(!url)("status page custom domains (PostgreSQL)", () => {
     txt.set(rec.name, [rec.value]);
     expect((await verify(mine.id, owner.cookie)).status).toBe(200);
 
+    // Another workspace may name the same domain, but holds it only once it proves the TXT record for its own token.
     const claim = await setDomain(theirs.id, domain, other.cookie);
-    expect(claim.status).toBe(409);
-    expect(await claim.json()).toMatchObject({ code: "custom_domain_taken" });
+    expect(claim.status).toBe(200);
+    expect((await verify(theirs.id, other.cookie)).status).toBe(422); // their token is not in DNS
+    expect((await lookup(domain))?.id).toBe(mine.id);
     // the owner's page is not even visible to the other workspace
     expect((await setDomain(mine.id, host(), other.cookie)).status).toBe(404);
     expect((await call(`/api/status-pages/${mine.id}/domain`, { method: "DELETE", cookie: other.cookie })).status).toBe(404);
     expect((await verify(mine.id, other.cookie)).status).toBe(404);
     expect((await lookup(domain))?.id).toBe(mine.id);
+    // The domain changes hands: its new DNS owner publishes their record and takes it over without the old page.
+    const theirRec = ((await (await setDomain(theirs.id, domain, other.cookie)).json()) as { customDomainRecord: TxtRecord }).customDomainRecord;
+    txt.set(theirRec.name, [theirRec.value]);
+    expect((await verify(theirs.id, other.cookie)).status).toBe(200);
+    expect((await lookup(domain))?.id).toBe(theirs.id);
+    const released = await (await call(`/api/status-pages/${mine.id}`, { cookie: owner.cookie })).json();
+    expect(released).toMatchObject({ customDomainVerifiedAt: null });
 
     // a squatter's unverified claim: the real owner can still claim and verify; the squatter then cannot verify
     const contested = host();
@@ -125,10 +134,13 @@ describe.skipIf(!url)("status page custom domains (PostgreSQL)", () => {
     txt.set(real.name, [real.value]);
     expect((await verify(theirs.id, other.cookie)).status).toBe(422); // their token is not in DNS
     expect((await verify(second.id, owner.cookie)).status).toBe(200);
-    txt.set(real.name, [real.value, squat.value]); // even with both records present, only one page may hold the domain
-    const lost = await verify(theirs.id, other.cookie);
-    expect(lost.status).toBe(409);
     expect((await lookup(contested))?.id).toBe(second.id);
+    // Only the DNS owner can publish records: if they publish both, the latest proven page holds it, and only one ever does.
+    txt.set(real.name, [real.value, squat.value]);
+    expect((await verify(theirs.id, other.cookie)).status).toBe(200);
+    expect((await lookup(contested))?.id).toBe(theirs.id);
+    const [{ n }] = await database!.query<{ n: number }>("SELECT count(*)::int AS n FROM status_page WHERE custom_domain = $1 AND custom_domain_verified_at IS NOT NULL", [contested]);
+    expect(n).toBe(1);
   });
 
   it("members-only pages are not served on their domain; password pages unlock from their own domain only", async () => {

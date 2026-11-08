@@ -228,11 +228,8 @@ export const statusPages = new Hono<AppEnv>()
     const checked = statusPageDomain(c.req.valid("json").domain, appHosts(c.env));
     if ("error" in checked) return c.json({ error: checked.error }, 400);
     const db = c.get("database");
-    const taken = await db.query<{ id: string }>(
-      "SELECT id FROM status_page WHERE custom_domain = $1 AND custom_domain_verified_at IS NOT NULL AND id <> $2 LIMIT 1",
-      [checked.domain, page.id],
-    );
-    if (taken.length) return c.json({ error: "That domain is already in use by another status page", code: "custom_domain_taken" }, 409);
+    // No first-come lock: DNS decides. Anyone may set a name; whoever proves the TXT record for their own token holds it,
+    // so a domain that changes hands can be claimed by its new owner without the former page's cooperation.
     const token = newDomainToken();
     await db.query(
       "UPDATE status_page SET custom_domain = $2, custom_domain_token = $3, custom_domain_verified_at = NULL WHERE id = $1",
@@ -272,6 +269,13 @@ export const statusPages = new Hono<AppEnv>()
     }
     let rows: { verified_at: Date }[];
     try {
+      // The TXT record just proved control of the domain for this page's token: release it from any other page first
+      // (a domain that changed hands, or one its DNS owner moved). A concurrent verification can still lose the race on
+      // the partial unique index and answers 409 below; trying again settles it.
+      await c.get("database").query(
+        "UPDATE status_page SET custom_domain_verified_at = NULL WHERE custom_domain = $1 AND id <> $2 AND custom_domain_verified_at IS NOT NULL",
+        [page.customDomain, page.id],
+      );
       rows = await c.get("database").query<{ verified_at: Date }>(
         `UPDATE status_page SET custom_domain_verified_at = coalesce(custom_domain_verified_at, now())
          WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 RETURNING custom_domain_verified_at AS verified_at`,

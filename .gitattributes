@@ -1,0 +1,4 @@
+# Landing pages are checked byte-for-byte by scripts/landing-csp.mjs (and their CSP hashes depend on exact bytes)
+apps/web/public/*.html text eol=lf
+apps/web/public/landing.js text eol=lf
+apps/web/src/inline/*.js text eol=lf

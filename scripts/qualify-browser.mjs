@@ -346,6 +346,18 @@ try {
   if (madePage !== 201) throw new Error("Status page for CSP check not created: " + madePage);
   await page("/status/" + statusSlug);
   await until("status page rendered", () => js('document.body.innerText.includes("CSP qualification")'));
+  // The hand-written landing pages run under their own strict policy: the hashed pre-paint script and /landing.js
+  // must both execute (sample monitors rendered, language applied), with no violation. /zh-Hans goes last because it
+  // remembers the language in a cookie, which is cleared afterwards so later unprefixed pages stay English.
+  for (const [path, lang] of [["/", "en"], ["/es", "es"], ["/ja", "ja"], ["/zh-Hans", "zh-CN"]]) {
+    await page(path);
+    await until(`landing ${path} rendered by its scripts`, () => js(`document.querySelectorAll("#mons .mon").length === 4 && document.documentElement.getAttribute("lang") === ${JSON.stringify(lang)}`));
+    const landingPolicy = await js('document.querySelector("meta[http-equiv=content-security-policy]")?.content || ""');
+    if (!/default-src 'self'/.test(landingPolicy) || !/script-src 'self' 'sha256-/.test(landingPolicy) || /script-src[^;]*'unsafe-inline'/.test(landingPolicy)) {
+      throw new Error(`Landing ${path} policy missing or weak: ${landingPolicy.slice(0, 120)}`);
+    }
+  }
+  await js('document.cookie = "montral_lang=; max-age=0; path=/"');
   await page("/app");
   await until("app shell for CSP check", () => js('!!document.querySelector("nav")'));
   // The policy is present and enforced: an injected inline script must not run.

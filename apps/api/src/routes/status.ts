@@ -16,6 +16,10 @@ import { requireManager, uuidParams } from "../middleware";
 import { clientIp } from "../ratelimit";
 import { sharedCache, waitUntilOf } from "../sharedcache";
 import { buildIcs, buildLlmsTxt, buildRss, FEED_LIMIT, ICS_LIMIT } from "../status-feeds";
+import {
+  appHosts, challengeName, customDomainOrigin, newDomainToken, purgeCustomDomains, statusPageDomain, verifyDomainToken,
+} from "../custom-domain";
+import { isWorkers } from "../netguard";
 
 // optional link to the owner's own website; "" clears it
 const externalUrl = z
@@ -56,8 +60,21 @@ const thresholdsProblem = (c: Context<AppEnv>, ok: number, warn: number) =>
 const toComponents = (v: { monitorIds?: string[]; components?: { monitorId: string; groupName?: string }[] }) =>
   v.components ?? (v.monitorIds ?? []).map((monitorId) => ({ monitorId }));
 
-/** What the management API returns for a page: the password hash never leaves the server. */
-const toClient = ({ accessPasswordHash, ...page }: StatusPage) => ({ ...page, hasPassword: !!accessPasswordHash });
+/**
+ * What the management API returns for a page: the password hash never leaves the server. A page with a custom domain
+ * also carries the TXT record that verifies it (not a secret: it is meant to be published in DNS).
+ */
+const toClient = ({ accessPasswordHash, ...page }: StatusPage) => ({
+  ...page,
+  hasPassword: !!accessPasswordHash,
+  customDomainRecord: page.customDomain && page.customDomainToken ? { type: "TXT" as const, name: challengeName(page.customDomain), value: page.customDomainToken } : null,
+});
+
+/** Custom domains are routed by the self-hosted Node server only; a Workers deployment has no Host-based router. */
+const domainsUnsupported = (c: Context<AppEnv>) =>
+  isWorkers()
+    ? c.json({ error: "Custom domains need the self-hosted Node server; Cloudflare Workers deployments do not support them", code: "custom_domain_unsupported" }, 400)
+    : null;
 
 /** The stored flag counts only while the plan allows it: after a downgrade the page shows Montral again, and the flag is kept. */
 async function brandingHidden(c: Context<AppEnv>, page: { hideBranding: boolean; organizationId: string }) {
@@ -92,6 +109,8 @@ export const statusPages = new Hono<AppEnv>()
     await next();
     if (c.req.method !== "GET" && c.res.ok) {
       purgePublicStatus();
+      // a page deleted, made members-only or given another domain must stop being served on its old host at once
+      purgeCustomDomains();
     }
   })
   .get("/", async (c) => c.json((await c.get("repo").listStatusPages(c.get("orgId"), c.get("projectId"))).map(toClient)))
@@ -198,6 +217,75 @@ export const statusPages = new Hono<AppEnv>()
     );
     return rows[0] ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
   })
+  // Set (or replace) the page's custom domain. Always starts unverified with a fresh TXT value, so moving a domain or
+  // setting it again needs DNS proof again. Only a verified domain is exclusive: another page's unverified claim does
+  // not block this one (whoever proves DNS first wins), but a domain verified elsewhere is refused.
+  .put("/:id/domain", uuidParams, requireManager, zValidator("json", z.object({ domain: z.string().max(300) }).strict()), async (c) => {
+    const unsupported = domainsUnsupported(c);
+    if (unsupported) return unsupported;
+    const page = await c.get("repo").getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!page) return c.json({ error: "Not found" }, 404);
+    const checked = statusPageDomain(c.req.valid("json").domain, appHosts(c.env));
+    if ("error" in checked) return c.json({ error: checked.error }, 400);
+    const db = c.get("database");
+    const taken = await db.query<{ id: string }>(
+      "SELECT id FROM status_page WHERE custom_domain = $1 AND custom_domain_verified_at IS NOT NULL AND id <> $2 LIMIT 1",
+      [checked.domain, page.id],
+    );
+    if (taken.length) return c.json({ error: "That domain is already in use by another status page", code: "custom_domain_taken" }, 409);
+    const token = newDomainToken();
+    await db.query(
+      "UPDATE status_page SET custom_domain = $2, custom_domain_token = $3, custom_domain_verified_at = NULL WHERE id = $1",
+      [page.id, checked.domain, token],
+    );
+    return c.json({ customDomain: checked.domain, customDomainVerifiedAt: null, customDomainRecord: { type: "TXT", name: challengeName(checked.domain), value: token } });
+  })
+  .delete("/:id/domain", uuidParams, requireManager, async (c) => {
+    const page = await c.get("repo").getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!page) return c.json({ error: "Not found" }, 404);
+    await c.get("database").query(
+      "UPDATE status_page SET custom_domain = NULL, custom_domain_token = NULL, custom_domain_verified_at = NULL WHERE id = $1",
+      [page.id],
+    );
+    return c.body(null, 204);
+  })
+  // Look up the TXT record now and, on an exact match, mark the domain verified. The update is conditional on the
+  // domain and token read here, so a concurrent change of domain cannot be verified by the old record.
+  .post("/:id/domain/verify", uuidParams, requireManager, async (c) => {
+    const unsupported = domainsUnsupported(c);
+    if (unsupported) return unsupported;
+    const repo = c.get("repo");
+    const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!page) return c.json({ error: "Not found" }, 404);
+    if (!page.customDomain || !page.customDomainToken) return c.json({ error: "Set a custom domain first" }, 400);
+    // each check is an outbound DNS query
+    if (!(await repo.withinLimit(`cd-verify:${page.id}`, 30, 3600))) return c.json({ error: "Too many attempts, try again later" }, 429);
+    const record = { type: "TXT" as const, name: challengeName(page.customDomain), value: page.customDomainToken };
+    const outcome = await verifyDomainToken(page.customDomain, page.customDomainToken);
+    if (!outcome.ok) {
+      const error = outcome.reason === "lookup_failed"
+        ? "The DNS lookup failed. Try again in a few minutes."
+        : outcome.reason === "missing"
+          ? `No TXT record found at ${record.name} yet. DNS changes can take a while to appear.`
+          : `The TXT record at ${record.name} does not match. Its value must be exactly the one shown.`;
+      return c.json({ verified: false, reason: outcome.reason, error, record }, 422);
+    }
+    let rows: { verified_at: Date }[];
+    try {
+      rows = await c.get("database").query<{ verified_at: Date }>(
+        `UPDATE status_page SET custom_domain_verified_at = coalesce(custom_domain_verified_at, now())
+         WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 RETURNING custom_domain_verified_at AS verified_at`,
+        [page.id, page.customDomain, page.customDomainToken],
+      );
+    } catch (e) {
+      // the partial unique index: another page verified the same domain first
+      const err = e as { code?: string; cause?: { code?: string } };
+      if (err.code === "23505" || err.cause?.code === "23505") return c.json({ error: "That domain is already in use by another status page", code: "custom_domain_taken" }, 409);
+      throw e;
+    }
+    if (!rows[0]) return c.json({ error: "The domain changed while it was being verified. Try again." }, 409);
+    return c.json({ verified: true, customDomain: page.customDomain, customDomainVerifiedAt: rows[0].verified_at, record });
+  })
   .get("/:id/subscribers", uuidParams, requireManager, async (c) => {
     const repo = c.get("repo");
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
@@ -281,13 +369,23 @@ async function mcpDenied(c: Context<AppEnv>, slug: string) {
   return page && !page.mcpEnabled ? c.json({ error: "The owner of this status page turned off MCP access" }, 403) : null;
 }
 
+/**
+ * The address feeds name as the page's home: its verified custom domain when it is served there (not for a
+ * members-only page, which custom domains never serve), otherwise /status/<slug> on the main origin.
+ */
+function pageHome(c: Context<AppEnv>, page: StatusPage, origin: string) {
+  return page.customDomain && page.customDomainVerifiedAt && page.visibility !== "members" && !isWorkers()
+    ? `${customDomainOrigin(page.customDomain, c.env.WEB_ORIGIN)}/`
+    : `${origin}/status/${page.slug}`;
+}
+
 async function rssFeed(c: Context<AppEnv>) {
   const repo = c.get("repo");
   const page = await repo.statusPageBySlug(c.req.param("slug")!);
   if (!page) return c.json({ error: "Not found" }, 404);
   const [incidents, maintenance] = await Promise.all([repo.pageIncidents(page, { limit: FEED_LIMIT }), repo.pageMaintenance(page, { limit: FEED_LIMIT })]);
   const origin = appUrl() || new URL(c.req.url).origin;
-  const xml = buildRss({ title: page.title, link: `${origin}/status/${page.slug}`, incidents: incidents.map(toPublic), maintenance });
+  const xml = buildRss({ title: page.title, link: pageHome(c, page, origin), incidents: incidents.map(toPublic), maintenance });
   return c.body(xml, 200, { "content-type": "application/rss+xml; charset=utf-8", "cache-control": "public, max-age=60" });
 }
 
@@ -520,7 +618,7 @@ export const publicStatus = new Hono<AppEnv>()
     if (!page) return c.json({ error: "Not found" }, 404);
     const windows = await repo.pageMaintenance(page, { since: new Date(Date.now() - 30 * 864e5), limit: ICS_LIMIT });
     const origin = appUrl() || new URL(c.req.url).origin;
-    const body = buildIcs({ title: page.title, link: `${origin}/status/${page.slug}`, host: new URL(origin).host, windows });
+    const body = buildIcs({ title: page.title, link: pageHome(c, page, origin), host: new URL(origin).host, windows });
     return c.body(body, 200, { "content-type": "text/calendar; charset=utf-8", "cache-control": "public, max-age=300" });
   })
   // short, factual page summary for language models and other crawlers
@@ -532,7 +630,7 @@ export const publicStatus = new Hono<AppEnv>()
     const origin = appUrl() || new URL(c.req.url).origin;
     const body = buildLlmsTxt({
       title: page.title,
-      link: `${origin}/status/${page.slug}`,
+      link: pageHome(c, page, origin),
       api: `${origin}/api/public/status/${page.slug}`,
       overall: LABELS[overallOf(board.components.map((x) => x.status))].en,
       components: board.components,
@@ -615,13 +713,20 @@ export const publicStatus = new Hono<AppEnv>()
     const refused = () => c.json({ error: "Incorrect password" }, 401);
     // Only the web app's own form may unlock: a cross-site form post (text/plain, foreign Origin) would plant an
     // attacker-chosen page grant in the visitor's browser.
+    // A page served on its verified custom domain posts from that origin: accepted for that page only.
     const origin = c.req.header("origin");
-    if (!/^application\/json\b/i.test(c.req.header("content-type") ?? "") || (origin && origin !== c.env.WEB_ORIGIN && origin !== new URL(c.req.url).origin)) {
-      return c.json({ error: "Unlock requests must come from this site" }, 403);
-    }
+    const forbidden = () => c.json({ error: "Unlock requests must come from this site" }, 403);
+    if (!/^application\/json\b/i.test(c.req.header("content-type") ?? "")) return forbidden();
+    const mainOrigin = !origin || origin === c.env.WEB_ORIGIN || origin === new URL(c.req.url).origin;
     const body = (await c.req.json().catch(() => null)) as { slug?: unknown; password?: unknown } | null;
     const slug = typeof body?.slug === "string" && /^[a-z0-9-]{3,40}$/.test(body.slug) ? body.slug : null;
     const password = typeof body?.password === "string" && body.password.length <= 200 ? body.password : null;
+    if (!mainOrigin) {
+      const domainPage = slug && !isWorkers() ? await repo.statusPageBySlug(slug) : null;
+      const allowed = !!domainPage?.customDomain && !!domainPage.customDomainVerifiedAt &&
+        origin === customDomainOrigin(domainPage.customDomain, c.env.WEB_ORIGIN);
+      if (!allowed) return forbidden();
+    }
     if (!slug || !password) return refused();
     const ip = clientIp(c);
     // Per client: every attempt counts. Per page: an attempt takes a slot atomically before the (slow) password check

@@ -1,7 +1,7 @@
 ---
 import Doc from "../../layouts/Doc.astro";
 ---
-<Doc titleZh="自托管：Cloudflare Workers 或 Docker" descriptionZh="在 Cloudflare Workers 加 Postgres 上运行 Montral，或用一个 Docker 容器部署。" description="Run Montral on Cloudflare Workers with Postgres, or in one Docker container." title="Self-host" updated="2026-10-12" toc>
+<Doc titleZh="自托管：Cloudflare Workers 或 Docker" descriptionZh="在 Cloudflare Workers 加 Postgres 上运行 Montral，或用一个 Docker 容器部署。" description="Run Montral on Cloudflare Workers with Postgres, or in one Docker container." title="Self-host" updated="2026-11-09" toc>
   <div lang="en">
     <h1>Self-host Montral</h1>
     <p class="lede">Run your own copy on Cloudflare Workers or in Docker. Both use the same code and a Postgres database you control.</p>
@@ -208,6 +208,34 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
     <h3>How it works</h3>
     <p>People register their phone from the app; a <code>push</code> channel then alerts every member of the workspace who has a registered device, each in their own language. Registering a phone as an owner or admin creates a <em>Mobile app</em> channel for you if the workspace has none. Phones that Apple reports as no longer valid are forgotten automatically.</p>
     <p><strong>Important:</strong> an APNs key is tied to your Apple team and the app's bundle id, and a phone's token only works with the app that produced it. The official Montral app can therefore receive push only from the hosted service. On a self-hosted server push works for an app you build and sign yourself with your own bundle id and key. A relay that would let the official app receive push from self-hosted servers is not implemented.</p>
+    <h2 id="custom-domains">Custom domains for status pages</h2>
+    <p>A status page can be served on its own hostname, such as <code>status.example.com</code>, by the Docker (Node) server. <strong>Cloudflare Workers deployments do not support custom domains</strong>: the API refuses to set one there (<code>400</code>, code <code>custom_domain_unsupported</code>).</p>
+    <p>Montral does not issue certificates. Your reverse proxy terminates TLS for the domain and forwards requests to Montral with the original <code>Host</code> header.</p>
+    <h3>1. Claim and verify the domain</h3>
+    <ul>
+      <li>In the status page editor, open <strong>Custom domain</strong>, enter the hostname and save. Only owners and admins can do this.</li>
+      <li>Create the TXT record shown: name <code>_montral-challenge.status.example.com</code>, value <code>montral-verify=…</code>, exactly as given.</li>
+      <li>Press <strong>Verify</strong>. Montral looks the record up from the server and needs an exact match. Saving the domain again, even the same name, issues a new value and needs a new verification.</li>
+      <li>A domain verified for one page cannot be claimed by another page or workspace. An unverified claim does not block anyone: whoever proves the DNS record first gets the domain.</li>
+    </ul>
+    <h3>2. Point the domain at your proxy</h3>
+    <p>Add an <code>A</code>/<code>AAAA</code> or <code>CNAME</code> record for the hostname that points at your proxy, then add a site for it. With Caddy, which obtains the certificate itself and keeps the <code>Host</code> header by default:</p>
+    <pre><code is:raw># Caddyfile
+app.example.com {
+	reverse_proxy montral:8080
+}
+status.example.com {
+	reverse_proxy montral:8080
+}</code></pre>
+    <p>With nginx, keep the host: <code>proxy_set_header Host $host;</code>. If the proxy rewrites <code>Host</code>, Montral reads <code>X-Forwarded-Host</code> instead, but only from a trusted proxy (<code>TRUST_PROXY=true</code> and the proxy's address in <code>TRUST_PROXY_PEER_IPS</code>). From any other peer that header is ignored.</p>
+    <h3>What the domain serves</h3>
+    <ul>
+      <li><code>/</code> is the status page. <code>/rss.xml</code>, <code>/maintenance.ics</code>, <code>/badge.svg</code> and <code>/llms.txt</code> are its feeds, and <code>/api/public/status/&lt;slug&gt;/…</code> keeps working for the page's own requests.</li>
+      <li>Every other path is <code>404</code>: the app, sign-in and sign-up, the private API, webhook receivers, docs and other pages. The domain never serves the signed-in app, and sign-in cookies are never read there.</li>
+      <li>Public pages work as usual. Password pages show the password form, and unlocking sets an access cookie for that domain only. Members-only pages answer <code>404</code> on the custom domain, because sign-in lives on the main address. Share links still point at the main address.</li>
+      <li>Changes made through the API apply at once on the server that handled them. With several servers, others pick a change up within 60 seconds.</li>
+    </ul>
+
     <h2 id="after">After install</h2>
     <ul>
       <li>Create your first monitor, then a <a href="/docs/embed">status page</a> and, optionally, embed its state on your site.</li>
@@ -420,6 +448,34 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
     <h3>工作方式</h3>
     <p>成员在应用里注册自己的手机；<code>push</code> 渠道会通知工作区中所有已注册设备的成员，并按各自的语言显示。所有者或管理员注册手机时，如果工作区还没有该渠道，会自动创建名为 <em>Mobile app</em> 的渠道。Apple 反馈已失效的手机会被自动清除。</p>
     <p><strong>重要：</strong>APNs 密钥绑定你的 Apple 团队和应用的 bundle id，手机令牌也只对产生它的应用有效。因此官方 Montral 应用只能接收托管服务发出的推送。自托管服务器上，推送适用于你自己用自己的 bundle id 和密钥构建并签名的应用。让官方应用接收自托管服务器推送的中继服务尚未实现。</p>
+    <h2 id="custom-domains-zh">状态页自定义域名</h2>
+    <p>Docker（Node）服务器可以在独立的主机名（如 <code>status.example.com</code>）上提供状态页。<strong>Cloudflare Workers 部署不支持自定义域名</strong>：在那里设置时 API 会拒绝（<code>400</code>，code 为 <code>custom_domain_unsupported</code>）。</p>
+    <p>Montral 不签发证书。由你的反向代理为该域名终止 TLS，并携带原始 <code>Host</code> 头把请求转发给 Montral。</p>
+    <h3>1. 认领并验证域名</h3>
+    <ul>
+      <li>在状态页编辑器中打开<strong>自定义域名</strong>，填写主机名并保存。仅所有者和管理员可以操作。</li>
+      <li>按显示内容创建 TXT 记录：名称 <code>_montral-challenge.status.example.com</code>，值 <code>montral-verify=…</code>，必须完全一致。</li>
+      <li>点击<strong>验证</strong>。Montral 从服务器查询该记录，要求完全匹配。再次保存域名（即使名称相同）会生成新的值，需要重新验证。</li>
+      <li>已为某个页面验证的域名不能被其他页面或工作区认领。未验证的认领不会阻止任何人：先通过 DNS 验证的一方获得该域名。</li>
+    </ul>
+    <h3>2. 把域名指向你的代理</h3>
+    <p>为该主机名添加指向代理的 <code>A</code>/<code>AAAA</code> 或 <code>CNAME</code> 记录，然后在代理中添加站点。Caddy 会自动申请证书，并默认保留 <code>Host</code> 头：</p>
+    <pre><code is:raw># Caddyfile
+app.example.com {
+	reverse_proxy montral:8080
+}
+status.example.com {
+	reverse_proxy montral:8080
+}</code></pre>
+    <p>使用 nginx 时请保留主机名：<code>proxy_set_header Host $host;</code>。如果代理改写了 <code>Host</code>，Montral 会改读 <code>X-Forwarded-Host</code>，但只信任受信代理发来的值（<code>TRUST_PROXY=true</code>，且代理地址在 <code>TRUST_PROXY_PEER_IPS</code> 中）；其他来源的该头会被忽略。</p>
+    <h3>域名上提供的内容</h3>
+    <ul>
+      <li><code>/</code> 是状态页；<code>/rss.xml</code>、<code>/maintenance.ics</code>、<code>/badge.svg</code> 和 <code>/llms.txt</code> 是它的订阅源；页面自身发起的 <code>/api/public/status/&lt;slug&gt;/…</code> 请求照常可用。</li>
+      <li>其他路径一律返回 <code>404</code>：应用、登录和注册、私有 API、Webhook 接收地址、文档以及其他状态页。该域名永远不会提供已登录的应用，也不会读取登录 Cookie。</li>
+      <li>公开页面照常可用。密码页面显示密码表单，解锁后只为该域名设置访问 Cookie。仅成员可见的页面在自定义域名上返回 <code>404</code>，因为登录只在主地址进行。分享链接仍指向主地址。</li>
+      <li>通过 API 所做的修改会在处理该请求的服务器上立即生效；多台服务器时，其他服务器会在 60 秒内同步。</li>
+    </ul>
+
     <h2 id="after-zh">安装之后</h2>
     <ul>
       <li>创建第一个监控项，再创建<a href="/docs/embed">状态页</a>，需要的话把状态嵌入到你的网站。</li>

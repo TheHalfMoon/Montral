@@ -6,6 +6,7 @@ import { actionEmail, appUrl, sendEmail } from "../email";
 import { langFromHeader, tr } from "../mail-i18n";
 import type { AppEnv } from "../env";
 import type { Plan } from "../entitlements";
+import { currentSession } from "../auth";
 import { requireManager, uuidParams } from "../middleware";
 import { clientIp } from "../ratelimit";
 import { sharedCache, waitUntilOf } from "../sharedcache";
@@ -33,6 +34,8 @@ const pageBody = z.object({
   uptimeWarnPct: z.number().min(1).max(100).optional(),
   // public MCP tools may serve this page
   mcpEnabled: z.boolean().optional(),
+  // "members": only signed-in members of the workspace see the page and its feeds
+  visibility: z.enum(["public", "members"]).optional(),
   // hours before maintenance starts that subscribers are reminded; 0 = never
   maintenanceReminderHours: z.number().int().min(0).max(168).optional(),
   monitorIds: z.array(z.string().uuid()).optional(),
@@ -214,27 +217,54 @@ async function rssFeed(c: Context<AppEnv>) {
   return c.body(xml, 200, { "content-type": "application/rss+xml; charset=utf-8", "cache-control": "public, max-age=60" });
 }
 
-/** All slug routes, including subscriptions and machine-readable feeds, share this boundary. */
+/** A members-only page is readable only through a browser session of a current member of its workspace. */
+async function memberOfPageWorkspace(c: Context<AppEnv>, organizationId: string): Promise<boolean> {
+  const session = await currentSession(c.get("auth"), c.req.raw.headers);
+  return !!session && (await c.get("repo").isMember(session.user.id, organizationId));
+}
+
+/**
+ * All slug routes, including subscriptions, badges and machine-readable feeds, share this boundary. A members-only
+ * page and any edition access policy make every response private; a refused visitor gets the same 404 as for a page
+ * that does not exist.
+ */
 async function statusAccess(c: Context<AppEnv>, next: () => Promise<void>) {
   const policy = c.get("entitlements").statusPageAccess;
   const slug = c.req.param("slug");
-  if (!policy || !slug || slug === "_") return next();
-  // No shared response is safe while a deployment uses an access policy, including not-found/errors.
+  if (!slug || slug === "_") return next();
+  const page = await c.get("repo").statusPageBySlug(slug);
+  const membersOnly = page?.visibility === "members";
+  if (!policy && !membersOnly) return next();
+  // No shared response is safe for a restricted page, including not-found/errors.
   c.set("statusResponsePrivate", true);
   c.header("cache-control", "private, no-store");
-  const page = await c.get("repo").statusPageBySlug(slug);
   if (!page) return c.json({ error: "Not found" }, 404);
-  let access: Awaited<ReturnType<typeof policy>>;
-  try { access = await policy(page, c.req.raw); }
-  catch {
-    console.error("status page access policy unavailable");
-    return c.json({ error: "Unavailable" }, 503);
+  if (membersOnly) {
+    let member: boolean;
+    try { member = await memberOfPageWorkspace(c, page.organizationId); }
+    catch {
+      console.error("status page membership check unavailable");
+      return c.json({ error: "Unavailable" }, 503);
+    }
+    if (!member) {
+      c.header("x-robots-tag", "noindex, nofollow");
+      return c.json({ error: "Not found" }, 404);
+    }
   }
-  if (access?.allowed !== true) return c.json({ error: "Not found" }, 404);
-  // Always bypass external caches for policy-enabled deployments: a formerly public page may change access.
+  if (policy) {
+    let access: Awaited<ReturnType<typeof policy>>;
+    try { access = await policy(page, c.req.raw); }
+    catch {
+      console.error("status page access policy unavailable");
+      return c.json({ error: "Unavailable" }, 503);
+    }
+    if (access?.allowed !== true) return c.json({ error: "Not found" }, 404);
+  }
+  // Always bypass external caches: a formerly public page may change access, and a visitor's session decides.
   await next();
   c.header("cache-control", "private, no-store");
   c.header("vary", "Cookie, Authorization");
+  if (membersOnly) c.header("x-robots-tag", "noindex, nofollow");
 }
 
 /** Subscription and one-click unsubscribe URLs are bearer tokens in query

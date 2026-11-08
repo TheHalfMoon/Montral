@@ -309,6 +309,13 @@
       "when": 1793474804027,
       "tag": "0043_unknown_dagger",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1794105437282,
+      "tag": "0044_status_page_visibility",
+      "breakpoints": true
     }
   ]
 }

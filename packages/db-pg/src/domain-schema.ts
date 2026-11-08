@@ -405,9 +405,14 @@ export const statusPage = pgTable(
     mcpEnabled: boolean("mcp_enabled").notNull().default(true),
     /** subscribers get a reminder this many hours before maintenance starts; 0 turns it off */
     maintenanceReminderHours: integer("maintenance_reminder_hours").notNull().default(24),
+    /** "public": anyone; "members": only signed-in members of the page's workspace (everyone else gets 404) */
+    visibility: text("visibility", { enum: ["public", "members"] }).notNull().default("public"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [uniqueIndex("status_page_slug_idx").on(t.slug)],
+  (t) => [
+    uniqueIndex("status_page_slug_idx").on(t.slug),
+    check("status_page_visibility_chk", sql`${t.visibility} in ('public', 'members')`),
+  ],
 );
 
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */

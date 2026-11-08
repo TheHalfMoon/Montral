@@ -328,10 +328,12 @@ export interface StatusPage {
   mcpEnabled: boolean;
   /** hours before maintenance starts that subscribers are reminded; 0 = never */
   maintenanceReminderHours: number;
+  /** "public": anyone; "members": only signed-in members of the page's workspace */
+  visibility: "public" | "members";
   createdAt: Date;
 }
-export type NewStatusPage = { slug: string; title: string; theme?: string; showLatency?: boolean; externalUrl?: string | null; hideBranding?: boolean };
-export type StatusPagePatch = Partial<Pick<StatusPage, "title" | "theme" | "showLatency" | "externalUrl" | "hideBranding" | "uptimeOkPct" | "uptimeWarnPct" | "mcpEnabled" | "maintenanceReminderHours">>;
+export type NewStatusPage = { slug: string; title: string; theme?: string; showLatency?: boolean; externalUrl?: string | null; hideBranding?: boolean; visibility?: StatusPage["visibility"] };
+export type StatusPagePatch = Partial<Pick<StatusPage, "title" | "theme" | "showLatency" | "externalUrl" | "hideBranding" | "uptimeOkPct" | "uptimeWarnPct" | "mcpEnabled" | "maintenanceReminderHours" | "visibility">>;
 export type PageComponentInput = { monitorId: string; groupName?: string };
 export interface Subscriber {
   id: string;

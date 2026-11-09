@@ -94,6 +94,20 @@ export function parseGrant(raw: string): "all" | GrantEntry[] {
     .map(([org, sel]) => ({ org, ids: !sel || sel === "*" ? null : sel.split(",") }));
 }
 
+/**
+ * Every new user gets a personal workspace they own, and it becomes the active workspace of the session they signed
+ * up with. Better Auth runs a user's create.after hook only once the whole sign-up has finished (it is queued "after
+ * the transaction"), i.e. after the first session was created; that session's create.before hook therefore found no
+ * workspace and stored none. Left like that, every request of the session had to guess a workspace.
+ */
+export async function givePersonalWorkspace(database: Pick<Database, "repo" | "query">, user: { id: string; name?: string | null; email: string }) {
+  const name = `${user.name || user.email.split("@")[0]}'s workspace`;
+  const id = crypto.randomUUID();
+  await database.repo.createPersonalWorkspace({ id, name, slug: slugify(name), ownerId: user.id });
+  await database.query(`update session set active_organization_id = $2 where user_id = $1 and active_organization_id is null`, [user.id, id]);
+  return id;
+}
+
 /** Removes everything that could let someone who never proved the email keep access to the user. */
 export async function purgeUnverifiedSecrets(database: Database, userId: string) {
   for (const sql of [
@@ -393,8 +407,7 @@ export function createAuth(database: Database, env: Bindings) {
           },
           // every new user gets a personal workspace they own
           after: async (user) => {
-            const name = `${user.name || user.email.split("@")[0]}'s workspace`;
-            await repo.createPersonalWorkspace({ id: crypto.randomUUID(), name, slug: slugify(name), ownerId: user.id });
+            await givePersonalWorkspace(database, user);
           },
         },
       },

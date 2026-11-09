@@ -768,6 +768,7 @@ export const zh: Record<string, string> = {
   "Single sign-on linked.": "单点登录已关联。",
   "Link your company's identity provider to this account, then sign in with SSO. The provider must confirm this account's email address.": "将公司的身份提供商关联到此账号，之后即可通过 SSO 登录。身份提供商必须确认此账号的邮箱地址。",
   "Link single sign-on": "关联单点登录",
+  "You were removed from this workspace. Ask an owner or admin to invite you again.": "你已被移出此工作区。请让所有者或管理员重新邀请你。",
   "TXT record not found at the last check": "上次检查时未找到 TXT 记录",
   "Verification withdrawn: the TXT record is gone": "验证已撤销：TXT 记录已不存在",
 };

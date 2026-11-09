@@ -3,7 +3,7 @@ import type { Bindings } from "./env";
 import { mcpResource } from "./auth";
 
 /** What an agent was given: every workspace of the user, or a list of workspaces with an optional project limit each. */
-export type OAuthGrant = { userId: string; all: boolean; workspaces: { id: string; projects?: string[] }[]; scopes: string[]; clientId?: string };
+export type OAuthGrant = { userId: string; all: boolean; workspaces: { id: string; projects?: string[] }[]; scopes: string[]; clientId?: string; sessionId?: string };
 
 type JwksSource = { api: { getJwks: () => Promise<unknown> } };
 
@@ -31,5 +31,7 @@ export async function verifyOAuthToken(auth: JwksSource, env: Bindings, token: s
     workspaces,
     scopes: scope.split(/\s+/).filter(Boolean),
     clientId: typeof payload.azp === "string" ? payload.azp : undefined,
+    // the session that authorized this grant (oauth-provider stamps it on access tokens, refreshes included)
+    sessionId: typeof payload.sid === "string" && payload.sid ? payload.sid : undefined,
   };
 }

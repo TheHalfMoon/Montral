@@ -1,5 +1,5 @@
 {
-  "id": "2a75fbff-b763-483e-a118-070483f55982",
+  "id": "81e86a0b-1b02-4847-99a1-ed4f17154dac",
   "prevId": "757ad8a8-98e9-49b4-a16f-0e2b1dff2bb0",
   "version": "7",
   "dialect": "postgresql",
@@ -5451,7 +5451,7 @@
       "checkConstraints": {
         "sso_credential_kind_chk": {
           "name": "sso_credential_kind_chk",
-          "value": "\"sso_credential\".\"kind\" in ('api_key', 'oauth')"
+          "value": "\"sso_credential\".\"kind\" in ('api_key')"
         }
       },
       "isRLSEnabled": false
@@ -5683,6 +5683,108 @@
           "value": "\"sso_flow\".\"intent\" in ('signin', 'link')"
         }
       },
+      "isRLSEnabled": false
+    },
+    "public.sso_removal": {
+      "name": "sso_removal",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true,
+          "default": "gen_random_uuid()"
+        },
+        "organization_id": {
+          "name": "organization_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "email": {
+          "name": "email",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "account_id": {
+          "name": "account_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "sso_removal_org_email_idx": {
+          "name": "sso_removal_org_email_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "email",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "sso_removal_org_account_idx": {
+          "name": "sso_removal_org_account_idx",
+          "columns": [
+            {
+              "expression": "organization_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "account_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "sso_removal_organization_id_organization_id_fk": {
+          "name": "sso_removal_organization_id_organization_id_fk",
+          "tableFrom": "sso_removal",
+          "tableTo": "organization",
+          "columnsFrom": [
+            "organization_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.sso_session": {

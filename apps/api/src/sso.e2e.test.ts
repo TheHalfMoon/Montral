@@ -36,6 +36,8 @@ class Jar {
     }
   }
   has = (name: string) => this.m.has(name);
+  /** another browser tab with the same cookies, from here on independent */
+  clone() { const j = new Jar(); for (const [k, v] of this.m) j.m.set(k, v); return j; }
   header = () => [...this.m].map(([k, v]) => `${k}=${v}`).join("; ");
 }
 type Res = { status: number; body: any; text: string; headers: Headers; location: string | null };
@@ -123,11 +125,14 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
    * An agent authorization (OAuth with PKCE, as an MCP client gets one) for `orgId`, made with the session in `jar`.
    * Returns the access token, or the HTTP status of the step that refused.
    */
-  async function agentToken(jar: Jar, orgId: string): Promise<{ token?: string; refused?: number }> {
+  async function agentToken(jar: Jar, orgId: string, reuse?: string): Promise<{ token?: string; refused?: number; clientId: string; viaAuthorize?: boolean }> {
     const redirect = "http://127.0.0.1:33333/callback";
-    const reg = await call("/api/auth/oauth2/register", { method: "POST", body: { client_name: "SSO e2e agent", redirect_uris: [redirect], token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] } });
-    expect(reg.status, reg.text).toBeLessThan(300);
-    const clientId = reg.body.client_id as string;
+    let clientId = reuse;
+    if (!clientId) {
+      const reg = await call("/api/auth/oauth2/register", { method: "POST", body: { client_name: "SSO e2e agent", redirect_uris: [redirect], token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] } });
+      expect(reg.status, reg.text).toBeLessThan(300);
+      clientId = reg.body.client_id as string;
+    }
     const verifier = randomBytes(32).toString("base64url");
     const challenge = createHash("sha256").update(verifier).digest("base64url");
     const resource = `${origin}/api/mcp`;
@@ -143,22 +148,24 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
       return { status: r.status, body, location: r.headers.get("location") };
     };
     const auth = await raw(`/api/auth/oauth2/authorize?${query}`);
-    if (auth.status >= 400) return { refused: auth.status };
+    if (auth.status >= 400) return { refused: auth.status, clientId };
     let loc: string = auth.location ?? auth.body?.url;
+    // a consent already on file (and the picker cookie): the code comes straight from /authorize
+    const viaAuthorize = loc.startsWith(redirect);
     if (loc.includes("/oauth/workspace")) {
       const c = await raw("/api/auth/oauth2/continue", { method: "POST", body: { postLogin: true, oauth_query: new URL(loc, origin).search.slice(1) } });
-      if (c.status !== 200) return { refused: c.status };
+      if (c.status !== 200) return { refused: c.status, clientId };
       loc = c.body.redirect_uri ?? c.body.url;
     }
     if (!loc.startsWith(redirect)) {
       const consent = await raw("/api/auth/oauth2/consent", { method: "POST", body: { accept: true, oauth_query: new URL(loc, origin).search.slice(1) } });
-      if (consent.status !== 200) return { refused: consent.status };
+      if (consent.status !== 200) return { refused: consent.status, clientId };
       loc = consent.body.redirect_uri ?? consent.body.url;
     }
     const code = new URL(loc).searchParams.get("code")!;
     const tok = await app.fetch(new Request(`${origin}/api/auth/oauth2/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, redirect_uri: redirect, client_id: clientId, code_verifier: verifier, resource }) }), env as never);
     expect(tok.status, await tok.clone().text()).toBe(200);
-    return { token: ((await tok.json()) as { access_token: string }).access_token };
+    return { token: ((await tok.json()) as { access_token: string }).access_token, clientId, viaAuthorize };
   }
   const asAgent = async (token: string, orgId: string) => (await app.fetch(new Request(`${origin}/api/monitors`, { headers: { authorization: `Bearer ${token}`, "x-workspace-id": orgId } }), env as never)).status;
   const asKey = async (key: string) => (await call("/api/monitors", { key })).status;
@@ -332,6 +339,20 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect(await q("SELECT 1 FROM account WHERE user_id = $1 AND provider_id = $2", [id, `sso:${connA}`])).toHaveLength(0);
     expect(failure((await sso(idpA, new Jar(), { email }, user)).location)).toBe("link_required");
     expect(await isMember(ownerA.orgId, id)).toBe(false);
+    // the removed member was signed out everywhere
+    expect(await q("SELECT 1 FROM session WHERE user_id = $1", [id])).toHaveLength(0);
+    // deleting the account does not open the way back: a fresh sign-in is not provisioned into the workspace...
+    await q(`DELETE FROM "user" WHERE id = $1`, [id]);
+    expect(failure((await sso(idpA, new Jar(), { email }, user)).location)).toBe("access_removed");
+    expect(failure((await sso(idpA, new Jar(), { email }, { ...user, sub: "leaver-new-sub" })).location)).toBe("access_removed");
+    expect(await userIdOf(email)).toBeNull();
+    expect((await auditOf(ownerA.orgId)).some((e) => e.action === "sso.sign_in_refused" && e.changes?.values?.reason === "removed")).toBe(true);
+    // ...until an owner or admin invites the address again
+    const inv = await call("/api/auth/organization/invite-member", { method: "POST", jar: ownerA.jar, body: { organizationId: ownerA.orgId, email, role: "member" } });
+    expect(inv.status, inv.text).toBe(200);
+    const back = new Jar();
+    expect((await sso(idpA, back, { email }, user)).location).toBe(`${origin}/app`);
+    expect(await isMember(ownerA.orgId, (await userIdOf(email))!)).toBe(true);
   });
 
   it("refuses an email the provider did not verify, and a domain the connection may not use", async () => {
@@ -553,9 +574,50 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     const newKey = await call("/api/auth/api-key/create", { method: "POST", jar: viaSso, body: { name: "via-sso", metadata: { organizationId: ownerA.orgId } } });
     expect(newKey.status, newKey.text).toBe(200);
     expect(await asKey(newKey.body.key)).toBe(200);
-    const newAgent = await agentToken(viaSso, ownerA.orgId);
+    // the same client as the pre-switch grant: its consent is on file, so /authorize issues the code by itself
+    const newAgent = await agentToken(viaSso, ownerA.orgId, oldAgent.clientId);
+    expect(newAgent.viaAuthorize).toBe(true);
     expect(newAgent.token).toBeTruthy();
     expect(await asAgent(newAgent.token!, ownerA.orgId)).toBe(200);
+    // a later SSO consent for that client does not make the earlier, non-SSO token count: tokens carry their session
+    expect(await asAgent(oldAgent.token!, ownerA.orgId)).toBe(403);
+    // signing out of that SSO session ends what it authorized
+    expect((await call("/api/auth/sign-out", { method: "POST", jar: viaSso.clone(), body: {} })).status).toBe(200);
+    expect(await asAgent(newAgent.token!, ownerA.orgId)).toBe(403);
+
+    // A member who joins after the switch with a password session: that session row is alive (nothing revoked it), so
+    // these refusals come from the guards themselves, not from a missing session.
+    const erin = await signUp("erin", `erin-${rand}@${domainA}`);
+    const erinUser = { sub: "erin-sub", email: erin.email, email_verified: true };
+    await join(ownerA, erin.email, erin.jar);
+    const live = erin.jar; // password session
+    const [{ slug: slugA }] = await q<{ slug: string }>("SELECT slug FROM organization WHERE id = $1", [ownerA.orgId]);
+    for (const [path, init] of [
+      ["/api/auth/organization/set-active", { method: "POST", body: { organizationSlug: slugA } }],
+      ["/api/auth/organization/set-active", { method: "POST", body: { organizationId: ownerA.orgId } }],
+      [`/api/auth/organization/get-full-organization?organizationSlug=${slugA}`, {}],
+      [`/api/auth/organization/get-full-organization?organizationId=${ownerA.orgId}`, {}],
+      ["/api/auth/organization/invite-member", { method: "POST", body: { organizationId: ownerA.orgId, email: `z-${rand}@example.com`, role: "member" } }],
+      ["/api/auth/api-key/create", { method: "POST", body: { name: "live", metadata: { organizationId: ownerA.orgId } } }],
+    ] as const) {
+      const r = await call(path, { ...init, jar: live });
+      expect(r.status, path).toBe(403);
+      expect(r.body?.code, path).toBe("SSO_REQUIRED");
+    }
+    // her SSO session (linked from the password session, in another tab) authorizes an agent...
+    const erinSso = live.clone();
+    await sso(idpA, erinSso, { intent: "link" }, erinUser);
+    const erinAgent = await agentToken(erinSso, ownerA.orgId);
+    expect(await asAgent(erinAgent.token!, ownerA.orgId)).toBe(200);
+    // ...but the live password session cannot get a code for that client, although its consent is on file
+    const fromPassword = await agentToken(live, ownerA.orgId, erinAgent.clientId);
+    expect(fromPassword.token).toBeUndefined();
+    expect(fromPassword.refused).toBe(403);
+    const [consent] = await q<{ id: string }>("SELECT id FROM oauth_consent WHERE user_id = $1 AND client_id = $2", [erin.id, erinAgent.clientId]);
+    const update = await call("/api/auth/oauth2/update-consent", { method: "POST", jar: live, body: { id: consent.id, update: { scopes: ["mcp:read"] } } });
+    expect(update.status).toBe(403);
+    expect(update.body?.code).toBe("SSO_REQUIRED");
+    expect(await asAgent(erinAgent.token!, ownerA.orgId)).toBe(200);
 
     // the operator's instance-wide provider is another connection: it does not satisfy workspace A's requirement
     const viaInstance = new Jar();
@@ -616,6 +678,23 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     const all = JSON.stringify([events, listed.body, await auditOf(ownerB.orgId)]);
     for (const secret of [idpA.clientSecret, idpB.clientSecret]) expect(all).not.toContain(secret);
     for (const token of idpA.issued) expect(all).not.toContain(token);
+  });
+
+  it("signs out the connection's sessions and voids its API keys when the issuer or client changes", async () => {
+    const email = `bea2-${rand}@${domainB}`;
+    const jar = new Jar();
+    expect((await sso(idpB, jar, { email }, { sub: "bea2-sub", email, email_verified: true })).location).toBe(`${origin}/app`);
+    const id = (await userIdOf(email))!;
+    const key = await call("/api/auth/api-key/create", { method: "POST", jar, body: { name: "bea2", metadata: { organizationId: ownerB.orgId } } });
+    expect(key.status, key.text).toBe(200);
+    expect(await q("SELECT 1 FROM sso_credential WHERE connection_id = $1", [connB])).not.toHaveLength(0);
+    expect(await q("SELECT 1 FROM sso_session WHERE connection_id = $1", [connB])).not.toHaveLength(0);
+    const moved = await call("/api/sso", { method: "PUT", jar: ownerB.jar, body: { issuer: idpA.issuer, clientId: idpA.clientId, clientSecret: idpA.clientSecret, domains: [domainB] } });
+    expect(moved.status, moved.text).toBe(200);
+    expect(await q("SELECT 1 FROM sso_session WHERE connection_id = $1", [connB])).toHaveLength(0);
+    expect(await q("SELECT 1 FROM sso_credential WHERE connection_id = $1", [connB])).toHaveLength(0);
+    expect(await q("SELECT 1 FROM session WHERE user_id = $1", [id])).toHaveLength(0);
+    expect(await q("SELECT 1 FROM account WHERE provider_id = $1", [`sso:${connB}`])).toHaveLength(0);
   });
 
   it("deletes the connection with its identity links", async () => {

@@ -593,19 +593,36 @@ export const ssoSession = pgTable("sso_session", {
 });
 
 /**
- * Credentials (API keys, OAuth agent grants) created from an SSO session, and through which connection: in a
- * require-SSO workspace a member's credential only works when its row names that workspace's connection.
+ * API keys created from an SSO session, and through which connection: in a require-SSO workspace a member's key only
+ * works when its row names that workspace's connection.
  */
 export const ssoCredential = pgTable(
   "sso_credential",
   {
-    /** "api_key" (credential_id = key id) or "oauth" (credential_id = "<user id>|<client id>") */
+    /** "api_key" (credential_id = key id); agent tokens need no row, they carry the session that authorized them */
     kind: text("kind").notNull(),
     credentialId: text("credential_id").notNull(),
     connectionId: text("connection_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [primaryKey({ columns: [t.kind, t.credentialId, t.connectionId] }), check("sso_credential_kind_chk", sql`${t.kind} in ('api_key', 'oauth')`)],
+  (t) => [primaryKey({ columns: [t.kind, t.credentialId, t.connectionId] }), check("sso_credential_kind_chk", sql`${t.kind} in ('api_key')`)],
+);
+
+/**
+ * People removed from (or who left) a workspace, by address and by SSO identity: single sign-on does not provision them
+ * into it again, even with a new account, until the address is invited again (which deletes the rows).
+ */
+export const ssoRemoval = pgTable(
+  "sso_removal",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    email: text("email").notNull(),
+    /** "<issuer>|<subject>" of an SSO identity the person had at the workspace's connection; null for the address row */
+    accountId: text("account_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sso_removal_org_email_idx").on(t.organizationId, t.email), index("sso_removal_org_account_idx").on(t.organizationId, t.accountId)],
 );
 
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */

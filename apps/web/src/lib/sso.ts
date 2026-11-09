@@ -14,6 +14,7 @@ export const SSO_ERRORS: Record<string, string> = {
   identity_in_use: "That single sign-on identity is already linked to another account.",
   signup_closed: "Sign-ups are closed here. Ask a workspace owner to invite you.",
   sso_required: "Your workspace requires single sign-on. Use “Sign in with SSO”.",
+  access_removed: "You were removed from this workspace. Ask an owner or admin to invite you again.",
 };
 
 /** Starts a single sign-on: by work email (its verified domain) or by workspace ID, then goes to the identity provider. */

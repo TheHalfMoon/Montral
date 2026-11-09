@@ -5,7 +5,7 @@ import { HTTPException } from "hono/http-exception";
 import type { AppEnv, RequestIdentity } from "./env";
 import { currentSession } from "./auth";
 import { verifyOAuthToken } from "./oauth";
-import { credentialVia, isOwnerRole, oauthCredentialId, sessionVia, ssoRequirementOf } from "./sso-store";
+import { credentialVia, isOwnerRole, sessionVia, ssoRequirementOf } from "./sso-store";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -43,6 +43,7 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   let fromKey = false;
   let scope: Scope = null;
   let granted: AppEnv["Variables"]["workspaceGrant"] = null;
+  let grantSession: string | undefined;
   if (!session) {
     // API-key access (Authorization: Bearer montral_… or x-api-key)
     const raw = c.req.header("x-api-key") ?? c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
@@ -59,6 +60,7 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
         throw new HTTPException(403, { message: `This token lacks the ${write ? "mcp:write" : "mcp:read"} scope` });
       }
       identity = { kind: "oauth", clientId: grant.clientId! };
+      grantSession = grant.sessionId;
       userId = grant.userId;
       fromKey = true;
       // an agent may be given several workspaces (or all of them): it says which one it works in per request
@@ -102,7 +104,8 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
     if (!orgId) throw new HTTPException(403, { message: "No workspace" });
   }
   // "Require SSO": a member other than an owner (the break-glass account) reaches the workspace only with what its own
-  // SSO connection produced: a session it created, or an API key or agent authorization made from such a session.
+  // SSO connection produced: a session it created, an API key made from such a session, or an agent token whose
+  // authorizing session (its `sid`) is such a session and is still alive.
   // Covers sessions and credentials from before the switch and from any other way of signing in.
   {
     const database = c.get("database");
@@ -113,7 +116,8 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
         ? await sessionVia(q, String((session?.session as { id?: unknown } | undefined)?.id ?? ""), required)
         : identity.kind === "api-key"
           ? await credentialVia(q, "api_key", identity.credentialId, required)
-          : await credentialVia(q, "oauth", oauthCredentialId(userId, identity.clientId), required);
+          // an agent token counts only through the session that authorized it: a live SSO session of this connection
+          : !!grantSession && (await sessionVia(q, grantSession, required));
       if (!ok) throw new HTTPException(403, { message: "This workspace requires single sign-on. Sign out and use Sign in with SSO; API keys and agent authorizations must be created after signing in with SSO." });
     }
   }

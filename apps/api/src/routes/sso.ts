@@ -10,7 +10,7 @@ import { allow } from "../ratelimit";
 import { ssoCallbackUrl } from "../sso-auth";
 import { discover, normalizeIssuer, SsoError } from "../sso-oidc";
 import { encryptSecret } from "../sso-secret";
-import { forgetSsoRequirement, instanceConnection, isOwnerRole, providerIdOf, revokeNonSsoSessions } from "../sso-store";
+import { forgetSsoRequirement, instanceConnection, invalidateConnection, isOwnerRole, providerIdOf, revokeNonSsoSessions } from "../sso-store";
 
 /**
  * Single sign-on settings of the active workspace: one OpenID Connect connection, its email domains (each verified
@@ -126,6 +126,8 @@ export const ssoAdmin = new Hono<AppEnv>()
       );
       // links are keyed on issuer and subject, so links of another issuer can never match again: remove them
       if (current.issuer !== issuer) await q(c)(`DELETE FROM account WHERE provider_id = $1::text`, [providerIdOf(id)]);
+      // sessions and API keys the old provider or client vouched for prove nothing any more
+      if (current.issuer !== issuer || current.client_id !== input.clientId) await invalidateConnection(q(c), id);
     } else {
       try {
         await q(c)(
@@ -164,7 +166,7 @@ export const ssoAdmin = new Hono<AppEnv>()
     forgetSsoRequirement(orgId);
     if (!gone) return c.body(null, 204);
     await q(c)(`DELETE FROM account WHERE provider_id = $1::text`, [providerIdOf(gone.id)]);
-    await q(c)(`DELETE FROM sso_session WHERE connection_id = $1::text`, [gone.id]);
+    await invalidateConnection(q(c), gone.id);
     await audit(c, "sso.connection_delete", { type: "sso_connection", id: gone.id, projectId: null }, null);
     return c.body(null, 204);
   })

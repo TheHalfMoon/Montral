@@ -202,9 +202,68 @@ export async function ssoRequirementOf(q: Query, orgId: string): Promise<string 
   return row?.id ?? null;
 }
 
+/** Whether `sessionId` is a live (unexpired) session that `connectionId` created. */
 export async function sessionVia(q: Query, sessionId: string, connectionId: string): Promise<boolean> {
-  const rows = await q(`SELECT 1 AS one FROM sso_session WHERE session_id = $1::text AND connection_id = $2::text`, [sessionId, connectionId]);
+  const rows = await q(
+    `SELECT 1 AS one FROM sso_session x JOIN session s ON s.id = x.session_id
+      WHERE x.session_id = $1::text AND x.connection_id = $2::text AND s.expires_at > now()`,
+    [sessionId, connectionId],
+  );
   return rows.length > 0;
+}
+
+/**
+ * For the OAuth authorization endpoints, where the workspaces a grant ends up covering are not known for sure in
+ * advance: the session must satisfy every require-SSO workspace in which the user is a member other than an owner.
+ */
+export async function ssoSatisfiesAll(q: Query, userId: string, sessionId: string): Promise<boolean> {
+  const required = await ssoRequiredFor(q, userId);
+  if (!required.length) return true;
+  const via = await sessionConnection(q, sessionId);
+  return !!via && required.every((r) => r.connectionId === via);
+}
+
+// ── removals ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Someone was removed from (or left) a workspace: their address and their SSO identities at its connection are
+ * remembered, so neither can be provisioned into it again (not even after deleting the account) until someone
+ * invites the address again.
+ */
+export async function recordRemoval(q: Query, orgId: string, userId: string) {
+  await q(
+    `INSERT INTO sso_removal (organization_id, email, account_id)
+     SELECT $1::text, lower(u.email), NULL FROM "user" u WHERE u.id = $2::text
+     UNION ALL
+     SELECT $1::text, lower(u.email), a.account_id FROM "user" u
+       JOIN account a ON a.user_id = u.id
+       JOIN sso_connection c ON a.provider_id = 'sso:' || c.id::text AND c.organization_id = $1::text
+      WHERE u.id = $2::text`,
+    [orgId, userId],
+  );
+}
+
+export async function removedFrom(q: Query, orgId: string, email: string, accountId: string): Promise<boolean> {
+  const rows = await q(
+    `SELECT 1 AS one FROM sso_removal WHERE organization_id = $1::text AND (email = lower($2::text) OR account_id = $3::text) LIMIT 1`,
+    [orgId, email, accountId],
+  );
+  return rows.length > 0;
+}
+
+/** An invitation to the address lifts the block (for the address and the identities recorded with it). */
+export async function clearRemoval(q: Query, orgId: string, email: string) {
+  await q(`DELETE FROM sso_removal WHERE organization_id = $1::text AND email = lower($2::text)`, [orgId, email]);
+}
+
+/**
+ * The connection's provider or client changed: what the old one produced is no longer proof of anything. Its
+ * sessions are signed out (their sso_session rows go with them) and the credentials made from them stop counting.
+ */
+export async function invalidateConnection(q: Query, connectionId: string) {
+  await q(`DELETE FROM session WHERE id IN (SELECT session_id FROM sso_session WHERE connection_id = $1::text)`, [connectionId]);
+  await q(`DELETE FROM sso_session WHERE connection_id = $1::text`, [connectionId]);
+  await q(`DELETE FROM sso_credential WHERE connection_id = $1::text`, [connectionId]);
 }
 
 // ── credentials made from SSO sessions ─────────────────────────────────────────────────────────────────────────────
@@ -215,8 +274,7 @@ export async function sessionConnection(q: Query, sessionId: string): Promise<st
   return row?.connection_id ?? null;
 }
 
-export type CredentialKind = "api_key" | "oauth";
-export const oauthCredentialId = (userId: string, clientId: string) => `${userId}|${clientId}`;
+export type CredentialKind = "api_key";
 
 export async function recordSsoCredential(q: Query, kind: CredentialKind, credentialId: string, connectionId: string) {
   await q(`INSERT INTO sso_credential (kind, credential_id, connection_id) VALUES ($1::text, $2::text, $3::text) ON CONFLICT DO NOTHING`, [kind, credentialId, connectionId]);

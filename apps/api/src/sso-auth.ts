@@ -8,7 +8,7 @@ import { clientIpFromHeaders } from "./ratelimit";
 import { authorizationUrl, discover, emailDomain, exchangeCode, randomToken, sha256b64url, SsoError, verifyIdToken, type VerifiedIdentity } from "./sso-oidc";
 import { SecretUnreadable } from "./sso-secret";
 import {
-  connectionById, connectionForStart, consumeFlow, createFlow, linkIdentity, markSsoSession, provisionUser,
+  accountIdOf, connectionById, connectionForStart, consumeFlow, createFlow, linkIdentity, removedFrom, markSsoSession, provisionUser,
   userByEmail, userByIdentity, userById, type SsoConnection,
 } from "./sso-store";
 
@@ -48,7 +48,7 @@ export function safeReturnTo(raw: unknown): string {
 /** Error codes the web app turns into a message (login page, or Account for a link). Never details of the failure. */
 export type SsoFailure =
   | "invalid_state" | "idp_error" | "invalid_id_token" | "connection_disabled" | "connection_misconfigured" | "email_not_verified"
-  | "domain_not_allowed" | "link_required" | "link_email_mismatch" | "identity_in_use" | "signup_closed" | "sso_required";
+  | "domain_not_allowed" | "link_required" | "link_email_mismatch" | "identity_in_use" | "signup_closed" | "sso_required" | "access_removed";
 
 export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) {
   const q: Query = (sql, params) => database.query(sql, params);
@@ -186,6 +186,12 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             if (await userByEmail(q, identity.email)) {
               await refusal(conn, "link_required", ctx.headers);
               return fail("link_required");
+            }
+            // someone removed from the workspace (by address or by this identity) is not provisioned back into it, even
+            // with a new account, until the address is invited again
+            if (conn.orgId && (await removedFrom(q, conn.orgId, identity.email, accountIdOf(identity.issuer, identity.subject)))) {
+              await refusal(conn, "removed", ctx.headers);
+              return fail("access_removed");
             }
             // the operator's provider follows DISABLE_SIGNUP; a workspace's own provider provisions into that workspace only
             if (!conn.orgId && ["true", "1"].includes(String(env.DISABLE_SIGNUP ?? "").trim().toLowerCase()) && !(await database.repo.hasPendingInvitation(identity.email))) return fail("signup_closed");

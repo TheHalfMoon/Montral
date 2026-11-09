@@ -9,12 +9,15 @@ import { userLang, tr } from "./mail-i18n";
 import type { Bindings } from "./env";
 import { AUDITED_AUTH_PATHS, auditAuthCall, MEMBERSHIP_ENDING_PATHS, noteKeyBeforeDelete, noteMembershipBefore, type KeyNote, type MemberNote } from "./audit-auth";
 import { ssoPlugin, type SsoSignIn } from "./sso-auth";
-import { dropSsoLinksOfFormerMember, oauthCredentialId, recordSsoCredential, sessionConnection, ssoAllows, ssoProtected, ssoRequiredFor } from "./sso-store";
+import { clearRemoval, dropSsoLinksOfFormerMember, recordRemoval, recordSsoCredential, sessionConnection, ssoAllows, ssoProtected, ssoRequiredFor, ssoSatisfiesAll } from "./sso-store";
 
 /** Better Auth endpoints that act on a workspace without passing requireOrg: held to the workspace's "require SSO". */
-const SSO_GUARDED_PATHS = new Set(["/oauth2/consent", "/oauth2/continue", "/api-key/create", "/api-key/update"]);
-/** Endpoints after which a credential made from an SSO session is remembered for that session's connection. */
-const SSO_CREDENTIAL_PATHS = new Set(["/api-key/create", "/oauth2/consent", "/oauth2/continue"]);
+const SSO_GUARDED_PATHS = new Set(["/api-key/create", "/api-key/update"]);
+/**
+ * The OAuth provider's endpoints that issue authorization codes or create or change consent. /oauth2/authorize issues a
+ * code by itself when a consent is already on file, so it is guarded like the consent screens.
+ */
+const SSO_OAUTH_PATHS = new Set(["/oauth2/authorize", "/oauth2/continue", "/oauth2/consent", "/oauth2/update-consent"]);
 const plain = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Error) && !(v instanceof Response) ? (v as Record<string, unknown>) : null);
 const text = (v: unknown) => (typeof v === "string" && v ? v : null);
 
@@ -258,19 +261,29 @@ export function createAuth(database: Database, env: Bindings) {
         // consent, API keys): a member other than an owner may only act on such a workspace with a session its own
         // SSO connection created. The workspaces concerned: the one named in the request, else the active one; for an
         // agent's consent, every workspace the grant would cover.
+        // The OAuth endpoints do not trust the picker cookie (montral_grant, written by the browser) to say which
+        // workspaces a grant covers: the session must satisfy every require-SSO workspace of the user.
+        if (SSO_OAUTH_PATHS.has(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          if (session && !(await ssoSatisfiesAll(query, session.user.id, session.session.id))) {
+            throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
+          }
+        }
         if (ctx.path.startsWith("/organization/") || SSO_GUARDED_PATHS.has(ctx.path)) {
           const session = await getSessionFromCtx(ctx).catch(() => null);
           if (session) {
             const body = plain(ctx.body) ?? {};
+            const queryArgs = plain(ctx.query) ?? {};
             const active = text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId);
             let targets: (string | null)[];
-            if (ctx.path.startsWith("/oauth2/")) {
-              const want = picked ? parseGrant(picked) : null;
-              targets = want === "all" ? await repo.workspacesOf(session.user.id).then((w) => w.map((x) => x.id)) : want ? want.map((g) => g.org) : [active];
-            } else if (ctx.path.startsWith("/api-key/")) {
+            if (ctx.path.startsWith("/api-key/")) {
               targets = [text(plain(body.metadata)?.organizationId) ?? active];
             } else {
-              targets = [text(body.organizationId) ?? text(plain(ctx.query)?.organizationId) ?? active];
+              // a workspace may be named by id or by slug (set-active, get-full-organization, ...): both are checked
+              const slug = text(body.organizationSlug) ?? text(queryArgs.organizationSlug);
+              const bySlug = slug ? ((await query<{ id: string }>(`SELECT id FROM organization WHERE slug = $1::text`, [slug]))[0]?.id ?? null) : null;
+              const byId = text(body.organizationId) ?? text(queryArgs.organizationId);
+              targets = byId || bySlug ? [byId, bySlug] : [active];
             }
             for (const orgId of new Set(targets)) {
               if (orgId && !(await ssoAllows(query, orgId, session.user.id, session.session.id))) {
@@ -315,26 +328,36 @@ export function createAuth(database: Database, env: Bindings) {
       // workspace audit log for the member, invitation, workspace and API-key endpoints (audit-auth.ts); never fails the call
       after: createAuthMiddleware(async (ctx) => {
         const returned = plain(ctx.context.returned);
-        // an API key or agent grant made from an SSO session keeps working in a require-SSO workspace of that connection
-        if (SSO_CREDENTIAL_PATHS.has(ctx.path) && returned) {
+        // an API key made from an SSO session keeps working in a require-SSO workspace of that connection (agent tokens
+        // need no record: they carry the session that authorized them)
+        if (ctx.path === "/api-key/create" && returned && text(returned.id)) {
           try {
             const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
             const connection = session ? await sessionConnection(query, session.session.id) : null;
-            if (session && connection) {
-              if (ctx.path === "/api-key/create" && text(returned.id)) await recordSsoCredential(query, "api_key", returned.id as string, connection);
-              const clientId = new URLSearchParams(String(plain(ctx.body)?.oauth_query ?? "")).get("client_id");
-              if (ctx.path.startsWith("/oauth2/") && clientId) await recordSsoCredential(query, "oauth", oauthCredentialId(session.user.id, clientId), connection);
-            }
+            if (connection) await recordSsoCredential(query, "api_key", returned.id as string, connection);
           } catch {
             console.error("sso credential could not be recorded; private diagnostics suppressed");
           }
         }
-        // someone left or was removed: their SSO links to that workspace go too, so SSO cannot sign them back into it
+        // Someone left or was removed. The removal is remembered (address and SSO identities), so provisioning cannot
+        // bring them back even after they delete their account; their SSO links to the workspace go; and someone who
+        // was removed is signed out everywhere. A new invitation to the address lifts the block.
         if (MEMBERSHIP_ENDING_PATHS.has(ctx.path) && returned) {
           const gone = ctx.path === "/organization/remove-member" ? plain(returned.member) : returned;
           const orgId = text(gone?.organizationId);
           const userId = text(gone?.userId) ?? (ctx.path === "/organization/leave" ? (memberNote?.userId ?? null) : null);
-          if (orgId && userId) await dropSsoLinksOfFormerMember(query, orgId, userId).catch(() => console.error("sso links could not be removed; private diagnostics suppressed"));
+          if (orgId && userId) {
+            try {
+              await recordRemoval(query, orgId, userId);
+              await dropSsoLinksOfFormerMember(query, orgId, userId);
+              if (ctx.path === "/organization/remove-member") await query(`DELETE FROM session WHERE user_id = $1::text`, [userId]);
+            } catch {
+              console.error("sso removal could not be recorded; private diagnostics suppressed");
+            }
+          }
+        }
+        if (ctx.path === "/organization/invite-member" && returned && text(returned.organizationId) && text(returned.email)) {
+          await clearRemoval(query, returned.organizationId as string, returned.email as string).catch(() => console.error("sso removal could not be cleared; private diagnostics suppressed"));
         }
         if (!AUDITED_AUTH_PATHS.has(ctx.path)) return;
         const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));

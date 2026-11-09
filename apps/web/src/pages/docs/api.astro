@@ -115,6 +115,7 @@ const groups: Group[] = [
     noteZh: "维护窗口生效期间，所覆盖的监控项仍会被检测，但不会创建事件或发送告警。monitorIds 为空表示覆盖当前项目内所有监控项。可按 IANA 时区每天或每周重复，截止时刻包含在内且须在首次开始后 366 天内。每次实际持续时长固定，最多 24 小时。首次开始严格采用传入时刻；后续按当地墙钟时间重复。夏令时跳时使用跳时前偏移量向后顺延，重复时刻选择后一次。所有窗口同时生成，每次有独立提醒标识。取消不会撤回已领取待发送或已发送的提醒。",
     eps: [
       { m: "GET", p: "/maintenance", en: "Up to 1000 project windows, active/upcoming first and closest to now first.", zh: "最多返回 1000 个项目维护窗口，当前及未来窗口优先，并按距离当前时间排序。", res: `[{ id, name, startsAt, endsAt, monitorIds, createdAt, projectId, seriesId, recurrence }]` },
+      { m: "GET", p: "/maintenance/:id", en: "One window (or one occurrence of a series) by id, including ended ones beyond the list's 1000-window cap. 404 when it does not exist, belongs to another workspace, or is outside a project-limited key's projects.", zh: "按 id 获取单个窗口（或系列中的一次窗口），包括超出列表 1000 条上限的已结束窗口。窗口不存在、属于其他工作区或不在受限密钥的项目范围内时返回 404。", res: `{ id, name, startsAt, endsAt, monitorIds, createdAt, projectId, seriesId, recurrence }` },
       { m: "POST", p: "/maintenance", en: "Schedule one window or a bounded recurring series. Returns 201 with the first occurrence; use GET /maintenance to list all.", zh: "创建一次性窗口或有限周期系列。返回 201 和首次窗口；通过 GET /maintenance 查看全部。", req: `name        string, 1-120\nstartsAt    ISO 8601 date-time\nendsAt      ISO 8601 date-time, after startsAt\nmonitorIds  uuid[], max 500   (default [])\nrecurrence  null (default), or { frequency: "daily" | "weekly", timeZone: "America/Toronto", until: "2027-01-01T00:00:00Z" }` },
       { m: "POST", p: "/maintenance/:id/end", en: "End an active occurrence now, retaining history. Idempotent. Returns { ok: true }.", zh: "立即结束当前窗口并保留历史。可重复调用，返回 { ok: true }。" },
       { m: "DELETE", p: "/maintenance/series/:id", en: "Cancel a series by seriesId: remove future occurrences and end active ones, preserving completed windows. Idempotent, returns 204.", zh: "按 seriesId 取消系列：删除未来窗口并结束当前窗口，保留已完成历史。可重复调用，返回 204。" },
@@ -347,6 +348,19 @@ DELETE /api/push/devices/:token    204</code></pre>
     <p>Create a monitor with <code>"type":"heartbeat"</code> and call its URL from your job. No API key is needed; the token is the secret. Use <code>GET</code> or <code>POST</code>.</p>
     <pre><code>curl https://montral.invalid/api/heartbeat/&lt;heartbeatToken&gt;</code></pre>
     <p>Returns <code is:raw>{"ok":true}</code>, or <code>404</code> for an unknown token. A ping resolves an open incident for that monitor.</p>
+    <h2 id="terraform">Terraform provider</h2>
+    <p>The repository ships a Terraform (and OpenTofu) provider in <code>terraform-provider-montral/</code>. It is <strong>not published to any registry</strong>: build it from source with Go and point Terraform at the binary with <code>dev_overrides</code>, as described in its <code>README.md</code>. It manages monitors (<code>montral_monitor</code>), alert channels (<code>montral_alert_channel</code>), status pages (<code>montral_status_page</code>), maintenance windows (<code>montral_maintenance_window</code>) project escalation (<code>montral_project_alerting</code>) and escalation policies (<code>montral_escalation_policy</code>), with <code>montral_monitor</code> and <code>montral_project</code> data sources. It talks to this REST API with an API key, verifies TLS, and refreshes every resource on each plan so changes made in the dashboard show up as drift.</p>
+    <pre><code is:raw>provider "montral" {
+  endpoint = "https://montral.example.com"   # or MONTRAL_ENDPOINT
+  # api_key from MONTRAL_API_KEY; project_id optional (defaults to the key's first project)
+}
+
+resource "montral_monitor" "api" {
+  name   = "API health"
+  type   = "http"
+  target = "https://api.example.com/health"
+}</code></pre>
+    <p>Use an owner's or admin's key: credentials in channel settings, monitor headers and request bodies are returned only to them, and with a member's key the provider keeps those values from state and cannot detect out-of-band changes to them. Status page passwords are never returned by the API.</p>
   </div>
   <div lang="zh-CN">
     <h1>API 参考</h1>
@@ -415,6 +429,19 @@ DELETE /api/push/devices/:token    204</code></pre>
     <p>创建 <code>"type":"heartbeat"</code> 的监控项，并在你的任务中请求其地址。无需 API 密钥，令牌本身即是凭证。可使用 <code>GET</code> 或 <code>POST</code>。</p>
     <pre><code>curl https://montral.invalid/api/heartbeat/&lt;heartbeatToken&gt;</code></pre>
     <p>成功返回 <code is:raw>{"ok":true}</code>，令牌无效返回 <code>404</code>。收到心跳会关闭该监控项未结束的事件。</p>
+    <h2 id="terraform-zh">Terraform Provider</h2>
+    <p>仓库在 <code>terraform-provider-montral/</code> 中提供 Terraform（及 OpenTofu）Provider。它<strong>尚未发布到任何 Registry</strong>：请用 Go 从源码构建，并按其 <code>README.md</code> 的说明通过 <code>dev_overrides</code> 让 Terraform 使用该二进制文件。它可管理监控项（<code>montral_monitor</code>）、告警渠道（<code>montral_alert_channel</code>）、状态页（<code>montral_status_page</code>）、维护窗口（<code>montral_maintenance_window</code>）项目升级策略（<code>montral_project_alerting</code>）和升级策略（<code>montral_escalation_policy</code>），并提供 <code>montral_monitor</code> 与 <code>montral_project</code> 数据源。它使用 API 密钥调用本 REST API，校验 TLS 证书，并在每次 plan 时刷新所有资源，因此在控制台中所做的修改会显示为漂移。</p>
+    <pre><code is:raw>provider "montral" {
+  endpoint = "https://montral.example.com"   # 或 MONTRAL_ENDPOINT
+  # api_key 读取 MONTRAL_API_KEY；project_id 可选（默认使用密钥的第一个项目）
+}
+
+resource "montral_monitor" "api" {
+  name   = "API health"
+  type   = "http"
+  target = "https://api.example.com/health"
+}</code></pre>
+    <p>请使用所有者或管理员的密钥：渠道设置中的凭据、监控项请求头和请求体只返回给他们；使用普通成员的密钥时，Provider 会沿用状态文件中的值，无法发现在 Terraform 之外对这些值的修改。API 从不返回状态页密码。</p>
   </div>
 
   <div class="toc">

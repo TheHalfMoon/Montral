@@ -1,0 +1,8 @@
+terraform-provider-montral
+terraform-provider-montral.exe
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+crash.log

@@ -778,6 +778,8 @@ export interface Repo {
   saveSettings(orgId: string, patch: Partial<WorkspaceSettings>): Promise<WorkspaceSettings>;
 
   listMaintenance(orgId: string, projectId: string): Promise<MaintenanceWindow[]>;
+  /** One window by id, whatever its age (the list is capped); null when it is not in this workspace or outside `scope`. */
+  getMaintenance(orgId: string, id: string, scope: Scope): Promise<MaintenanceWindow | null>;
   createMaintenance(orgId: string, projectId: string, w: NewMaintenance): Promise<MaintenanceWindow>;
   /** Each returns the windows it actually changed (empty when nothing matched). */
   deleteMaintenance(orgId: string, id: string, scope: Scope): Promise<MaintenanceChange[]>;

@@ -7,7 +7,7 @@ could not be watched.
 
 ## Change
 - New monitor type `ping` (`apps/api/src/ping.ts`), enum value added by
-  migration `0050_monitor_ping` (`ALTER TYPE ... ADD VALUE 'ping'`, as for
+  migration `0051_monitor_ping` (`ALTER TYPE ... ADD VALUE 'ping'`, as for
   `certificate` in 0046). Repo, schema, API, web and docs type lists updated.
 - Target: a hostname (LDH labels) or an IP literal (IPv6 optionally in
   brackets, no zone id), parsed by `pingHost` in `netguard.ts`. Scheme, port,
@@ -102,7 +102,7 @@ could not be watched.
   `build:node` (esbuild server bundle): builds.
 
 ## Not tested / limits
-- `ping.e2e.test.ts` (API on real PostgreSQL: enum value from 0050 stored,
+- `ping.e2e.test.ts` (API on real PostgreSQL: enum value from 0051 stored,
   target validation, private refusal, region refusal, PATCH, Kuma import
   preview, Workers 400) skips locally (no PostgreSQL); it runs in GitHub CI.
 - Not run in the Docker image. That BusyBox ping in `node:22-alpine` as

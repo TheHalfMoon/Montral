@@ -87,6 +87,11 @@ services:
       POSTGRES_USER: montral
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: montral
+      # PostgreSQL 18's own default, spelled out so it cannot drift: an image of another major version (say someone
+      # changes the tag to 17) then finds this 18 cluster and refuses to start ("database files are incompatible"),
+      # instead of quietly initialising a new, empty cluster next to your data. Upgrade majors with pg_upgrade or a
+      # dump and restore (see /docs/backup), never by changing the tag.
+      PGDATA: /var/lib/postgresql/18/docker
     # PostgreSQL 18 images keep PGDATA in a versioned subdirectory, so mount the parent
     volumes: [pgdata:/var/lib/postgresql]
     healthcheck:

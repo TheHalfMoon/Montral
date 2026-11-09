@@ -221,7 +221,7 @@ export const api = {
     req<{ customDomain: string; customDomainVerifiedAt: null; customDomainRecord: DomainRecord }>(`/status-pages/${id}/domain`, { method: "PUT", body: JSON.stringify({ domain }) }),
   clearStatusDomain: (id: string) => req<void>(`/status-pages/${id}/domain`, { method: "DELETE" }),
   verifyStatusDomain: (id: string) =>
-    req<{ verified: true; customDomain: string; customDomainVerifiedAt: string; record: DomainRecord }>(`/status-pages/${id}/domain/verify`, { method: "POST" }),
+    req<{ verified: true; customDomain: string; customDomainVerifiedAt: string; customDomainCheckedAt: string; record: DomainRecord }>(`/status-pages/${id}/domain/verify`, { method: "POST" }),
   shareLinks: (id: string) => req<ShareLink[]>(`/status-pages/${id}/share-links`),
   createShareLink: (id: string, b: { label?: string; expiresInHours?: number }) =>
     req<{ id: string; label: string | null; expiresAt: string; url: string; warning: string }>(`/status-pages/${id}/share-links`, { method: "POST", body: JSON.stringify(b) }),

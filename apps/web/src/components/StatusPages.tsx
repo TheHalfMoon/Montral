@@ -454,7 +454,7 @@ function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Part
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
             <button type="button" className="btn sm primary" disabled={!!busy} onClick={() => void run("verify", async () => {
               const r = await api.verifyStatusDomain(page.id);
-              onChange({ customDomainVerifiedAt: r.customDomainVerifiedAt, customDomainCheckedAt: r.customDomainVerifiedAt, customDomainFailingSince: null, customDomainCheckError: null });
+              onChange({ customDomainVerifiedAt: r.customDomainVerifiedAt, customDomainCheckedAt: r.customDomainCheckedAt, customDomainFailingSince: null, customDomainCheckError: null });
               setNote(t("Verified. Montral serves the page on this domain as soon as your reverse proxy forwards it."));
             })}>{busy === "verify" ? t("Checking DNS…") : verified ? t("Verify again") : t("Verify")}</button>
             {verified && <a className="mono" href={`https://${page.customDomain}/`} target="_blank" rel="noopener">{page.customDomain} ↗</a>}
@@ -485,7 +485,7 @@ function DomainHealth({ page, verified }: { page: StatusPage; verified: boolean 
       </p>
     );
   if (verified && page.customDomainCheckedAt)
-    return <p className="faint" style={{ marginTop: 12, fontSize: 13 }}>{t("TXT record last confirmed {time}. Montral re-checks it every 6 hours.").replace("{time}", new Date(page.customDomainCheckedAt).toLocaleString())}</p>;
+    return <p className="faint" style={{ marginTop: 12, fontSize: 13 }}>{t("TXT record last confirmed {time}. Montral re-checks it about every 6 hours.").replace("{time}", new Date(page.customDomainCheckedAt).toLocaleString())}</p>;
   return null;
 }
 

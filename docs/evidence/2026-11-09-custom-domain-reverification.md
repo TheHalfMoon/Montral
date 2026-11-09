@@ -15,10 +15,12 @@ in `docs/FINAL-REPORT.md`.
 - Migration `0050_status_page_domain_recheck` adds four columns to
   `status_page`: `custom_domain_checked_at`, `custom_domain_failing_since`,
   `custom_domain_failures` and `custom_domain_check_error`.
-- `recheckCustomDomains` (`apps/api/src/custom-domain.ts`) runs from the Node
-  scheduler every 5 minutes, independently of monitor checks. It claims due
-  rows with `FOR UPDATE SKIP LOCKED`, at most 10 per run, with 4 lookups in
-  parallel.
+- `recheckCustomDomains` (`apps/api/src/custom-domain.ts`) runs every 5
+  minutes on its own Node timer, outside the monitor tick, so slow DNS never
+  delays checks. It claims due rows in batches of 25 with
+  `FOR UPDATE SKIP LOCKED`, failing domains first, with 8 lookups in parallel.
+  It keeps claiming until nothing is due or 60 s have passed, and stops
+  between batches on shutdown.
 - **Policy** (`DOMAIN_RECHECK`):
   - **Re-check interval:** every 6 h while the record matches; every 30 min
     once a check failed.
@@ -26,6 +28,9 @@ in `docs/FINAL-REPORT.md`.
     least 3 failed checks.
   - **`lookup_failed`** (timeouts, SERVFAIL): verification is withdrawn after
     7 days, so a resolver outage does not take a status page offline.
+  - **Switching kinds:** a streak that switches between `lookup_failed` and
+    `missing`/`mismatch` starts over, so one NXDOMAIN after days of resolver
+    trouble cannot withdraw at once.
   - **Recovery:** any matching check ends the streak.
 - **Race safety:** each write is bound to the row's `(id, domain, token)` and
   to `verified_at IS NOT NULL`. A domain that was set again, removed, verified
@@ -54,8 +59,11 @@ and 18 in CI, with an explicit clock and per-test page scoping. It covers:
 - A mismatch counts like a missing record.
 - Unreachable DNS keeps the domain for 7 days, then withdraws it. An answer in
   between starts a new streak.
-- Races: the domain is set again, or taken over by another workspace, while a
-  lookup is in flight. Neither page is changed by the stale write.
+- A switch from `lookup_failed` to `missing` starts a new streak.
+- Races: the domain is set again, set again *and* re-verified with a new
+  token, or taken over by another workspace while a lookup is in flight. None
+  of them is changed by the stale write. The re-verified case proves the token
+  binding on its own.
 - Three concurrent servers: each domain is looked up exactly once per round.
 
 ## Not demonstrated

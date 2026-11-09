@@ -157,9 +157,9 @@ server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral: serv
 // never ends is a hung database call: it would block every later tick while /health keeps answering. Nothing else can
 // recover that, so exit and let the container's restart policy bring the process back. State lives in Postgres.
 const TICK_STUCK_MS = 5 * 60_000;
+let stopping = false; // set once by stop(); timers check it before starting new work
 let tickStartedAt = 0; // 0 = no tick running
 let lastHookPruneAt = 0; // successful Montral maintenance completion only
-let lastDomainRecheckAt = 0;
 const tickGate = createNodeTickGate();
 const tick = setInterval(() => {
   tickGate.start(async () => {
@@ -181,22 +181,24 @@ const tick = setInterval(() => {
           // No timestamp update: try again on the next scheduled tick.
         }
       }
-      // Verified custom domains keep proving control of their TXT record (policy in custom-domain.ts). Rows are
-      // claimed in the database, so several servers share the work; a failure here never touches monitoring.
-      if (Date.now() - lastDomainRecheckAt >= 5 * 60_000) {
-        lastDomainRecheckAt = Date.now();
-        try {
-          const r = await recheckCustomDomains((sql, params) => database.query(sql, params));
-          if (r.withdrawn) console.error(`custom domains: verification withdrawn for ${r.withdrawn} domain(s) whose TXT record is gone`);
-        } catch {
-          console.error("custom domain re-check failed; private diagnostic suppressed");
-        }
-      }
     } finally {
       tickStartedAt = 0;
     }
   });
 }, 30_000);
+// Verified custom domains keep proving control of their TXT record (policy in custom-domain.ts). On its own timer,
+// outside the monitor tick: slow or blackholed DNS must never delay checks. Rows are claimed in the database, so
+// several servers share the work; one run at a time per process, bounded by the policy's time budget.
+let domainRecheckRunning = false;
+const domainRecheck = setInterval(() => {
+  if (domainRecheckRunning || stopping) return;
+  domainRecheckRunning = true;
+  recheckCustomDomains((sql, params) => database.query(sql, params), { shouldContinue: () => !stopping })
+    .then((r) => { if (r.withdrawn) console.error(`custom domains: verification withdrawn for ${r.withdrawn} domain(s) whose TXT record is gone`); })
+    .catch(() => { if (!stopping) console.error("custom domain re-check failed; private diagnostic suppressed"); })
+    .finally(() => { domainRecheckRunning = false; });
+}, 5 * 60_000);
+domainRecheck.unref();
 const watchdog = setInterval(() => {
   // The scheduler tick can complete while local queue handlers remain hung.
   // Restart rather than silently exhausting all 512 in-process reservations.
@@ -213,12 +215,12 @@ const watchdog = setInterval(() => {
 }, 30_000);
 watchdog.unref();
 
-let stopping = false;
 const stop = () => {
   if (stopping) return; // SIGTERM followed by SIGINT must not close the DB twice.
   stopping = true;
   clearInterval(tick);
   clearInterval(watchdog);
+  clearInterval(domainRecheck);
   const activeTick = tickGate.stopAndWait();
   const closedServer = new Promise<boolean>((resolve) => {
     server.close((err) => resolve(!err));

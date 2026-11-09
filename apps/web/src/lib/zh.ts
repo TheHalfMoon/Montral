@@ -622,7 +622,7 @@ export const zh: Record<string, string> = {
   "Restore the record, then verify again.": "请恢复该记录，然后重新验证。",
   "Re-check failing since {time}.": "自 {time} 起复查失败。",
   "The page is still served. Verification is withdrawn after 24 hours without the record, or 7 days if DNS stays unreachable.": "页面仍在提供。若记录缺失超过 24 小时，或 DNS 持续无法访问超过 7 天，验证将被撤销。",
-  "TXT record last confirmed {time}. Montral re-checks it every 6 hours.": "TXT 记录最近一次确认于 {time}。Montral 每 6 小时复查一次。",
+  "TXT record last confirmed {time}. Montral re-checks it about every 6 hours.": "TXT 记录最近一次确认于 {time}。Montral 大约每 6 小时复查一次。",
   "Custom domains need the self-hosted server. This deployment does not support them.": "自定义域名需要自托管服务器，当前部署不支持。",
   "Serve this page on your own hostname, such as status.example.com. Montral does not issue certificates: your reverse proxy (Caddy, nginx) terminates TLS for the domain and forwards it to Montral with the original Host header.": "在你自己的主机名（如 status.example.com）上提供此页面。Montral 不签发证书：由你的反向代理（Caddy、nginx）为该域名终止 TLS，并携带原始 Host 头转发给 Montral。",
   "Saved. Create the TXT record below, then verify.": "已保存。请创建下方的 TXT 记录，然后验证。",

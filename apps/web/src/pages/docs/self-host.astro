@@ -238,10 +238,10 @@ status.example.com {
     </ul>
 
     <h3>Keep the TXT record</h3>
-    <p>A verified domain keeps proving control. The server looks the TXT record up again every 6 hours, and every 30 minutes once a lookup failed. A short DNS problem never takes the page offline: while a failure streak is young, the domain keeps serving and the editor shows when the streak started and why.</p>
+    <p>A verified domain keeps proving control. The server looks the TXT record up again about every 6 hours, and about every 30 minutes once a lookup failed (failing domains are checked first). A short DNS problem never takes the page offline: while a failure streak is young, the domain keeps serving and the editor shows when the streak started and why.</p>
     <ul>
       <li>If the record has been <strong>missing or holds another value</strong> for 24 hours, over at least three checks, verification is withdrawn and the domain answers <code>404</code>.</li>
-      <li>If the domain's <strong>DNS cannot be reached at all</strong> (timeouts, SERVFAIL, dead nameservers), the page stays served for 7 days before verification is withdrawn.</li>
+      <li>If the domain's <strong>DNS cannot be reached at all</strong> (timeouts, SERVFAIL, dead nameservers), the page stays served for 7 days before verification is withdrawn. A streak that switches between unreachable DNS and a missing record starts over.</li>
       <li>The editor shows the reason for a withdrawal. Restore the record and press <strong>Verify</strong> to serve the domain again.</li>
       <li>Several servers share the re-checks: each domain is claimed in the database, so it is looked up once per round. A withdrawal applies at once on the server that made it, and within 60 seconds on the others.</li>
     </ul>
@@ -487,10 +487,10 @@ status.example.com {
     </ul>
 
     <h3>保留 TXT 记录</h3>
-    <p>已验证的域名需要持续证明控制权。服务器每 6 小时重新查询一次 TXT 记录，查询失败后改为每 30 分钟一次。短暂的 DNS 问题不会让页面下线：失败记录刚开始时，域名继续提供页面，编辑器会显示失败开始的时间和原因。</p>
+    <p>已验证的域名需要持续证明控制权。服务器大约每 6 小时重新查询一次 TXT 记录，查询失败后改为大约每 30 分钟一次（优先检查失败的域名）。短暂的 DNS 问题不会让页面下线：失败记录刚开始时，域名继续提供页面，编辑器会显示失败开始的时间和原因。</p>
     <ul>
       <li>如果记录<strong>缺失或内容不符</strong>已持续 24 小时、且至少检查了三次，验证将被撤销，该域名返回 <code>404</code>。</li>
-      <li>如果该域名的 <strong>DNS 完全无法访问</strong>（超时、SERVFAIL、名称服务器失效），页面会继续提供 7 天，之后撤销验证。</li>
+      <li>如果该域名的 <strong>DNS 完全无法访问</strong>（超时、SERVFAIL、名称服务器失效），页面会继续提供 7 天，之后撤销验证。失败类型在 DNS 无法访问与记录缺失之间切换时，重新开始计算。</li>
       <li>编辑器会显示撤销原因。恢复记录后点击<strong>验证</strong>即可重新在该域名上提供页面。</li>
       <li>多台服务器共同承担复查：每个域名在数据库中被认领，因此每轮只查询一次。撤销在执行它的服务器上立即生效，其他服务器在 60 秒内同步。</li>
     </ul>

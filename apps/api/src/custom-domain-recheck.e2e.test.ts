@@ -151,6 +151,43 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
     expect(await recheck(r.id, u1 + 8 * 24 * H, failing("ETIMEOUT"))).toMatchObject({ withdrawn: 0 }); // a new streak
   });
 
+  it("a streak that switches from unreachable DNS to a missing record starts over instead of withdrawing at once", async () => {
+    const p = await verifiedPage();
+    const t1 = p.t0 + 7 * H;
+    await recheck(p.id, t1, failing("ESERVFAIL"));
+    await recheck(p.id, t1 + 3 * 24 * H, failing("ESERVFAIL"));
+    await recheck(p.id, t1 + 6 * 24 * H, failing("ESERVFAIL"));
+    txt.delete(p.rec.name);
+    const t2 = t1 + 6 * 24 * H + DOMAIN_RECHECK.failingMs;
+    expect(await recheck(p.id, t2)).toMatchObject({ failed: 1, withdrawn: 0 }); // NXDOMAIN after 6 days of SERVFAIL
+    const s = await state(p.id);
+    expect(s).toMatchObject({ failures: 1, error: "missing" });
+    expect(new Date(s.since!).getTime()).toBe(t2);
+    await recheck(p.id, t2 + 12 * H);
+    expect(await recheck(p.id, t2 + 24 * H)).toMatchObject({ withdrawn: 1 }); // the missing-record rule, from t2
+  });
+
+  it("a stale failure cannot land on a domain that was set again and re-verified with a new token during the lookup", async () => {
+    const p = await verifiedPage();
+    // three failures put the page one check away from withdrawal
+    txt.delete(p.rec.name);
+    const t1 = p.t0 + 7 * H;
+    for (const dt of [0, 12 * H, 23 * H]) await recheck(p.id, t1 + dt);
+    expect(await state(p.id)).toMatchObject({ failures: 3 });
+    const reVerify: TxtResolver = async () => {
+      const set = await call(`/api/status-pages/${p.id}/domain`, { method: "PUT", cookie: p.cookie, body: JSON.stringify({ domain: p.domain }) });
+      const rec = ((await set.json()) as { customDomainRecord: Rec }).customDomainRecord;
+      txt.set(rec.name, [rec.value]);
+      expect((await call(`/api/status-pages/${p.id}/domain/verify`, { method: "POST", cookie: p.cookie })).status).toBe(200);
+      return []; // the in-flight lookup still reports the old token missing
+    };
+    expect(await recheck(p.id, t1 + 24 * H, reVerify)).toMatchObject({ checked: 1, failed: 1, withdrawn: 0 });
+    // verified again under the new token: still routed, with a clean streak (only the token binding blocked the write)
+    expect(await state(p.id)).toMatchObject({ failures: 0, error: null, since: null });
+    expect((await state(p.id)).verified).not.toBeNull();
+    expect(await routed(p.domain)).toBe(p.id);
+  });
+
   it("a re-check never touches a domain that was set again, removed or taken over while it was looking it up", async () => {
     // set again (new token) during the lookup: the stale failure must not land on the new claim
     const p = await verifiedPage();

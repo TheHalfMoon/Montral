@@ -97,7 +97,11 @@ set -e
 if [[ $downgrade_status -eq 0 || $downgrade_status -eq 124 ]]; then
   echo "PostgreSQL 17 did not refuse the PostgreSQL 18 volume (exit ${downgrade_status})" >&2; echo "$downgrade_log" | tail -20 >&2; exit 1
 fi
-grep -q -i 'incompatible' <<<"$downgrade_log" || { echo "downgrade refused for an unexpected reason:" >&2; echo "$downgrade_log" | tail -20 >&2; exit 1; }
+# What matters: it found the existing cluster (no new, empty one was initialised) and refused to run on it. PostgreSQL 17
+# stops either at 18's configuration file or at the data directory version check, whichever it reaches first.
+grep -q 'Skipping initialization' <<<"$downgrade_log" || { echo "the older image did not recognise the existing cluster:" >&2; echo "$downgrade_log" | tail -20 >&2; exit 1; }
+grep -q -i -E 'incompatible|configuration file .* contains errors' <<<"$downgrade_log" || { echo "downgrade refused for an unexpected reason:" >&2; echo "$downgrade_log" | tail -20 >&2; exit 1; }
+"${compose[@]}" run --rm --no-deps -T --entrypoint sh postgres -c 'test ! -e /var/lib/postgresql/data/PG_VERSION' || { echo "a second cluster was initialised in the volume" >&2; exit 1; }
 "${compose[@]}" up -d --wait postgres
 "${compose[@]}" up -d montral
 wait_healthy

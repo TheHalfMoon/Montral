@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { armCache } from "../lib/api";
-import { NAV_LABEL, resolveRoute } from "../lib/routes";
+import { NAV_LABEL, isSamePage, pageKey, resolveRoute } from "../lib/routes";
 import { t } from "../lib/i18n";
 import { lp, stripLocale } from "../lib/locale-path";
 import Toaster from "./Toaster";
@@ -50,6 +50,8 @@ function internal(a: HTMLAnchorElement, e: MouseEvent) {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return false;
   if (a.target && a.target !== "_self") return false;
   if (a.hasAttribute("download") || a.origin !== location.origin) return false;
+  // an in-page fragment link (the "Skip to main content" link) is the browser's job: moving focus and scroll
+  if (a.hash && a.pathname === location.pathname && a.search === location.search) return false;
   const p = stripLocale(a.pathname);
   return p === NAV_PREFIX || p.startsWith(NAV_PREFIX + "/");
 }
@@ -89,7 +91,9 @@ export default function Router() {
 
   useEffect(() => {
     let remounted = false;
+    let shown = pageKey(location);
     const show = () => {
+      shown = pageKey(location);
       remounted = false;
       setPath(location.pathname);
       setBump(0);
@@ -99,13 +103,15 @@ export default function Router() {
       window.dispatchEvent(new Event("montral:changed")); // refresh the sidebar counts
     };
     const onPop = () => { armCache(); show(); };
+    // a fragment-only history change (the skip link, Back after it) stays on this page: the browser scrolls and focuses
+    const onPopState = () => { if (pageKey(location) !== shown) onPop(); };
     // another workspace or project: same page, new data — remount it even though the path did not change
     const onScope = () => { setScope((n) => n + 1); show(); };
     const onClick = (e: MouseEvent) => {
       const a = (e.target as Element | null)?.closest?.("a");
       if (!a || !internal(a, e)) return;
       e.preventDefault();
-      if (a.pathname + a.search === location.pathname + location.search) return;
+      if (isSamePage(a, location)) return;
       history.pushState(null, "", a.pathname + a.search);
       onPop();
     };
@@ -116,13 +122,13 @@ export default function Router() {
       armCache();
       setBump((n) => n + 1);
     };
-    window.addEventListener("popstate", onPop);
+    window.addEventListener("popstate", onPopState);
     window.addEventListener("montral:scope", onScope);
     window.addEventListener("montral:stale", onStale);
     document.addEventListener("click", onClick);
     syncShell(location.pathname);
     return () => {
-      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("popstate", onPopState);
       window.removeEventListener("montral:scope", onScope);
       window.removeEventListener("montral:stale", onStale);
       document.removeEventListener("click", onClick);

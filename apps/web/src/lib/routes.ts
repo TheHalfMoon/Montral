@@ -48,3 +48,12 @@ export function resolveRoute(pathname: string): { route: Route; params: string[]
   }
   return null;
 }
+
+type PageLocation = { pathname: string; search: string };
+/**
+ * The part of a location that selects a page. Two history entries that differ only in their #fragment (the "Skip to
+ * main content" link, in-page anchors) are the same page: the router must not remount it, scroll to the top, re-arm
+ * the read cache or refetch the sidebar counts for a fragment-only popstate.
+ */
+export const pageKey = (l: PageLocation) => l.pathname + l.search;
+export const isSamePage = (a: PageLocation, b: PageLocation) => pageKey(a) === pageKey(b);

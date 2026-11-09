@@ -50,10 +50,11 @@ export default function Select<V extends string | number>({
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={id}
-        aria-label={label}
         onClick={() => { setOpen((o) => !o); setActive(-1); }}
       >
         {icon}
+        {/* the name includes the visible value (WCAG 2.5.3 label in name): "Language English", not just "Language" */}
+        {label && <span className="sr-only">{label} </span>}
         <span className="dd-cur">{cur?.label}</span>
         <svg className="dd-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 9l6 6 6-6" /></svg>
       </button>

@@ -1,0 +1,94 @@
+name: Montral cross-browser and accessibility
+on:
+  # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
+  push:
+    branches: [main]
+  # every pull request, deliberately with no paths filter: a UI regression can come from an API or database change
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  browsers:
+    name: Chromium, Firefox, WebKit and mobile viewports with WCAG 2.1 AA (PostgreSQL 18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_DATABASE_URL: postgres://montral:montral-local-test@127.0.0.1:5432/montral_ci
+    services:
+      postgres:
+        # the exact image docker-compose.yml ships
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_DB: montral_ci
+          POSTGRES_USER: montral
+          POSTGRES_PASSWORD: montral-local-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U montral -d montral_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build Node API
+        run: pnpm --filter @montral/api build:node
+      - name: Build self-hosted Node web
+        run: DEPLOY_TARGET=node pnpm --filter @montral/web build
+      # Browser binaries are cached per pinned Playwright version (a version bump is a new key, so a stale browser is
+      # never reused). System libraries are not cached: `install --with-deps` below still apt-installs them every run.
+      - name: Read the pinned Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('./e2e/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright.outputs.version }}
+      # The browsers and their system libraries come from the Playwright version pinned in e2e/package.json
+      # (pnpm exec resolves the workspace's own binary, never a newer one from the registry). Downloads and apt are
+      # retried: a dropped transfer is not a test failure.
+      - name: Install Playwright browsers and system dependencies
+        working-directory: e2e
+        shell: bash
+        run: |
+          set -euo pipefail
+          pnpm exec playwright --version
+          echo 'Acquire::Retries "5";' | sudo tee /etc/apt/apt.conf.d/80-retries >/dev/null
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps chromium firefox webkit; then exit 0; fi
+            echo "playwright install attempt $attempt failed; retrying"
+            sleep $((attempt * 10))
+          done
+          exit 1
+      - name: Run cross-browser journeys and axe checks against disposable PostgreSQL
+        shell: bash
+        run: |
+          set -euo pipefail
+          xbrowser_db="${TEST_DATABASE_URL%/*}/montral_test_xbrowser_ci"
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_xbrowser_ci'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_xbrowser_ci WITH (FORCE)"' EXIT
+          cd e2e
+          TEST_DATABASE_URL="$xbrowser_db" pnpm exec playwright test
+      - name: Upload Playwright report and traces
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report/
+            e2e/test-results/
+          retention-days: 14

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { NAV_LABEL, ROUTES, resolveRoute } from "./routes";
+import { NAV_LABEL, ROUTES, isSamePage, pageKey, resolveRoute } from "./routes";
 
 describe("resolveRoute", () => {
   it("resolves static routes", () => {
@@ -30,5 +30,18 @@ describe("resolveRoute", () => {
   it("has unique names and a label for every nav key", () => {
     expect(new Set(ROUTES.map((r) => r.name)).size).toBe(ROUTES.length);
     for (const r of ROUTES) expect(NAV_LABEL[r.key]).toBeTruthy();
+  });
+});
+
+describe("isSamePage (fragment-only navigation)", () => {
+  const at = (href: string) => new URL(href, "http://montral.test");
+  it("treats a fragment-only change, such as the skip link, as the same page", () => {
+    expect(isSamePage(at("/app"), at("/app#main-content"))).toBe(true);
+    expect(isSamePage(at("/app/monitors/1#main-content"), at("/app/monitors/1"))).toBe(true);
+    expect(pageKey(at("/app?project=a#x"))).toBe("/app?project=a");
+  });
+  it("treats a different path or query as a new page", () => {
+    expect(isSamePage(at("/app"), at("/app/incidents"))).toBe(false);
+    expect(isSamePage(at("/app?project=a"), at("/app?project=b"))).toBe(false);
   });
 });

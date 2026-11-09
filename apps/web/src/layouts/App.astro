@@ -76,7 +76,7 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
         <div class="crumb"><b data-t>{crumb}</b></div>
         <div class="bar-r"><TopBar client:only="react" /></div>
       </div>
-      <main class="page" id="main-content"><slot /></main>
+      <main class="page" id="main-content" tabindex="-1"><slot /></main>
     </div>
     <nav class="tabs" aria-label="Primary">
       {main.slice(0, 4).map(([k, href, label]) => (

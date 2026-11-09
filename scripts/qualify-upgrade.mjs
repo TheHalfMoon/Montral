@@ -456,7 +456,8 @@ try {
   const temp = mkdtempSync(join(tmpdir(), "montral-upgrade-"));
   summary.tempDir = temp;
   const preDump = join(temp, "pre-upgrade.dump");
-  await timed("preUpgradeBackup", () => hostTool("pg_dump", ["--format=custom", "--no-owner", "--no-acl", "--file", preDump, dbUrl(DBS.upgrade)]));
+  // the documented backup command (`docker compose exec -T postgres pg_dump -U montral -Fc montral > montral-pre-upgrade.dump`)
+  await timed("preUpgradeBackup", () => inContainer(["pg_dump", "-U", PG_USER, "-Fc", DBS.upgrade], { stdoutFile: preDump }));
   summary.preUpgradeDumpBytes = statSync(preDump).size;
 
   log("A: HEAD on the same database");
@@ -525,8 +526,12 @@ try {
 
   // (b2) supported rollback: restore the pre-upgrade backup into a fresh database and start the old build on it
   log("B: restore the pre-upgrade backup into a new database, old build on it");
-  await createDb(DBS.rollback);
-  await timed("rollbackRestore", () => hostTool("pg_restore", ["--exit-on-error", "--no-owner", "--no-acl", "--dbname", dbUrl(DBS.rollback), preDump]));
+  // the documented rollback: an EMPTY database (never --clean over the upgraded one), restored with the container's tools
+  await dropDb(DBS.rollback);
+  await timed("rollbackRestore", async () => {
+    await inContainer(["createdb", "-U", PG_USER, DBS.rollback]);
+    await inContainer(["pg_restore", "-U", PG_USER, "-d", DBS.rollback, "--no-owner", "--exit-on-error"], { stdinFile: preDump });
+  });
   const rolledBack = await fingerprints(db(DBS.rollback));
   const rbDiff = diffKeys(preUpgrade, rolledBack);
   check(rbDiff.length === 0, `rollback: restored database equals the pre-upgrade state, every table's row count and SHA-256 fingerprint (${rbDiff.join(", ")})`);

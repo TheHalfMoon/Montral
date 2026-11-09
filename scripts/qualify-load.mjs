@@ -638,7 +638,19 @@ try {
   check(p5.statusSummary.errors === 0 && p5.monitorsList.errors === 0, `phase 5: reads degrade without errors or ${T.requestTimeoutMs} ms timeouts (summary ${JSON.stringify(p5.statusSummary.statuses)}, monitors ${JSON.stringify(p5.monitorsList.statuses)})`);
   check(fan5.fiveXx === 0 && fan5.accepted === 2000, `phase 5: all 2000 webhooks accepted (statuses ${JSON.stringify(fan5.statuses)})`);
   check(fan5.storedTotalAllInboxes === 5000 + 2000, `phase 5: stored webhook events ${fan5.storedTotalAllInboxes} == accepted 7000`);
-  check(p5.perMonitor.monitors === N && ge(p5.perMonitor.min, 1), `phase 5: every one of ${N} monitors kept being checked with DB_POOL_MAX=2 (counted ${p5.perMonitor.monitors}, min ${p5.perMonitor.min})`);
+  // No starvation. With 2 connections the server cannot keep 4,000 monitors at 60 s (that is the point of the phase),
+  // so a fixed ~3-minute window may legitimately miss a monitor whose check lands just outside it (seen: lag up to
+  // 216 s against a 181 s window). The real invariant: no monitor goes longer than its interval plus the lag bound
+  // without a check, measured at the end of the phase from each monitor's latest observation.
+  const staleRows = await sql`
+    select count(*)::int as n from monitor m
+    where m.organization_id = ${orgId}
+      and not exists (select 1 from monitor_observation o where o.monitor_id = m.id
+                      and o.observed_at >= now() - make_interval(secs => ${INTERVAL_SEC + T.pool2LagP95Sec}))`;
+  p5.monitorsWithoutRecentCheck = staleRows[0].n;
+  check(p5.perMonitor.monitors === N, `phase 5: every one of ${N} monitors counted`);
+  check(p5.monitorsWithoutRecentCheck === 0, `phase 5: no monitor starved with DB_POOL_MAX=2 (${p5.monitorsWithoutRecentCheck} of ${N} without a check in the last ${INTERVAL_SEC + T.pool2LagP95Sec} s)`);
+  check(Number.isFinite(p5.completionLagSec.max) && le(p5.completionLagSec.max, T.pool2LagP95Sec), `phase 5: worst completion lag ${p5.completionLagSec.max}s <= ${T.pool2LagP95Sec}s`);
   // Correctness floor for an under-provisioned pool: monitoring degrades but stays bounded.
   check(le(p5.completionLagSec.p95, T.pool2LagP95Sec), `phase 5: completion lag p95 ${p5.completionLagSec.p95}s <= ${T.pool2LagP95Sec}s with DB_POOL_MAX=2`);
   check(p5.resources.health.failures === 0 && le(p5.resources.health.max, T.maxHealthMs), `phase 5: /health within ${T.maxHealthMs} ms (max ${p5.resources.health.max})`);

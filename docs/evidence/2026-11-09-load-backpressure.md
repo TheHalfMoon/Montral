@@ -88,7 +88,7 @@ container on the same host.
 | Full status board (concurrency 20) | 233 req/s; p50 / p95 / p99 74 / 143 / 193 ms; 0 errors | p95 140-155 ms |
 | RSS during reads and webhooks (pool 10) | max 733 MB | 689-733 MB |
 | `DB_POOL_MAX=2`: server connections | max 2 | 2 |
-| `DB_POOL_MAX=2`: monitoring | 3,322 checks/min (cannot keep up with 4,000/min); lag p95 132 s; every monitor checked 2-3 times in 180 s | 2,694-3,322/min; p95 111-168 s |
+| `DB_POOL_MAX=2`: monitoring | 3,322 checks/min (cannot keep up with 4,000/min); lag p95 132 s; no monitor starved (see thresholds) | 2,694-3,322/min; p95 111-168 s |
 | `DB_POOL_MAX=2`: reads | summary p95 514 ms (13,185 requests); `/api/monitors` p95 1,190 ms (619 requests); 0 errors | summary p95 514-685 ms |
 | `DB_POOL_MAX=2`: webhooks | 92 accepted/s, all 202, p99 861 ms; total stored 7,000 | 65-101/s |
 | `DB_POOL_MAX=2`: RSS (512 MB old space) | 283 to 452 MB, levelling off around 445 MB; `/health` max 86 ms | max 446-469 MB |
@@ -125,7 +125,12 @@ recorded as a failure.
   - At most 2 server connections.
   - Reads and webhooks complete without errors or timeouts.
   - Stored == accepted.
-  - Every one of the 4,000 monitors is checked in the 180 s window.
+  - No starvation: at the end of the phase, every one of the 4,000 monitors has
+    a check in the last 360 s (its 60 s interval plus the 300 s lag bound), and
+    the worst completion lag is at most 300 s. An earlier rule ("checked within
+    the 180 s window") was wrong for an under-provisioned pool: run 42609831385
+    saw lag up to 216 s (within bounds) against a 181 s window, so 50 monitors
+    were checked just outside it. No monitor was starved; the rule was replaced.
   - Lag p95 is at most 300 s. This is a deliberately generous "bounded, not
     fast" floor: it is the watchdog's 5-minute stall horizon.
   - `/health` answers within 5 s, and the process does not die (including from

@@ -294,7 +294,9 @@ describe("client secret encryption at rest", () => {
     await expect(decryptSecret(server, "conn-2", stored)).rejects.toBeInstanceOf(SecretUnreadable);
     await expect(decryptSecret(`${server}-rotated`, "conn-1", stored)).rejects.toBeInstanceOf(SecretUnreadable);
     const [v, iv, ct] = stored.split(".");
-    const flipped = ct.slice(0, -2) + (ct.endsWith("A") ? "B" : "A") + ct.slice(-1);
+    // change one character of the ciphertext (never to the same character, so the test cannot pass by chance)
+    const at = Math.floor(ct.length / 2);
+    const flipped = ct.slice(0, at) + (ct[at] === "A" ? "B" : "A") + ct.slice(at + 1);
     await expect(decryptSecret(server, "conn-1", `${v}.${iv}.${flipped}`)).rejects.toBeInstanceOf(SecretUnreadable);
     await expect(decryptSecret(server, "conn-1", "garbage")).rejects.toBeInstanceOf(SecretUnreadable);
     await expect(encryptSecret("short", "c", "x")).rejects.toThrow(/BETTER_AUTH_SECRET/);

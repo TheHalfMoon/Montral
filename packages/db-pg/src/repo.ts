@@ -647,7 +647,10 @@ export function createRepo(db: Db): Repo {
           const newer = generation === undefined
             // Legacy messages can finish until this monitor starts using generation-based claims.
             ? and(eq(schema.monitor.lastRunGeneration, 0), or(isNull(schema.monitor.lastRunToken), sql`${schema.monitor.lastRunToken} < ${token.toISOString()}::timestamptz`))
-            : sql`${schema.monitor.lastRunGeneration} < ${generation} and ${schema.monitor.runGeneration} >= ${generation}`;
+            : sql`${schema.monitor.lastRunGeneration} < ${generation} and ${schema.monitor.runGeneration} = ${generation}`;
+          // Only the newest outstanding lease may start. When a slow target leaves older queue
+          // messages behind, starting all generations after recovery creates a burst of stale checks.
+          // Equality coalesces that backlog without weakening the row-locked at-most-once start.
           const won = await db
             .update(schema.monitor)
             .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation } : {}) })

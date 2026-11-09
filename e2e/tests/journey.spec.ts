@@ -137,12 +137,37 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     expect(await page.evaluate(() => document.cookie.includes("montral_sa_")), "status access cookie must be HttpOnly").toBe(false);
   });
 
-  // Crashes (React render errors, invalid pattern attributes) and unhandled promise rejections (including a fetch the
-  // app leaves uncaught when navigation aborts it) fail the journey in every engine. The one exclusion: WebKit logs
-  // "Fetch API cannot load <url> due to access control checks." for every request a navigation cancels, even one the
-  // app handles. For a same-origin /api request (no CORS is involved) that message can only mean cancellation.
+  // Crashes (React render errors, invalid pattern attributes), console errors and unhandled promise rejections fail the
+  // journey in every engine.
+  //
+  // The one exclusion is narrow. When a navigation cancels an in-flight same-origin /api fetch, WebKit raises
+  // "Fetch API cannot load <url> due to access control checks." through Playwright's `pageerror` channel. That is
+  // where uncaught errors arrive, so the entry looks like an uncaught exception. In run 42567389270 it appeared for a
+  // request the app does handle (the subscribers load, inside try/catch). A rejection the app genuinely leaves
+  // unhandled also produces its own separate `pageerror` entry ("Unhandled Promise Rejection: TypeError: Load
+  // failed"), and that entry is NOT filtered.
+  //
+  // Chromium and Firefox have no equivalent message. There an unhandled aborted fetch surfaces as "Failed to fetch" or
+  // "NetworkError when attempting to fetch resource" and fails the journey, so a missing handler is caught in two more
+  // engines even if WebKit's wording ever changed. The filter matches only this exact message for this server's
+  // origin and /api paths, and only in WebKit.
   const host = new URL(baseURL!).host.replace(/\./g, "\\.");
   const webkitCancelled = new RegExp(String.raw`: uncaught Fetch API cannot load http:\s?/+` + host + String.raw`/api/\S* due to access control checks\.$`);
   const cancelledByNavigation = (e: string) => browserName === "webkit" && webkitCancelled.test(e);
   expect(guard.errors.filter((e) => !cancelledByNavigation(e)), "console errors or uncaught exceptions during the journey").toEqual([]);
+
+  // Failed HTTP responses: the global list allows only the anonymous /api/me probe and the hosted status-page widget.
+  // The journey deliberately causes exactly these, matched by method, path and status, nothing broader:
+  const designed = [
+    { method: "GET", path: `/status/${lockedSlug}`, status: 401, why: "the outsider opens the password page: lock form served with 401" },
+    { method: "POST", path: "/api/public/status/_/unlock", status: 401, why: "the wrong password is refused" },
+  ];
+  const isDesigned = (r: (typeof guard.failedRequests)[number]) =>
+    designed.some((d) => d.method === r.method && d.path === r.path && d.status === r.status);
+  expect(guard.failedRequests.filter((r) => !isDesigned(r)).map((r) => `${r.method} ${r.path} ${r.status} (on ${r.on})`),
+    "unexpected failed requests during the journey").toEqual([]);
+  // and the designed failures did happen (each exactly once), so the allowance cannot hide a changed flow
+  for (const d of designed) {
+    expect(guard.failedRequests.filter((r) => r.method === d.method && r.path === d.path && r.status === d.status).length, d.why).toBe(1);
+  }
 });

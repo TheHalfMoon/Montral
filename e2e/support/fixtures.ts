@@ -11,8 +11,10 @@ export type PageGuard = {
   csp: string[];
   /** console.error messages and uncaught exceptions seen so far. */
   errors: string[];
-  /** HTTP responses >= 400 that are not in EXPECTED_FAILED_RESPONSES ("METHOD /path STATUS"). */
+  /** HTTP responses >= 400 that are not in EXPECTED_FAILED_RESPONSES ("METHOD /path STATUS (on /page)"). */
   failedResponses: string[];
+  /** The same responses, structured, so a test can allow its own designed failures by exact method, path and status. */
+  failedRequests: { method: string; path: string; status: number; on: string }[];
 };
 
 /**
@@ -29,7 +31,7 @@ const NETWORK_CONSOLE_ERROR = /^Failed to load resource: the server responded wi
 
 export const test = base.extend<{ guard: PageGuard }>({
   guard: [async ({ page }, use, testInfo) => {
-    const guard: PageGuard = { csp: [], errors: [], failedResponses: [] };
+    const guard: PageGuard = { csp: [], errors: [], failedResponses: [], failedRequests: [] };
     // A console message is the one reporting channel every engine supports and no CSP can block.
     await page.addInitScript((prefix: string) => {
       addEventListener("securitypolicyviolation", (e) => {
@@ -49,7 +51,9 @@ export const test = base.extend<{ guard: PageGuard }>({
       const url = new URL(response.url());
       const method = response.request().method();
       if (EXPECTED_FAILED_RESPONSES.some((e) => e.method === method && e.path === url.pathname && e.status === response.status())) return;
-      guard.failedResponses.push(`${method} ${url.origin === process.env.MONTRAL_E2E_BASE_URL ? url.pathname : url.origin + url.pathname} ${response.status()} (on ${here()})`);
+      const path = url.origin === process.env.MONTRAL_E2E_BASE_URL ? url.pathname : url.origin + url.pathname;
+      guard.failedRequests.push({ method, path, status: response.status(), on: here() });
+      guard.failedResponses.push(`${method} ${path} ${response.status()} (on ${here()})`);
     });
     page.on("pageerror", (error) => guard.errors.push(`${here()}: uncaught ${error.name}: ${error.message}`));
     await use(guard);
@@ -95,8 +99,8 @@ function describe(v: AxeViolation) {
 }
 
 /**
- * Runs axe-core (WCAG 2.0/2.1 A and AA) on the current page. Serious and critical violations fail the test (softly,
- * so one run reports every page); moderate and minor ones are reported as annotations. The full result is attached.
+ * Runs axe-core (WCAG 2.0/2.1 A and AA) on the current page. A violation of any impact (critical, serious, moderate or
+ * minor) fails the test, softly so one run reports every page. The full result is attached to the report.
  */
 export async function checkA11y(page: Page, testInfo: TestInfo, name: string) {
   const results = await new AxeBuilder({ page })
@@ -107,13 +111,11 @@ export async function checkA11y(page: Page, testInfo: TestInfo, name: string) {
     .disableRules(Object.keys(DISABLED_RULES))
     .analyze();
   await testInfo.attach(`axe-${name}.json`, { body: JSON.stringify(results.violations, null, 2), contentType: "application/json" });
-  const blocking = results.violations.filter((v) => v.impact === "serious" || v.impact === "critical");
-  const advisory = results.violations.filter((v) => !(v.impact === "serious" || v.impact === "critical"));
-  for (const v of advisory) testInfo.annotations.push({ type: `a11y-${v.impact ?? "unknown"}`, description: `${name}: ${describe(v)}` });
+  const count = (impacts: string[]) => results.violations.filter((v) => impacts.includes(v.impact ?? "")).length;
   // printed so the CI log is the complete per-engine record, even for passing pages
-  console.log(`AXE ${testInfo.project.name} ${name}: ${blocking.length} serious/critical, ${advisory.length} moderate/minor` +
-    advisory.map((v) => `\n  advisory ${describe(v)}`).join(""));
-  expect.soft(blocking.map(describe), `serious/critical WCAG 2.1 AA violations on ${name}`).toEqual([]);
+  console.log(`AXE ${testInfo.project.name} ${name}: ${count(["critical", "serious"])} serious/critical, ${count(["moderate", "minor"])} moderate/minor` +
+    results.violations.map((v) => `\n  ${describe(v)}`).join(""));
+  expect.soft(results.violations.map(describe), `WCAG 2.1 AA violations (any impact) on ${name}`).toEqual([]);
 }
 
 /** A unique, synthetic identity for one test. */

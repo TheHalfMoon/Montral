@@ -57,6 +57,9 @@ Each project runs 5 tests (25 in all), with no retries: a flaky engine counts as
      - A wrong password is refused and the page stays locked.
      - The correct password unlocks the page.
      - The access cookie is not readable from script.
+   - Any failed HTTP response fails the journey, except the two it causes on purpose: the locked page
+     (`GET /status/<slug>` returns 401) and the wrong password (`POST /api/public/status/_/unlock` returns 401).
+     Each is matched by method, path and status, and each must occur exactly once.
    - Any console error, uncaught exception or unhandled promise rejection fails the journey. Rejections from fetches
      aborted by navigation count too. The one exclusion is WebKit's own "Fetch API cannot load <same-origin /api
      URL> due to access control checks." message, which WebKit logs for every request a navigation cancels, even
@@ -84,9 +87,9 @@ The only failed responses accepted are the two designed anonymous ones. Each is 
   - locked password page
   - audit log (the workspace audit page from #39, with the journey's own events)
   - `/docs/self-host`
-- **Thresholds:** `serious` and `critical` violations fail the test. `moderate` and `minor` ones are recorded as
-  annotations and printed on an `AXE <project> <page>:` line in the CI log. The full violation JSON is attached to
-  the report.
+- **Thresholds:** a violation of any impact (critical, serious, moderate or minor) fails the test. Each page's counts
+  are printed on an `AXE <project> <page>:` line in the CI log, and the full violation JSON is attached to the
+  report.
 - **Disabled rules:** none (`DISABLED_RULES` is empty).
 - **Preload option:** axe's CSSOM preload is turned off with `preload: { assets: ["media"] }`. That preload
   re-downloads the cross-origin Google Fonts stylesheet with XHR, and the landing page's `connect-src 'self'`
@@ -101,7 +104,7 @@ The only failed responses accepted are the two designed anonymous ones. Each is 
 | `link-name` on the docs header logo link at phone width, where its text is hidden | 2.4.4, 4.1.2 | `aria-label="Montral"` |
 | `scrollable-region-focusable` on docs code samples and wide tables | 2.1.1 | `doc-shell.js` adds `tabindex="0"` to exactly the overflowing `<pre>`/`<table>` elements, re-checks on resize, and shows a focus outline. |
 | `scrollable-region-focusable` on the audit log table wrapper at phone width (mobile-chromium, mobile-webkit) | 2.1.1 | The wrapper is a focusable, named region (`tabindex="0"`, `role="region"`, "Audit events, newest first") with a focus outline. |
-| Dashboard skip link did nothing in any engine: the client router intercepted the same-page `#main-content` click and called `preventDefault()` | 2.4.1 | The router leaves same-document fragment links to the browser. `<main>` has `tabindex="-1"`, so focus moves into it. |
+| Dashboard skip link did nothing in any engine: the client router intercepted the same-page `#main-content` click and called `preventDefault()` | 2.4.1 | The router leaves same-document fragment links to the browser, and ignores a fragment-only `popstate`, so there is no scroll to top, cache re-arm or count refetch (`isSamePage`, unit-tested). `<main>` has `tabindex="-1"`, so focus moves into it. |
 
 ### Functional defects the journeys found (all engines)
 

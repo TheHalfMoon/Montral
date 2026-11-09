@@ -3,6 +3,7 @@ on:
   # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
   push:
     branches: [main]
+  # every pull request, deliberately with no paths filter: a UI regression can come from an API or database change
   pull_request:
   workflow_dispatch:
 concurrency:
@@ -47,6 +48,16 @@ jobs:
         run: pnpm --filter @montral/api build:node
       - name: Build self-hosted Node web
         run: DEPLOY_TARGET=node pnpm --filter @montral/web build
+      # Browser binaries are cached per pinned Playwright version (a version bump is a new key, so a stale browser is
+      # never reused). System libraries are not cached: `install --with-deps` below still apt-installs them every run.
+      - name: Read the pinned Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('./e2e/package.json').devDependencies['@playwright/test']")" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ steps.playwright.outputs.version }}
       # The browsers and their system libraries come from the Playwright version pinned in e2e/package.json
       # (pnpm exec resolves the workspace's own binary, never a newer one from the registry). Downloads and apt are
       # retried: a dropped transfer is not a test failure.

@@ -35,7 +35,9 @@ import postgres from "../packages/db-pg/node_modules/postgres/src/index.js";
 const connection = process.env.TEST_DATABASE_URL;
 if (!connection) throw new Error("Set TEST_DATABASE_URL to a disposable local PostgreSQL database");
 const dbUrl = new URL(connection);
-if (!["127.0.0.1", "localhost"].includes(dbUrl.hostname) || !/^\/montral_test_[a-zA-Z0-9_]+$/.test(dbUrl.pathname)) {
+// No query parameters at all: libpq/postgres.js accept ?host= (and similar), which could
+// silently redirect the connection away from the local hostname checked here.
+if (!["127.0.0.1", "localhost"].includes(dbUrl.hostname) || !/^\/montral_test_[a-zA-Z0-9_]+$/.test(dbUrl.pathname) || dbUrl.search !== "") {
   throw new Error("Load qualification refuses any non-local or non-disposable database");
 }
 
@@ -70,6 +72,9 @@ const T = {
   maxRssMb: 1024,
   maxBackpressureRssGrowthMb: 256,
   maxHealthMs: 5000,
+  // DB_POOL_MAX=2 cannot keep up with N monitors at 60 s; the floor is "bounded", not "fast":
+  // lag p95 under 5 minutes (the watchdog's stall horizon) while every monitor is still checked.
+  pool2LagP95Sec: 300,
   recoveryMaxSec: 600,
   requestTimeoutMs: 30_000, // any request slower than this counts as an error
   maxDbConnections: 10, // DB_POOL_MAX default
@@ -80,6 +85,11 @@ const T = {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
+// Comparisons against a bound only pass for a real, finite measurement: an empty sample
+// set (null, NaN, +/-Infinity) must fail the qualification, never pass vacuously.
+const num = (v) => typeof v === "number" && Number.isFinite(v);
+const le = (v, bound) => num(v) && v <= bound;
+const ge = (v, bound) => num(v) && v >= bound;
 const check = (ok, message) => { if (!ok) { failures.push(message); console.error("FAIL: " + message); } return ok; };
 const pct = (values, p) => {
   if (!values.length) return null;
@@ -256,6 +266,7 @@ const outstandingQuery = () => sql`
     and not exists (select 1 from load_claim_log r where r.kind = 'release' and r.monitor_id = c.monitor_id and r.generation = c.generation)
     and not exists (select 1 from monitor_observation o where o.monitor_id = c.monitor_id and o.generation = c.generation)`;
 let dbSamples = 0;
+const samplerErrors = [];
 const dbLoop = (async () => {
   while (samplersOn) {
     try {
@@ -270,20 +281,34 @@ const dbLoop = (async () => {
         const [o] = await outstandingQuery();
         ps().outstanding.push(o.n);
       }
-    } catch {}
+    } catch (e) {
+      // A failed sample is a failed measurement, not a silent gap.
+      if (samplersOn) samplerErrors.push(`${phase}: ${e?.message ?? e}`.slice(0, 300));
+    }
     await sleep(5000);
   }
 })();
+const maxOf = (a) => (a.length ? Math.max(...a) : null); // null, never -Infinity or 0, when nothing was sampled
+const minOf = (a) => (a.length ? Math.min(...a) : null);
 function summarizePhase(name) {
   const s = phaseStats[name];
   if (!s) return null;
   return {
+    samples: { health: s.healthMs.length + s.healthFail, rss: s.rssMb.length, db: s.conns.length, outstanding: s.outstanding.length },
     health: { ...latencyStats(s.healthMs), failures: s.healthFail },
     // every 10th 1 s sample, so a plateau can be told from steady growth
-    rssMb: { min: round(Math.min(...s.rssMb)), max: round(Math.max(...s.rssMb)), last: round(s.rssMb.at(-1)), series10s: s.rssMb.filter((_, i) => i % 10 === 0).map((v) => Math.round(v)) },
-    dbConnections: { max: Math.max(0, ...s.conns), maxActive: Math.max(0, ...s.activeConns), maxLockWaits: Math.max(0, ...s.lockWaits) },
-    outstandingRuns: { max: Math.max(0, ...s.outstanding), last: s.outstanding.at(-1) ?? null },
+    rssMb: { min: round(minOf(s.rssMb)), max: round(maxOf(s.rssMb)), last: round(s.rssMb.at(-1) ?? null), series10s: s.rssMb.filter((_, i) => i % 10 === 0).map((v) => Math.round(v)) },
+    dbConnections: { max: maxOf(s.conns), maxActive: maxOf(s.activeConns), maxLockWaits: maxOf(s.lockWaits) },
+    outstandingRuns: { max: maxOf(s.outstanding), last: s.outstanding.at(-1) ?? null },
   };
+}
+
+// Each measured phase must actually have been sampled; otherwise its bounds would be vacuous.
+function checkSamples(name, s) {
+  check(!!s && s.samples.health > 0 && s.samples.rss > 0 && s.samples.db > 0,
+    `${name}: health, RSS and DB samples exist (${JSON.stringify(s?.samples)})`);
+  if (["p1_throughput", "p2_backpressure", "p2_recovery", "p5_pool2"].includes(name))
+    check(!!s && s.samples.outstanding > 0, `${name}: outstanding-run samples exist (${s?.samples.outstanding})`);
 }
 
 // ── measurement queries ───────────────────────────────────────────────────────
@@ -315,7 +340,7 @@ async function perMonitorCounts(from, to) {
   const counts = rows.map((r) => r.n);
   const histogram = {};
   for (const n of counts) histogram[n] = (histogram[n] ?? 0) + 1;
-  return { monitors: rows.length, min: Math.min(...counts), max: Math.max(...counts), histogram };
+  return { monitors: rows.length, min: minOf(counts), max: maxOf(counts), histogram };
 }
 const releasesSince = async (from) => (await sql`select count(*)::int as n from load_claim_log where kind = 'release' and at >= ${from}`)[0].n;
 
@@ -403,12 +428,12 @@ try {
   summary.phases.throughput = p1;
   log("phase 1", JSON.stringify(p1));
   check(p1.perMonitor.monitors === N, "phase 1: every seeded monitor counted");
-  check(p1.perMonitor.min >= T.perMonitorMin, `phase 1: no lost checks (min results per monitor ${p1.perMonitor.min} >= ${T.perMonitorMin})`);
-  check(p1.perMonitor.max <= T.perMonitorMax, `phase 1: no duplicate checks (max results per monitor ${p1.perMonitor.max} <= ${T.perMonitorMax})`);
-  check(p1.completionLagSec.p95 != null && p1.completionLagSec.p95 <= T.lagP95Sec, `phase 1: completion lag p95 ${p1.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
+  check(ge(p1.perMonitor.min, T.perMonitorMin), `phase 1: no lost checks (min results per monitor ${p1.perMonitor.min} >= ${T.perMonitorMin})`);
+  check(le(p1.perMonitor.max, T.perMonitorMax), `phase 1: no duplicate checks (max results per monitor ${p1.perMonitor.max} <= ${T.perMonitorMax})`);
+  check(le(p1.completionLagSec.p95, T.lagP95Sec), `phase 1: completion lag p95 ${p1.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
   check(p1.releases === 0, `phase 1: no backpressure releases at nominal load (got ${p1.releases})`);
-  check(p1.resources.dbConnections.max <= T.maxDbConnections, `phase 1: server DB connections ${p1.resources.dbConnections.max} <= pool max ${T.maxDbConnections}`);
-  const p1OutstandingMax = p1.resources.outstandingRuns.max;
+  check(le(p1.resources.dbConnections.max, T.maxDbConnections), `phase 1: server DB connections ${p1.resources.dbConnections.max} <= pool max ${T.maxDbConnections}`);
+  const p1OutstandingMax = p1.resources.outstandingRuns.max ?? 0; // absence fails checkSamples below
 
   // ── 2. backpressure: slow target, then recovery ────────────────────────────
   phase = "p2_backpressure";
@@ -435,9 +460,9 @@ try {
     resources: summarizePhase("p2_backpressure"),
   };
   check(capReachedAt !== null, "phase 2: the local queue reached capacity and refused work (backpressure exercised)");
-  check(p2.resources.outstandingRuns.max <= T.maxOutstandingRuns, `phase 2: outstanding runs ${p2.resources.outstandingRuns.max} <= ${T.maxOutstandingRuns} (512 messages x 25 + one claim round)`);
-  check(p2.resources.rssMb.max - p1.resources.rssMb.max <= T.maxBackpressureRssGrowthMb, `phase 2: RSS growth under backpressure ${round(p2.resources.rssMb.max - p1.resources.rssMb.max)} MB <= ${T.maxBackpressureRssGrowthMb} MB`);
-  check(p2.resources.health.failures === 0 && p2.resources.health.max <= T.maxHealthMs, `phase 2: /health answered every probe within ${T.maxHealthMs} ms (max ${p2.resources.health.max}, failures ${p2.resources.health.failures})`);
+  check(le(p2.resources.outstandingRuns.max, T.maxOutstandingRuns), `phase 2: outstanding runs ${p2.resources.outstandingRuns.max} <= ${T.maxOutstandingRuns} (512 messages x 25 + one claim round)`);
+  check(num(p1.resources.rssMb.max) && le(p2.resources.rssMb.max - p1.resources.rssMb.max, T.maxBackpressureRssGrowthMb), `phase 2: RSS growth under backpressure ${round(p2.resources.rssMb.max - p1.resources.rssMb.max)} MB <= ${T.maxBackpressureRssGrowthMb} MB`);
+  check(p2.resources.health.failures === 0 && le(p2.resources.health.max, T.maxHealthMs), `phase 2: /health answered every probe within ${T.maxHealthMs} ms (max ${p2.resources.health.max}, failures ${p2.resources.health.failures})`);
   check(logCounts.watchdogExit === 0 && alive(), "phase 2: watchdog did not restart the process");
   check(p2.targetMaxInFlight <= 4 * 20, `phase 2: concurrent checks ${p2.targetMaxInFlight} <= 80 (4 messages x 20)`);
 
@@ -454,7 +479,7 @@ try {
     const w = await windowStats(new Date(to - 60_000), to);
     lastLag = w.completionLagSec;
     const [o] = await outstandingQuery();
-    if (w.completionLagSec.n > 0 && w.completionLagSec.p95 <= T.lagP95Sec && o.n <= Math.max(p1OutstandingMax * 1.5, p1OutstandingMax + 500)) {
+    if (w.completionLagSec.n > 0 && le(w.completionLagSec.p95, T.lagP95Sec) && o.n <= Math.max(p1OutstandingMax * 1.5, p1OutstandingMax + 500)) {
       recoveredAt = Date.now();
       break;
     }
@@ -478,8 +503,8 @@ try {
   p2.recoveryResources = summarizePhase("p2_recovery");
   summary.phases.backpressure = p2;
   log("phase 2", JSON.stringify(p2));
-  check(p2.afterRecovery.perMonitor.min >= 1, "phase 2: every monitor checked again after recovery (no starvation)");
-  check(p2.afterRecovery.completionLagSec.p95 <= T.lagP95Sec, `phase 2: post-recovery lag p95 ${p2.afterRecovery.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
+  check(p2.afterRecovery.perMonitor.monitors === N && ge(p2.afterRecovery.perMonitor.min, 1), `phase 2: every one of ${N} monitors checked again after recovery (no starvation; counted ${p2.afterRecovery.perMonitor.monitors}, min ${p2.afterRecovery.perMonitor.min})`);
+  check(le(p2.afterRecovery.completionLagSec.p95, T.lagP95Sec), `phase 2: post-recovery lag p95 ${p2.afterRecovery.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
 
   // ── 3 + 4. webhooks and API reads (monitoring keeps running underneath) ────
   phase = "p3_webhooks";
@@ -562,9 +587,10 @@ try {
   // Startup and shutdown are excluded: /health is expected to be unavailable there.
   for (const name of Object.keys(phaseStats).filter((n) => n.startsWith("p"))) {
     const s = summarizePhase(name);
-    check(s.health.failures === 0 && (s.health.max ?? 0) <= T.maxHealthMs, `${name}: /health always answered within ${T.maxHealthMs} ms (max ${s.health.max}, failures ${s.health.failures})`);
-    check(s.rssMb.max <= T.maxRssMb, `${name}: RSS ${s.rssMb.max} MB <= ${T.maxRssMb} MB`);
-    check(s.dbConnections.max <= T.maxDbConnections, `${name}: server DB connections ${s.dbConnections.max} <= ${T.maxDbConnections}`);
+    checkSamples(name, s);
+    check(s.health.failures === 0 && le(s.health.max, T.maxHealthMs), `${name}: /health always answered within ${T.maxHealthMs} ms (max ${s.health.max}, failures ${s.health.failures})`);
+    check(le(s.rssMb.max, T.maxRssMb), `${name}: RSS ${s.rssMb.max} MB <= ${T.maxRssMb} MB`);
+    check(le(s.dbConnections.max, T.maxDbConnections), `${name}: server DB connections ${s.dbConnections.max} <= ${T.maxDbConnections}`);
   }
   phase = "stopping";
   summary.firstServerStop = await stopServer("server (pool 10)");
@@ -607,13 +633,16 @@ try {
   p5.maxOldSpaceMb = P5_OLD_SPACE_MB;
   summary.phases.dbPool2 = p5;
   log("phase 5", JSON.stringify(p5));
-  check(p5.resources.dbConnections.max <= T.maxDbConnectionsPool2, `phase 5: server DB connections ${p5.resources.dbConnections.max} <= DB_POOL_MAX 2`);
+  checkSamples("p5_pool2", p5.resources);
+  check(le(p5.resources.dbConnections.max, T.maxDbConnectionsPool2), `phase 5: server DB connections ${p5.resources.dbConnections.max} <= DB_POOL_MAX 2`);
   check(p5.statusSummary.errors === 0 && p5.monitorsList.errors === 0, `phase 5: reads degrade without errors or ${T.requestTimeoutMs} ms timeouts (summary ${JSON.stringify(p5.statusSummary.statuses)}, monitors ${JSON.stringify(p5.monitorsList.statuses)})`);
   check(fan5.fiveXx === 0 && fan5.accepted === 2000, `phase 5: all 2000 webhooks accepted (statuses ${JSON.stringify(fan5.statuses)})`);
   check(fan5.storedTotalAllInboxes === 5000 + 2000, `phase 5: stored webhook events ${fan5.storedTotalAllInboxes} == accepted 7000`);
-  check(p5.perMonitor.min >= 1, `phase 5: every monitor kept being checked with DB_POOL_MAX=2 (min ${p5.perMonitor.min})`);
-  check(p5.resources.health.failures === 0 && p5.resources.health.max <= T.maxHealthMs, `phase 5: /health within ${T.maxHealthMs} ms (max ${p5.resources.health.max})`);
-  check(p5.resources.rssMb.max <= T.maxRssMb, `phase 5: RSS ${p5.resources.rssMb.max} MB <= ${T.maxRssMb} MB`);
+  check(p5.perMonitor.monitors === N && ge(p5.perMonitor.min, 1), `phase 5: every one of ${N} monitors kept being checked with DB_POOL_MAX=2 (counted ${p5.perMonitor.monitors}, min ${p5.perMonitor.min})`);
+  // Correctness floor for an under-provisioned pool: monitoring degrades but stays bounded.
+  check(le(p5.completionLagSec.p95, T.pool2LagP95Sec), `phase 5: completion lag p95 ${p5.completionLagSec.p95}s <= ${T.pool2LagP95Sec}s with DB_POOL_MAX=2`);
+  check(p5.resources.health.failures === 0 && le(p5.resources.health.max, T.maxHealthMs), `phase 5: /health within ${T.maxHealthMs} ms (max ${p5.resources.health.max})`);
+  check(le(p5.resources.rssMb.max, T.maxRssMb), `phase 5: RSS ${p5.resources.rssMb.max} MB <= ${T.maxRssMb} MB`);
   phase = "stopping";
   summary.secondServerStop = await stopServer("server (pool 2)");
 
@@ -646,6 +675,8 @@ try {
     claimsLogged: claims.claims, releasesLogged: claims.releases, serverLogCounts: logCounts,
   };
   log("integrity", JSON.stringify(summary.integrity));
+  summary.integrity.samplerErrors = samplerErrors;
+  check(samplerErrors.length === 0, `samplers: no DB sampling errors (${samplerErrors.length}: ${samplerErrors.slice(0, 3).join(" | ")})`);
   check(dup.n === 0, `integrity: no run generation recorded twice (${dup.n})`);
   check(mismatchObs === 0, `integrity: check results == observations for every monitor (${mismatchObs} mismatches)`);
   check(mismatchRollup === 0, `integrity: rollup totals == check results for every monitor (${mismatchRollup} mismatches)`);

@@ -3,8 +3,8 @@
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list
 at the end. **Y** yes, **N** no, **P** partial, **$** paid tier/add-on only,
-**?** not verified. Montral's column reflects `main` plus the open pull requests
-noted in brackets, verified against the code, not marketing copy.
+**?** not verified. Montral's column reflects `main` at `9db0d3d` (2026-11-08), with the
+merging pull request in brackets, verified against the code, not marketing copy.
 
 ## Matrix
 
@@ -12,18 +12,18 @@ noted in brackets, verified against the code, not marketing copy.
 |---|---|---|---|---|---|---|---|
 | HTTP(S) | Y | Y | Y | Y | Y | Y | N |
 | Keyword assertion | Y (contains/absent) | Y | Y | Y | Y | Y | N |
-| JSON body assertion | N | Y | Y | P | Y | Y | N |
+| JSON body assertion | Y (#27; path + comparison) | Y | Y | P | Y | Y | N |
 | TCP | Y | Y | Y | Y | Y | Y | N |
 | Ping / ICMP | N | Y | Y | ? | Y | Y | N |
 | DNS | Y | Y | Y | Y | Y | Y | P |
-| TLS certificate expiry | P (branch ready; Node only) | P | Y | ? | Y | Y | N |
+| TLS certificate expiry | Y on Node/Docker (#26); refused on Workers | P | Y | ? | Y | Y | N |
 | Domain expiry | Y | ? | Y | ? | Y | Y | N |
 | Heartbeat / cron | Y | Y | Y | ? | Y | Y | N |
 | WebSocket | Y | Y | ? | ? | ? | Y | N |
 | Database (Postgres/MySQL/Redis) | Y | Y | N | N | N | N | N |
 | Browser / multi-step | N | N | $ | N | N | P | N |
 | Multi-region | Y (edge probes) | N | ? | Y | Y | P | n/a |
-| Alert channels | 14 (email, Slack, Telegram, Lark, Discord, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
+| Alert channels | 14, 4 added in #28 (email, Slack, Telegram, Lark, Discord, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
 | SMS / voice | N | via providers | Y | ? | Y | via providers | N |
 | Manual incidents + timeline | Y | N | Y | Y | P | P | n/a |
 | Acknowledge | Y | N | Y | ? | ? | N | n/a |
@@ -32,9 +32,9 @@ noted in brackets, verified against the code, not marketing copy.
 | Postmortems | Y | N | Y | ? | P | N | n/a |
 | Public status page | Y | Y | Y | Y | Y | Y | n/a |
 | Members-only page | Y (#18) | N | $ (SSO) | $ | ? | P | n/a |
-| Password page | Y (#21, in CI) | N | $ | Y | $ | P | n/a |
-| Expiring share links | Y (#21, in CI) | N | ? | ? | ? | N | n/a |
-| Custom domain | P (Node/Docker only; verified TXT, branch pending) | Y | Y | Y | $ | self-host | $ |
+| Password page | Y (#21) | N | $ | Y | $ | P | n/a |
+| Expiring share links | Y (#21; revocable) | N | ? | ? | ? | N | n/a |
+| Custom domain | Y on Node/Docker (#29; TXT-verified, DNS takeover); not on Workers | Y | Y | Y | $ | self-host | $ |
 | Subscribers | Y (email) | N | Y | Y | Y | N | n/a |
 | Maintenance windows | Y (recurring) | Y | Y | Y | Y | Y | n/a |
 | Badges / embed | Y | Y | ? | ? | ? | Y | n/a |
@@ -64,25 +64,31 @@ noted in brackets, verified against the code, not marketing copy.
 | Clickjacking, security headers | `web-security-headers.test.ts` (PR #15) |
 | Script CSP, app and landing pages | `verify-csp-hashes.mjs`, `landing-csp.mjs --check`, Chromium CSP_PASS (PRs #19, #22) |
 | Webhook replay SSRF | `montral-hooks.e2e.test.ts`, three review rounds (PR #17) |
-| Private status pages | `status-visibility.e2e.test.ts` (PR #18), `status-password-links.e2e.test.ts` (PR #21) |
+| Private status pages | `status-visibility.e2e.test.ts` (PR #18), `status-password-links.e2e.test.ts` and Chromium STATUS_PASSWORD_PASS (PR #21) |
+| Custom-domain isolation | `custom-domain*.test.ts`, real-server CUSTOM_DOMAIN_SMOKE_PASS (PR #29) |
+| TLS monitor, JSON assertions, channels | `certificate.test.ts`, `json-assertion*.test.ts`, `more-channels.test.ts` (PRs #26-#28) |
 
 ## Prioritised gaps
 
-Ranked by user value, reliability and security, then cost. Items marked done are
-merged; "next" items are the planned order.
+Ranked by user value, reliability and security, then cost.
 
-1. **TLS certificate expiry**: implemented on a branch, pending PR after #21.
-2. **JSON body assertions** (JSONPath-style): expected baseline; low cost. Next.
-3. **More alert channels** (Google Chat, Mattermost, Pushover, Gotify): low cost,
-   high switching value from Kuma/Gatus users.
-4. **Custom domains for status pages**: implemented for the self-hosted Node server (TXT verification, host routing; Workers refused); branch pending PR. See `docs/evidence/2026-11-09-custom-domains.md`.
-5. **Ping / ICMP**: needs raw sockets or the system `ping`; not possible on
+Done since the matrix was first written: TLS certificate expiry (#26), JSON body
+assertions (#27), Google Chat / Mattermost / Gotify / Pushover (#28), custom domains
+for status pages on the Node server (#29).
+
+Remaining, in planned order:
+
+1. **Ping / ICMP**: needs raw sockets or the system `ping`; not possible on
    Workers. Evaluate for Node only.
-6. **Terraform provider / config-as-code**: valued by GitOps teams; large.
-7. **On-call schedules**: large; escalation already exists.
-8. **SSO (OIDC/SAML), audit log**: enterprise tier; large.
-9. **SMS / voice**: requires a paid provider; out of scope without approval.
-10. **Browser / multi-step checks**: large; needs a headless browser runtime.
+2. **Periodic re-verification of custom domains**: today a verified domain stays
+   verified until another page proves it or it is removed; a scheduled TXT
+   re-check would release domains whose record disappeared.
+3. **Terraform provider / config-as-code**: valued by GitOps teams; large.
+4. **On-call schedules**: large; escalation already exists.
+5. **SSO (OIDC/SAML), audit log**: enterprise tier; large.
+6. **SMS / voice**: requires a paid provider; out of scope without approval.
+7. **Browser / multi-step checks**: large; needs a headless browser runtime.
+8. **Custom webhook responses** (webhook.site parity): medium.
 
 ## Sources
 

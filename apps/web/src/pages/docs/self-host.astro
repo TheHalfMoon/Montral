@@ -51,13 +51,33 @@ docker compose up -d --build</code></pre>
     </table>
     <h3>Operate</h3>
     <ul>
-      <li><strong>Upgrade</strong>: pull the latest private source commit, then <code>docker compose up -d --build</code>. Migrations run on start.</li>
+      <li><strong>Upgrade</strong>: pull the latest private source commit, then <code>docker compose up -d --build</code>. Migrations run on start. Back up first; see <a href="#upgrade">Upgrade and rollback</a>.</li>
       <li><strong>PostgreSQL version</strong>: <code>docker-compose.yml</code> pins <code>postgres:18.6-alpine</code> and its data directory. Never change the tag to another major version: PostgreSQL cannot read another major's data, and with the pinned directory an older or newer image refuses to start rather than creating a new, empty database. Move between majors with a dump and restore (<a href="/docs/backup">Backup and restore</a>).</li>
       <li><strong>Backup</strong>: <code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>. Restore steps are in <a href="/docs/backup">Backup and restore</a>.</li>
       <li><strong>Several containers</strong>: checks are leased with <code>FOR UPDATE SKIP LOCKED</code>, so more containers can share one database without duplicating checks.</li>
       <li><strong>Logs</strong>: <code>docker compose logs -f montral</code>. A health endpoint is at <code>/health</code>.</li>
       <li><strong>Audit log retention</strong>: workspace audit events (Workspace, Audit log in the dashboard) are kept for <code>AUDIT_RETENTION_DAYS</code> (default 365, at least 30) and pruned once an hour by the scheduler, on Docker and Workers alike. The <code>audit_event</code> table is append-only: a database trigger refuses UPDATE, DELETE and TRUNCATE, except deletes made by the <code>montral_prune_audit</code> retention function and the cascade when a workspace is deleted. It protects against application mistakes, not against the database owner, who can still drop the trigger. Backups include the table like any other.</li>
     </ul>
+    <h3 id="upgrade">Upgrade and rollback</h3>
+    <p>Migrations only go forward. Every step below is qualified in CI (<code>montral-upgrade.yml</code>): an installation of the previous release candidate, seeded with users, projects, monitors, channels, incidents, status pages, webhook inboxes, maintenance windows and API keys, is upgraded, rolled back and recovered from backups.</p>
+    <ol>
+      <li><strong>Back up first</strong>, with the app running: <code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral-pre-upgrade.dump</code>, then <code>pg_restore --list montral-pre-upgrade.dump | head</code> to check the file. Keep it until you are sure you will not roll back.</li>
+      <li><strong>Upgrade</strong>: update the source, then <code>docker compose up -d --build</code>. Migrations run in one transaction when the new container starts, before it accepts requests; containers starting together wait for each other. Data, sign-in sessions, API keys, share links, password pages, custom domains and webhook receiver URLs keep working (with the same <code>BETTER_AUTH_SECRET</code>).</li>
+      <li><strong>Check</strong>: <code>/health</code> answers, you can sign in, and monitors show new checks within a minute.</li>
+    </ol>
+    <p><strong>An older build does not start on an upgraded database.</strong> It sees migrations it does not know, refuses to start (<code>Database migration history is ahead of this build</code>, also reported by <code>migrate-plain.mjs --check</code>), and exits after about a minute of retries without changing anything. Going back to the old build therefore always means going back to the pre-upgrade backup:</p>
+    <pre><code>docker compose stop montral
+docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral-upgraded.dump   # what the upgraded version wrote
+docker compose exec postgres dropdb -U montral montral
+docker compose exec postgres createdb -U montral montral
+docker compose exec -T postgres pg_restore -U montral -d montral --no-owner &lt; montral-pre-upgrade.dump
+# check out the previous source, then
+docker compose up -d --build</code></pre>
+    <ul>
+      <li>Restore into an <strong>empty</strong> database as above. Do not restore a pre-upgrade backup over the upgraded database with <code>--clean</code>: tables and columns the upgrade added are not in the backup, so they would stay behind and a later upgrade could fail on them.</li>
+      <li>Everything written after the upgrade (checks, incidents, settings) is not in the pre-upgrade backup; the extra dump keeps it in case you upgrade again.</li>
+    </ul>
+    <p><strong>Disaster recovery</strong> uses the same commands: restore the latest backup into a new, empty database (<a href="/docs/backup#restore">Backup and restore</a>), keep the same <code>.env</code>, and start the app; migrations newer than the backup run on start. For the synthetic installation in CI, from a dropped database to a verified, serving app (create database, restore, start, sign in and read everything back) took RTO_SECONDS seconds; your time grows with the size of the database, mostly in <code>pg_restore</code>.</p>
     <h3 id="ping">Ping (ICMP) monitors</h3>
     <p>Ping monitors run the system <code>ping</code> binary of the server, so they work only on the self-hosted Node server (Docker or <code>node server.mjs</code>); a Cloudflare Workers deployment refuses to create them. The image is based on <code>node:22-alpine</code> and runs as the unprivileged <code>node</code> user, so it uses BusyBox <code>ping</code> with unprivileged ICMP sockets. Linux allows those for the groups listed in <code>net.ipv4.ping_group_range</code>; Docker 20.10 and later set it to <code>0 2147483647</code> in every container, so nothing needs to be configured. On an older engine, another runtime, or when the host's default is restricted, add this to the <code>montral</code> service in <code>docker-compose.yml</code>:</p>
     <pre><code is:raw>    sysctls:
@@ -378,13 +398,33 @@ docker compose up -d --build</code></pre>
     </table>
     <h3>运维</h3>
     <ul>
-      <li><strong>升级</strong>：目前无公开镜像；从私有源码更新时拉取新代码后执行 <code>docker compose up -d --build</code>。迁移在启动时自动运行。</li>
+      <li><strong>升级</strong>：目前无公开镜像；从私有源码更新时拉取新代码后执行 <code>docker compose up -d --build</code>。迁移在启动时自动运行。请先备份，详见<a href="#upgrade-zh">升级与回滚</a>。</li>
       <li><strong>PostgreSQL 版本</strong>：<code>docker-compose.yml</code> 固定了 <code>postgres:18.6-alpine</code> 及其数据目录。切勿把标签改为其他大版本：PostgreSQL 无法读取其他大版本的数据；固定数据目录后，较旧或较新的镜像会拒绝启动，而不是新建一个空数据库。跨大版本请通过导出和恢复迁移（<a href="/docs/backup">备份与恢复</a>）。</li>
       <li><strong>备份</strong>：<code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>。恢复步骤见<a href="/docs/backup">备份与恢复</a>。</li>
       <li><strong>多个容器</strong>：检测通过 <code>FOR UPDATE SKIP LOCKED</code> 加租约，多个容器共用一个数据库也不会重复检测。</li>
       <li><strong>日志</strong>：<code>docker compose logs -f montral</code>。健康检查接口为 <code>/health</code>。</li>
       <li><strong>审计日志保留</strong>：工作区审计事件（控制台“工作区”中的“审计日志”）保留 <code>AUDIT_RETENTION_DAYS</code> 天（默认 365，最少 30），由调度器每小时清理一次，Docker 和 Workers 相同。<code>audit_event</code> 表只能追加：数据库触发器拒绝 UPDATE、DELETE 和 TRUNCATE，唯一例外是 <code>montral_prune_audit</code> 保留期函数执行的删除，以及删除工作区时的级联删除。它防范的是应用程序错误，而不是数据库所有者，后者仍可删除该触发器。备份会像其他表一样包含此表。</li>
     </ul>
+    <h3 id="upgrade-zh">升级与回滚</h3>
+    <p>迁移只能向前执行。下面每一步都在 CI（<code>montral-upgrade.yml</code>）中验证过：先用上一个候选发布版本建立一套包含用户、项目、监控、告警渠道、事件、状态页、Webhook 收件箱、维护窗口和 API 密钥的安装，再对它执行升级、回滚和从备份恢复。</p>
+    <ol>
+      <li><strong>先备份</strong>（应用可以保持运行）：<code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral-pre-upgrade.dump</code>，再用 <code>pg_restore --list montral-pre-upgrade.dump | head</code> 检查文件。在确定不会回滚之前请一直保留它。</li>
+      <li><strong>升级</strong>：更新源码后执行 <code>docker compose up -d --build</code>。新容器启动时会在接受请求之前，在一个事务中执行迁移；同时启动的多个容器会互相等待。数据、登录会话、API 密钥、分享链接、密码保护的状态页、自定义域名和 Webhook 接收地址都继续有效（前提是 <code>BETTER_AUTH_SECRET</code> 不变）。</li>
+      <li><strong>检查</strong>：<code>/health</code> 正常响应，可以登录，监控在一分钟内出现新的检测记录。</li>
+    </ol>
+    <p><strong>旧版本无法在升级后的数据库上启动。</strong>它会发现自己不认识的迁移，拒绝启动（<code>Database migration history is ahead of this build</code>，<code>migrate-plain.mjs --check</code> 也会报告），重试约一分钟后退出，不会改动任何数据。因此，回到旧版本就意味着回到升级前的备份：</p>
+    <pre><code>docker compose stop montral
+docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral-upgraded.dump   # 保存新版本写入的数据
+docker compose exec postgres dropdb -U montral montral
+docker compose exec postgres createdb -U montral montral
+docker compose exec -T postgres pg_restore -U montral -d montral --no-owner &lt; montral-pre-upgrade.dump
+# 检出之前的源码，然后
+docker compose up -d --build</code></pre>
+    <ul>
+      <li>请像上面那样恢复到<strong>空</strong>数据库。不要用 <code>--clean</code> 把升级前的备份恢复到升级后的数据库上：升级新增的表和列不在备份里，会被留下，之后再次升级时可能因此失败。</li>
+      <li>升级之后写入的内容（检测记录、事件、设置）不在升级前的备份里；额外的那份导出会保留它们，以便之后再次升级。</li>
+    </ul>
+    <p><strong>灾难恢复</strong>使用相同的命令：把最近的备份恢复到一个新的空数据库（<a href="/docs/backup#restore-zh">备份与恢复</a>），保持 <code>.env</code> 不变，然后启动应用；比备份更新的迁移会在启动时执行。CI 中的合成安装从数据库被删除到应用恢复服务并通过验证（建库、恢复、启动、登录并读回全部数据）用时 RTO_SECONDS 秒；实际耗时随数据库大小增长，主要花在 <code>pg_restore</code> 上。</p>
     <h3 id="ping-zh">Ping（ICMP）监控</h3>
     <p>Ping 监控调用服务器上的系统 <code>ping</code> 程序，因此只能在自托管 Node 服务器（Docker 或 <code>node server.mjs</code>）上运行；部署在 Cloudflare Workers 上时会拒绝创建。镜像基于 <code>node:22-alpine</code>，以非特权用户 <code>node</code> 运行，使用 BusyBox <code>ping</code> 和非特权 ICMP 套接字。Linux 只允许 <code>net.ipv4.ping_group_range</code> 中列出的用户组使用这类套接字；Docker 20.10 及更高版本在每个容器中都将其设为 <code>0 2147483647</code>，因此无需额外配置。如果使用较旧的引擎、其他容器运行时，或主机默认值受限，请在 <code>docker-compose.yml</code> 的 <code>montral</code> 服务中加入：</p>
     <pre><code is:raw>    sysctls:

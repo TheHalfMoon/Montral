@@ -14,7 +14,8 @@ const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
 const env = {
   DATABASE_URL: url,
-  BETTER_AUTH_SECRET: "montral-sso-e2e-secret-not-for-production",
+  // the OAuth agent flow signs with the JWKS shared by every e2e file, whose private key is encrypted with this secret
+  BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123",
   BETTER_AUTH_URL: origin,
   WEB_ORIGIN: origin,
   // the synthetic identity providers listen on 127.0.0.1 over plain http

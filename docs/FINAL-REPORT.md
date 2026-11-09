@@ -5,7 +5,9 @@ Nothing is released, deployed, packaged, published or tagged. That requires the 
 (`GREEN LIGHT MONTRAL`). A public repository is not release authorization. No paid service was enabled and no cost
 was incurred. Billing stays disabled by default and test-mode only.
 
-**Candidate revision:** `main` at `c58c24a` (2026-11-09). Every claim below points to a merged pull request, a CI run
+**Candidate revision:** `main` at `c58c24a` (2026-11-09). `a133236` (#43) changed only the qualification harness
+(load phase-5 rule, Chromium start-up) and evidence; the application is identical, and this report's own pull request
+re-runs every workflow on top of it. Every claim below points to a merged pull request, a CI run
 on its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
@@ -34,6 +36,7 @@ Each pull request passed an independent review (findings fixed) and every CI che
 | #39 | `7535614` | Workspace audit log: append-only, API, CSV/JSONL export, MCP, UI, retention |
 | #40 | `8fedf26` | Load, queue backpressure, webhook ingestion and DB pool exhaustion qualification |
 | #36 | `c58c24a` | Cross-browser (Chromium, Firefox, WebKit, mobile) and WCAG 2.1 AA gate, plus the app bugs it found |
+| #43 | `a133236` | Qualification harness: load phase 5 asserts no starvation (a fixed-window rule failed a docs-only PR); Chromium start-up reads its own DevTools port (a 20 s deadline failed on a busy runner) |
 
 Earlier work (#12–#30) is listed in the git history and the previous version of this report.
 

@@ -21,6 +21,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 8a | Status page editor crashed for every page (React hook order, error #310) | P1 | Done (#36): found by the cross-browser journey | journey spec |
 | 8b | Slug and ntfy-topic `pattern` invalid under the `v` regex flag (validation silently skipped) | P2 | Done (#36) | journey spec |
 | 8c | Dashboard skip link did nothing; text contrast below WCAG AA | P2 | Done (#36) | 45 axe scans, 0 violations |
+| 8d | Qualification flakes: load phase-5 window rule, Chromium CDP start-up deadline | P1 | Done (#43); both seen on PRs that did not touch the app | run 42609831385, run 42616676193 |
 
 ## Capabilities
 

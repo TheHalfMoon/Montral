@@ -74,7 +74,7 @@ echo "== unprivileged ICMP inside the image (ping monitors)"
 "${compose[@]}" exec -T montral ping -c 1 -W 2 127.0.0.1 >/dev/null || { echo "ping as node user failed inside the image" >&2; exit 1; }
 # and the app's own ping monitor, end to end: create, run a check, read the stored status
 created="$(api POST /api/monitors '{"name":"Docker ping","type":"ping","target":"127.0.0.1"}')"
-ping_id="$(sed -n 's/.*"id":"\([^"]*\)".*//p' <<<"$created")"
+ping_id="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("id",""))' <<<"$created")"
 [[ -n "$ping_id" ]] || { echo "ping monitor create failed: $created" >&2; exit 1; }
 api POST "/api/monitors/${ping_id}/check" '{}' | grep '"ok":true' >/dev/null || { echo "ping monitor check request failed" >&2; exit 1; }
 api GET "/api/monitors/${ping_id}" | grep '"status":"up"' >/dev/null || { echo "ping monitor is not up after its check: $(api GET "/api/monitors/${ping_id}")" >&2; exit 1; }

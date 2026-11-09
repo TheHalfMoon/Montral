@@ -53,6 +53,8 @@ const target = createServer((_, res) => { res.statusCode = mode === "up" ? 200 :
 await new Promise((r) => target.listen(0, "0.0.0.0", r));
 const targetUrl = `http://127.0.0.1:${target.address().port}/health`;
 
+// Same image for primary and replica; CI runs the oldest supported major and the one docker-compose.yml ships.
+const PG_IMAGE = process.env.MONTRAL_FAILOVER_PG_IMAGE || "postgres:17";
 let child;
 let log = "";
 const exited = (proc) => proc.exitCode !== null || proc.signalCode !== null;
@@ -62,7 +64,7 @@ try {
   // primary: replication enabled; any standby may connect with the same credentials
   sh(["run", "-d", "--name", "montral-fo-primary", "--network", NET, "-p", `127.0.0.1:${primaryPort}:5432`,
     "-e", `POSTGRES_PASSWORD=${PW}`, "-e", "POSTGRES_USER=montral", "-e", "POSTGRES_DB=montral_test_failover",
-    "postgres:17", "-c", "wal_level=replica", "-c", "max_wal_senders=5", "-c", "hot_standby=on", "-c", "wal_keep_size=256MB"]);
+    PG_IMAGE, "-c", "wal_level=replica", "-c", "max_wal_senders=5", "-c", "hot_standby=on", "-c", "wal_keep_size=256MB"]);
   const primaryUrl = `postgres://montral:${PW}@127.0.0.1:${primaryPort}/montral_test_failover`;
   const primary = postgres(primaryUrl, { max: 1, onnotice: () => {} });
   await until("primary ready", async () => (await primary`select 1 as ok`)[0].ok === 1, 60_000);
@@ -71,7 +73,7 @@ try {
 
   // replica: base backup with -R (standby.signal + primary_conninfo), then run as a hot standby
   sh(["run", "-d", "--name", "montral-fo-replica", "--network", NET, "-p", `127.0.0.1:${replicaPort}:5432`,
-    "-e", `PGPASSWORD=${PW}`, "--user", "postgres", "--entrypoint", "bash", "postgres:17", "-c",
+    "-e", `PGPASSWORD=${PW}`, "--user", "postgres", "--entrypoint", "bash", PG_IMAGE, "-c",
     "rm -rf /tmp/pgdata && until pg_basebackup -h montral-fo-primary -U montral -D /tmp/pgdata -R -X stream -d 'application_name=montral_replica'; do sleep 1; done && chmod 700 /tmp/pgdata && exec postgres -D /tmp/pgdata -c hot_standby=on"]);
   await until("replica streaming", async () => (await primary`select count(*)::int as n from pg_stat_replication where state = 'streaming'`)[0].n === 1, 90_000);
   // synchronous commit: a commit returns only once the standby has it, so promotion loses no committed row
@@ -180,7 +182,7 @@ try {
   await promoted.end({ timeout: 1 });
 
   for (const line of summary) console.log(line);
-  console.log("FAILOVER_PASS: network partition and primary promotion qualified on real PostgreSQL primary/replica containers");
+  console.log(`FAILOVER_PASS: network partition and primary promotion qualified on real PostgreSQL primary/replica containers (${PG_IMAGE})`);
 } catch (error) {
   console.error("server log tail:\n" + log.split("\n").slice(-30).join("\n"));
   try { console.error("primary logs:\n" + sh(["logs", "--tail", "20", "montral-fo-primary"])); } catch {}

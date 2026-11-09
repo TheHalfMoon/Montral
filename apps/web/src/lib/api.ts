@@ -25,7 +25,10 @@ export type Monitor = {
 };
 export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null; endsAt: string | null };
 export type HookInbox = { id: string; name: string; created_at: string };
-export type HookEvent = { id: string; method: string; content_type: string | null; headers: Record<string,string>; body: string; created_at: string };
+export type HookEvent = { id: string; method: string; content_type: string | null; headers: Record<string,string>; body: string; created_at: string; response_status?: number | null };
+export type HookResponseContentType = "text/plain" | "application/json" | "application/xml" | "text/xml" | "text/csv";
+export type HookResponseVariant = { status: number; contentType: HookResponseContentType; body: string; headers: { name: string; value: string }[]; location?: string };
+export type HookResponse = HookResponseVariant & { delayMs: number; methods?: Partial<Record<"POST" | "PUT" | "PATCH", HookResponseVariant>> };
 export type Project = { id: string; name: string };
 /** One project's line in the "All projects" overview. */
 export type ProjectOverview = Project & { monitors: number; down: number; openIncidents: number };
@@ -246,6 +249,9 @@ export const api = {
   deleteHookEvent: (inbox: string, event: string) => req<void>(`/hooks/inboxes/${inbox}/events/${event}`, { method: "DELETE" }),
   replayHookEvent: (inbox: string, event: string, url: string) =>
     req<{ status: number; contentType: string | null; body: string; truncated: boolean; durationMs: number }>(`/hooks/inboxes/${inbox}/events/${event}/replay`, { method: "POST", body: JSON.stringify({ url }) }),
+  hookResponse: (id: string) => req<{ response: HookResponse | null }>(`/hooks/inboxes/${id}/response`),
+  setHookResponse: (id: string, response: HookResponse) => req<{ response: HookResponse }>(`/hooks/inboxes/${id}/response`, { method: "PUT", body: JSON.stringify(response) }),
+  resetHookResponse: (id: string) => req<void>(`/hooks/inboxes/${id}/response`, { method: "DELETE" }),
   timeCoverage: (id: string, days: 7 | 30) => req<TimeCoverage>(`/monitors/${id}/time-coverage?days=${days}`),
   monitors: () => req<Monitor[]>("/monitors"),
   monitor: (id: string) => req<Monitor & { results: CheckResult[]; regionStats: RegionStat[] }>(`/monitors/${id}`),

@@ -3,10 +3,21 @@ import type { Tool } from "@montral/mcp-rest";
 import { z } from "zod";
 
 import { migrateMontralHooks, mountMontralHooks } from "./montral-hooks";
+import { RESPONSE_CONTENT_TYPES } from "./montral-hook-response";
 import { migrateMontralBilling, mountMontralBilling } from "./montral-billing";
 import { createMontralEntitlements, migrateMontralMetering } from "./montral-metering";
 
 const id = z.string().uuid().describe("Montral webhook inbox UUID.");
+// The REST route validates fully (header deny-list, size caps, location rules); this shape only guides agents.
+const responseVariantShape = {
+  status: z.number().int().min(200).max(599).optional().describe("HTTP status, 200-599 (default 200)."),
+  contentType: z.enum(RESPONSE_CONTENT_TYPES).optional().describe("Body type (default text/plain); charset=utf-8 is added."),
+  body: z.string().max(65_536).optional().describe("Response body text; must be empty for 204, 205 and 304."),
+  headers: z.array(z.object({ name: z.string().min(1).max(64), value: z.string().max(1024) }).strict()).max(20).optional()
+    .describe("Custom headers. Names are HTTP tokens; values printable ASCII without line breaks."),
+  location: z.string().max(2048).optional().describe("Absolute http(s) URL, only with a 3xx status."),
+};
+const responseVariant = z.object(responseVariantShape).strict();
 export const MONTRAL_TOOLS: Tool[] = [
   {
     name: "list_webhook_inboxes",
@@ -43,6 +54,33 @@ export const MONTRAL_TOOLS: Tool[] = [
     destructive: true,
     idempotent: true,
     build: (a) => ({ method: "DELETE", path: `/api/hooks/inboxes/${a.id}/events/${a.eventId}` }),
+  },
+  {
+    name: "get_webhook_response",
+    description: "Read what an inbox's secret receiver answers to captured requests: status, content type, body, custom headers, optional redirect location, delay and per-method overrides. null means the default 202 {\"received\":true}. Requires manager role.",
+    schema: z.object({ id }),
+    readOnly: true,
+    build: (a) => ({ method: "GET", path: `/api/hooks/inboxes/${a.id}/response` }),
+  },
+  {
+    name: "set_webhook_response",
+    description: "Configure what an inbox's secret receiver answers (custom mock responses), replacing any previous configuration. Status 200-599; a 3xx may carry an absolute http(s) location. Body is text up to 64 KiB (all variants together) served as text/plain, application/json, application/xml, text/xml or text/csv (XML and CSV as attachments); HTML is not supported. Up to 20 custom headers: x-* names outside reserved families plus retry-after, content-language, warning, deprecation, sunset, allow, accept-patch, accept-post, request-id, correlation-id, idempotency-key, traceparent, tracestate and ratelimit*. delayMs waits up to 10000 ms before answering when a delay slot is free (otherwise it answers at once; the request is always captured). methods overrides the response for POST, PUT or PATCH. Refusals (invalid token, oversized, malformed, rate-limited) and replay never use it. Requires manager role.",
+    schema: z.object({
+      id,
+      ...responseVariantShape,
+      delayMs: z.number().int().min(0).max(10_000).optional().describe("Milliseconds to wait before answering, 0-10000."),
+      methods: z.object({ POST: responseVariant.optional(), PUT: responseVariant.optional(), PATCH: responseVariant.optional() }).strict().optional()
+        .describe("Per-method overrides; a method without one uses the top-level response."),
+    }),
+    idempotent: true,
+    build: ({ id, ...config }) => ({ method: "PUT", path: `/api/hooks/inboxes/${id}/response`, body: config }),
+  },
+  {
+    name: "reset_webhook_response",
+    description: "Remove an inbox's custom response so its receiver answers the default 202 {\"received\":true} again. Captured events are kept. Requires manager role.",
+    schema: z.object({ id }),
+    idempotent: true,
+    build: (a) => ({ method: "DELETE", path: `/api/hooks/inboxes/${a.id}/response` }),
   },
   {
     name: "delete_webhook_inbox",

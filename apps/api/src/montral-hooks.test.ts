@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { capturedHeaders, fingerprint, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
+import { capturedHeaders, fingerprint, hookDelaySlots, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
 function fixture(allowReceipt = true) {
-  const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string }> = [];
-  const events: Array<{ id: string; inbox_id: string; organization_id: string; project_id: string; body: string; headers: unknown }> = [];
+  const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string; response?: any }> = [];
+  const events: Array<{ id: string; inbox_id: string; organization_id: string; project_id: string; body: string; headers: unknown; response_status?: number | null }> = [];
+  const audits: Array<{ action: string; changes: unknown }> = [];
   let member = "owner";
   let projectId = "project-a";
   const db = {
@@ -17,7 +18,28 @@ function fixture(allowReceipt = true) {
       }
       if (sql.startsWith("SELECT id,name,created_at")) return inboxes.filter((i) => i.organization_id === args[0] && i.project_id === args[1]).map((i) => ({ id: i.id, name: i.name, created_at: new Date() }));
       if (sql.startsWith("SELECT id FROM montral_hook_inbox")) return inboxes.filter((i) => i.id === args[0] && i.organization_id === args[1] && i.project_id === args[2]).map((i) => ({ id: i.id }));
-      if (sql.startsWith("SELECT id,organization_id,project_id,token_hash")) return inboxes.filter((i) => i.id === args[0]);
+      if (sql.startsWith("SELECT id,organization_id,project_id,token_hash")) return inboxes.filter((i) => i.id === args[0]).map((i) => ({ ...i, delay_ms: i.response?.delayMs ?? 0 }));
+      if (sql.startsWith("SELECT response FROM montral_hook_inbox")) return inboxes.filter((i) => i.id === args[0] && i.organization_id === args[1] && i.project_id === args[2]).map((i) => ({ response: i.response ?? null }));
+      if (sql.startsWith("UPDATE montral_hook_inbox SET response=")) {
+        const inbox = inboxes.find((i) => i.id === args[0] && i.organization_id === args[1] && i.project_id === args[2]);
+        if (!inbox) return [];
+        inbox.response = sql.includes("response=NULL") ? null : JSON.parse(String(args[3]));
+        return [{ id: inbox.id }];
+      }
+      if (sql.startsWith("UPDATE montral_hook_event SET response_status=")) {
+        const event = events.find((e) => e.id === args[0] && e.inbox_id === args[2]);
+        if (event) event.response_status = Number(args[1]);
+        return [];
+      }
+      if (sql.includes("INSERT INTO audit_event")) { audits.push({ action: String(args[8]), changes: args[11] ? JSON.parse(String(args[11])) : null }); return []; }
+      if (sql.includes("montral_capture_hook_event_v2")) {
+        const inbox = inboxes.find(i => i.id === args[0] && i.token_hash === args[1]);
+        if (!inbox) return [{ result: null }];
+        const status = (inbox.response?.methods?.[String(args[3])] ?? inbox.response)?.status ?? 202;
+        events.push({ id: String(args[2]), inbox_id: inbox.id, organization_id: inbox.organization_id, project_id: inbox.project_id,
+          body: String(args[6]), headers: JSON.parse(String(args[5])), response_status: status });
+        return [{ result: { status, response: inbox.response ?? null } }];
+      }
       if (sql.includes("montral_capture_hook_event")) {
         const inbox = inboxes.find(i => i.id === args[0] && i.token_hash === args[1]);
         if (!inbox) return [{ accepted: false }];
@@ -54,7 +76,7 @@ function fixture(allowReceipt = true) {
   const authed = new Hono<AppEnv>();
   mountMontralHooks({ app, authed });
   app.route("/api", authed);
-  return { app, inboxes, events, setMember: (m: string) => { member = m; }, setProject: (p: string) => { projectId = p; } };
+  return { app, inboxes, events, audits, setMember: (m: string) => { member = m; }, setProject: (p: string) => { projectId = p; } };
 }
 
 /** Secret receiver paths must never be cacheable, indexable or referrable,
@@ -324,6 +346,194 @@ describe("Montral webhook security", () => {
     expect(res.status).toBe(403);
     const eventRead = await f.app.request("/api/hooks/inboxes/00000000-0000-4000-8000-000000000000/events");
     expect(eventRead.status).toBe(403);
+  });
+});
+
+describe("configurable receiver responses", () => {
+  async function inbox(f: ReturnType<typeof fixture>) {
+    const res = await f.app.request("/api/hooks/inboxes", { method: "POST", headers: { "content-type": "application/json" }, body: '{"name":"Mock"}' });
+    return await res.json() as { id: string; path: string };
+  }
+  const put = (f: ReturnType<typeof fixture>, id: string, body: unknown) => f.app.request(`/api/hooks/inboxes/${id}/response`, {
+    method: "PUT", headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body),
+  });
+
+  it("answers captured requests with the configured status, headers and body, keeping privacy headers", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    expect(await (await f.app.request(`/api/hooks/inboxes/${id}/response`)).json()).toEqual({ response: null });
+    const saved = await put(f, id, { status: 201, contentType: "application/json", body: '{"mock":true}', headers: [{ name: "X-Mock-Id", value: "m-1" }] });
+    expect(saved.status).toBe(200);
+    expectPrivateHookHeaders(saved);
+    expect((await saved.json() as { response: { status: number } }).response.status).toBe(201);
+    const res = await f.app.request(path, { method: "POST", headers: { "content-type": "application/json" }, body: '{"in":1}' });
+    expect(res.status).toBe(201);
+    expect(await res.text()).toBe('{"mock":true}');
+    expect(res.headers.get("content-type")).toBe("application/json; charset=utf-8");
+    expect(res.headers.get("x-mock-id")).toBe("m-1");
+    expect(res.headers.get("content-security-policy")).toContain("sandbox");
+    expectPrivateHookHeaders(res);
+    expect(f.events.at(-1)).toMatchObject({ body: '{"in":1}', response_status: 201 });
+    expect(f.audits.map((a) => a.action)).toContain("hook_inbox.response_update");
+    const recorded = f.audits.find((a) => a.action === "hook_inbox.response_update")!.changes as { fields: string[]; values: Record<string, unknown> };
+    expect(recorded.fields).toEqual(expect.arrayContaining(["status", "body", "headers"]));
+    expect(recorded.values).toEqual({ status: 201 });
+    expect(JSON.stringify(recorded)).not.toContain("m-1");
+    expect(JSON.stringify(recorded)).not.toContain("mock");
+  });
+
+  it("uses per-method overrides, redirects with a location, and bodyless statuses", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    expect((await put(f, id, { status: 302, location: "https://example.com/next", methods: { PUT: { status: 204 }, PATCH: { status: 418, body: "teapot" } } })).status).toBe(200);
+    const post = await f.app.request(path, { method: "POST", body: "a" });
+    expect(post.status).toBe(302);
+    expect(post.headers.get("location")).toBe("https://example.com/next");
+    const putRes = await f.app.request(path, { method: "PUT", body: "b" });
+    expect(putRes.status).toBe(204);
+    expect(putRes.headers.get("content-type")).toBeNull();
+    expect(await putRes.text()).toBe("");
+    expectPrivateHookHeaders(putRes);
+    const patch = await f.app.request(path, { method: "PATCH", body: "c" });
+    expect(patch.status).toBe(418);
+    expect(await patch.text()).toBe("teapot");
+    expect(f.events.map((e) => e.response_status)).toEqual([302, 204, 418]);
+  });
+
+  it("refuses invalid configurations with 400 and stores nothing", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    for (const bad of [
+      { status: 101 }, { status: 302, location: "javascript:alert(1)" }, { contentType: "text/html", body: "<script>1</script>" },
+      { headers: [{ name: "Set-Cookie", value: "session=x" }] }, { headers: [{ name: "Access-Control-Allow-Origin", value: "*" }] },
+      { headers: [{ name: "X-Test", value: "a\r\nSet-Cookie: b=1" }] }, { delayMs: 60_000 }, { unknown: true },
+    ]) {
+      const res = await put(f, id, bad);
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+      expectPrivateHookHeaders(res);
+    }
+    expect((await put(f, id, "{not json")).status).toBe(400);
+    expect(f.inboxes[0].response).toBeUndefined();
+    const res = await f.app.request(path, { method: "POST", body: "x" });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ received: true });
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("caps the configuration request size before parsing", async () => {
+    const f = fixture();
+    const { id } = await inbox(f);
+    const res = await put(f, id, { body: "x".repeat(600 * 1024) });
+    expect(res.status).toBe(413);
+    expectPrivateHookHeaders(res);
+  });
+
+  it("keeps the fixed refusal answers whatever is configured", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 200, body: "configured", headers: [{ name: "X-Mock", value: "1" }] });
+    const wrong = await f.app.request(path.slice(0, -1) + (path.endsWith("0") ? "1" : "0"), { method: "POST", body: "x" });
+    expect(wrong.status).toBe(404);
+    expect(wrong.headers.get("x-mock")).toBeNull();
+    const big = await f.app.request(path, { method: "POST", body: "x".repeat(33 * 1024) });
+    expect(big.status).toBe(413);
+    expect(big.headers.get("x-mock")).toBeNull();
+    const bad = await f.app.request(path, { method: "POST", body: new Uint8Array([65, 0, 66]) as BodyInit });
+    expect(bad.status).toBe(422);
+    expect(bad.headers.get("x-mock")).toBeNull();
+    for (const r of [wrong, big, bad]) expectPrivateHookHeaders(r);
+
+    const limited = fixture(false);
+    const other = await inbox(limited);
+    await put(limited, other.id, { status: 200, body: "configured" });
+    const throttled = await limited.app.request(other.path, { method: "POST", body: "x" });
+    expect(throttled.status).toBe(429);
+    expect(await throttled.text()).not.toContain("configured");
+    expectPrivateHookHeaders(throttled);
+  });
+
+  it("resets to the default 202 and records the reset", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 500, body: "down" });
+    expect((await f.app.request(path, { method: "POST", body: "x" })).status).toBe(500);
+    const reset = await f.app.request(`/api/hooks/inboxes/${id}/response`, { method: "DELETE" });
+    expect(reset.status).toBe(204);
+    expect((await f.app.request(path, { method: "POST", body: "x" })).status).toBe(202);
+    expect(f.audits.filter((a) => a.action === "hook_inbox.response_update")).toHaveLength(2);
+    expect((await f.app.request(`/api/hooks/inboxes/00000000-0000-4000-8000-000000000000/response`, { method: "DELETE" })).status).toBe(404);
+  });
+
+  it("is manager-only and scoped to the inbox's project", async () => {
+    const f = fixture();
+    const { id } = await inbox(f);
+    f.setMember("member");
+    expect((await f.app.request(`/api/hooks/inboxes/${id}/response`)).status).toBe(403);
+    expect((await put(f, id, { status: 201 })).status).toBe(403);
+    expect((await f.app.request(`/api/hooks/inboxes/${id}/response`, { method: "DELETE" })).status).toBe(403);
+    f.setMember("owner");
+    f.setProject("project-b");
+    expect((await f.app.request(`/api/hooks/inboxes/${id}/response`)).status).toBe(404);
+    expect((await put(f, id, { status: 201 })).status).toBe(404);
+    expect(f.inboxes[0].response).toBeUndefined();
+  });
+
+  it("delays the answer within bounds; beyond the inbox's slots it captures and answers at once, never refusing", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 201, body: "slow", delayMs: 600 });
+    const started = Date.now();
+    const first = await f.app.request(path, { method: "POST", body: "x" });
+    expect(first.status).toBe(201);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(550);
+    // Five slots per inbox: the sixth concurrent request is still captured and
+    // gets the configured status and body, just without the delay.
+    const before = f.events.length;
+    const t0 = Date.now();
+    const burst = await Promise.all(Array.from({ length: 6 }, () => Promise.resolve(f.app.request(path, { method: "POST", body: "y" }))
+      .then(async (r) => ({ r, text: await r.text(), ms: Date.now() - t0 }))));
+    expect(burst.map((b) => b.r.status)).toEqual([201, 201, 201, 201, 201, 201]);
+    expect(burst.every((b) => b.text === "slow")).toBe(true);
+    expect(burst.filter((b) => b.ms >= 550)).toHaveLength(5);
+    expect(burst.filter((b) => b.ms < 550)).toHaveLength(1);
+    expect(f.events.length - before).toBe(6);
+    expect(f.events.slice(before).every((e) => e.response_status === 201)).toBe(true);
+    for (const b of burst) expectPrivateHookHeaders(b.r);
+    // Slots are released afterwards.
+    expect(hookDelaySlots.active({ inbox: id })).toBe(0);
+  });
+
+  it("serves XML bodies as attachments so a browser never renders them", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 200, contentType: "application/xml", body: '<svg xmlns="http://www.w3.org/2000/svg"><text>x</text></svg>' });
+    const res = await f.app.request(path, { method: "POST", body: "x" });
+    expect(res.headers.get("content-type")).toBe("application/xml; charset=utf-8");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="response.xml"');
+    expectPrivateHookHeaders(res);
+  });
+
+  it("records the status actually sent when a stored configuration fails re-validation", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    f.inboxes[0].response = { status: 200, contentType: "text/html", body: "<b>x</b>", headers: [], delayMs: 0 };
+    const res = await f.app.request(path, { method: "POST", body: "x" });
+    expect(res.status).toBe(202);
+    expect(f.events.at(-1)?.response_status).toBe(202);
+    expect(id).toBeTruthy();
+  });
+
+  it("stops waiting when the sender disconnects", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 200, delayMs: 10_000 });
+    const controller = new AbortController();
+    const started = Date.now();
+    const pending = f.app.fetch(new Request("http://localhost" + path, { method: "POST", body: "x", signal: controller.signal }));
+    setTimeout(() => controller.abort(), 50);
+    await Promise.resolve(pending).catch(() => null);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(f.events).toHaveLength(1);
   });
 });
 

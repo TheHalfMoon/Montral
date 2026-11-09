@@ -6,7 +6,8 @@ import { allow } from "./ratelimit";
 import { audit, auditChanges } from "./audit";
 import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers } from "./netguard";
 import { pinnedFetch } from "./pinnedfetch";
-import { relationExists } from "./schema-catalog";
+import { columnExists, relationExists } from "./schema-catalog";
+import { boundedDelay, buildConfiguredResponse, DelaySlots, parseHookResponseConfig, RESPONSE_LIMITS, responseVariant, type HookResponseConfig } from "./montral-hook-response";
 import { z } from "zod";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -100,9 +101,9 @@ export class InboxCreationTimeoutError extends Error {
 /** A single end-to-end read deadline prevents low-rate senders from holding
  * authenticated inbox-creation requests open indefinitely. The override exists
  * for deterministic test streams; mounted requests use the 10-second bound. */
-export async function readInboxCreation(request: Request, timeoutMs = INBOX_CREATE_READ_MS): Promise<{ oversized: boolean; value?: unknown }> {
+export async function readInboxCreation(request: Request, timeoutMs = INBOX_CREATE_READ_MS, maxBytes = INBOX_CREATE_MAX_BYTES): Promise<{ oversized: boolean; value?: unknown }> {
   const declared = request.headers.get("content-length");
-  if (declared && /^\d+$/.test(declared) && Number(declared) > INBOX_CREATE_MAX_BYTES) {
+  if (declared && /^\d+$/.test(declared) && Number(declared) > maxBytes) {
     void request.body?.cancel().catch(() => {});
     return { oversized: true };
   }
@@ -118,7 +119,7 @@ export async function readInboxCreation(request: Request, timeoutMs = INBOX_CREA
     for (;;) {
       const { done, value } = await Promise.race([reader.read(), deadline]);
       if (done) break;
-      if (value.byteLength > INBOX_CREATE_MAX_BYTES - size) return { oversized: true };
+      if (value.byteLength > maxBytes - size) return { oversized: true };
       chunks.push(value);
       size += value.byteLength;
     }
@@ -147,7 +148,11 @@ export type HookEvent = {
   id: string; inbox_id: string; organization_id: string; project_id: string;
   method: string; content_type: string | null; headers: Record<string,string>;
   body: string; created_at: Date;
+  /** Status the receiver answered with; null for events captured before configurable responses. */
+  response_status?: number | null;
 };
+/** Delayed responses in flight on this process; see DelaySlots. */
+export const hookDelaySlots = new DelaySlots(5, 20, 200);
 
 export const fingerprint = async (token: string) => {
   const bytes = new TextEncoder().encode(token);
@@ -233,12 +238,21 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
     await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_inbox_scope
       ON montral_hook_inbox (organization_id, project_id)`);
   }
+  // Configurable receiver response. ADD COLUMN IF NOT EXISTS would take ACCESS
+  // EXCLUSIVE even when the column exists, so only a genuine upgrade runs it.
+  // Inbox before event: the same order a capture locks them in.
+  if (!await columnExists(db, "montral_hook_inbox", "response")) {
+    await db.query(`ALTER TABLE montral_hook_inbox ADD COLUMN IF NOT EXISTS response jsonb`);
+  }
   await db.query(`CREATE TABLE IF NOT EXISTS montral_hook_event (
     id uuid PRIMARY KEY, inbox_id uuid NOT NULL REFERENCES montral_hook_inbox(id) ON DELETE CASCADE,
     organization_id text NOT NULL, project_id text NOT NULL, method varchar(10) NOT NULL,
     content_type varchar(256), headers jsonb NOT NULL DEFAULT '{}'::jsonb, body text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW()
   )`);
+  if (!await columnExists(db, "montral_hook_event", "response_status")) {
+    await db.query(`ALTER TABLE montral_hook_event ADD COLUMN IF NOT EXISTS response_status smallint`);
+  }
   if (!await relationExists(db, "montral_hook_event_recent")) {
     await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_recent
       ON montral_hook_event (inbox_id, created_at DESC)`);
@@ -298,7 +312,42 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_hooks_v3"];
+  // v2 also reads the inbox's response configuration under the same row lock
+  // and records the status it selects, so the stored status always matches
+  // the configuration the receiver answers with, even while a manager edits it.
+  // The 7-argument function above stays for replicas still running the old code.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_capture_hook_event_v2(
+      p_inbox uuid, p_hash text, p_event uuid, p_method text,
+      p_content_type text, p_headers jsonb, p_body text
+    ) RETURNS jsonb LANGUAGE plpgsql AS $montral$
+    DECLARE current_inbox record; chosen_status smallint;
+    BEGIN
+      SELECT organization_id,project_id,response INTO current_inbox
+      FROM montral_hook_inbox
+      WHERE id=p_inbox AND token_hash=p_hash FOR UPDATE;
+      IF NOT FOUND THEN RETURN NULL; END IF;
+      chosen_status := COALESCE(
+        (COALESCE(current_inbox.response->'methods'->p_method, current_inbox.response)->>'status')::smallint, 202);
+      INSERT INTO montral_hook_event(
+        id,inbox_id,organization_id,project_id,method,content_type,headers,body,response_status
+      ) VALUES (
+        p_event,p_inbox,current_inbox.organization_id,current_inbox.project_id,
+        p_method,p_content_type,p_headers,p_body,chosen_status
+      );
+      DELETE FROM montral_hook_event
+      WHERE inbox_id=p_inbox AND (
+        created_at < NOW() - INTERVAL '7 days'
+        OR id IN (
+          SELECT id FROM montral_hook_event
+          WHERE inbox_id=p_inbox ORDER BY created_at DESC,id DESC OFFSET 250
+        )
+      );
+      RETURN jsonb_build_object('status', chosen_status, 'response', current_inbox.response);
+    END;
+    $montral$
+  `);
+  return ["montral_hooks_v4"];
 }
 
 /** Server-driven expiry, including idle inboxes; no user interaction is needed to evict old events. */
@@ -403,7 +452,7 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       where += ` AND (e.body ILIKE $${params.length} OR e.content_type ILIKE $${params.length} OR e.headers::text ILIKE $${params.length})`;
     }
     const rows = await db.query<HookEvent>(
-      `SELECT e.id,e.method,e.content_type,e.headers,e.body,e.created_at FROM montral_hook_event e WHERE ${where} ORDER BY e.created_at DESC, e.id DESC LIMIT ${EVENT_PAGE + 1}`, params,
+      `SELECT e.id,e.method,e.content_type,e.headers,e.body,e.created_at,e.response_status FROM montral_hook_event e WHERE ${where} ORDER BY e.created_at DESC, e.id DESC LIMIT ${EVENT_PAGE + 1}`, params,
     );
     const more = rows.length > EVENT_PAGE;
     const events = more ? rows.slice(0, EVENT_PAGE) : rows;
@@ -473,6 +522,53 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       return c.json({ error: "Could not reach the target" }, 502);
     }
   });
+  /**
+   * What the public receiver answers for this inbox. Managers only for reads
+   * too: a configured body or header may hold values the team treats as secret.
+   * Refusals (404, 408, 413, 422, 429) never use it, and replay never does.
+   */
+  privateHooks.get("/inboxes/:id/response", uuidParams, requireManager, async (c) => {
+    const rows = await c.get("database").query<{ response: HookResponseConfig | null }>(
+      "SELECT response FROM montral_hook_inbox WHERE id=$1 AND organization_id=$2 AND project_id=$3",
+      [c.req.param("id"), c.get("orgId"), c.get("projectId")],
+    );
+    if (!rows.length) return c.json({ error: "Not found" }, 404);
+    return c.json({ response: rows[0].response ?? null });
+  });
+  privateHooks.put("/inboxes/:id/response", uuidParams, requireManager, async (c) => {
+    let incoming: Awaited<ReturnType<typeof readInboxCreation>>;
+    try {
+      incoming = await readInboxCreation(c.req.raw, INBOX_CREATE_READ_MS, RESPONSE_LIMITS.maxRequestBytes);
+    } catch (error) {
+      if (error instanceof InboxCreationTimeoutError) return c.json({ error: "Request body read timeout" }, 408);
+      throw error;
+    }
+    if (incoming.oversized) return c.json({ error: "Payload too large" }, 413);
+    const parsed = parseHookResponseConfig(incoming.value);
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    const config = parsed.value;
+    const updated = await c.get("database").query<{ id: string }>(
+      "UPDATE montral_hook_inbox SET response=$4::jsonb WHERE id=$1 AND organization_id=$2 AND project_id=$3 RETURNING id",
+      [c.req.param("id"), c.get("orgId"), c.get("projectId"), JSON.stringify(config)],
+    );
+    if (!updated.length) return c.json({ error: "Not found" }, 404);
+    // Field names, the status and the delay only: bodies, header values and the redirect target are never recorded.
+    await audit(c, "hook_inbox.response_update", { type: "hook_inbox", id: c.req.param("id") }, auditChanges({
+      status: config.status, contentType: config.contentType, delayMs: config.delayMs,
+      body: config.body ? true : undefined, headers: config.headers.length ? true : undefined,
+      location: config.location ? true : undefined, methods: config.methods ? true : undefined,
+    }));
+    return c.json({ response: config });
+  });
+  privateHooks.delete("/inboxes/:id/response", uuidParams, requireManager, async (c) => {
+    const updated = await c.get("database").query<{ id: string }>(
+      "UPDATE montral_hook_inbox SET response=NULL WHERE id=$1 AND organization_id=$2 AND project_id=$3 RETURNING id",
+      [c.req.param("id"), c.get("orgId"), c.get("projectId")],
+    );
+    if (!updated.length) return c.json({ error: "Not found" }, 404);
+    await audit(c, "hook_inbox.response_update", { type: "hook_inbox", id: c.req.param("id") }, auditChanges({ reset: true }));
+    return c.body(null, 204);
+  });
   privateHooks.delete("/inboxes/:id", uuidParams, requireManager, async (c) => {
     const deleted = await c.get("database").query(
       "DELETE FROM montral_hook_inbox WHERE id=$1 AND organization_id=$2 AND project_id=$3 RETURNING id",
@@ -510,14 +606,38 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     // Re-check the secret and inbox under a row lock in the same transaction as
     // the INSERT and retention pruning. If it was deleted while we streamed the
     // body, return 404 instead of raising a foreign-key error or leaking data.
-    const captured = await db.query<{ accepted: boolean }>(
-      "SELECT montral_capture_hook_event($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS accepted",
-      [id, await fingerprint(token), crypto.randomUUID(), c.req.method,
+    // The full response configuration comes back from the capture, read under that lock.
+    const eventId = crypto.randomUUID();
+    const captured = await db.query<{ result: { status: number; response: unknown } | null }>(
+      "SELECT montral_capture_hook_event_v2($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS result",
+      [id, await fingerprint(token), eventId, c.req.method,
         (c.req.header("content-type") ?? "").slice(0, 256) || null,
         JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
     );
-    if (!captured[0]?.accepted) return c.json({ error: "Not found" }, 404);
-    return c.json({ received: true }, 202);
+    const result = captured[0]?.result;
+    if (!result) return c.json({ error: "Not found" }, 404);
+    const stored = typeof result.response === "string" ? JSON.parse(result.response) as unknown : result.response;
+    const config = stored ? parseHookResponseConfig(stored) : null;
+    const variant = config?.ok ? responseVariant(config.value, c.req.method) : null;
+    // The event records what is actually sent. The SQL function's choice can
+    // only differ for a stored configuration that fails validation here (the
+    // default 202 is sent instead); correct the record before answering.
+    const sent = variant ? variant.status : 202;
+    if (Number(result.status) !== sent) {
+      await db.query("UPDATE montral_hook_event SET response_status=$2 WHERE id=$1 AND inbox_id=$3", [eventId, sent, id]);
+    }
+    if (!config?.ok || !variant) return c.json({ received: true }, 202);
+    if (config.value.delayMs > 0) {
+      // Taken only now, after the body was read and the event stored. No free
+      // slot (inbox, organization or process) means: answer at once, without
+      // the delay. The delay never prevents capture.
+      const release = hookDelaySlots.acquire(id, inbox.organization_id);
+      if (release) {
+        try { await boundedDelay(config.value.delayMs, c.req.raw.signal); } finally { release(); }
+      }
+    }
+    const out = buildConfiguredResponse(variant);
+    return out.body === null ? c.body(null, out.status as 204, out.headers) : c.body(out.body, out.status as 200, out.headers);
   });
   app.route("/api/hooks/receive", publicHooks);
 }

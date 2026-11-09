@@ -36,7 +36,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 15 | Terraform provider / config-as-code | P2 | Not started; REST API and Uptime Kuma import exist |
 | 16 | Browser / multi-step synthetic checks | P3 | Not started; needs an isolated headless runtime |
 | 17 | SMS / voice alerts | P3 | Blocked: paid provider, needs owner approval |
-| 18 | Custom webhook responses (webhook.site parity) | P3 | Not started |
+| 18 | Custom webhook responses (webhook.site parity) | P3 | In review (#47); evidence `docs/evidence/2026-11-10-webhook-responses.md` |
 | 19 | Owner email when a custom domain is withdrawn | P3 | Not started; shown in the editor and audit log |
 | 20 | Merge stale queued check runs after a slow-target backlog (one monitor can get up to 6 catch-up checks in 2 min) | P3 | Not started; measured in #40 |
 | 21 | Dark-mode contrast scan, screen-reader testing, real Safari/iOS devices | P2 | Not started; WebKit coverage is Playwright's Linux build |

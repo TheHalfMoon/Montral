@@ -1,6 +1,121 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
-import { api, ApiError, type HookInbox, type HookEvent } from "../lib/api";
+import { api, ApiError, type HookInbox, type HookEvent, type HookResponse, type HookResponseContentType } from "../lib/api";
+
+const CONTENT_TYPES: HookResponseContentType[] = ["text/plain", "application/json", "application/xml", "text/xml", "text/csv"];
+const BODYLESS = new Set([204, 205, 304]);
+const DEFAULT_RESPONSE: HookResponse = { status: 200, contentType: "text/plain", body: "", headers: [], delayMs: 0 };
+
+/** The response a sender would see, as plain HTTP text; the fixed headers are added by the server and listed so nothing is a surprise. */
+function previewResponse(r: HookResponse): string {
+  const lines = [`HTTP/1.1 ${r.status}`];
+  for (const h of r.headers) if (h.name.trim()) lines.push(`${h.name.trim()}: ${h.value}`);
+  if (r.status >= 300 && r.status <= 399 && r.location) lines.push(`location: ${r.location}`);
+  if (!BODYLESS.has(r.status)) {
+    lines.push(`content-type: ${r.contentType}; charset=utf-8`);
+    if (r.contentType !== "text/plain" && r.contentType !== "application/json") lines.push(`content-disposition: attachment; filename="response.${r.contentType === "text/csv" ? "csv" : "xml"}"`);
+  }
+  lines.push("cache-control: private, no-store", "referrer-policy: no-referrer", "x-content-type-options: nosniff", "x-robots-tag: noindex, nofollow", "content-security-policy: default-src 'none'; sandbox; frame-ancestors 'none'");
+  return lines.join("\n") + "\n\n" + (BODYLESS.has(r.status) ? "" : r.body);
+}
+
+/** Per-inbox receiver response (managers only; the API answers 403 to others and the editor says so). */
+function ResponseEditor({ inbox }: { inbox: string }) {
+  const [draft, setDraft] = useState<HookResponse>(DEFAULT_RESPONSE);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [saved, setSaved] = useState("");
+  useEffect(() => {
+    let live = true;
+    api.hookResponse(inbox).then((r) => {
+      if (!live) return;
+      setConfigured(!!r.response);
+      setDraft(r.response ? { ...DEFAULT_RESPONSE, ...r.response } : DEFAULT_RESPONSE);
+    }).catch((e) => { if (live) { setConfigured(false); setError((e as Error).message); } });
+    return () => { live = false; };
+  }, [inbox]);
+  const set = (patch: Partial<HookResponse>) => { setSaved(""); setDraft((d) => ({ ...d, ...patch })); };
+  const setHeader = (i: number, patch: Partial<{ name: string; value: string }>) => set({ headers: draft.headers.map((h, n) => (n === i ? { ...h, ...patch } : h)) });
+  const redirect = draft.status >= 300 && draft.status <= 399;
+  const save = async (e: React.SyntheticEvent) => {
+    e.preventDefault(); setBusy(true); setError(""); setSaved("");
+    try {
+      const body: HookResponse = {
+        ...draft,
+        body: BODYLESS.has(draft.status) ? "" : draft.body,
+        headers: draft.headers.filter((h) => h.name.trim() || h.value.trim()).map((h) => ({ name: h.name.trim(), value: h.value.trim() })),
+        location: redirect && draft.location?.trim() ? draft.location.trim() : undefined,
+      };
+      const r = await api.setHookResponse(inbox, body);
+      setDraft({ ...DEFAULT_RESPONSE, ...r.response });
+      setConfigured(true);
+      setSaved(t("Response saved. New requests get it right away."));
+    } catch (x) { setError((x as Error).message); } finally { setBusy(false); }
+  };
+  const reset = async () => {
+    setBusy(true); setError(""); setSaved("");
+    try {
+      await api.resetHookResponse(inbox);
+      setDraft(DEFAULT_RESPONSE);
+      setConfigured(false);
+      setSaved(t("Back to the default response: 202 with {\"received\":true}."));
+    } catch (x) { setError((x as Error).message); } finally { setBusy(false); }
+  };
+  const ids = { status: `hr-status-${inbox}`, type: `hr-type-${inbox}`, body: `hr-body-${inbox}`, delay: `hr-delay-${inbox}`, loc: `hr-loc-${inbox}`, preview: `hr-preview-${inbox}` };
+  return <section className="card sect hook-response" style={{ marginTop: 24 }} aria-labelledby={`hr-title-${inbox}`}>
+    <div className="ph">
+      <div><h2 id={`hr-title-${inbox}`}>{t("Receiver response")}</h2>
+        <p className="muted">{configured ? t("This inbox answers captured requests with the response below.") : t("This inbox answers 202 with {\"received\":true}. Set a status, body and headers to mock the service your sender expects.")}</p></div>
+    </div>
+    <form onSubmit={save} style={{ display: "grid", gap: 12 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <label className="fld" htmlFor={ids.status} style={{ width: 140 }}>{t("Status code")}
+          <input id={ids.status} className="in" type="number" min={200} max={599} step={1} required value={draft.status}
+            onChange={(e) => set({ status: Number(e.target.value) })} />
+        </label>
+        <label className="fld" htmlFor={ids.type} style={{ minWidth: 200 }}>{t("Content type")}
+          <select id={ids.type} className="in" value={draft.contentType} disabled={BODYLESS.has(draft.status)} onChange={(e) => set({ contentType: e.target.value as HookResponseContentType })}>
+            {CONTENT_TYPES.map((ct) => <option key={ct} value={ct}>{ct}</option>)}
+          </select>
+        </label>
+        <label className="fld" htmlFor={ids.delay} style={{ width: 180 }}>{t("Delay (ms, up to 10000)")}
+          <input id={ids.delay} className="in" type="number" min={0} max={10000} step={100} value={draft.delayMs}
+            onChange={(e) => set({ delayMs: Number(e.target.value) })} />
+        </label>
+      </div>
+      {redirect && <label className="fld" htmlFor={ids.loc}>{t("Redirect location (http or https URL)")}
+        <input id={ids.loc} className="in" type="url" maxLength={2048} value={draft.location ?? ""} placeholder="https://example.com/next" onChange={(e) => set({ location: e.target.value })} />
+      </label>}
+      <label className="fld" htmlFor={ids.body}>{t("Response body (up to 64 KiB)")}
+        <textarea id={ids.body} className="in mono" style={{ height: 120, padding: 12 }} disabled={BODYLESS.has(draft.status)} value={BODYLESS.has(draft.status) ? "" : draft.body}
+          onChange={(e) => set({ body: e.target.value })} placeholder='{"ok":true}' />
+      </label>
+      <fieldset style={{ border: 0, padding: 0, margin: 0, display: "grid", gap: 8 }}>
+        <legend style={{ fontWeight: 600, marginBottom: 6 }}>{t("Response headers")}</legend>
+        {draft.headers.map((h, i) => <div key={i} style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <input className="in" aria-label={`${t("Response header name")} ${i + 1}`} maxLength={64} value={h.name} placeholder="x-mock-id" onChange={(e) => setHeader(i, { name: e.target.value })} style={{ flex: 1, minWidth: 140 }} />
+          <input className="in" aria-label={`${t("Response header value")} ${i + 1}`} maxLength={1024} value={h.value} onChange={(e) => setHeader(i, { value: e.target.value })} style={{ flex: 2, minWidth: 180 }} />
+          <button type="button" className="btn sm" aria-label={`${t("Remove response header")} ${i + 1}`} onClick={() => set({ headers: draft.headers.filter((_, n) => n !== i) })}>{t("Remove")}</button>
+        </div>)}
+        <div><button type="button" className="btn sm" disabled={draft.headers.length >= 20} onClick={() => set({ headers: [...draft.headers, { name: "", value: "" }] })}>{t("+ Response header")}</button></div>
+        <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Up to 20 headers: x-* names (outside reserved families) and a few standard ones such as retry-after, content-language, ratelimit-* and traceparent. The privacy headers below are always sent. HTML is not supported; XML and CSV bodies are sent as downloads.")}</p>
+      </fieldset>
+      {draft.methods && <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Per-method overrides set through the API are kept when you save.")} ({Object.keys(draft.methods).join(", ")})</p>}
+      <div>
+        <b id={ids.preview}>{t("Preview")}</b>
+        <pre className="code2" role="region" aria-labelledby={ids.preview} style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: 280, overflow: "auto" }} tabIndex={0}>{previewResponse(draft)}</pre>
+      </div>
+      {error && <p className="err" role="alert">{error}</p>}
+      {saved && <p className="muted" role="status">{saved}</p>}
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button className="btn primary" disabled={busy || configured === null}>{busy ? t("Saving…") : t("Save response")}</button>
+        {configured && <button type="button" className="btn" disabled={busy} onClick={reset}>{t("Use default response")}</button>}
+      </div>
+      <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Only captured requests get this response. Invalid links (404), oversized (413), malformed (422) and rate-limited (429) requests keep their fixed answers, and replay never uses it.")}</p>
+    </form>
+  </section>;
+}
 
 export default function WebhookInboxes() {
   const [inboxes, setInboxes] = useState<HookInbox[] | null>(null);
@@ -92,6 +207,7 @@ export default function WebhookInboxes() {
         <button className="btn sm" disabled={busy} onClick={() => remove(i.id)}>{t("Delete")}</button>
       </div>)}
     </div>
+    {selected && <ResponseEditor key={selected} inbox={selected} />}
     {selected && <section style={{ marginTop: 24 }}>
       <div className="ph">
         <div><h2>{t("Captured events")}</h2><p className="muted">{t("Only users authorized for this Montral project can inspect event bodies.")}</p></div>
@@ -109,7 +225,7 @@ export default function WebhookInboxes() {
         {!events.length && <div className="tr">{method || applied ? t("No events match this filter.") : t("No captured events yet.")}</div>}
         {events.map((e) => <div className="tr" key={e.id} style={{ display: "block", padding: 16 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
-            <b>{e.method} · {e.content_type || t("Unknown type")}</b>
+            <b>{e.method} · {e.content_type || t("Unknown type")}{e.response_status ? <span className="muted" style={{ fontWeight: 400 }}> · {t("answered")} {e.response_status}</span> : null}</b>
             <span className="muted">{new Date(e.created_at).toLocaleString()}</span>
           </div>
           <details style={{ marginTop: 8 }}><summary>{t("Inspect request")}</summary>

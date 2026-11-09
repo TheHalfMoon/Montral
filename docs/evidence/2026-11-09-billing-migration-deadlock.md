@@ -39,3 +39,16 @@ CI run https://github.com/TheHalfMoon/Montral/actions/runs/42445399140: `apps/ap
 - **Not proven locally:** the e2e tests above have **not** run against PostgreSQL yet. They need GitHub CI (`TEST_DATABASE_URL`). The RED results described for old code come from reading the code and PostgreSQL's documented lock levels. They were not observed on this machine.
 - **Residual risk (upgrade window only):** `montral_apply_billing_event` (`subscription_created`) locks `montral_billing_intent` (FOR UPDATE) before `montral_subscription`, which is the opposite of checkout. No single migration lock order matches both functions, so a genuine one-time upgrade can still deadlock with a concurrent webhook. Steady-state restarts take no billing table locks, so they cannot. If the upgrade case happens, the request now gets a retryable 503 and the provider retries the signed event, which is deduplicated by digest.
 - The existing flaky CI assertion should stop failing once the no-op migration no longer locks tables. Confirm this in CI on this branch.
+
+## Review follow-up
+
+- The 503 mapping also reads `err.cause.code`, because Drizzle wraps driver
+  errors. Deadlocks from repo paths are therefore classified too. Covered by
+  unit tests.
+- `migrateEdition` retries up to three times on 40P01/40001. A genuine
+  upgrade that loses a deadlock to live webhook traffic no longer fails the
+  server's start. The transaction committed nothing, and migrations are
+  idempotent.
+- The interleaving test waits up to 60 s, because waiting on another test
+  file's edition advisory lock counts as progress, not as being blocked.
+

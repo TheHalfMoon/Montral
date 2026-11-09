@@ -335,9 +335,13 @@ export const handleApiError: ErrorHandler<AppEnv> = (err, c) => {
  */
 export function errorClass(err: unknown): string {
   try {
+    // SQLSTATEs, Node system codes, and postgres.js connection codes such as CONNECTION_CLOSED; Drizzle wraps the
+    // driver error, so its code sits on `cause`
+    const safe = (code: unknown) => typeof code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z_]{2,30}|[A-Z]+(?:_[A-Z]+){1,4})$/.test(code);
     const code = (err as { code?: unknown } | null)?.code;
-    // SQLSTATEs, Node system codes, and postgres.js connection codes such as CONNECTION_CLOSED
-    if (typeof code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z_]{2,30}|[A-Z]+(?:_[A-Z]+){1,4})$/.test(code)) return code;
+    if (safe(code)) return code as string;
+    const causeCode = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+    if (safe(causeCode)) return causeCode as string;
     const name = (err as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "unknown";
   } catch {

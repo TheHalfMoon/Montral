@@ -20,6 +20,13 @@ describe("errorClass", () => {
     expect(errorClass({ code: "CONNECTION_CLOSED" })).toBe("CONNECTION_CLOSED");
     expect(errorClass({ code: "lowercase_code" })).toBe("Object");
   });
+  it("reads the driver code a wrapper (Drizzle) keeps on `cause`, with the same safety rules", () => {
+    class DrizzleQueryError extends Error {}
+    const wrapped = (code: unknown) => Object.assign(new DrizzleQueryError("Failed query: select … params: hunter2"), { cause: { code } });
+    expect(errorClass(wrapped("40P01"))).toBe("40P01");
+    expect(errorClass(wrapped("postgres://user:pass@host/db"))).toBe("DrizzleQueryError");
+    expect(errorClass(Object.assign(wrapped("23505"), { code: "40001" }))).toBe("40001"); // own code wins
+  });
 });
 
 describe("handleApiError", () => {
@@ -31,6 +38,13 @@ describe("handleApiError", () => {
     app.onError(handleApiError);
     return app;
   }
+
+  it("maps a Drizzle-wrapped deadlock to the same 503", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await appThrowing(Object.assign(new Error(secretMessage), { cause: { code: "40P01" } })).request("/boom");
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain("hunter2");
+  });
 
   it.each(["40P01", "40001"])("maps PostgreSQL %s to a retryable 503 with Retry-After and a fixed body", async (code) => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});

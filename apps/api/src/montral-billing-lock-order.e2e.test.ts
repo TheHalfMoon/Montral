@@ -29,7 +29,9 @@ const EDITION_TABLES = "'montral_billing_intent','montral_subscription','montral
 async function settleOrBlock(observer: Db, migration: Promise<unknown>, pid: () => number) {
   let settled = false;
   void migration.then(() => { settled = true; }, () => { settled = true; });
-  const deadline = Date.now() + 15_000;
+  // Generous: waiting for another test file's edition advisory lock is progress, not a failure (it is not counted
+  // as "blocked" below), and that file may take a while to migrate the shared database.
+  const deadline = Date.now() + 60_000;
   while (!settled && Date.now() < deadline) {
     if (pid()) {
       // Only relation locks: another test file may legitimately hold the

@@ -4,6 +4,7 @@ import { Hono, type Context } from "hono";
 import { limitedJsonBody } from "../json-body-budget";
 import { z } from "zod";
 import type { AppEnv } from "../env";
+import { audit, auditChanges } from "../audit";
 import { ALL_PROJECTS, cookieValue, isManager, listedProjects, requireManager, uuidParams } from "../middleware";
 import { creditCost } from "../entitlements";
 import { isWorkers, targetProblem } from "../netguard";
@@ -336,6 +337,7 @@ async function importMonitors(c: Context<AppEnv>, preview: boolean) {
   const result = { destination: { organizationId: c.get("orgId"), projectId: c.get("projectId"), projectName: project?.name ?? null }, preview, created, duplicates, ready, skipped, report, canImport: !batch.limit && candidates.length > 0, autoChannelCount: auto.length, capacity: batch.limit };
   // same fields as the single-create 402 (error text, numeric limit, active, plan); the batch detail is under `capacity`
   if (batch.limit && !preview) return c.json({ ...result, error: `The ${plan?.name} plan allows ${batch.limit.max} active monitors`, code: "monitor_limit", limit: batch.limit.max, active: batch.limit.active, plan: plan?.id, upgradeUrl: plan?.upgradeUrl }, 402);
+  if (!preview && created) await audit(c, "monitor.import", { type: "monitor", id: null }, auditChanges({}, { count: created }));
   return c.json(result, preview || (!created && duplicates) ? 200 : created ? 201 : 400);
 }
 
@@ -356,7 +358,9 @@ export const monitors = new Hono<AppEnv>()
     const refused = await overPlan(c, { add: 1, intervalSec: v.type === "heartbeat" ? undefined : v.intervalSec });
     if (refused) return refused;
     const channelIds = await withAutoChannels(repo, c.get("orgId"), c.get("projectId"), v.channelIds);
-    return c.json((await shown(c, [await repo.createMonitor(c.get("orgId"), c.get("projectId"), newMonitor({ ...v, channelIds }))]))[0], 201);
+    const created = await repo.createMonitor(c.get("orgId"), c.get("projectId"), newMonitor({ ...v, channelIds }));
+    await audit(c, "monitor.create", { type: "monitor", id: created.id, projectId: created.projectId }, auditChanges(v));
+    return c.json((await shown(c, [created]))[0], 201);
   })
   // JSON backup of this project's monitors; feed it back to POST /import (here or in another workspace)
   .get("/export", async (c) => {
@@ -451,6 +455,7 @@ export const monitors = new Hono<AppEnv>()
       ...(v.paused !== undefined ? { status: v.paused ? "paused" : "pending", nextCheckAt: new Date() } : {}),
     });
     if (!row) return c.json({ error: "Not found" }, 404);
+    await audit(c, "monitor.update", { type: "monitor", id: row.id, projectId: row.projectId }, auditChanges(v));
     // a heartbeat's deadline depends on interval + grace, so re-derive it when either changes
     if (row.type === "heartbeat" && (v.intervalSec !== undefined || v.graceSec !== undefined) && v.paused === undefined) {
       const again = await repo.updateMonitor(c.get("orgId"), row.id, c.get("projectScope"), { nextCheckAt: nextAfter(row) });
@@ -459,7 +464,10 @@ export const monitors = new Hono<AppEnv>()
     return c.json((await shown(c, [row]))[0]);
   })
   .delete("/:id", uuidParams, requireManager, async (c) => {
-    await c.get("repo").deleteMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    const repo = c.get("repo");
+    const existing = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    await repo.deleteMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (existing) await audit(c, "monitor.delete", { type: "monitor", id: existing.id, projectId: existing.projectId }, auditChanges({}, { name: existing.name, type: existing.type }));
     return c.body(null, 204);
   })
   // Runs the monitor's check now. With `region` it is one request from that region instead: the answer is returned and

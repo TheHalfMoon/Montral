@@ -466,6 +466,38 @@ export const statusPageShareLink = pgTable(
   (t) => [uniqueIndex("status_page_share_link_token_idx").on(t.tokenHash), index("status_page_share_link_page_idx").on(t.statusPageId)],
 );
 
+/**
+ * Who changed what in a workspace (apps/api/src/audit.ts). Append-only: a trigger refuses UPDATE, TRUNCATE and DELETE,
+ * except retention pruning through montral_prune_audit() and the cascade when the workspace itself is deleted.
+ * `changes` holds field names (and allowlisted non-secret values) only, never passwords, tokens, keys or channel URLs.
+ * project_id, actor_id and target_id carry no foreign keys on purpose: the record outlives what it describes.
+ */
+export const auditEvent = pgTable(
+  "audit_event",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    projectId: uuid("project_id"),
+    actorType: text("actor_type").notNull(),
+    actorId: text("actor_id"),
+    /** the user's email or the API key's name at the time of the action */
+    actorLabel: text("actor_label"),
+    action: text("action").notNull(),
+    targetType: text("target_type").notNull(),
+    targetId: text("target_id"),
+    changes: jsonb("changes").$type<{ fields: string[]; values?: Record<string, string | number | boolean | null> }>(),
+    ip: text("ip"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("audit_event_org_created_idx").on(t.organizationId, t.createdAt.desc(), t.id.desc()),
+    index("audit_event_org_target_idx").on(t.organizationId, t.targetType, t.targetId),
+    check("audit_event_actor_type_chk", sql`${t.actorType} in ('user', 'api_key', 'system')`),
+    check("audit_event_action_chk", sql`${t.action} ~ '^[a-z_]+(\\.[a-z_]+)+$' and length(${t.action}) <= 64`),
+    check("audit_event_changes_chk", sql`${t.changes} is null or (jsonb_typeof(${t.changes}) = 'object' and octet_length(${t.changes}::text) <= 4096)`),
+  ],
+);
+
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */
 export const rateLimit = pgTable("rate_limit", {
   key: text("key").primaryKey(),

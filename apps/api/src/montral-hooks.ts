@@ -3,6 +3,7 @@ import type { AppEnv } from "./env";
 import { Hono } from "hono";
 import { requireManager, rejectInAllProjects, uuidParams } from "./middleware";
 import { allow } from "./ratelimit";
+import { audit, auditChanges } from "./audit";
 import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers } from "./netguard";
 import { pinnedFetch } from "./pinnedfetch";
 import { relationExists } from "./schema-catalog";
@@ -368,6 +369,8 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       [id, ...scope, parsed.data.name, await fingerprint(token)],
     );
     if (!created[0]?.id) return c.json({ error: "Inbox limit reached" }, 409);
+    // the secret receiver path is never recorded
+    await audit(c, "hook_inbox.create", { type: "hook_inbox", id }, auditChanges({ name: parsed.data.name }));
     return c.json({ id, name: parsed.data.name, path: `/api/hooks/receive/${id}/${token}`, warning: "This secret URL is shown only once. Treat it like a password." }, 201);
   });
   privateHooks.get("/inboxes/:id/events", uuidParams, requireManager, async (c) => {
@@ -412,7 +415,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       "DELETE FROM montral_hook_event WHERE id=$1 AND inbox_id=$2 AND organization_id=$3 AND project_id=$4 RETURNING id",
       [c.req.param("sid"), c.req.param("id"), c.get("orgId"), c.get("projectId")],
     );
-    return removed.length ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
+    if (!removed.length) return c.json({ error: "Not found" }, 404);
+    await audit(c, "hook_event.delete", { type: "hook_event", id: c.req.param("sid") });
+    return c.body(null, 204);
   });
   /**
    * Development replay: resend one captured request to a URL the manager
@@ -458,6 +463,8 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     try {
       const res = await replayFetch(parsed.data.url, { method: event.method, headers, body: event.body, signal }, c.env.MONTRAL_REPLAY_PRIVATE_TARGETS === "true");
       const { text, truncated } = await readReplayBody(res, REPLAY_RESPONSE_BYTES, signal);
+      // the replay URL (which can carry credentials) and the response are never recorded
+      await audit(c, "hook_event.replay", { type: "hook_event", id: event.id }, auditChanges({ url: true }, { method: event.method }));
       return c.json({ status: res.status, contentType: res.headers.get("content-type"), body: text, truncated, durationMs: Date.now() - started });
     } catch (error) {
       if (error instanceof BlockedTarget) return c.json({ error: error.message, code: "target_not_allowed" }, 400);
@@ -471,7 +478,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       "DELETE FROM montral_hook_inbox WHERE id=$1 AND organization_id=$2 AND project_id=$3 RETURNING id",
       [c.req.param("id"), c.get("orgId"), c.get("projectId")],
     );
-    return deleted.length ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
+    if (!deleted.length) return c.json({ error: "Not found" }, 404);
+    await audit(c, "hook_inbox.delete", { type: "hook_inbox", id: c.req.param("id") });
+    return c.body(null, 204);
   });
   authed.route("/hooks", privateHooks);
 

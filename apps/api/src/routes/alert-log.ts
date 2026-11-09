@@ -3,6 +3,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import type { AppEnv } from "../env";
 import { requireManager } from "../middleware";
+import { audit, auditChanges } from "../audit";
 
 /** Alert delivery history for the current project, newest first. */
 export const alertLog = new Hono<AppEnv>().get(
@@ -25,6 +26,8 @@ export const settings = new Hono<AppEnv>()
       if (c.get("projectScope")) return c.json({ error: "This API key is limited to specific projects" }, 403);
       const v = c.req.valid("json");
       if (Object.values(v).every((x) => x === undefined)) return c.json({ error: "No changes" }, 400);
-      return c.json(await c.get("repo").saveSettings(c.get("orgId"), v));
+      const saved = await c.get("repo").saveSettings(c.get("orgId"), v);
+      await audit(c, "workspace.settings.update", { type: "workspace", id: c.get("orgId"), projectId: null }, auditChanges(v));
+      return c.json(saved);
     },
   );

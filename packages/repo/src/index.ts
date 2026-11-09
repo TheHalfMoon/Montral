@@ -556,6 +556,11 @@ export interface Repo {
   underMaintenance(m: Pick<Monitor, "id" | "organizationId" | "projectId">): Promise<boolean>;
   /** Delete raw results and alert history past each workspace's retention, and old rollups. */
   purgeExpired(): Promise<void>;
+  /**
+   * Delete workspace audit events older than `olderThanDays` (at least 30) through the database's retention function,
+   * the only deletion the append-only audit table allows. Returns how many were removed. Optional for test backends.
+   */
+  pruneAuditEvents?(olderThanDays: number): Promise<number>;
   /** Fixed-window counter shared across isolates; true while within `limit`. */
   withinLimit(key: string, limit: number, windowSec: number): Promise<boolean>;
 

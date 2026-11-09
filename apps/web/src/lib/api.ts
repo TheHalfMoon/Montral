@@ -213,7 +213,17 @@ export type TimeCoverage = {
   observedMaintenanceMs: number; policy: "bounded-observation-v1";
 };
 
+/** One workspace audit log entry (GET /api/audit-events). `changes` names the fields a request set, never secret values. */
+export type AuditEvent = {
+  id: string; projectId: string | null; actorType: "user" | "api_key" | "system"; actorId: string | null; actorLabel: string | null;
+  action: string; targetType: string; targetId: string | null;
+  changes: { fields: string[]; values?: Record<string, string | number | boolean | null> } | null;
+  ip: string | null; createdAt: string;
+};
+
 export const api = {
+  /** `query` is a URLSearchParams string of filters and the cursor, without the leading "?". */
+  auditEvents: (query: string) => fetchJson<{ events: AuditEvent[]; next: string | null }>(`/audit-events${query ? "?" + query : ""}`, { cache: "no-store" }),
   billingStatus: () => req<BillingStatus>("/billing"),
   billingCheckout: (plan: "pro" | "business") => req<{ url: string; testMode: true }>("/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
   revokeStatusAccess: (id: string) => req<{ ok: true }>(`/status-pages/${id}/access/revoke`, { method: "POST" }),

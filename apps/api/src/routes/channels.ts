@@ -5,6 +5,7 @@ import { deliver, safeDeliveryReason } from "../alerts";
 import { apnsConfigured } from "../apns";
 import type { AppEnv } from "../env";
 import { isManager, requireManager, uuidParams } from "../middleware";
+import { audit, auditChanges } from "../audit";
 import { urlProblem } from "../netguard";
 import { maskConfig, restoreConfig, sameJson } from "../secrets";
 
@@ -91,7 +92,10 @@ export const channels = new Hono<AppEnv>()
     // a key limited to some projects cannot create what other projects would share
     const projectId = v.scope === "project" || c.get("projectScope") ? c.get("projectId") : null;
     const { scope: _scope, ...channel } = v;
-    return c.json((await shown(c, [await c.get("repo").createChannel(c.get("orgId"), projectId, { ...channel, config: cfg.data })]))[0], 201);
+    const created = await c.get("repo").createChannel(c.get("orgId"), projectId, { ...channel, config: cfg.data });
+    // "config" is recorded by name only: it holds webhook URLs, bot tokens and routing keys
+    await audit(c, "channel.create", { type: "channel", id: created.id, projectId }, auditChanges(v));
+    return c.json((await shown(c, [created]))[0], 201);
   })
   .patch("/:id", uuidParams, zValidator("json", z.object({ name: z.string().min(1).max(80).optional(), enabled: z.boolean().optional(), autoEnable: z.boolean().optional(), config: z.record(z.string(), z.unknown()).optional() })), async (c) => {
     const repo = c.get("repo");
@@ -114,7 +118,9 @@ export const channels = new Hono<AppEnv>()
       }
     }
     const row = await repo.updateChannel(c.get("orgId"), c.req.param("id"), c.get("projectScope"), patch);
-    return row ? c.json((await shown(c, [row]))[0]) : c.json({ error: "Not found" }, 404);
+    if (!row) return c.json({ error: "Not found" }, 404);
+    await audit(c, "channel.update", { type: "channel", id: row.id, projectId: row.projectId }, auditChanges(patch));
+    return c.json((await shown(c, [row]))[0]);
   })
   // sends a harmless test message so people can verify the destination before an outage
   .post("/:id/test", uuidParams, async (c) => {
@@ -147,6 +153,8 @@ export const channels = new Hono<AppEnv>()
       const names = using.slice(0, 5).map((m) => m.name).join(", ") + (using.length > 5 ? ", …" : "");
       return c.json({ error: `This channel is used by ${using.length} monitor${using.length === 1 ? "" : "s"} (${names}). Turn it off on ${using.length === 1 ? "that monitor" : "those monitors"} before removing it.`, code: "channel_in_use", monitors: using }, 409);
     }
+    const existing = await repo.getChannel(c.get("orgId"), id, c.get("projectScope"));
     await repo.deleteChannel(c.get("orgId"), id, c.get("projectScope"));
+    if (existing) await audit(c, "channel.delete", { type: "channel", id: existing.id, projectId: existing.projectId }, auditChanges({}, { name: existing.name, type: existing.type }));
     return c.body(null, 204);
   });

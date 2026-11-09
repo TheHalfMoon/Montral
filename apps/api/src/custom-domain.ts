@@ -249,8 +249,10 @@ export async function recheckCustomDomains(
     summary.failed++;
     // Right-hand sides read the row as it was before this UPDATE: the streak start, count and kind are the stored ones.
     // `fresh` = this failure starts a new streak (none yet, or the kind switched between unresolvable and definitive).
+    // A withdrawal is written to the workspace audit log in the same statement (actor "system"), so it is recorded
+    // exactly when it happens and never twice.
     const rows = await query<{ withdrawn: boolean }>(
-      `UPDATE status_page AS sp SET
+      `WITH upd AS (UPDATE status_page AS sp SET
          custom_domain_failures = CASE WHEN s.fresh THEN 1 ELSE sp.custom_domain_failures + 1 END,
          custom_domain_failing_since = CASE WHEN s.fresh THEN $5::timestamptz ELSE sp.custom_domain_failing_since END,
          custom_domain_check_error = $4::text,
@@ -263,7 +265,12 @@ export async function recheckCustomDomains(
                          OR (custom_domain_check_error = 'lookup_failed') <> ($4::text = 'lookup_failed')) AS fresh
              FROM status_page WHERE id = $1) AS s
        WHERE sp.id = s.id AND sp.custom_domain = $2 AND sp.custom_domain_token = $3 AND sp.custom_domain_verified_at IS NOT NULL
-       RETURNING sp.custom_domain_verified_at IS NULL AS withdrawn`,
+       RETURNING sp.id, sp.organization_id, sp.project_id, sp.custom_domain_verified_at IS NULL AS withdrawn),
+       logged AS (INSERT INTO audit_event (organization_id, project_id, actor_type, actor_label, action, target_type, target_id, changes)
+         SELECT organization_id, project_id, 'system', 'Custom domain re-check', 'status_page.domain.withdrawn', 'status_page', id::text,
+                jsonb_build_object('fields', jsonb_build_array('customDomainVerifiedAt'), 'values', jsonb_build_object('domain', $2::text, 'reason', $4::text))
+         FROM upd WHERE withdrawn RETURNING 1)
+       SELECT withdrawn FROM upd`,
       [row.id, row.domain, row.token, outcome.reason, now.toISOString(), p.absentMs / 1000, p.minFailures, p.unresolvableMs / 1000],
     );
     if (rows[0]?.withdrawn) summary.withdrawn++;

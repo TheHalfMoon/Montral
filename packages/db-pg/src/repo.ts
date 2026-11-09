@@ -733,6 +733,12 @@ export function createRepo(db: Db): Repo {
       // a phone that has not opened the app (which re-registers on launch) for half a year is gone or has a stale token
       await db.delete(schema.pushDevice).where(lte(schema.pushDevice.lastSeenAt, new Date(Date.now() - PUSH_DEVICE_STALE_DAYS * 864e5)));
     },
+    async pruneAuditEvents(olderThanDays) {
+      if (!Number.isInteger(olderThanDays) || olderThanDays < 30) throw new Error("audit retention must be at least 30 days");
+      // the only path that may delete audit rows: the append-only trigger lets this function's cutoff through
+      const rows = await db.execute<{ removed: number }>(sql`select montral_prune_audit(make_interval(days => ${olderThanDays})) as removed`);
+      return Number((rows as unknown as { removed: number }[])[0]?.removed ?? 0);
+    },
     async withinLimit(key, limit, windowSec) {
       const t = schema.rateLimit;
       const expired = sql`${t.windowStart} < now() - make_interval(secs => ${windowSec})`;

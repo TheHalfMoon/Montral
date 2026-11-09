@@ -58,6 +58,8 @@ export type Bindings = {
   TRUST_PROXY_PEER_IPS?: string;
   /** Days a team invitation stays valid. Default 7. */
   INVITE_TTL_DAYS?: string;
+  /** Days workspace audit events are kept (30 to 3650). Default 365. */
+  AUDIT_RETENTION_DAYS?: string;
   /** "true" lets monitors and alert webhooks target private, loopback and link-local addresses (default: refused). */
   ALLOW_PRIVATE_TARGETS?: string;
   /** User-Agent of HTTP checks. Default: Montral/0.1 (+https://github.com/TheHalfMoon/Montral). */
@@ -123,6 +125,8 @@ export type Variables = {
    * (null = no limit); "all" = any workspace the user belongs to. null for a signed-in session.
    */
   workspaceGrant: null | "all" | Map<string, string[] | null>;
+  /** A streamed response still reading from the request's database: it is closed once this settles, not before. */
+  databaseHeldUntil?: Promise<void>;
 };
 
 export type AppEnv = { Bindings: Bindings; Variables: Variables };

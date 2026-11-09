@@ -23,6 +23,7 @@ import { scrubUntrustedForwarding } from "./node-proxy-peer";
 import { createNodeTickGate } from "./node-tick-gate";
 import { appHosts, lookupCustomDomain, recheckCustomDomains } from "./custom-domain";
 import { routeCustomDomain, STATUS_DOMAIN_HEADER } from "./custom-domain-node";
+import { auditRetentionDays } from "./audit";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -166,7 +167,7 @@ const tick = setInterval(() => {
     tickStartedAt = Date.now();
     try {
       try {
-        await runDueChecks(database.repo, queue, entitlements, { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
+        await runDueChecks(database.repo, queue, entitlements, { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true", auditRetentionDays: auditRetentionDays(env) });
       } catch {
         console.error("monitor scheduler failed; private diagnostic suppressed");
       }

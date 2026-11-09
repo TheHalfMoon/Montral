@@ -13,6 +13,7 @@ import {
 } from "../status-access";
 import type { StatusPage } from "@montral/repo";
 import { requireManager, uuidParams } from "../middleware";
+import { audit, auditChanges } from "../audit";
 import { clientIp } from "../ratelimit";
 import { sharedCache, waitUntilOf } from "../sharedcache";
 import { buildIcs, buildLlmsTxt, buildRss, FEED_LIMIT, ICS_LIMIT } from "../status-feeds";
@@ -128,6 +129,7 @@ export const statusPages = new Hono<AppEnv>()
       if (await repo.slugTaken(v.slug)) return c.json({ error: "That slug is already taken" }, 409);
       const page = await repo.createStatusPage(c.get("orgId"), c.get("projectId"), { ...v, ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}) });
       await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
+      await audit(c, "status_page.create", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({ ...v, password, monitorIds, components }));
       return c.json(toClient(page), 201);
     },
   )
@@ -164,6 +166,8 @@ export const statusPages = new Hono<AppEnv>()
       ...(password || visibilityChanged ? { accessVersion: page.accessVersion + 1 } : {}),
     });
     if (monitorIds || components) await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
+    // the new password itself is never recorded: only that the field changed
+    await audit(c, "status_page.update", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({ ...v, password, monitorIds, components }));
     return c.json({ ok: true });
   })
   // Sign out everyone outside the workspace: existing password and share-link cookies stop working; links still work.
@@ -172,6 +176,7 @@ export const statusPages = new Hono<AppEnv>()
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!page) return c.json({ error: "Not found" }, 404);
     await repo.updateStatusPage(page.id, { accessVersion: page.accessVersion + 1 });
+    await audit(c, "status_page.access.revoke", { type: "status_page", id: page.id, projectId: page.projectId });
     return c.json({ ok: true });
   })
   .get("/:id/share-links", uuidParams, requireManager, async (c) => {
@@ -203,6 +208,8 @@ export const statusPages = new Hono<AppEnv>()
         [page.id, hash, label || null, c.get("userId"), expiresAt.toISOString(), MAX_ACTIVE_SHARE_LINKS],
       );
       if (!rows[0]?.id) return c.json({ error: `A page can have at most ${MAX_ACTIVE_SHARE_LINKS} active share links` }, 409);
+      // the link's URL and token are never recorded
+      await audit(c, "status_page.share_link.create", { type: "status_page_share_link", id: rows[0].id, projectId: page.projectId }, auditChanges({ label, expiresInHours }));
       const origin = appUrl() || new URL(c.req.url).origin;
       c.header("cache-control", "no-store");
       return c.json({ id: rows[0].id, label: label || null, expiresAt, url: `${origin}/api/public/status/_/access?t=${token}`, warning: "This link is shown only once. Anyone who has it can open the page until it expires or is revoked." }, 201);
@@ -215,7 +222,9 @@ export const statusPages = new Hono<AppEnv>()
       "UPDATE status_page_share_link SET revoked_at = coalesce(revoked_at, now()) WHERE id = $1 AND status_page_id = $2 RETURNING id",
       [c.req.param("sid"), page.id],
     );
-    return rows[0] ? c.body(null, 204) : c.json({ error: "Not found" }, 404);
+    if (!rows[0]) return c.json({ error: "Not found" }, 404);
+    await audit(c, "status_page.share_link.revoke", { type: "status_page_share_link", id: rows[0].id, projectId: page.projectId });
+    return c.body(null, 204);
   })
   // Set (or replace) the page's custom domain. Always starts unverified with a fresh TXT value, so moving a domain or
   // setting it again needs DNS proof again. Naming a domain another page holds is allowed: DNS decides, and the domain
@@ -235,6 +244,7 @@ export const statusPages = new Hono<AppEnv>()
       "UPDATE status_page SET custom_domain = $2, custom_domain_token = $3, custom_domain_verified_at = NULL, custom_domain_checked_at = NULL, custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL WHERE id = $1",
       [page.id, checked.domain, token],
     );
+    await audit(c, "status_page.domain.set", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({ domain: checked.domain }));
     return c.json({ customDomain: checked.domain, customDomainVerifiedAt: null, customDomainRecord: { type: "TXT", name: challengeName(checked.domain), value: token } });
   })
   .delete("/:id/domain", uuidParams, requireManager, async (c) => {
@@ -244,6 +254,7 @@ export const statusPages = new Hono<AppEnv>()
       "UPDATE status_page SET custom_domain = NULL, custom_domain_token = NULL, custom_domain_verified_at = NULL, custom_domain_checked_at = NULL, custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL WHERE id = $1",
       [page.id],
     );
+    if (page.customDomain) await audit(c, "status_page.domain.remove", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({ domain: page.customDomain }));
     return c.body(null, 204);
   })
   // Look up the TXT record now and, on an exact match, mark the domain verified. The update is conditional on the
@@ -290,6 +301,7 @@ export const statusPages = new Hono<AppEnv>()
       throw e;
     }
     if (!rows[0]) return c.json({ error: "The domain changed while it was being verified. Try again." }, 409);
+    await audit(c, "status_page.domain.verify", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({ domain: page.customDomain }, { verified: true }));
     return c.json({ verified: true, customDomain: page.customDomain, customDomainVerifiedAt: rows[0].verified_at, customDomainCheckedAt: rows[0].checked_at, record });
   })
   .get("/:id/subscribers", uuidParams, requireManager, async (c) => {
@@ -303,12 +315,17 @@ export const statusPages = new Hono<AppEnv>()
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!page) return c.json({ error: "Not found" }, 404);
     await repo.deleteSubscriber(page.id, c.req.param("sid"));
+    // the subscriber's address is personal data and stays out of the log
+    await audit(c, "status_page.subscriber.remove", { type: "status_subscriber", id: c.req.param("sid"), projectId: page.projectId });
     return c.body(null, 204);
   })
   .delete("/:id", uuidParams, requireManager, async (c) => {
     const repo = c.get("repo");
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
-    if (page) await repo.deleteStatusPage(page.id);
+    if (page) {
+      await repo.deleteStatusPage(page.id);
+      await audit(c, "status_page.delete", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({}, { slug: page.slug }));
+    }
     return c.body(null, 204);
   });
 

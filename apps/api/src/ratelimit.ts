@@ -34,11 +34,16 @@ function canonicalIp(raw: string | null | undefined): string | null {
  * append the actual socket peer; production must also block direct ingress.
  */
 export function clientIp(c: Context, env?: Pick<Bindings, "TRUST_PROXY">): string | null {
-  if (onWorkers) return canonicalIp(c.req.header("cf-connecting-ip"));
-  if (!proxied(env ?? (c.env as Bindings | undefined))) return null;
+  return clientIpFromHeaders((name) => c.req.header(name), env ?? (c.env as Bindings | undefined));
+}
+
+/** clientIp for code that has the request headers but no Hono context (Better Auth hooks); same trust rules. */
+export function clientIpFromHeaders(header: (name: string) => string | null | undefined, env: Pick<Bindings, "TRUST_PROXY"> | undefined): string | null {
+  if (onWorkers) return canonicalIp(header("cf-connecting-ip"));
+  if (!proxied(env)) return null;
   // A client can prepend spoofed XFF entries; the trusted final hop is the
   // only entry used as the quota identity.
-  const forwarded = c.req.header("x-forwarded-for")?.split(",");
+  const forwarded = header("x-forwarded-for")?.split(",");
   return canonicalIp(forwarded?.at(-1));
 }
 

@@ -1,4 +1,5 @@
 import { forgetProjects, requireManager, uuidParams } from "../middleware";
+import { audit, auditChanges } from "../audit";
 import { zValidator } from "@hono/zod-validator";
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
@@ -26,10 +27,16 @@ export const projects = new Hono<AppEnv>()
   .get("/", async (c) => c.json(await c.get("repo").listProjects(c.get("orgId"), c.get("projectScope"))))
   // the "All projects" strip: per project, how many monitors, how many are down and how many incidents are open
   .get("/overview", async (c) => c.json(await c.get("repo").projectOverview(c.get("orgId"), c.get("projectScope"))))
-  .post("/", unlimited, zValidator("json", body), async (c) => c.json(await c.get("repo").createProject(c.get("orgId"), c.req.valid("json").name), 201))
+  .post("/", unlimited, zValidator("json", body), async (c) => {
+    const row = await c.get("repo").createProject(c.get("orgId"), c.req.valid("json").name);
+    await audit(c, "project.create", { type: "project", id: row.id, projectId: row.id }, auditChanges(c.req.valid("json")));
+    return c.json(row, 201);
+  })
   .patch("/:id", uuidParams, unlimited, requireManager, zValidator("json", body), async (c) => {
     const row = await c.get("repo").renameProject(c.get("orgId"), c.req.param("id"), c.req.valid("json").name);
-    return row ? c.json(row) : c.json({ error: "Not found" }, 404);
+    if (!row) return c.json({ error: "Not found" }, 404);
+    await audit(c, "project.update", { type: "project", id: row.id, projectId: row.id }, auditChanges(c.req.valid("json")));
+    return c.json(row);
   })
   .get("/:id/alerting", uuidParams, async (c) => {
     const scope = c.get("projectScope");
@@ -52,7 +59,9 @@ export const projects = new Hono<AppEnv>()
       if (found.some((ch) => ch.projectId && ch.projectId !== id)) return c.json({ error: "An escalation level names a channel that belongs to another project" }, 400);
     }
     const row = await repo.saveProjectAlerting(c.get("orgId"), id, v);
-    return row ? c.json(row) : c.json({ error: "Not found" }, 404);
+    if (!row) return c.json({ error: "Not found" }, 404);
+    await audit(c, "project.alerting.update", { type: "project", id, projectId: id }, auditChanges(v));
+    return c.json(row);
   })
   .delete("/:id", uuidParams, unlimited, requireManager, async (c) => {
     const repo = c.get("repo");
@@ -60,5 +69,7 @@ export const projects = new Hono<AppEnv>()
     if ((await repo.countProjects(orgId)) <= 1) return c.json({ error: "A workspace needs at least one project" }, 400);
     await repo.deleteProject(orgId, c.req.param("id"));
     forgetProjects(orgId);
+    // the project is gone: the event is workspace-wide and names it by id
+    await audit(c, "project.delete", { type: "project", id: c.req.param("id"), projectId: null });
     return c.body(null, 204);
   });

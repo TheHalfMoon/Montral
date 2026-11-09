@@ -4,6 +4,7 @@ import { z } from "zod";
 import { notifyIncidentUpdate } from "../alerts";
 import type { AppEnv } from "../env";
 import { listedProjects, uuidParams } from "../middleware";
+import { audit, auditChanges } from "../audit";
 import { purgePublicStatus } from "./status";
 
 const visibility = z.enum(["public", "internal"]);
@@ -39,6 +40,7 @@ export const incidents = new Hono<AppEnv>()
         v.body ? { status: "investigating", body: v.body, authorId: c.get("userId"), visibility: v.visibility } : undefined,
       );
       purgePublicStatus();
+      await audit(c, "incident.create", { type: "incident", id: inc.id, projectId: inc.projectId ?? null }, auditChanges({ title: v.title, severity: v.severity, monitorId: v.monitorId ?? undefined, body: v.body, visibility: v.visibility }));
       return c.json(inc, 201);
     },
   )
@@ -66,7 +68,9 @@ export const incidents = new Hono<AppEnv>()
       const inc = await repo.updateIncidentWriteUp(c.get("orgId"), id, { rootCause: blank(v.rootCause), postmortem: blank(v.postmortem), publish: v.publishPostmortem });
       // publishing or taking down a postmortem changes the public page at once
       purgePublicStatus();
-      return inc ? c.json(inc) : c.json({ error: "Not found" }, 404);
+      if (!inc) return c.json({ error: "Not found" }, 404);
+      await audit(c, "incident.update", { type: "incident", id: inc.id, projectId: inc.projectId ?? null }, auditChanges(v));
+      return c.json(inc);
     },
   )
   .post(
@@ -83,6 +87,8 @@ export const incidents = new Hono<AppEnv>()
       const r = await repo.postIncidentUpdate(c.get("orgId"), id, { ...v, authorId: c.get("userId") });
       if (!r) return c.json({ error: "Not found" }, 404);
       purgePublicStatus();
+      // the update's text is not recorded, only its status and visibility
+      await audit(c, v.status === "resolved" ? "incident.resolve" : "incident.update", { type: "incident", id: r.incident.id, projectId: r.incident.projectId ?? null }, auditChanges({ status: v.status, body: v.body, visibility: v.visibility }));
       // internal updates stay inside the team: no subscriber email
       if (r.update.visibility === "public") await notifyIncidentUpdate(repo, r.incident, v, c.get("entitlements"));
       return c.json(r.update, 201);
@@ -93,5 +99,7 @@ export const incidents = new Hono<AppEnv>()
     const id = c.req.param("id");
     if (!(await repo.incidentVisible(c.get("orgId"), id, c.get("projectScope")))) return c.json({ error: "Not found" }, 404);
     const inc = await repo.acknowledgeIncident(c.get("orgId"), id, c.get("userId"));
-    return inc ? c.json(inc) : c.json({ error: "Not found" }, 404);
+    if (!inc) return c.json({ error: "Not found" }, 404);
+    await audit(c, "incident.acknowledge", { type: "incident", id: inc.id, projectId: inc.projectId ?? null });
+    return c.json(inc);
   });

@@ -185,7 +185,7 @@ export function StatusPageEditor({ id }: { id: string }) {
 
           <div className="card cc">
             <div className="cc-h"><h3>{t("Who can see this page")}</h3></div>
-            <div className="seg" role="radiogroup" aria-label={t("Who can see this page")}>
+            <div className="seg stack-sm" role="radiogroup" aria-label={t("Who can see this page")}>
               {(["public", "password", "members"] as const).map((v) => (
                 <i key={v} role="radio" tabIndex={0} aria-checked={(page.visibility ?? "public") === v} className={(page.visibility ?? "public") === v ? "on" : ""}
                   onClick={() => setPage({ ...page, visibility: v })}

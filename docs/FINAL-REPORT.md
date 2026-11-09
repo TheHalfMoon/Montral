@@ -79,7 +79,7 @@ Demonstrated on real processes and real PostgreSQL, not mocks:
 | Backup and restore | RESTORE_DRILL_PASS + catalog negative control, Linux and macOS | 48 tables, row counts and SHA-256 content match |
 | PostgreSQL major mismatch | DOCKER_COMPOSE_PASS (#37) | 17 refuses 18 data; data intact |
 | Sustained load (#40) | LOAD_QUALIFICATION_PASS | 4,001 checks/min for 4,000 monitors at the candidate (4,001–4,016 across runs), lag p95 61.9 s; 0 lost or duplicated checks (results == target requests exactly) |
-| Backpressure: slow target (10 s) | #40 | Queue bounded (≤ 80 in flight, ≤ 13,800 unstarted claims), RSS +45 MB, `/health` ≤ 17 ms (candidate run; 10–17 ms across runs), no false watchdog restart; backlog drained in 131 s (131–141 s across runs) |
+| Backpressure: slow target (10 s) | #40 | Queue bounded (≤ 80 in flight, ≤ 13,800 unstarted claims), RSS +45 MB, `/health` ≤ 17 ms (candidate run; 5.6–17 ms across runs), no false watchdog restart; backlog drained in 131 s (131–141 s across runs) |
 | Duplicate / delayed events | #40, #17 | Webhook store == accepted (cap 250 per inbox); 429 beyond the rate limit; replay never mutates the stored event |
 | Connection pool exhaustion (`DB_POOL_MAX=2`) | #40 | Never above 2 connections, 0 errors, every monitor still checked (lag p95 ~110–170 s) |
 

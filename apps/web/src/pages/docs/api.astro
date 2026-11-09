@@ -347,6 +347,19 @@ DELETE /api/push/devices/:token    204</code></pre>
     <p>Create a monitor with <code>"type":"heartbeat"</code> and call its URL from your job. No API key is needed; the token is the secret. Use <code>GET</code> or <code>POST</code>.</p>
     <pre><code>curl https://montral.invalid/api/heartbeat/&lt;heartbeatToken&gt;</code></pre>
     <p>Returns <code is:raw>{"ok":true}</code>, or <code>404</code> for an unknown token. A ping resolves an open incident for that monitor.</p>
+    <h2 id="terraform">Terraform provider</h2>
+    <p>The repository ships a Terraform (and OpenTofu) provider in <code>terraform-provider-montral/</code>. It is <strong>not published to any registry</strong>: build it from source with Go and point Terraform at the binary with <code>dev_overrides</code>, as described in its <code>README.md</code>. It manages monitors (<code>montral_monitor</code>), alert channels (<code>montral_alert_channel</code>), status pages (<code>montral_status_page</code>), maintenance windows (<code>montral_maintenance_window</code>) and project escalation (<code>montral_project_alerting</code>), with <code>montral_monitor</code> and <code>montral_project</code> data sources. It talks to this REST API with an API key, verifies TLS, and refreshes every resource on each plan so changes made in the dashboard show up as drift.</p>
+    <pre><code is:raw>provider "montral" {
+  endpoint = "https://montral.example.com"   # or MONTRAL_ENDPOINT
+  # api_key from MONTRAL_API_KEY; project_id optional (defaults to the key's first project)
+}
+
+resource "montral_monitor" "api" {
+  name   = "API health"
+  type   = "http"
+  target = "https://api.example.com/health"
+}</code></pre>
+    <p>Use an owner's or admin's key: credentials in channel settings, monitor headers and request bodies are returned only to them, and with a member's key the provider keeps those values from state and cannot detect out-of-band changes to them. Status page passwords are never returned by the API.</p>
   </div>
   <div lang="zh-CN">
     <h1>API 参考</h1>
@@ -415,6 +428,19 @@ DELETE /api/push/devices/:token    204</code></pre>
     <p>创建 <code>"type":"heartbeat"</code> 的监控项，并在你的任务中请求其地址。无需 API 密钥，令牌本身即是凭证。可使用 <code>GET</code> 或 <code>POST</code>。</p>
     <pre><code>curl https://montral.invalid/api/heartbeat/&lt;heartbeatToken&gt;</code></pre>
     <p>成功返回 <code is:raw>{"ok":true}</code>，令牌无效返回 <code>404</code>。收到心跳会关闭该监控项未结束的事件。</p>
+    <h2 id="terraform-zh">Terraform Provider</h2>
+    <p>仓库在 <code>terraform-provider-montral/</code> 中提供 Terraform（及 OpenTofu）Provider。它<strong>尚未发布到任何 Registry</strong>：请用 Go 从源码构建，并按其 <code>README.md</code> 的说明通过 <code>dev_overrides</code> 让 Terraform 使用该二进制文件。它可管理监控项（<code>montral_monitor</code>）、告警渠道（<code>montral_alert_channel</code>）、状态页（<code>montral_status_page</code>）、维护窗口（<code>montral_maintenance_window</code>）和项目升级策略（<code>montral_project_alerting</code>），并提供 <code>montral_monitor</code> 与 <code>montral_project</code> 数据源。它使用 API 密钥调用本 REST API，校验 TLS 证书，并在每次 plan 时刷新所有资源，因此在控制台中所做的修改会显示为漂移。</p>
+    <pre><code is:raw>provider "montral" {
+  endpoint = "https://montral.example.com"   # 或 MONTRAL_ENDPOINT
+  # api_key 读取 MONTRAL_API_KEY；project_id 可选（默认使用密钥的第一个项目）
+}
+
+resource "montral_monitor" "api" {
+  name   = "API health"
+  type   = "http"
+  target = "https://api.example.com/health"
+}</code></pre>
+    <p>请使用所有者或管理员的密钥：渠道设置中的凭据、监控项请求头和请求体只返回给他们；使用普通成员的密钥时，Provider 会沿用状态文件中的值，无法发现在 Terraform 之外对这些值的修改。API 从不返回状态页密码。</p>
   </div>
 
   <div class="toc">

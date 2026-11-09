@@ -45,7 +45,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Custom webhook responses | Y (status, headers, text body, delay, per method; #47, in review) | N | N | N | N | N | $ |
 | REST API | Y | P | Y | Y | Y | P | Y |
 | MCP server | Y (OAuth) | N | Y | Y | Y | N | ? |
-| Terraform / config-as-code | N | N | Y | Y | ? | Y (YAML) | N |
+| Terraform / config-as-code | Y, unpublished: build from source (`terraform-provider-montral/`) | N | Y | Y | ? | Y (YAML) | N |
 | Self-hosting | Y (Docker/Node + Postgres; also Workers) | Y (MIT) | N | Y (AGPL) | N | Y (Apache) | P |
 | 2FA | Y | Y | ? | ? | Y | n/a | ? |
 | SSO (OIDC/SAML) | P (GitHub sign-in) | N | $ | ? | $ | Y | ? |
@@ -89,7 +89,7 @@ schedules with escalation policies (#48, awaiting review).
 Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
 1. **SSO (OIDC; SAML if justified)**: GitHub sign-in only today; large.
-2. **Terraform provider / config-as-code**: REST API and Uptime Kuma import exist; large.
+2. **Terraform provider / config-as-code**: implemented in `terraform-provider-montral/` (#50, in review; unpublished, build from source).
 3. **Browser / multi-step checks**: needs an isolated headless runtime; large.
 4. **Custom webhook responses** (webhook.site parity): implemented in #47, in review (`docs/evidence/2026-11-10-webhook-responses.md`).
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.

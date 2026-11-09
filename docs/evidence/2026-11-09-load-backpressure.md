@@ -125,12 +125,14 @@ recorded as a failure.
   - At most 2 server connections.
   - Reads and webhooks complete without errors or timeouts.
   - Stored == accepted.
-  - No starvation: at the end of the phase, every one of the 4,000 monitors has
-    a check in the last 360 s (its 60 s interval plus the 300 s lag bound), and
-    the worst completion lag is at most 300 s. An earlier rule ("checked within
-    the 180 s window") was wrong for an under-provisioned pool: run 42609831385
-    saw lag up to 216 s (within bounds) against a 181 s window, so 50 monitors
-    were checked just outside it. No monitor was starved; the rule was replaced.
+  - No starvation: every one of the 4,000 monitors gets a check from the
+    phase-5 server within 360 s of its start (its 60 s interval plus the 300 s
+    lag bound; only phase-5 observations count, and the script waits for
+    stragglers up to that deadline), and the worst steady-state completion lag
+    is at most 300 s. An earlier rule ("checked within the 180 s window") was
+    wrong for an under-provisioned pool: run 42609831385 saw lag up to 216 s
+    (within bounds) against a 181 s window, so 50 monitors were checked just
+    outside it. That run does not prove or disprove starvation; the new rule does.
   - Lag p95 is at most 300 s. This is a deliberately generous "bounded, not
     fast" floor: it is the watchdog's 5-minute stall horizon.
   - `/health` answers within 5 s, and the process does not die (including from

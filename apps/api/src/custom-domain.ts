@@ -185,6 +185,92 @@ export async function lookupCustomDomain(query: Query, host: string): Promise<Do
   return site;
 }
 
+// ── periodic re-verification ──────────────────────────────────────────────────
+
+/**
+ * Re-check policy. A verified domain keeps proving control: its TXT record is looked up again every
+ * RECHECK_HEALTHY_MS, and every RECHECK_FAILING_MS once a check failed. The page keeps being served while a streak is
+ * young, so a DNS hiccup or a resolver outage never takes a status page offline (which is when people need it most).
+ * Verification is withdrawn when the record has been definitively gone or replaced ("missing" / "mismatch") for
+ * WITHDRAW_ABSENT_MS over at least WITHDRAW_MIN_FAILURES checks, or when the name could not be resolved at all
+ * ("lookup_failed": SERVFAIL, timeouts, dead nameservers) for WITHDRAW_UNRESOLVABLE_MS. A withdrawn domain is no
+ * longer routed and must be verified again; the reason stays visible to the page's admins.
+ */
+export const DOMAIN_RECHECK = {
+  healthyMs: 6 * 3600_000,
+  failingMs: 30 * 60_000,
+  absentMs: 24 * 3600_000,
+  minFailures: 3,
+  unresolvableMs: 7 * 24 * 3600_000,
+  batch: 10,
+  parallel: 4,
+} as const;
+
+export type RecheckSummary = { checked: number; matched: number; failed: number; withdrawn: number };
+
+/**
+ * Re-checks the verified domains that are due (Node scheduler, a few per run). Each due row is claimed first by
+ * stamping custom_domain_checked_at under FOR UPDATE SKIP LOCKED, so concurrent servers never check the same domain
+ * twice in one round. Every write is bound to the page, domain and token it looked up: a domain that was set again,
+ * removed, re-verified or taken over by another page in the meantime is left alone. Withdrawal is decided inside the
+ * same UPDATE from the stored streak, so two racing writers cannot withdraw on a stale count.
+ */
+export async function recheckCustomDomains(
+  query: Query,
+  options: { now?: Date; resolver?: TxtResolver; policy?: Partial<typeof DOMAIN_RECHECK>; /** tests: only these pages */ pageIds?: string[] } = {},
+): Promise<RecheckSummary> {
+  const p = { ...DOMAIN_RECHECK, ...options.policy };
+  const now = options.now ?? new Date();
+  const due = await query<{ id: string; domain: string; token: string }>(
+    `UPDATE status_page SET custom_domain_checked_at = $1::timestamptz
+     WHERE id IN (
+       SELECT id FROM status_page
+       WHERE custom_domain_verified_at IS NOT NULL AND custom_domain IS NOT NULL AND custom_domain_token IS NOT NULL
+         AND ($5::text IS NULL OR id::text = ANY(string_to_array($5::text, ',')))
+         AND (custom_domain_checked_at IS NULL OR custom_domain_checked_at <= $1::timestamptz - make_interval(secs =>
+               CASE WHEN custom_domain_failing_since IS NULL THEN $2::double precision ELSE $3::double precision END))
+       ORDER BY custom_domain_checked_at NULLS FIRST, id
+       LIMIT $4
+       FOR UPDATE SKIP LOCKED)
+     RETURNING id, custom_domain AS domain, custom_domain_token AS token`,
+    [now.toISOString(), p.healthyMs / 1000, p.failingMs / 1000, p.batch, options.pageIds ? options.pageIds.join(",") : null],
+  );
+  const summary: RecheckSummary = { checked: due.length, matched: 0, failed: 0, withdrawn: 0 };
+  const one = async (row: { id: string; domain: string; token: string }) => {
+    const outcome = await verifyDomainToken(row.domain, row.token, options.resolver ?? txtResolver);
+    if (outcome.ok) {
+      summary.matched++;
+      await query(
+        `UPDATE status_page SET custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL
+         WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 AND custom_domain_verified_at IS NOT NULL`,
+        [row.id, row.domain, row.token],
+      );
+      return;
+    }
+    summary.failed++;
+    // Right-hand sides read the row as it was before this UPDATE: the streak start and count are the stored ones.
+    const rows = await query<{ withdrawn: boolean }>(
+      `UPDATE status_page SET
+         custom_domain_failures = custom_domain_failures + 1,
+         custom_domain_failing_since = coalesce(custom_domain_failing_since, $5::timestamptz),
+         custom_domain_check_error = $4::text,
+         custom_domain_verified_at = CASE WHEN
+             ($4::text <> 'lookup_failed' AND custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $6::double precision)
+               AND custom_domain_failures + 1 >= $7::int)
+             OR ($4::text = 'lookup_failed' AND custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $8::double precision))
+           THEN NULL ELSE custom_domain_verified_at END
+       WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 AND custom_domain_verified_at IS NOT NULL
+       RETURNING custom_domain_verified_at IS NULL AS withdrawn`,
+      [row.id, row.domain, row.token, outcome.reason, now.toISOString(), p.absentMs / 1000, p.minFailures, p.unresolvableMs / 1000],
+    );
+    if (rows[0]?.withdrawn) summary.withdrawn++;
+  };
+  for (let i = 0; i < due.length; i += p.parallel) await Promise.all(due.slice(i, i + p.parallel).map(one));
+  // This process stops routing a withdrawn domain at once; other servers within CUSTOM_DOMAIN_TTL_MS.
+  if (summary.withdrawn) purgeCustomDomains();
+  return summary;
+}
+
 /** Scheme for links to a custom domain: https, unless the instance itself runs on plain http (local testing). */
 export const customDomainOrigin = (domain: string, webOrigin: string | undefined) =>
   `${/^http:/i.test(webOrigin ?? "") ? "http" : "https"}://${domain}`;

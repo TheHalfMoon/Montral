@@ -326,6 +326,14 @@ export interface StatusPage {
   customDomainToken: string | null;
   /** null until the TXT record matched; only verified domains are routed */
   customDomainVerifiedAt: Date | null;
+  /** last scheduled re-check of a verified domain's TXT record */
+  customDomainCheckedAt: Date | null;
+  /** start of the current streak of failed re-checks; null while the record matches */
+  customDomainFailingSince: Date | null;
+  /** consecutive failed re-checks */
+  customDomainFailures: number;
+  /** last failed re-check outcome; with customDomainVerifiedAt null it explains a withdrawal */
+  customDomainCheckError: "missing" | "mismatch" | "lookup_failed" | null;
   theme: string;
   showLatency: boolean;
   /** optional website the page header links to (http/https) */

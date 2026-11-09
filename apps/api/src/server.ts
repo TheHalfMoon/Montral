@@ -21,7 +21,7 @@ import { processCheckMessage, runDueChecks } from "./scheduler";
 import { createLocalCheckQueue, claimsForUnstarted } from "./local-check-queue";
 import { scrubUntrustedForwarding } from "./node-proxy-peer";
 import { createNodeTickGate } from "./node-tick-gate";
-import { appHosts, lookupCustomDomain } from "./custom-domain";
+import { appHosts, lookupCustomDomain, recheckCustomDomains } from "./custom-domain";
 import { routeCustomDomain, STATUS_DOMAIN_HEADER } from "./custom-domain-node";
 
 /**
@@ -159,6 +159,7 @@ server.listen(port, env.BIND_HOST || "0.0.0.0", () => console.log(`montral: serv
 const TICK_STUCK_MS = 5 * 60_000;
 let tickStartedAt = 0; // 0 = no tick running
 let lastHookPruneAt = 0; // successful Montral maintenance completion only
+let lastDomainRecheckAt = 0;
 const tickGate = createNodeTickGate();
 const tick = setInterval(() => {
   tickGate.start(async () => {
@@ -178,6 +179,17 @@ const tick = setInterval(() => {
         } catch {
           console.error("montral maintenance failed; private diagnostic suppressed");
           // No timestamp update: try again on the next scheduled tick.
+        }
+      }
+      // Verified custom domains keep proving control of their TXT record (policy in custom-domain.ts). Rows are
+      // claimed in the database, so several servers share the work; a failure here never touches monitoring.
+      if (Date.now() - lastDomainRecheckAt >= 5 * 60_000) {
+        lastDomainRecheckAt = Date.now();
+        try {
+          const r = await recheckCustomDomains((sql, params) => database.query(sql, params));
+          if (r.withdrawn) console.error(`custom domains: verification withdrawn for ${r.withdrawn} domain(s) whose TXT record is gone`);
+        } catch {
+          console.error("custom domain re-check failed; private diagnostic suppressed");
         }
       }
     } finally {

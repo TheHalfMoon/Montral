@@ -409,6 +409,14 @@ export const statusPage = pgTable(
     customDomainToken: text("custom_domain_token"),
     /** when the TXT record last matched; null = not verified (setting the domain again resets it) */
     customDomainVerifiedAt: timestamp("custom_domain_verified_at", { withTimezone: true }),
+    /** when the scheduler last re-checked the TXT record of a verified domain (null = not since it was verified) */
+    customDomainCheckedAt: timestamp("custom_domain_checked_at", { withTimezone: true }),
+    /** first re-check of the current failing streak; null while the record keeps matching */
+    customDomainFailingSince: timestamp("custom_domain_failing_since", { withTimezone: true }),
+    /** consecutive failed re-checks in the current streak */
+    customDomainFailures: integer("custom_domain_failures").notNull().default(0),
+    /** outcome of the last failed re-check ("missing" | "mismatch" | "lookup_failed"); kept after a withdrawal */
+    customDomainCheckError: text("custom_domain_check_error", { enum: ["missing", "mismatch", "lookup_failed"] }),
     theme: text("theme").notNull().default("light"),
     showLatency: boolean("show_latency").notNull().default(true),
     externalUrl: text("external_url"),

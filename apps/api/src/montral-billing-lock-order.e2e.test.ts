@@ -137,12 +137,12 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
         UNION ALL SELECT 'montral_hook_inbox_scope' WHERE to_regclass('montral_hook_inbox_scope') IS NOT NULL
         UNION ALL SELECT 'montral_hook_event_recent' WHERE to_regclass('montral_hook_event_recent') IS NOT NULL
         UNION ALL SELECT 'montral_hook_event_expiry' WHERE to_regclass('montral_hook_event_expiry') IS NOT NULL
-        ORDER BY 1`)).map(x => x.item);
+        `)).map(x => x.item).sort(); // sorted here: SQL ORDER BY follows the cluster's collation ('.' vs '_' differs on macOS)
       const complete = [
         "montral_billing_intent.consumed_at", "montral_billing_intent_pending",
         "montral_hook_event_expiry", "montral_hook_event_recent", "montral_hook_inbox_scope",
         "montral_subscription.ends_at",
-      ];
+      ].sort();
       expect(await shape()).toEqual(complete);
 
       // Simulate a pre-upgrade schema that needs DDL on BOTH billing tables.

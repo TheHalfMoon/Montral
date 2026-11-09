@@ -86,8 +86,11 @@ export function resolveOnCall(
   if (winner) {
     // A higher-priority override may expire before the rotation's next shift.
     // A lower-priority override becomes effective at that expiry.
+    const nextPreemption = overrides.reduce((min, o) =>
+      o.start.getTime() > now && o.priority > winner.priority
+        ? Math.min(min, o.start.getTime()) : min, winner.end.getTime());
     return { participantId: winner.participantId, source: "override",
-      validUntil: new Date(Math.min(winner.end.getTime(), boundary)) };
+      validUntil: new Date(Math.min(nextPreemption, boundary)) };
   }
   // A future override may start before the normal shift ends.
   const nextOverride = overrides.reduce((min, o) =>

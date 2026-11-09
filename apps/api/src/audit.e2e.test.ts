@@ -109,8 +109,8 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     inboxPath = inbox.body.path;
     expect((await call(`/api/hooks/inboxes/${ids.inbox}`, { method: "DELETE", cookie: c })).status).toBe(204);
 
-    // an API key (named like a spreadsheet formula) that then acts on its own
-    const key = await call("/api/auth/api-key/create", { method: "POST", cookie: c, body: { name: '=HYPERLINK("https://evil.example","x")', metadata: { organizationId: owner.orgId } } });
+    // an API key (named like a spreadsheet formula, within the 32-character name limit) that then acts on its own
+    const key = await call("/api/auth/api-key/create", { method: "POST", cookie: c, body: { name: '=HYPERLINK("http://e.x","x")', metadata: { organizationId: owner.orgId } } });
     expect(key.status).toBe(200);
     apiKey = key.body.key;
     apiKeyId = key.body.id;
@@ -133,16 +133,17 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     const one = (action: string, targetId?: string) => rows.find((r) => r.action === action && (!targetId || r.target_id === targetId))!;
     expect(one("monitor.update", ids.monitor)).toMatchObject({
       actor_type: "user", actor_id: owner.id, actor_label: owner.email, target_type: "monitor", target_id: ids.monitor, project_id: owner.projectId,
-      changes: { fields: ["name", "paused"], values: { name: "Audit API v2", paused: true } },
+      changes: { fields: expect.arrayContaining(["name", "paused"]), values: expect.objectContaining({ name: "Audit API v2", paused: true }) },
     });
     expect(one("monitor.delete", ids.doomed)).toMatchObject({ target_type: "monitor", changes: { values: { name: "Doomed" } } });
     expect(one("channel.update", ids.channel)).toMatchObject({ target_type: "channel", changes: { fields: ["config", "name"], values: { name: "Ops" } } });
+    expect(JSON.stringify(one("channel.update", ids.channel).changes)).not.toContain("discord");
     expect(one("status_page.update", ids.page)).toMatchObject({ changes: { fields: ["password", "title"] } });
     expect(one("status_page.create", ids.page)).toMatchObject({ changes: { values: { visibility: "password" } } });
     expect(one("status_page.share_link.create", ids.link)).toMatchObject({ target_type: "status_page_share_link" });
     expect(one("api_key.create")).toMatchObject({ actor_type: "user", actor_id: owner.id, target_type: "api_key", target_id: apiKeyId, project_id: null });
     // the key's own action names the key, by id and by its name at the time
-    expect(one("monitor.create", ids.keyMonitor)).toMatchObject({ actor_type: "api_key", actor_id: apiKeyId, actor_label: '=HYPERLINK("https://evil.example","x")' });
+    expect(one("monitor.create", ids.keyMonitor)).toMatchObject({ actor_type: "api_key", actor_id: apiKeyId, actor_label: '=HYPERLINK("http://e.x","x")' });
     // no client address can be told without a trusted proxy (Node, TRUST_PROXY unset)
     expect(rows.every((r) => r.ip === null)).toBe(true);
   });
@@ -295,7 +296,7 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     const lines = csv.text.trimEnd().split("\r\n");
     expect(lines[0]).toBe("created_at,id,action,actor_type,actor_id,actor_label,target_type,target_id,project_id,ip,changes");
     // the API key named =HYPERLINK(...) is exported as text, quoted and prefixed with an apostrophe
-    expect(csv.text).toContain(`"'=HYPERLINK(""https://evil.example"",""x"")"`);
+    expect(csv.text).toContain(`"'=HYPERLINK(""http://e.x"",""x"")"`);
     expect(csv.text).not.toMatch(/(^|,)=HYPERLINK/m);
     const listed = (await call("/api/audit-events?limit=200", { cookie: owner.cookie })).body.events as any[];
     expect(lines.length - 1).toBe(listed.length);

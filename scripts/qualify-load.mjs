@@ -47,6 +47,7 @@ const CHECK_TIMEOUT_MS = 15_000; // ... inside the monitors' 15 s timeout, so ch
 const WARMUP_MS = 90_000;
 const P1_WINDOW_MS = 300_000;
 const P5_LOAD_MS = 240_000;
+const P5_OLD_SPACE_MB = 512;
 const SUMMARY_PATH = resolve(process.env.LOAD_SUMMARY_PATH ?? "load-summary.json");
 const APP = "montral-load-qa"; // application_name of this script's own DB connections
 
@@ -278,7 +279,8 @@ function summarizePhase(name) {
   if (!s) return null;
   return {
     health: { ...latencyStats(s.healthMs), failures: s.healthFail },
-    rssMb: { min: round(Math.min(...s.rssMb)), max: round(Math.max(...s.rssMb)), last: round(s.rssMb.at(-1)) },
+    // every 10th 1 s sample, so a plateau can be told from steady growth
+    rssMb: { min: round(Math.min(...s.rssMb)), max: round(Math.max(...s.rssMb)), last: round(s.rssMb.at(-1)), series10s: s.rssMb.filter((_, i) => i % 10 === 0).map((v) => Math.round(v)) },
     dbConnections: { max: Math.max(0, ...s.conns), maxActive: Math.max(0, ...s.activeConns), maxLockWaits: Math.max(0, ...s.lockWaits) },
     outstandingRuns: { max: Math.max(0, ...s.outstanding), last: s.outstanding.at(-1) ?? null },
   };
@@ -569,7 +571,11 @@ try {
 
   // ── 5. DB connection exhaustion: DB_POOL_MAX=2 under mixed load ────────────
   phase = "startup2";
-  child = startServer({ DB_POOL_MAX: "2" });
+  // An uncapped first run reached 1150 MB RSS here: V8 sizes its old space from
+  // host RAM (16 GB) and collects lazily. A 512 MB old-space cap tells garbage
+  // from retained memory: retention would end this server with a heap OOM
+  // (and fail the run); reclaimable garbage keeps it alive and under the RSS bound.
+  child = startServer({ DB_POOL_MAX: "2", NODE_OPTIONS: [process.env.NODE_OPTIONS, `--max-old-space-size=${P5_OLD_SPACE_MB}`].filter(Boolean).join(" ") });
   await waitHealthy(child);
   phase = "p5_pool2";
   const p5From = new Date();
@@ -598,6 +604,7 @@ try {
   fan5.storedTotalAllInboxes = stored5[0].n;
   p5.webhooks = fan5;
   p5.resources = summarizePhase("p5_pool2");
+  p5.maxOldSpaceMb = P5_OLD_SPACE_MB;
   summary.phases.dbPool2 = p5;
   log("phase 5", JSON.stringify(p5));
   check(p5.resources.dbConnections.max <= T.maxDbConnectionsPool2, `phase 5: server DB connections ${p5.resources.dbConnections.max} <= DB_POOL_MAX 2`);

@@ -54,10 +54,19 @@ describe.skipIf(!url)("GET /maintenance/:id", () => {
       // a key limited to another project cannot read it; a key for its own project can
       const org = (await owner("GET", "/me")).body.organization.id as string;
       const second = (await owner("POST", "/projects", { name: "Second" })).body.id as string;
-      const key = async (projectIds: string[]) => (await owner("POST", "/auth/api-key/create", { name: "k", metadata: { organizationId: org, projectIds } })).body.key as string;
-      const viaKey = async (k: string) => (await app.fetch(new Request(`${origin}/api/maintenance/${ended.body.id}`, { headers: { "x-api-key": k } }), env as never)).status;
-      expect(await viaKey(await key([second]))).toBe(404);
-      expect(await viaKey(await key([ended.body.projectId]))).toBe(200);
+      const key = async (projectIds: string[]) => {
+        const made = await owner("POST", "/auth/api-key/create", { name: "k", metadata: { organizationId: org, projectIds } });
+        expect(made.status, JSON.stringify(made.body)).toBe(200);
+        return made.body.key as string;
+      };
+      const viaKey = async (k: string) => {
+        const r = await app.fetch(new Request(`${origin}/api/maintenance/${ended.body.id}`, { headers: { "x-api-key": k } }), env as never);
+        return `${r.status} ${await r.text()}`;
+      };
+      const ownProject = await key([ended.body.projectId]);
+      const otherProject = await key([second]);
+      expect(await viaKey(ownProject)).toMatch(/^200 /);
+      expect(await viaKey(otherProject)).toMatch(/^404 /);
     } finally {
       await db.close(1);
     }

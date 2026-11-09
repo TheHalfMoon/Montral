@@ -18,6 +18,7 @@ import Team from "./Team";
 import Account from "./Account";
 import ApiKeys from "./ApiKeys";
 import Settings from "./Settings";
+import AuditLog from "./AuditLog";
 import MailReview from "./MailReview";
 import Usage from "./Usage";
 import { ChooseProject } from "./AllProjects";
@@ -37,7 +38,7 @@ function syncShell(pathname: string) {
       else el.removeAttribute("aria-current");
     }
   });
-  document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "usage", "billing"].includes(key));
+  document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "audit-log", "usage", "billing"].includes(key));
   const label = hit ? t(NAV_LABEL[hit.route.key]) : t("Not found");
   const crumb = document.querySelector(".crumb b");
   if (crumb) crumb.textContent = label;
@@ -73,6 +74,7 @@ function View({ name, params, title }: { name: string; params: string[]; title: 
     case "Account": return <Account />;
     case "ApiKeys": return <ApiKeys />;
     case "Settings": return <Settings />;
+    case "AuditLog": return <AuditLog />;
     case "MailReview": return <MailReview />;
     case "Usage": return <Usage />;
     default: return null;

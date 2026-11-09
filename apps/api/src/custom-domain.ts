@@ -1,3 +1,4 @@
+import { auditChanges, recordAuditEvent } from "./audit";
 import { ttlCache } from "./ttlcache";
 
 /**
@@ -249,7 +250,7 @@ export async function recheckCustomDomains(
     summary.failed++;
     // Right-hand sides read the row as it was before this UPDATE: the streak start, count and kind are the stored ones.
     // `fresh` = this failure starts a new streak (none yet, or the kind switched between unresolvable and definitive).
-    const rows = await query<{ withdrawn: boolean }>(
+    const rows = await query<{ withdrawn: boolean; organization_id: string; project_id: string | null }>(
       `UPDATE status_page AS sp SET
          custom_domain_failures = CASE WHEN s.fresh THEN 1 ELSE sp.custom_domain_failures + 1 END,
          custom_domain_failing_since = CASE WHEN s.fresh THEN $5::timestamptz ELSE sp.custom_domain_failing_since END,
@@ -263,10 +264,24 @@ export async function recheckCustomDomains(
                          OR (custom_domain_check_error = 'lookup_failed') <> ($4::text = 'lookup_failed')) AS fresh
              FROM status_page WHERE id = $1) AS s
        WHERE sp.id = s.id AND sp.custom_domain = $2 AND sp.custom_domain_token = $3 AND sp.custom_domain_verified_at IS NOT NULL
-       RETURNING sp.custom_domain_verified_at IS NULL AS withdrawn`,
+       RETURNING sp.organization_id, sp.project_id, sp.custom_domain_verified_at IS NULL AS withdrawn`,
       [row.id, row.domain, row.token, outcome.reason, now.toISOString(), p.absentMs / 1000, p.minFailures, p.unresolvableMs / 1000],
     );
-    if (rows[0]?.withdrawn) summary.withdrawn++;
+    if (rows[0]?.withdrawn) {
+      summary.withdrawn++;
+      // Workspace audit log, actor "system". A separate, best-effort statement: the withdrawal above is already
+      // committed, and a failure here must never undo or fail it.
+      await recordAuditEvent(query, {
+        orgId: rows[0].organization_id,
+        projectId: rows[0].project_id,
+        actor: { type: "system", id: null, label: "Custom domain re-check" },
+        action: "status_page.domain.withdrawn",
+        targetType: "status_page",
+        targetId: row.id,
+        changes: auditChanges({ customDomainVerifiedAt: null }, { domain: row.domain, reason: outcome.reason }),
+        ip: null,
+      }).catch(() => console.error("audit event could not be recorded; private diagnostics suppressed"));
+    }
   };
   while (Date.now() - startedAt < p.budgetMs && (options.shouldContinue?.() ?? true)) {
     const due = await query<{ id: string; domain: string; token: string }>(

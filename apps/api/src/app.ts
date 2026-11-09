@@ -8,6 +8,7 @@ import { connectionString, type AppEnv } from "./env";
 import { mountMcp } from "./mcp-route";
 import { rejectInAllProjects, requireOrg } from "./middleware";
 import { alertLog, settings } from "./routes/alert-log";
+import { auditEvents } from "./routes/audit";
 import { channels } from "./routes/channels";
 import { push } from "./routes/push";
 import { incidents } from "./routes/incidents";
@@ -28,6 +29,7 @@ import { migrateMontralSchema } from "./schema-migrate";
 import { availableRegions } from "./probes";
 import { PROBE_TYPES } from "./regions";
 import { completeRecovery, runDueChecks } from "./scheduler";
+import { auditRetentionDays } from "./audit";
 
 export function createApp(openDatabase: OpenDatabase, options: { edition?: Edition } = {}) {
   const edition = options.edition ?? community;
@@ -47,11 +49,15 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     try {
       await next();
     } finally {
-      const close = database.close(1);
+      // a streamed response (the audit export) still reads after the handler returned: close once it is done
+      const held = c.get("databaseHeldUntil");
+      const close = held ? held.then(() => database.close(1), () => database.close(1)) : database.close(1);
       try {
         c.executionCtx.waitUntil(close); // Workers
       } catch {
-        await close; // Node has no ExecutionContext
+        // Node has no ExecutionContext. Awaiting a held database here would wait for a stream nobody can read yet.
+        if (held) close.catch(() => console.error("database close failed; private diagnostics suppressed"));
+        else await close;
       }
     }
   });
@@ -190,7 +196,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // trigger checks from an external scheduler when Workers Cron is not available
   app.post("/internal/run-checks", async (c) => {
     if (!c.env.CRON_SECRET || !safeEqual(c.req.header("x-cron-secret"), c.env.CRON_SECRET)) return c.json({ error: "Forbidden" }, 403);
-    return c.json({ checked: await runDueChecks(c.get("repo"), c.env.CHECK_QUEUE, c.get("entitlements"), { monthlyReportsPaused: c.env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" }) });
+    return c.json({ checked: await runDueChecks(c.get("repo"), c.env.CHECK_QUEUE, c.get("entitlements"), { monthlyReportsPaused: c.env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true", auditRetentionDays: auditRetentionDays(c.env) }) });
   });
 
   // applies pending migrations over HTTP, for deployments that cannot run `pnpm db:migrate` from a shell
@@ -230,6 +236,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   authed.route("/maintenance", maintenance);
   authed.route("/monthly-reconciliation", monthlyReconciliation);
   authed.route("/status-pages", statusPages);
+  authed.route("/audit-events", auditEvents);
   // what this credential may reach: a session sees every workspace of the user, a key or an agent only what it was given
   authed.get("/workspaces", async (c) => {
     const repo = c.get("repo");

@@ -37,6 +37,7 @@ docker compose up -d --build</code></pre>
         <tr><td><code>LEGAL_LINKS</code></td><td>Set to <code>true</code> to add "you agree to the Terms and Privacy Policy" to the sign-up form. The bundled <code>/terms</code> and <code>/privacy</code> pages describe the hosted service at montral.invalid: replace them with your own text first.</td></tr>
         <tr><td><code>TURNSTILE_SITE_KEY</code><br /><code>TURNSTILE_SECRET_KEY</code></td><td>Set both to put a <a href="https://developers.cloudflare.com/turnstile/">Cloudflare Turnstile</a> check on the email sign-up form; the API verifies the token too. GitHub sign-in is not covered.</td></tr>
         <tr><td><code>INVITE_TTL_DAYS</code></td><td>How long invitations stay valid. Default 7.</td></tr>
+        <tr><td><code>AUDIT_RETENTION_DAYS</code></td><td>How long workspace audit events are kept, 30 to 3650 days. Default 365.</td></tr>
         <tr><td><code>CRON_SECRET</code></td><td>Optional. Lets an external scheduler call <code>POST /internal/run-checks</code>; unset leaves <code>/internal/*</code> closed.</td></tr>
         <tr><td><code>MONTRAL_REPLAY_PRIVATE_TARGETS</code></td><td>Set to <code>true</code> to let webhook replay reach private development endpoints such as <code>localhost</code>. Separate from <code>ALLOW_PRIVATE_TARGETS</code> because replay shows the endpoint's response to the workspace manager; link-local and cloud metadata addresses stay refused. Leave it unset on instances other people sign up to.</td></tr>
         <tr><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>Set to <code>true</code> to monitor internal services. By default monitors and alert webhooks pointing at private, loopback or link-local addresses (and single-label names such as compose service names) are refused, so a signed-up user cannot probe your network.</td></tr>
@@ -55,6 +56,7 @@ docker compose up -d --build</code></pre>
       <li><strong>Backup</strong>: <code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>. Restore steps are in <a href="/docs/backup">Backup and restore</a>.</li>
       <li><strong>Several containers</strong>: checks are leased with <code>FOR UPDATE SKIP LOCKED</code>, so more containers can share one database without duplicating checks.</li>
       <li><strong>Logs</strong>: <code>docker compose logs -f montral</code>. A health endpoint is at <code>/health</code>.</li>
+      <li><strong>Audit log retention</strong>: workspace audit events (Workspace, Audit log in the dashboard) are kept for <code>AUDIT_RETENTION_DAYS</code> (default 365, at least 30) and pruned once an hour by the scheduler, on Docker and Workers alike. The <code>audit_event</code> table is append-only: a database trigger refuses UPDATE, DELETE and TRUNCATE, except deletes made by the <code>montral_prune_audit</code> retention function and the cascade when a workspace is deleted. It protects against application mistakes, not against the database owner, who can still drop the trigger. Backups include the table like any other.</li>
     </ul>
     <h3 id="ping">Ping (ICMP) monitors</h3>
     <p>Ping monitors run the system <code>ping</code> binary of the server, so they work only on the self-hosted Node server (Docker or <code>node server.mjs</code>); a Cloudflare Workers deployment refuses to create them. The image is based on <code>node:22-alpine</code> and runs as the unprivileged <code>node</code> user, so it uses BusyBox <code>ping</code> with unprivileged ICMP sockets. Linux allows those for the groups listed in <code>net.ipv4.ping_group_range</code>; Docker 20.10 and later set it to <code>0 2147483647</code> in every container, so nothing needs to be configured. On an older engine, another runtime, or when the host's default is restricted, add this to the <code>montral</code> service in <code>docker-compose.yml</code>:</p>
@@ -111,6 +113,7 @@ cd ../web &amp;&amp; pnpm build &amp;&amp; pnpm exec wrangler deploy</code></pre
         <tr><td>api vars</td><td><code>BETTER_AUTH_URL</code><br><code>WEB_ORIGIN</code></td><td>Public origin of the site. Used for cookies, OAuth and email links.</td></tr>
         <tr><td>api vars</td><td><code>EMAIL_FROM</code></td><td>Sender address. Onboard the domain in Cloudflare Email Sending; without it emails are logged.</td></tr>
         <tr><td>api vars</td><td><code>INVITE_TTL_DAYS</code></td><td>How long invitations stay valid. Default 7.</td></tr>
+        <tr><td>api vars</td><td><code>AUDIT_RETENTION_DAYS</code></td><td>How long workspace audit events are kept, 30 to 3650 days. Default 365.</td></tr>
         <tr><td>api vars</td><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>Set to <code>true</code> to let monitors and alert webhooks target private addresses. Default: refused. Cloudflare Workers cannot reach private ranges anyway; this mostly matters for Docker.</td></tr>
         <tr><td>api vars + secret</td><td><code>PROBE_REGIONS</code>, <code>PROBE_SECRET</code></td><td>Optional. Remote probes for <a href="#regions">multi-region checks</a>. Put the region list in <code>vars</code> and the shared secret with <code>wrangler secret put PROBE_SECRET</code>.</td></tr>
         <tr><td>api vars</td><td><code>DISABLE_SIGNUP</code></td><td>Set to <code>true</code> to close registration (email and GitHub). Create your own account first; afterwards only people with a pending invitation can still sign up.</td></tr>
@@ -293,6 +296,7 @@ docker compose up -d --build</code></pre>
         <tr><td><code>LEGAL_LINKS</code></td><td>设为 <code>true</code> 后，注册表单会显示“创建账户即表示同意服务条款与隐私政策”。自带的 <code>/terms</code> 和 <code>/privacy</code> 描述的是 montral.invalid 托管服务，请先换成你自己的文本。</td></tr>
         <tr><td><code>TURNSTILE_SITE_KEY</code><br /><code>TURNSTILE_SECRET_KEY</code></td><td>两者都设置后，邮箱注册表单会显示 <a href="https://developers.cloudflare.com/turnstile/">Cloudflare Turnstile</a> 验证，API 也会校验令牌。GitHub 登录不受影响。</td></tr>
         <tr><td><code>INVITE_TTL_DAYS</code></td><td>邀请有效天数，默认 7。</td></tr>
+        <tr><td><code>AUDIT_RETENTION_DAYS</code></td><td>工作区审计事件保留天数，30 到 3650，默认 365。</td></tr>
         <tr><td><code>CRON_SECRET</code></td><td>可选。允许外部调度器调用 <code>POST /internal/run-checks</code>；不设置则 <code>/internal/*</code> 保持关闭。</td></tr>
         <tr><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>设为 <code>true</code> 以监控内网服务。默认拒绝指向私有、回环、链路本地地址（以及 compose 服务名这类单段主机名）的监控项和告警 Webhook，避免已注册用户探测你的内网。</td></tr>
         <tr><td><code>CHECK_USER_AGENT</code></td><td>可选。HTTP 检查使用的 User-Agent。</td></tr>
@@ -310,6 +314,7 @@ docker compose up -d --build</code></pre>
       <li><strong>备份</strong>：<code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>。恢复步骤见<a href="/docs/backup">备份与恢复</a>。</li>
       <li><strong>多个容器</strong>：检测通过 <code>FOR UPDATE SKIP LOCKED</code> 加租约，多个容器共用一个数据库也不会重复检测。</li>
       <li><strong>日志</strong>：<code>docker compose logs -f montral</code>。健康检查接口为 <code>/health</code>。</li>
+      <li><strong>审计日志保留</strong>：工作区审计事件（控制台“工作区”中的“审计日志”）保留 <code>AUDIT_RETENTION_DAYS</code> 天（默认 365，最少 30），由调度器每小时清理一次，Docker 和 Workers 相同。<code>audit_event</code> 表只能追加：数据库触发器拒绝 UPDATE、DELETE 和 TRUNCATE，唯一例外是 <code>montral_prune_audit</code> 保留期函数执行的删除，以及删除工作区时的级联删除。它防范的是应用程序错误，而不是数据库所有者，后者仍可删除该触发器。备份会像其他表一样包含此表。</li>
     </ul>
     <h3 id="ping-zh">Ping（ICMP）监控</h3>
     <p>Ping 监控调用服务器上的系统 <code>ping</code> 程序，因此只能在自托管 Node 服务器（Docker 或 <code>node server.mjs</code>）上运行；部署在 Cloudflare Workers 上时会拒绝创建。镜像基于 <code>node:22-alpine</code>，以非特权用户 <code>node</code> 运行，使用 BusyBox <code>ping</code> 和非特权 ICMP 套接字。Linux 只允许 <code>net.ipv4.ping_group_range</code> 中列出的用户组使用这类套接字；Docker 20.10 及更高版本在每个容器中都将其设为 <code>0 2147483647</code>，因此无需额外配置。如果使用较旧的引擎、其他容器运行时，或主机默认值受限，请在 <code>docker-compose.yml</code> 的 <code>montral</code> 服务中加入：</p>
@@ -366,6 +371,7 @@ cd ../web &amp;&amp; pnpm build &amp;&amp; pnpm exec wrangler deploy</code></pre
         <tr><td>api vars</td><td><code>BETTER_AUTH_URL</code><br><code>WEB_ORIGIN</code></td><td>站点公网地址，用于 Cookie、OAuth 和邮件链接。</td></tr>
         <tr><td>api vars</td><td><code>EMAIL_FROM</code></td><td>发件地址。需在 Cloudflare Email Sending 中接入该域名；不配置则邮件只写日志。</td></tr>
         <tr><td>api vars</td><td><code>INVITE_TTL_DAYS</code></td><td>邀请有效天数，默认 7。</td></tr>
+        <tr><td>api vars</td><td><code>AUDIT_RETENTION_DAYS</code></td><td>工作区审计事件保留天数，30 到 3650，默认 365。</td></tr>
         <tr><td>api vars</td><td><code>ALLOW_PRIVATE_TARGETS</code></td><td>设为 <code>true</code> 允许监控项和告警 Webhook 指向私有地址，默认拒绝。Cloudflare Workers 本身无法访问私有网段，此项主要影响 Docker 部署。</td></tr>
         <tr><td>api vars + secret</td><td><code>PROBE_REGIONS</code>, <code>PROBE_SECRET</code></td><td>可选。用于<a href="#regions-zh">多区域检测</a>的远程探针。区域列表放在 <code>vars</code>，共享密钥用 <code>wrangler secret put PROBE_SECRET</code> 设置。</td></tr>
         <tr><td>api vars</td><td><code>DISABLE_SIGNUP</code></td><td>设为 <code>true</code> 关闭注册（邮箱与 GitHub 均适用）。请先创建好自己的账号；之后只有持有待处理邀请的人还能注册。</td></tr>

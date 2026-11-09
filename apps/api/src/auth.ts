@@ -7,6 +7,7 @@ import { captcha, jwt, oneTimeToken, organization, twoFactor } from "better-auth
 import { actionEmail, appUrl, sendEmail } from "./email";
 import { userLang, tr } from "./mail-i18n";
 import type { Bindings } from "./env";
+import { AUDITED_AUTH_PATHS, auditAuthCall, MEMBERSHIP_ENDING_PATHS, noteKeyBeforeDelete, noteMembershipBefore, type KeyNote, type MemberNote } from "./audit-auth";
 
 export function slugify(s: string) {
   return (s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace") + "-" + Math.random().toString(36).slice(2, 6);
@@ -123,6 +124,11 @@ export function createAuth(database: Database, env: Bindings) {
   const repo = database.repo;
   // this auth object lives for one request, so the cookie of that request can be parked here for the OAuth callbacks
   let picked: string | undefined;
+  // the API key a delete request is about, read before Better Auth removes its row (audit log)
+  let keyNote: KeyNote | null = null;
+  // the acting user's membership, confirmed before a call that may end it (audit log)
+  let memberNote: MemberNote | null = null;
+  const query = <T>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
   return betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
@@ -209,6 +215,11 @@ export function createAuth(database: Database, env: Bindings) {
       // Most MCP clients register without an application_type and use a loopback or custom-scheme redirect; the
       // OIDC default ("web") would refuse those, so such clients are treated as the native apps they are.
       before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path === "/api-key/delete") keyNote = await noteKeyBeforeDelete(query, ctx.body).catch(() => null);
+        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          memberNote = await noteMembershipBefore(query, session as never, ctx.body).catch(() => null);
+        }
         // access tokens are issued for the MCP endpoint; the resource row is created on first use because the
         // identifier is this deployment's own URL (known only at runtime, so it cannot ship in a migration)
         if (["/oauth2/authorize", "/oauth2/continue", "/oauth2/consent"].includes(ctx.path)) {
@@ -247,6 +258,12 @@ export function createAuth(database: Database, env: Bindings) {
           }
         });
         if (native) return { context: { ...ctx, body: { ...body, application_type: "native" } } };
+      }),
+      // workspace audit log for the member, invitation, workspace and API-key endpoints (audit-auth.ts); never fails the call
+      after: createAuthMiddleware(async (ctx) => {
+        if (!AUDITED_AUTH_PATHS.has(ctx.path)) return;
+        const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
+        await auditAuthCall(query, env, { path: ctx.path, body: ctx.body, returned: ctx.context.returned, headers: ctx.headers, session: session as never }, keyNote, memberNote);
       }),
     },
     plugins: [

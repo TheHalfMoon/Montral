@@ -30,6 +30,7 @@ services:
       # optional: close registration once your own account exists (invited people can still join)
       DISABLE_SIGNUP: ${DISABLE_SIGNUP:-}
       INVITE_TTL_DAYS: ${INVITE_TTL_DAYS:-}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-}
       # "true" when exactly one reverse proxy is in front: its X-Forwarded-For feeds the rate limits
       TRUST_PROXY: ${TRUST_PROXY:-}
       TRUST_PROXY_PEER_IPS: ${TRUST_PROXY_PEER_IPS:-}

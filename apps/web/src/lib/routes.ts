@@ -1,7 +1,7 @@
 import { stripLocale } from "./locale-path";
 
 /** The back-office route table, shared by the static shell (404 status for deep links) and the client router. */
-export type NavKey = "monitors" | "incidents" | "status-pages" | "hooks" | "billing" | "alerting" | "maintenance" | "team" | "account" | "api-keys" | "settings" | "usage";
+export type NavKey = "monitors" | "incidents" | "status-pages" | "hooks" | "billing" | "alerting" | "maintenance" | "team" | "account" | "api-keys" | "settings" | "audit-log" | "usage";
 export type Route = {
   re: RegExp;
   name: string;
@@ -15,7 +15,7 @@ export type Route = {
 
 export const NAV_LABEL: Record<NavKey, string> = {
   monitors: "Monitors", incidents: "Incidents", "status-pages": "Status pages", hooks: "Webhooks", billing: "Billing", alerting: "Alerting",
-  maintenance: "Maintenance", team: "Team", account: "Account", "api-keys": "API keys", settings: "Settings", usage: "Plan & usage",
+  maintenance: "Maintenance", team: "Team", account: "Account", "api-keys": "API keys", settings: "Settings", "audit-log": "Audit log", usage: "Plan & usage",
 };
 
 export const ROUTES: Route[] = [
@@ -34,6 +34,7 @@ export const ROUTES: Route[] = [
   { re: /^\/app\/api-keys$/, name: "ApiKeys", key: "api-keys", title: "API keys", data: () => ["/projects"] },
   { re: /^\/app\/usage$/, name: "Usage", key: "usage", title: "Plan & usage", data: () => ["/usage", "/monitors"] },
   { re: /^\/app\/settings$/, name: "Settings", key: "settings", title: "Settings", data: () => [] },
+  { re: /^\/app\/audit-log$/, name: "AuditLog", key: "audit-log", title: "Audit log", data: () => [] },
   // Unlinked, staged workspace-owner tool; the API stays OFF unless explicitly configured.
   { re: /^\/app\/mail-review$/, name: "MailReview", key: "settings", title: "Monthly mail review", data: () => [] },
 ];

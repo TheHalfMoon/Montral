@@ -679,3 +679,18 @@ a.muted:hover{color:var(--ink)}
 .kp .sk{height:30px;width:64px;margin:6px 0}
 @keyframes sk{from{background-position:200% 0}to{background-position:-200% 0}}
 @media (prefers-reduced-motion:reduce){.sk{animation:none}}
+/* audit log */
+.audit-exp{display:flex;gap:8px;flex-wrap:wrap}
+.audit-flt{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:16px;margin-bottom:16px;align-items:end}
+.audit-flt-b{display:flex;gap:8px;flex-wrap:wrap}
+.audit-wrap{overflow-x:auto;padding:0}
+.audit-tbl{width:100%;border-collapse:collapse;font-size:13.5px}
+.audit-tbl th,.audit-tbl td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+.audit-tbl th{font-weight:600;color:var(--muted);font-size:12.5px;white-space:nowrap}
+.audit-tbl tbody tr:last-child td{border-bottom:0}
+.audit-tbl td:first-child{white-space:nowrap}
+.audit-cap{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+.audit-ch{max-width:340px;overflow-wrap:anywhere}
+.audit-id{display:block;overflow-wrap:anywhere}
+.audit-actor{overflow-wrap:anywhere}
+.audit-more{display:flex;justify-content:center;margin-top:14px}

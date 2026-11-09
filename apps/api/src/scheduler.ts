@@ -5,6 +5,7 @@ import { sendMonthlyReports } from "./reports";
 import { measure } from "./probes";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
+import { AUDIT_RETENTION_DEFAULT_DAYS } from "./audit";
 
 /** Monitors that watch an expiry date (domain registration, TLS certificate) rather than whether a service answers. */
 const expiryCheck = (m: Pick<Monitor, "type">) => m.type === "domain" || m.type === "certificate";
@@ -39,7 +40,7 @@ export type CheckQueue = { sendBatch(messages: { body: CheckMessage; delaySecond
  * Cron entry point. Leases every due monitor and either fans the work out to the queue
  * (production) or runs the checks inline (local dev / no queue bound). Returns how many were due.
  */
-export type SchedulerOptions = Readonly<{ monthlyReportsPaused?: boolean }>;
+export type SchedulerOptions = Readonly<{ monthlyReportsPaused?: boolean; /** days workspace audit events are kept (see audit.ts) */ auditRetentionDays?: number }>;
 export async function runDueChecks(repo: Repo, queue?: CheckQueue, entitlements: Entitlements = unmetered, options: SchedulerOptions = {}) {
   let total = 0;
   const limit = queue ? CLAIM_LIMIT : INLINE_LIMIT;
@@ -100,6 +101,8 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
   await step("alert escalations", () => sendEscalations(repo, entitlements, queue ? 10 : 3));
   // cheap housekeeping once an hour
   if (new Date().getMinutes() === 0) await step("expired monitor purge", () => repo.purgeExpired());
+  // audit events past their retention go through the database's prune function (the table refuses other deletes)
+  if (new Date().getMinutes() === 0 && repo.pruneAuditEvents) await step("audit retention", () => repo.pruneAuditEvents!(options.auditRetentionDays ?? AUDIT_RETENTION_DEFAULT_DAYS));
   // reminders and reports are claimed in the database before they are sent, so a coarse cadence is enough
   if (new Date().getMinutes() % 5 === 0) {
     await sendMaintenanceReminders(repo, entitlements).catch(() => console.error("maintenance reminders failed"));

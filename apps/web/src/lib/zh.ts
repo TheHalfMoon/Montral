@@ -635,4 +635,12 @@ export const zh: Record<string, string> = {
   "Keep this DNS record. Setting the domain again needs a new one.": "请保留此 DNS 记录。重新设置域名需要新的记录。",
   "Create this DNS record at your DNS provider:": "请在你的 DNS 服务商处创建以下记录：",
   "Verified. Montral serves the page on this domain as soon as your reverse proxy forwards it.": "已验证。只要你的反向代理转发该域名，Montral 就会在其上提供此页面。",
+  // audit log
+  "Audit log": "审计日志", System: "系统", "API key": "API 密钥", User: "用户",
+  "Only workspace owners and admins can view the audit log.": "只有工作区所有者和管理员可以查看审计日志。",
+  "Who changed what in this workspace, and when. Secret values such as passwords, tokens and webhook URLs are never recorded.": "记录谁在何时对此工作区做了哪些更改。密码、令牌和 Webhook 地址等机密值从不记录。",
+  "Export CSV": "导出 CSV", "Export JSON Lines": "导出 JSON Lines", "Filter audit events": "筛选审计事件",
+  Action: "操作", "Target type": "对象类型", Any: "任意", "Target ID": "对象 ID", "Actor ID": "操作者 ID", From: "开始日期", To: "结束日期",
+  "Apply filters": "应用筛选", Clear: "清除", "Audit events, newest first": "审计事件，按时间倒序", Actor: "操作者", Target: "对象",
+  Changes: "更改", "IP address": "IP 地址", "No audit events match these filters.": "没有符合这些筛选条件的审计事件。", "Load older events": "加载更早的事件",
 };

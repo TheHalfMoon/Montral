@@ -136,6 +136,25 @@ export const TOOLS: Tool[] = [
     build: (a) => ({ method: "DELETE", path: `/api/maintenance/series/${a.seriesId}` }),
   },
   { name: "list_maintenance", description: "Read maintenance windows in the selected project, including schedule and monitor associations. Use this authenticated list for planning; list_public_status_page_maintenance only shows windows for a published page slug. Records include recurrence metadata and seriesId. Use create_maintenance to schedule, skip_maintenance for one occurrence, end_maintenance for an active occurrence, or cancel_maintenance_series for the remaining series.", schema: z.object({}), readOnly: true, build: () => ({ method: "GET", path: "/api/maintenance" }) },
+  {
+    name: "list_audit_events",
+    description: "Read the workspace audit log, newest first: who (user, API key or system) created, changed or deleted monitors, status pages, channels, incidents, maintenance, members, API keys and webhook inboxes, when, and from which IP. Each event lists the changed field names; secret values are never stored. Workspace owners and admins only (others get 403), and not for credentials limited to specific projects. Pass the returned next as cursor for older events.",
+    schema: z.object({
+      action: z.string().regex(/^[a-z_.]{1,64}$/).optional().describe("Action prefix, e.g. monitor, status_page.domain or member.role_change."),
+      actorId: z.string().min(1).max(200).optional().describe("Only events by this user id or API key id."),
+      targetType: z.string().regex(/^[a-z_]{1,40}$/).optional().describe("Only events about this kind of object, e.g. monitor, channel, status_page, api_key."),
+      targetId: z.string().min(1).max(200).optional().describe("Only events about this object id (use with targetType)."),
+      from: z.string().datetime({ offset: true }).optional().describe("Earliest event time, ISO 8601 with offset (inclusive)."),
+      to: z.string().datetime({ offset: true }).optional().describe("Latest event time, ISO 8601 with offset (exclusive)."),
+      cursor: z.string().max(200).optional().describe("The next value of the previous page."),
+      limit: z.number().int().min(1).max(200).optional().describe("Events per page, 1-200; defaults to 50."),
+    }),
+    readOnly: true,
+    build: (a) => {
+      const qs = new URLSearchParams(Object.entries(a).filter((e) => e[1] !== undefined && e[1] !== "").map(([k, v]) => [k, String(v)])).toString();
+      return { method: "GET", path: `/api/audit-events${qs ? "?" + qs : ""}` };
+    },
+  },
 ];
 
 /**

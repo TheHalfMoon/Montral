@@ -11,6 +11,7 @@ import { runMontralMaintenance } from "./montral-maintenance";
 import { connectionString, type Bindings } from "./env";
 import { cloudflareEdgeCache, useEdgeCache } from "./sharedcache";
 import { processCheckMessage, runDueChecks, type CheckMessage } from "./scheduler";
+import { auditRetentionDays } from "./audit";
 
 // the one place that picks the storage backend
 const open: OpenDatabase = openDatabase;
@@ -34,7 +35,7 @@ export function createWorker(edition: Edition = montralEdition) {
         try {
           let schedulerError: unknown = null;
           try {
-            await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }), { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true" });
+            await runDueChecks(database.repo, env.CHECK_QUEUE, edition.entitlements({ database, env }), { monthlyReportsPaused: env.MONTRAL_MONTHLY_REPORTS_PAUSED === "true", auditRetentionDays: auditRetentionDays(env) });
           } catch (e) {
             schedulerError = e;
             console.error("monitor scheduler failed; private diagnostic suppressed");

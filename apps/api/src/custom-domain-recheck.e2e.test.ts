@@ -104,6 +104,12 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
     // the next check is due one failing interval later, past 24 h: withdrawn
     expect(await recheck(p.id, t1 + 24 * H - 60_000 + DOMAIN_RECHECK.failingMs)).toMatchObject({ failed: 1, withdrawn: 1 });
     expect(await routed(p.domain)).toBeNull();
+    // the workspace audit log has the admin's set and verify, then the system's withdrawal, once, without the TXT value
+    const events = await q<{ actor_type: string; actor_id: string | null; action: string; changes: unknown }>(
+      "SELECT actor_type, actor_id, action, changes FROM audit_event WHERE target_id = $1 AND action LIKE 'status_page.domain.%' ORDER BY created_at, id", [p.id]);
+    expect(events.map((e) => e.action)).toEqual(["status_page.domain.set", "status_page.domain.verify", "status_page.domain.withdrawn"]);
+    expect(events[2]).toMatchObject({ actor_type: "system", actor_id: null, changes: { fields: ["customDomainVerifiedAt"], values: { domain: p.domain, reason: "missing" } } });
+    expect(JSON.stringify(events)).not.toContain(p.rec.value);
     const shown = (await (await call(`/api/status-pages/${p.id}`, { cookie: p.cookie })).json()) as Record<string, unknown>;
     expect(shown).toMatchObject({ customDomain: p.domain, customDomainVerifiedAt: null, customDomainCheckError: "missing" });
     // a withdrawn domain is not re-checked any more; verifying again restores it and clears the reason

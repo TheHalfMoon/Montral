@@ -1,4 +1,5 @@
 import { zValidator } from "@hono/zod-validator";
+import { MANUAL_CHECK_WINDOW_SEC, MANUAL_CHECKS_PER_WINDOW, manualChecks } from "../manual-check-gate";
 import type { Repo } from "@montral/repo";
 import { Hono, type Context } from "hono";
 import { limitedJsonBody } from "../json-body-budget";
@@ -478,16 +479,30 @@ export const monitors = new Hono<AppEnv>()
       }
       if (!isRegionConfigured(region)) return c.json({ error: `Unknown region: ${region}`, code: "unknown_region", regions: [region] }, 400);
     }
-    const cost = region !== undefined ? 1 : creditCost(m);
-    // a manual check is a request like any other: it takes a credit
-    if ((await c.get("entitlements").spendCredits(m.organizationId, cost)) < cost) {
-      return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
+    // bounded per workspace (shared by every server) and per process (sockets, ping processes): see manual-check-gate.ts
+    if (!(await repo.withinLimit(`mcheck:${m.organizationId}`, MANUAL_CHECKS_PER_WINDOW, MANUAL_CHECK_WINDOW_SEC))) {
+      c.header("retry-after", "60");
+      return c.json({ error: "Too many manual checks, try again in a few minutes", code: "manual_check_rate_limited" }, 429);
     }
-    if (region === undefined) {
-      await checkOne(repo, m, c.get("entitlements"));
-      return c.json({ ok: true });
+    const release = manualChecks.tryEnter();
+    if (!release) {
+      c.header("retry-after", "5");
+      return c.json({ error: "This server is busy running other checks, try again shortly", code: "manual_check_busy" }, 429);
     }
-    const run = await runInRegion(region, m, repo);
-    if ("unreachable" in run) return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
-    return c.json({ ok: true, region, result: run.outcome });
+    try {
+      const cost = region !== undefined ? 1 : creditCost(m);
+      // a manual check is a request like any other: it takes a credit
+      if ((await c.get("entitlements").spendCredits(m.organizationId, cost)) < cost) {
+        return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
+      }
+      if (region === undefined) {
+        await checkOne(repo, m, c.get("entitlements"));
+        return c.json({ ok: true });
+      }
+      const run = await runInRegion(region, m, repo);
+      if ("unreachable" in run) return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
+      return c.json({ ok: true, region, result: run.outcome });
+    } finally {
+      release();
+    }
   });

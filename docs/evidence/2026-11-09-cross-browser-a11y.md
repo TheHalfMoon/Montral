@@ -50,6 +50,7 @@ Each project runs 5 tests (25 in all), with no retries: a flaky engine counts as
    - Create a second page, then in the editor choose "Password or share link", set the password and save.
    - Create a webhook inbox and post one synthetic payload to its receiver. The receiver URL is never printed, and
      failure snapshots redact it. The captured event shows in the inspector.
+   - The audit log lists the journey's changes.
    - Clear cookies, which makes the visitor an outsider:
      - The public page returns 200.
      - The password page returns 401 and shows only the lock form, never the title.
@@ -81,6 +82,7 @@ The only failed responses accepted are the two designed anonymous ones. Each is 
   - monitor list
   - public status page
   - locked password page
+  - audit log (the workspace audit page from #39, with the journey's own events)
   - `/docs/self-host`
 - **Thresholds:** `serious` and `critical` violations fail the test. `moderate` and `minor` ones are recorded as
   annotations and printed on an `AXE <project> <page>:` line in the CI log. The full violation JSON is attached to
@@ -120,7 +122,7 @@ The only failed responses accepted are the two designed anonymous ones. Each is 
 ## Result
 
 An earlier GitHub Actions run, 42566781804 on `be75093` with a looser journey guard, passed 25/25. All five projects passed the landing, sign-in, sign-up,
-docs and signed-in journey tests, and all eight axe pages reported 0 serious/critical and 0 moderate/minor
+docs and signed-in journey tests, and all eight axe pages then in the suite reported 0 serious/critical and 0 moderate/minor
 violations. The final PR head is reported in the PR.
 
 Local checks on Windows: `pnpm -r typecheck` (including `astro check` and the new `e2e` package) passed, and

@@ -102,6 +102,14 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await expect(page.locator(".code2").filter({ hasText: "xbrowser-e2e" }).first()).toBeVisible();
   });
 
+  await test.step("audit log lists the journey's changes and is accessible", async () => {
+    await page.goto("/app/audit-log");
+    await expect(page.getByRole("heading", { level: 1, name: "Audit log" })).toBeVisible();
+    await expect(page.locator("table.audit-tbl tbody tr").first()).toBeVisible();
+    await expect(page.locator("table.audit-tbl tbody")).not.toHaveAttribute("aria-busy", "true");
+    await checkA11y(page, testInfo, "audit-log");
+  });
+
   // From here on the visitor is an outsider: no session cookie.
   await context.clearCookies();
 

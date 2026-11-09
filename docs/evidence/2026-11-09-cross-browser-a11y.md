@@ -100,6 +100,7 @@ The only failed responses accepted are the two designed anonymous ones. Each is 
 | `label-content-name-mismatch` on the language buttons (landing, docs) and the custom `Select` (sign-in, sign-up): `aria-label="Language"` hid the visible "English" | 2.5.3 | Removed the aria-label. The visible value now stays in the name, after a visually hidden prefix: "Language: English". |
 | `link-name` on the docs header logo link at phone width, where its text is hidden | 2.4.4, 4.1.2 | `aria-label="Montral"` |
 | `scrollable-region-focusable` on docs code samples and wide tables | 2.1.1 | `doc-shell.js` adds `tabindex="0"` to exactly the overflowing `<pre>`/`<table>` elements, re-checks on resize, and shows a focus outline. |
+| `scrollable-region-focusable` on the audit log table wrapper at phone width (mobile-chromium, mobile-webkit) | 2.1.1 | The wrapper is a focusable, named region (`tabindex="0"`, `role="region"`, "Audit events, newest first") with a focus outline. |
 | Dashboard skip link did nothing in any engine: the client router intercepted the same-page `#main-content` click and called `preventDefault()` | 2.4.1 | The router leaves same-document fragment links to the browser. `<main>` has `tabindex="-1"`, so focus moves into it. |
 
 ### Functional defects the journeys found (all engines)

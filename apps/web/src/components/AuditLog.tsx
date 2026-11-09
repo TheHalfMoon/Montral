@@ -112,7 +112,8 @@ export default function AuditLog() {
         </div>
       </form>
       {err && <p className="err" role="alert">{err}</p>}
-      <div className="card audit-wrap">
+      {/* scrolls sideways on phones: focusable and named so keyboard users can scroll it too (WCAG 2.1.1) */}
+      <div className="card audit-wrap" tabIndex={0} role="region" aria-label={t("Audit events, newest first")}>
         <table className="audit-tbl">
           <caption className="audit-cap">{t("Audit events, newest first")}</caption>
           <thead>

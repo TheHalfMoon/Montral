@@ -688,6 +688,7 @@ a.muted:hover{color:var(--ink)}
 .audit-flt{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:16px;margin-bottom:16px;align-items:end}
 .audit-flt-b{display:flex;gap:8px;flex-wrap:wrap}
 .audit-wrap{overflow-x:auto;padding:0}
+.audit-wrap:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .audit-tbl{width:100%;border-collapse:collapse;font-size:13.5px}
 .audit-tbl th,.audit-tbl td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
 .audit-tbl th{font-weight:600;color:var(--muted);font-size:12.5px;white-space:nowrap}

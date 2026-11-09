@@ -5,6 +5,7 @@ import { requireManager, rejectInAllProjects, uuidParams } from "./middleware";
 import { allow } from "./ratelimit";
 import { BlockedTarget, checkUserAgent, guardedFetch, isWorkers } from "./netguard";
 import { pinnedFetch } from "./pinnedfetch";
+import { relationExists } from "./schema-catalog";
 import { z } from "zod";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -224,18 +225,27 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
     name varchar(100) NOT NULL, token_hash char(64) NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW()
   )`);
-  await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_inbox_scope
-    ON montral_hook_inbox (organization_id, project_id)`);
+  // CREATE INDEX IF NOT EXISTS takes a SHARE lock on the table (blocking
+  // webhook captures until the edition transaction commits) even when the
+  // index already exists. Consult the catalog so restarts take no table lock.
+  if (!await relationExists(db, "montral_hook_inbox_scope")) {
+    await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_inbox_scope
+      ON montral_hook_inbox (organization_id, project_id)`);
+  }
   await db.query(`CREATE TABLE IF NOT EXISTS montral_hook_event (
     id uuid PRIMARY KEY, inbox_id uuid NOT NULL REFERENCES montral_hook_inbox(id) ON DELETE CASCADE,
     organization_id text NOT NULL, project_id text NOT NULL, method varchar(10) NOT NULL,
     content_type varchar(256), headers jsonb NOT NULL DEFAULT '{}'::jsonb, body text NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW()
   )`);
-  await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_recent
-    ON montral_hook_event (inbox_id, created_at DESC)`);
-  await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_expiry
-    ON montral_hook_event (created_at)`);
+  if (!await relationExists(db, "montral_hook_event_recent")) {
+    await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_recent
+      ON montral_hook_event (inbox_id, created_at DESC)`);
+  }
+  if (!await relationExists(db, "montral_hook_event_expiry")) {
+    await db.query(`CREATE INDEX IF NOT EXISTS montral_hook_event_expiry
+      ON montral_hook_event (created_at)`);
+  }
   // PL/pgSQL executes the count as a separate statement AFTER taking the advisory
   // transaction lock. A CTE count in a caller statement sees its pre-lock snapshot,
   // so competing requests can otherwise overrun the quota.

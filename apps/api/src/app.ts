@@ -1,6 +1,6 @@
 import type { OpenDatabase } from "@montral/repo";
 import { isLang } from "./mail-i18n";
-import { Hono } from "hono";
+import { Hono, type ErrorHandler } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { createAuth, currentSession, NATIVE_CALLBACK, signupDisabled, slugify, turnstile } from "./auth";
@@ -304,13 +304,29 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   edition.mount?.({ app, authed });
   app.route("/api", authed);
 
-  app.onError((err, c) => {
-    if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
-    console.error(`Unhandled API error (${errorClass(err)}); private diagnostics suppressed`);
-    return c.json({ error: "Internal error" }, 500);
-  });
+  app.onError(handleApiError);
   return app;
 }
+
+/**
+ * PostgreSQL rolled back the whole transaction (40P01 deadlock_detected, 40001 serialization_failure); nothing was
+ * committed, so the client may safely retry. Answer 503 + Retry-After instead of an opaque 500.
+ */
+const RETRYABLE_SQLSTATES = new Set(["40P01", "40001"]);
+export const RETRY_AFTER_SECONDS = "1";
+
+export const handleApiError: ErrorHandler<AppEnv> = (err, c) => {
+  if (err instanceof HTTPException) return c.json({ error: err.message }, err.status);
+  const errClass = errorClass(err);
+  if (RETRYABLE_SQLSTATES.has(errClass)) {
+    console.error(`Retryable API database conflict (${errClass}); private diagnostics suppressed`);
+    c.header("retry-after", RETRY_AFTER_SECONDS);
+    c.header("cache-control", "no-store");
+    return c.json({ error: "Temporarily unavailable, please retry" }, 503);
+  }
+  console.error(`Unhandled API error (${errClass}); private diagnostics suppressed`);
+  return c.json({ error: "Internal error" }, 500);
+};
 
 /**
  * A classifier that is safe to log: a PostgreSQL SQLSTATE (e.g. 53300 too_many_connections, 40P01 deadlock) or a Node
@@ -319,9 +335,13 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
  */
 export function errorClass(err: unknown): string {
   try {
+    // SQLSTATEs, Node system codes, and postgres.js connection codes such as CONNECTION_CLOSED; Drizzle wraps the
+    // driver error, so its code sits on `cause`
+    const safe = (code: unknown) => typeof code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z_]{2,30}|[A-Z]+(?:_[A-Z]+){1,4})$/.test(code);
     const code = (err as { code?: unknown } | null)?.code;
-    // SQLSTATEs, Node system codes, and postgres.js connection codes such as CONNECTION_CLOSED
-    if (typeof code === "string" && /^(?:[0-9A-Z]{5}|E[A-Z_]{2,30}|[A-Z]+(?:_[A-Z]+){1,4})$/.test(code)) return code;
+    if (safe(code)) return code as string;
+    const causeCode = (err as { cause?: { code?: unknown } } | null)?.cause?.code;
+    if (safe(causeCode)) return causeCode as string;
     const name = (err as { constructor?: { name?: unknown } } | null)?.constructor?.name;
     return typeof name === "string" && /^[A-Za-z]{1,40}$/.test(name) ? name : "unknown";
   } catch {

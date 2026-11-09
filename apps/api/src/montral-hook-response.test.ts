@@ -63,12 +63,21 @@ describe("webhook response configuration validation", () => {
       "Referrer-Policy", "X-Content-Type-Options", "X-Robots-Tag", "Content-Type", "Location", "Content-Encoding",
       "X-Accel-Redirect", "X-Accel-Buffering", "X-Sendfile", "Sec-WebSocket-Accept", "Proxy-Status", "CF-Cache-Status",
       "X-Montral-Replay", "Permissions-Policy", "Origin-Agent-Cluster", "Content-Disposition", "X-Forwarded-For", "Report-To", "NEL",
+      // review additions: client hints, origin trials, privacy sandbox, CDN/proxy families
+      "Accept-CH", "Critical-CH", "Origin-Trial", "Shared-Storage-Write", "Ad-Auction-Signals", "Ad-Auction-Allowed",
+      "Attribution-Reporting-Register-Source", "Attribution-Reporting-Info", "Activate-Storage-Access", "X-Envoy-Upstream-Service-Time",
+      "Fly-Request-Id", "X-LiteSpeed-Cache", "X-Varnish", "X-Varnish-Cache", "Surrogate-Control", "CDN-Cache-Control", "Last-Modified",
+      "X-Real-IP", "X-XSS-Protection", "X-Powered-By",
+      // not on the allow-list at all: any new or unknown standard header is refused by default
+      "Foo-Bar", "Server-Timing", "Speculation-Rules", "Content-Location", "Digest", "Priority", "Observe-Browsing-Topics",
     ]) {
       expect(responseHeaderDenied(name), name).toBe(true);
       expect(refused({ headers: [{ name, value: "x" }] }), name).toMatch(/cannot be set/);
     }
-    for (const name of ["X-Mock-Id", "Retry-After", "X-Request-Id", "Content-Language", "X-RateLimit-Remaining", "Idempotency-Key", "X-GitHub-Event"]) {
+    for (const name of ["X-Mock-Id", "Retry-After", "X-Request-Id", "Content-Language", "X-RateLimit-Remaining", "Idempotency-Key", "X-GitHub-Event",
+      "RateLimit-Remaining", "Deprecation", "Sunset", "Traceparent", "Warning", "Allow", "Request-Id"]) {
       expect(responseHeaderDenied(name), name).toBe(false);
+      expect(ok({ headers: [{ name, value: "1" }] }).headers).toHaveLength(1);
     }
   });
 
@@ -82,7 +91,7 @@ describe("webhook response configuration validation", () => {
     expect(refused({ headers: big })).toMatch(/8 KiB/);
   });
 
-  it("allows only text content types and refuses HTML, SVG and script-capable types", () => {
+  it("allows only text content types and refuses HTML, SVG, XHTML and every other type (XML is accepted but never served inline)", () => {
     for (const contentType of ["text/plain", "application/json", "application/xml", "text/xml", "text/csv"]) expect(ok({ contentType }).contentType).toBe(contentType);
     for (const contentType of ["text/html", "image/svg+xml", "application/xhtml+xml", "text/javascript", "application/javascript", "application/pdf",
       "text/plain; charset=utf-8", "TEXT/PLAIN", "multipart/x-mixed-replace", "", 7]) {
@@ -160,6 +169,27 @@ describe("configured response construction", () => {
     expect(new Headers(out.headers).get("content-security-policy")).toContain("sandbox");
   });
 
+  it("never serves an XML (or CSV) body inline: it is always an attachment, so a browser cannot render XHTML or SVG from it", () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><a href="https://evil.example/"><text y="20">Sign in</text></a></svg>';
+    const xhtml = '<html xmlns="http://www.w3.org/1999/xhtml"><head><meta http-equiv="refresh" content="0;url=https://evil.example/"/></head></html>';
+    for (const contentType of ["application/xml", "text/xml"] as const) {
+      for (const body of [svg, xhtml, "<ok/>"]) {
+        const out = buildConfiguredResponse(ok({ contentType, body }));
+        expect(out.headers["content-disposition"], contentType).toBe('attachment; filename="response.xml"');
+        expect(out.headers["content-type"]).toBe(`${contentType}; charset=utf-8`);
+        expect(out.headers["x-content-type-options"]).toBe("nosniff");
+        expect(out.headers["content-security-policy"]).toContain("sandbox");
+      }
+    }
+    expect(buildConfiguredResponse(ok({ contentType: "text/csv", body: "a,b" })).headers["content-disposition"]).toBe('attachment; filename="response.csv"');
+    // Inline only for types a browser shows as plain text.
+    for (const contentType of ["text/plain", "application/json"]) {
+      expect(buildConfiguredResponse(ok({ contentType, body: svg })).headers["content-disposition"], contentType).toBeUndefined();
+    }
+    // A user header can never remove or replace the disposition.
+    expect(refused({ contentType: "application/xml", body: svg, headers: [{ name: "Content-Disposition", value: "inline" }] })).toMatch(/cannot be set/);
+  });
+
   it("omits body and content type for 204, 205 and 304, and sends location only for 3xx", () => {
     for (const status of [204, 205, 304]) {
       const out = buildConfiguredResponse({ status, contentType: "text/plain", body: "", headers: [] });
@@ -173,20 +203,35 @@ describe("configured response construction", () => {
 });
 
 describe("delayed response bounds", () => {
-  it("limits concurrent delayed responses per inbox and per process, and releases once", () => {
-    const slots = new DelaySlots(2, 3);
-    const a1 = slots.acquire("a"); const a2 = slots.acquire("a");
+  it("limits concurrent delayed responses per inbox, per organization and per process, and releases once", () => {
+    const slots = new DelaySlots(2, 3, 4);
+    const a1 = slots.acquire("a", "org1"); const a2 = slots.acquire("a", "org1");
     expect(a1 && a2).toBeTruthy();
-    expect(slots.acquire("a")).toBeNull();
-    const b1 = slots.acquire("b");
+    expect(slots.acquire("a", "org1")).toBeNull(); // per inbox
+    const b1 = slots.acquire("b", "org1");
     expect(b1).toBeTruthy();
-    expect(slots.acquire("c")).toBeNull(); // process-wide cap
+    expect(slots.acquire("c", "org1")).toBeNull(); // per organization: org1 is at 3
+    // Another organization is unaffected by org1 being at its cap.
+    const x1 = slots.acquire("x", "org2");
+    expect(x1).toBeTruthy();
+    expect(slots.acquire("y", "org3")).toBeNull(); // process-wide cap of 4
     a1!(); a1!(); // double release is harmless
-    expect(slots.active("a")).toBe(1);
-    expect(slots.active()).toBe(2);
-    expect(slots.acquire("c")).toBeTruthy();
-    a2!(); b1!();
-    expect(slots.active("a")).toBe(0);
+    expect(slots.active({ inbox: "a" })).toBe(1);
+    expect(slots.active({ org: "org1" })).toBe(2);
+    expect(slots.active()).toBe(3);
+    expect(slots.acquire("y", "org3")).toBeTruthy();
+    a2!(); b1!(); x1!();
+    expect(slots.active({ inbox: "a" })).toBe(0);
+    expect(slots.active({ org: "org1" })).toBe(0);
+  });
+
+  it("one organization saturating its cap leaves the process room for every other organization", () => {
+    const slots = new DelaySlots(5, 20, 200);
+    const held: (() => void)[] = [];
+    for (let i = 0; i < 100; i++) { const r = slots.acquire(`noisy-${i % 10}`, "noisy"); if (r) held.push(r); }
+    expect(held).toHaveLength(20);
+    for (let org = 0; org < 9; org++) for (let i = 0; i < 20; i++) expect(slots.acquire(`q-${org}-${i % 4}`, `quiet-${org}`)).toBeTruthy();
+    expect(slots.active()).toBe(200);
   });
 
   it("waits at most 10 seconds and stops early when the sender goes away", async () => {

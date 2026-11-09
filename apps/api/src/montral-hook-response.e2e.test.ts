@@ -177,36 +177,78 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     expect(tampered.headers.get("x-bad")).toBeNull();
     expect(tampered.headers.get("content-type")).toContain("application/json");
     privateHeaders(tampered);
+    // The event records what was actually sent (202), not the stored status (200).
+    const [latest] = (await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events as { response_status: number }[];
+    expect(latest.response_status).toBe(202);
+    const stored = await q<{ response_status: number }>(
+      "SELECT response_status FROM montral_hook_event WHERE inbox_id=$1 ORDER BY created_at DESC, id DESC LIMIT 1", [id]);
+    expect(stored[0].response_status).toBe(202);
   });
 
-  it("bounds delays, limits concurrent delayed responses per inbox, and never blocks other inboxes", async () => {
-    const owner = await signUp("delay");
-    const slow = await inbox(owner.cookie, "Slow");
-    const fast = await inbox(owner.cookie, "Fast");
-    expect((await call(`/api/hooks/inboxes/${slow.id}/response`, { method: "PUT", cookie: owner.cookie, body: { status: 200, body: "slow", delayMs: 1500 } })).status).toBe(200);
-    expect((await call(`/api/hooks/inboxes/${fast.id}/response`, { method: "PUT", cookie: owner.cookie, body: { status: 200, body: "fast" } })).status).toBe(200);
+  it("never serves an XML body as a renderable document", async () => {
+    const owner = await signUp("xml");
+    const { id, path } = await inbox(owner.cookie, "XML mock");
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><a href="https://evil.example/"><text y="20">Sign in</text></a></svg>';
+    for (const contentType of ["application/xml", "text/xml"]) {
+      expect((await call(`/api/hooks/inboxes/${id}/response`, { method: "PUT", cookie: owner.cookie, body: { contentType, body: svg } })).status).toBe(200);
+      const res = await send(path);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe(`${contentType}; charset=utf-8`);
+      expect(res.headers.get("content-disposition")).toBe('attachment; filename="response.xml"');
+      expect(res.headers.get("content-security-policy")).toContain("sandbox");
+      privateHeaders(res);
+    }
+    for (const contentType of ["text/html", "image/svg+xml", "application/xhtml+xml"]) {
+      expect((await call(`/api/hooks/inboxes/${id}/response`, { method: "PUT", cookie: owner.cookie, body: { contentType, body: svg } })).status, contentType).toBe(400);
+    }
+  });
+
+  it("bounds delays per organization without denying capture, and never blocks other inboxes or organizations", async () => {
+    const DELAY = 3000;
+    const noisy = await signUp("delay-noisy");
+    const quiet = await signUp("delay-quiet");
+    const noisyInboxes = await Promise.all(Array.from({ length: 5 }, (_, i) => inbox(noisy.cookie, `Slow ${i}`)));
+    const fast = await inbox(noisy.cookie, "Fast");
+    const quietInbox = await inbox(quiet.cookie, "Quiet slow");
+    for (const { id } of noisyInboxes) {
+      expect((await call(`/api/hooks/inboxes/${id}/response`, { method: "PUT", cookie: noisy.cookie, body: { status: 201, body: "slow", delayMs: DELAY } })).status).toBe(200);
+    }
+    expect((await call(`/api/hooks/inboxes/${fast.id}/response`, { method: "PUT", cookie: noisy.cookie, body: { status: 200, body: "fast" } })).status).toBe(200);
+    expect((await call(`/api/hooks/inboxes/${quietInbox.id}/response`, { method: "PUT", cookie: quiet.cookie, body: { status: 202, body: "quiet", delayMs: DELAY } })).status).toBe(200);
 
     const started = Date.now();
     const timed = (p: Promise<Response>) => p.then(async (r) => ({ status: r.status, text: await r.text(), ms: Date.now() - started }));
-    const slowOnes = Array.from({ length: 6 }, () => timed(send(slow.path)));
-    // Give the delayed requests time to take their slots, then hit the other inbox.
-    await new Promise((r) => setTimeout(r, 300));
+    // 25 concurrent delayed requests from one organization: its cap is 20 per process.
+    const noisyOnes = noisyInboxes.flatMap(({ path }) => Array.from({ length: 5 }, () => timed(send(path))));
+    // Once the noisy organization holds its slots, another inbox and another organization still work.
+    await new Promise((r) => setTimeout(r, 800));
+    expect(hookDelaySlots.active({ org: noisy.orgId })).toBe(20);
     const other = await timed(send(fast.path));
     expect(other.status).toBe(200);
     expect(other.text).toBe("fast");
-    expect(other.ms).toBeLessThan(1400);
-    const results = await Promise.all(slowOnes);
-    // Five slots per inbox: the sixth is refused with the fixed 429 and not captured.
-    expect(results.map((r) => r.status).sort()).toEqual([200, 200, 200, 200, 200, 429]);
-    for (const r of results.filter((x) => x.status === 200)) {
-      expect(r.text).toBe("slow");
-      expect(r.ms).toBeGreaterThanOrEqual(1400);
-      expect(r.ms).toBeLessThan(10_000);
-    }
-    const stored = await q<{ n: number }>("SELECT COUNT(*)::int AS n FROM montral_hook_event WHERE inbox_id=$1", [slow.id]);
-    expect(stored[0].n).toBe(5);
-    expect(hookDelaySlots.active(slow.id)).toBe(0);
-  }, 30_000);
+    expect(other.ms).toBeLessThan(DELAY - 200);
+    const quietStart = Date.now();
+    const quietRes = await send(quietInbox.path);
+    expect(quietRes.status).toBe(202);
+    expect(await quietRes.text()).toBe("quiet");
+    expect(Date.now() - quietStart).toBeGreaterThanOrEqual(DELAY - 100); // the other organization's delay is honoured
+
+    const results = await Promise.all(noisyOnes);
+    // Nobody is refused: all 25 are captured and get the configured status and body;
+    // 20 waited, the 5 beyond the organization cap were answered at once.
+    expect(results.map((r) => r.status)).toEqual(Array(25).fill(201));
+    expect(results.every((r) => r.text === "slow")).toBe(true);
+    expect(results.filter((r) => r.ms >= DELAY - 100)).toHaveLength(20);
+    expect(results.filter((r) => r.ms < DELAY - 100)).toHaveLength(5);
+    expect(Math.max(...results.map((r) => r.ms))).toBeLessThan(10_000 + DELAY);
+    const stored = await q<{ n: number; s: number }>(
+      "SELECT COUNT(*)::int AS n, COUNT(*) FILTER (WHERE response_status=201)::int AS s FROM montral_hook_event WHERE inbox_id = ANY($1::uuid[])",
+      [noisyInboxes.map((i) => i.id)]);
+    expect(stored[0]).toEqual({ n: 25, s: 25 });
+    expect(hookDelaySlots.active({ org: noisy.orgId })).toBe(0);
+    expect(hookDelaySlots.active({ org: quiet.orgId })).toBe(0);
+  }, 60_000);
+
 
   it("lets only managers of the owning workspace read or change it", async () => {
     const owner = await signUp("manager");

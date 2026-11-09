@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
-import { capturedHeaders, fingerprint, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
+import { capturedHeaders, fingerprint, hookDelaySlots, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
 function fixture(allowReceipt = true) {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string; response?: any }> = [];
@@ -25,6 +25,11 @@ function fixture(allowReceipt = true) {
         if (!inbox) return [];
         inbox.response = sql.includes("response=NULL") ? null : JSON.parse(String(args[3]));
         return [{ id: inbox.id }];
+      }
+      if (sql.startsWith("UPDATE montral_hook_event SET response_status=")) {
+        const event = events.find((e) => e.id === args[0] && e.inbox_id === args[2]);
+        if (event) event.response_status = Number(args[1]);
+        return [];
       }
       if (sql.includes("INSERT INTO audit_event")) { audits.push({ action: String(args[8]), changes: args[11] ? JSON.parse(String(args[11])) : null }); return []; }
       if (sql.includes("montral_capture_hook_event_v2")) {
@@ -473,22 +478,49 @@ describe("configurable receiver responses", () => {
     expect(f.inboxes[0].response).toBeUndefined();
   });
 
-  it("delays the answer within bounds and refuses when the inbox's delayed slots are full", async () => {
+  it("delays the answer within bounds; beyond the inbox's slots it captures and answers at once, never refusing", async () => {
     const f = fixture();
     const { id, path } = await inbox(f);
-    await put(f, id, { status: 200, body: "slow", delayMs: 400 });
+    await put(f, id, { status: 201, body: "slow", delayMs: 600 });
     const started = Date.now();
     const first = await f.app.request(path, { method: "POST", body: "x" });
-    expect(first.status).toBe(200);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(350);
-    // Five slots per inbox: the sixth concurrent delayed request is refused without capture.
+    expect(first.status).toBe(201);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(550);
+    // Five slots per inbox: the sixth concurrent request is still captured and
+    // gets the configured status and body, just without the delay.
     const before = f.events.length;
-    const burst = await Promise.all(Array.from({ length: 6 }, () => f.app.request(path, { method: "POST", body: "y" })));
-    expect(burst.map((r) => r.status).sort()).toEqual([200, 200, 200, 200, 200, 429]);
-    expect(f.events.length - before).toBe(5);
-    for (const r of burst) expectPrivateHookHeaders(r);
+    const t0 = Date.now();
+    const burst = await Promise.all(Array.from({ length: 6 }, () => Promise.resolve(f.app.request(path, { method: "POST", body: "y" }))
+      .then(async (r) => ({ r, text: await r.text(), ms: Date.now() - t0 }))));
+    expect(burst.map((b) => b.r.status)).toEqual([201, 201, 201, 201, 201, 201]);
+    expect(burst.every((b) => b.text === "slow")).toBe(true);
+    expect(burst.filter((b) => b.ms >= 550)).toHaveLength(5);
+    expect(burst.filter((b) => b.ms < 550)).toHaveLength(1);
+    expect(f.events.length - before).toBe(6);
+    expect(f.events.slice(before).every((e) => e.response_status === 201)).toBe(true);
+    for (const b of burst) expectPrivateHookHeaders(b.r);
     // Slots are released afterwards.
-    expect((await f.app.request(path, { method: "POST", body: "z" })).status).toBe(200);
+    expect(hookDelaySlots.active({ inbox: id })).toBe(0);
+  });
+
+  it("serves XML bodies as attachments so a browser never renders them", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 200, contentType: "application/xml", body: '<svg xmlns="http://www.w3.org/2000/svg"><text>x</text></svg>' });
+    const res = await f.app.request(path, { method: "POST", body: "x" });
+    expect(res.headers.get("content-type")).toBe("application/xml; charset=utf-8");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="response.xml"');
+    expectPrivateHookHeaders(res);
+  });
+
+  it("records the status actually sent when a stored configuration fails re-validation", async () => {
+    const f = fixture();
+    const { id, path } = await inbox(f);
+    f.inboxes[0].response = { status: 200, contentType: "text/html", body: "<b>x</b>", headers: [], delayMs: 0 };
+    const res = await f.app.request(path, { method: "POST", body: "x" });
+    expect(res.status).toBe(202);
+    expect(f.events.at(-1)?.response_status).toBe(202);
+    expect(id).toBeTruthy();
   });
 
   it("stops waiting when the sender disconnects", async () => {

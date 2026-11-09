@@ -667,7 +667,7 @@ export const zh: Record<string, string> = {
   "Redirect location (http or https URL)": "重定向地址（http 或 https URL）", "Response body (up to 64 KiB)": "响应正文（最多 64 KiB）",
   "Response headers": "响应头", "Response header name": "响应头名称", "Response header value": "响应头取值", "Remove response header": "移除响应头",
   "+ Response header": "+ 响应头",
-  "Up to 20 headers. Cookies, CORS, caching, security-policy and connection headers cannot be set, and the privacy headers below are always sent. HTML responses are not supported.": "最多 20 个响应头。不能设置 Cookie、CORS、缓存、安全策略和连接相关的响应头，下面列出的隐私响应头始终会发送。不支持 HTML 响应。",
+  "Up to 20 headers: x-* names (outside reserved families) and a few standard ones such as retry-after, content-language, ratelimit-* and traceparent. The privacy headers below are always sent. HTML is not supported; XML and CSV bodies are sent as downloads.": "最多 20 个响应头：x-* 名称（保留前缀除外）以及少数标准响应头，如 retry-after、content-language、ratelimit-* 和 traceparent。下面列出的隐私响应头始终会发送。不支持 HTML；XML 和 CSV 正文以下载方式发送。",
   "Per-method overrides set through the API are kept when you save.": "通过 API 设置的按方法覆盖会在保存时保留。",
   Preview: "预览", "Save response": "保存响应", "Use default response": "使用默认响应",
   "Only captured requests get this response. Invalid links (404), oversized (413), malformed (422) and rate-limited (429) requests keep their fixed answers, and replay never uses it.": "只有被捕获的请求会收到此响应。无效链接（404）、过大（413）、格式错误（422）和被限流（429）的请求保持固定响应，重放也从不使用它。",

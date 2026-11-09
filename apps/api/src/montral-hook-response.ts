@@ -3,20 +3,33 @@
  *
  * A manager may choose what the public receiver answers to a captured request:
  * a status code, a small text body with a content type from an allow-list,
- * a few custom headers and an optional bounded delay, optionally per method.
- * The receiver runs on the instance's own origin, so the configuration may not
- * weaken it: no cookies, no CORS, no security policies, no cache or framing
- * headers, nothing a proxy or the HTTP layer interprets, and no markup a
- * browser would render. The privacy headers every hook response carries are
+ * a few custom headers from an allow-list and an optional bounded delay,
+ * optionally per method. The receiver runs on the instance's own origin, so
+ * the configuration may not weaken it: no cookies, no CORS, no security
+ * policies, no cache or framing headers, nothing a proxy or the HTTP layer
+ * interprets, and no document a browser would render inline (XML and CSV are
+ * served as attachments). The privacy headers every hook response carries are
  * set after the user's headers and cannot be replaced.
  */
 
 export const RESPONSE_METHODS = ["POST", "PUT", "PATCH"] as const;
 export type ResponseMethod = (typeof RESPONSE_METHODS)[number];
 
-/** Text types only. HTML, SVG, XHTML and anything else a browser can execute are refused. */
+/**
+ * Text types only; HTML, SVG, XHTML and every other type are refused. XML is
+ * allowed for mocking XML APIs, but a browser renders an XML document and
+ * honours XHTML and SVG namespaces inside it (links, meta refresh, drawing:
+ * a spoofed page on the instance's origin even with scripts sandboxed). XML
+ * and CSV bodies are therefore always sent as `Content-Disposition:
+ * attachment` so a browser downloads them instead of displaying them; API
+ * clients ignore the disposition. Only text/plain and application/json are
+ * served inline, and with nosniff neither is ever interpreted as markup.
+ */
 export const RESPONSE_CONTENT_TYPES = ["text/plain", "application/json", "application/xml", "text/xml", "text/csv"] as const;
 export type ResponseContentType = (typeof RESPONSE_CONTENT_TYPES)[number];
+/** Content types a browser may display inline: never rendered as a document. */
+export const INLINE_CONTENT_TYPES: ReadonlySet<string> = new Set(["text/plain", "application/json"]);
+const ATTACHMENT_NAMES: Record<string, string> = { "application/xml": "response.xml", "text/xml": "response.xml", "text/csv": "response.csv" };
 
 export const RESPONSE_LIMITS = {
   minStatus: 200,
@@ -44,14 +57,32 @@ const FIELD_VALUE = /^[\x20-\x7e]*$/;
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 
 /**
- * Header names a configuration may not set (compared lower-case). They either
- * frame the message (a proxy would desynchronise), steer the browser on the
- * instance's origin (cookies, CORS, security policies, HSTS, Alt-Svc, Clear-Site-Data,
- * service workers, refresh/link preloads), are reserved for the hook privacy
- * policy, or are interpreted by a reverse proxy in front of the instance
- * (X-Accel-Redirect, X-Sendfile).
+ * Header names a configuration MAY set (compared lower-case): any `x-*` name
+ * outside the reserved families below, plus a short list of standard
+ * response headers that only describe the answer and steer neither the
+ * browser nor anything between the instance and the sender. Everything else
+ * is refused; new browser or proxy headers are refused by default.
+ */
+export const ALLOWED_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  "retry-after", "content-language", "warning", "deprecation", "sunset", "allow", "accept-patch", "accept-post",
+  "request-id", "correlation-id", "idempotency-key", "traceparent", "tracestate",
+  "ratelimit", "ratelimit-policy", "ratelimit-limit", "ratelimit-remaining", "ratelimit-reset",
+]);
+export const ALLOWED_RESPONSE_HEADER_PREFIXES = ["x-"] as const;
+
+/**
+ * Refused even when the allow-list would match (defence in depth, and the
+ * reserved `x-*` names). They either frame the message (a proxy would
+ * desynchronise), steer the browser on the instance's origin (cookies, CORS,
+ * security policies, HSTS, Alt-Svc, Clear-Site-Data, client hints, origin
+ * trials, service workers, refresh/link preloads), are reserved for the hook
+ * privacy policy, or are interpreted by a reverse proxy or CDN in front of the
+ * instance (X-Accel-Redirect, X-Sendfile, Envoy, Varnish, Fly, LiteSpeed).
  */
 export const DENIED_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
+  // browser features and privacy sandbox
+  "accept-ch", "accept-ch-lifetime", "critical-ch", "origin-trial", "shared-storage-write", "activate-storage-access",
+  "x-varnish", "x-cache", "x-cache-hits", "x-served-by", "x-request-start",
   // message framing and hop-by-hop
   "connection", "keep-alive", "proxy-connection", "transfer-encoding", "te", "trailer", "upgrade",
   "content-length", "content-encoding", "content-range", "accept-ranges", "host", "date", "server", "via", "alt-svc", "alt-used",
@@ -77,11 +108,15 @@ export const DENIED_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
 /** Whole families: CORS, cross-origin isolation, fetch metadata, proxy, CDN and Montral's own headers. */
 export const DENIED_RESPONSE_HEADER_PREFIXES = [
   "access-control-", "cross-origin-", "sec-", "proxy-", "x-accel-", "x-forwarded-", "cf-", "x-montral-", "x-litespeed-", "x-amz-", "x-goog-", "x-ms-",
+  "ad-auction-", "attribution-reporting-", "x-envoy-", "fly-", "x-varnish", "x-sendfile", "x-lighttpd-", "x-nginx-", "x-apache-",
+  "x-vercel-", "x-nf-", "x-netlify-", "x-cloud-trace-", "x-real-", "x-original-", "x-rewrite-", "x-middleware-", "x-frame-", "x-xss-",
 ] as const;
 
+/** True unless the name is on the allow-list and not reserved. */
 export function responseHeaderDenied(name: string): boolean {
   const n = name.toLowerCase();
-  return DENIED_RESPONSE_HEADERS.has(n) || DENIED_RESPONSE_HEADER_PREFIXES.some((p) => n.startsWith(p));
+  const allowed = ALLOWED_RESPONSE_HEADERS.has(n) || ALLOWED_RESPONSE_HEADER_PREFIXES.some((p) => n.startsWith(p));
+  return !allowed || DENIED_RESPONSE_HEADERS.has(n) || DENIED_RESPONSE_HEADER_PREFIXES.some((p) => n.startsWith(p));
 }
 
 export type ResponseHeader = { name: string; value: string };
@@ -140,7 +175,7 @@ function parseVariant(input: unknown, where: string): Result<ResponseVariant> {
     if (value.length > RESPONSE_LIMITS.maxHeaderValue || !FIELD_VALUE.test(value) || value !== value.trim()) {
       return fail(`${at}: header values must be printable ASCII without line breaks or surrounding spaces, at most ${RESPONSE_LIMITS.maxHeaderValue} characters`);
     }
-    if (responseHeaderDenied(name)) return fail(`${at}: the ${name.toLowerCase()} header cannot be set`);
+    if (responseHeaderDenied(name)) return fail(`${at}: the ${name.toLowerCase()} header cannot be set (allowed: x-* names outside reserved families, and retry-after, content-language, warning, deprecation, sunset, allow, accept-patch, accept-post, request-id, correlation-id, idempotency-key, traceparent, tracestate, ratelimit*)`);
     const lower = name.toLowerCase();
     if (seen.has(lower)) return fail(`${at}: duplicate header ${lower}`);
     seen.add(lower);
@@ -223,39 +258,52 @@ export function buildConfiguredResponse(variant: ResponseVariant): { status: num
     headers.location = variant.location;
   }
   const type = (RESPONSE_CONTENT_TYPES as readonly string[]).includes(variant.contentType) ? variant.contentType : "text/plain";
-  if (!bodyless) headers["content-type"] = `${type}; charset=utf-8`;
+  if (!bodyless) {
+    headers["content-type"] = `${type}; charset=utf-8`;
+    // XML (and CSV) would be displayed or rendered by a browser: always a download, never a document.
+    if (!INLINE_CONTENT_TYPES.has(type)) headers["content-disposition"] = `attachment; filename="${ATTACHMENT_NAMES[type] ?? "response.txt"}"`;
+  }
   headers["content-security-policy"] = CONFIGURED_RESPONSE_CSP;
   for (const [name, value] of Object.entries(HOOK_PRIVACY_HEADERS)) headers[name] = value;
   return { status: variant.status, headers, body: bodyless ? null : variant.body };
 }
 
 /**
- * Per-process bound on delayed responses. A delayed request holds a slot from
- * before its body is read until the response is sent (or the sender goes
- * away); when an inbox has none free the request is refused with a fixed 429
- * and nothing is captured. Requests to inboxes without a delay never take a
- * slot, so ordinary ingestion is unaffected.
+ * Bound on delayed responses in one server process (one isolate on Workers).
+ * A slot is taken only after the request body was read and the event
+ * captured, and held while the response waits. When the inbox, its
+ * organization or the process has no free slot, the request is NOT refused:
+ * the event is already stored and the configured response is sent at once,
+ * without the delay. The delay feature can therefore never deny capture, and
+ * one organization (at most `perOrg` sleeping requests) cannot starve
+ * another's delayed inboxes. Inboxes without a delay never take a slot.
  */
 export class DelaySlots {
-  private readonly inUse = new Map<string, number>();
+  private readonly byInbox = new Map<string, number>();
+  private readonly byOrg = new Map<string, number>();
   private total = 0;
-  constructor(readonly perInbox = 5, readonly perProcess = 200) {}
-  acquire(inbox: string): (() => void) | null {
-    const n = this.inUse.get(inbox) ?? 0;
-    if (n >= this.perInbox || this.total >= this.perProcess) return null;
-    this.inUse.set(inbox, n + 1);
+  constructor(readonly perInbox = 5, readonly perOrg = 20, readonly perProcess = 200) {}
+  acquire(inbox: string, org: string): (() => void) | null {
+    const i = this.byInbox.get(inbox) ?? 0;
+    const o = this.byOrg.get(org) ?? 0;
+    if (i >= this.perInbox || o >= this.perOrg || this.total >= this.perProcess) return null;
+    this.byInbox.set(inbox, i + 1);
+    this.byOrg.set(org, o + 1);
     this.total++;
     let released = false;
+    const dec = (m: Map<string, number>, k: string) => { const left = (m.get(k) ?? 1) - 1; if (left <= 0) m.delete(k); else m.set(k, left); };
     return () => {
       if (released) return;
       released = true;
       this.total--;
-      const left = (this.inUse.get(inbox) ?? 1) - 1;
-      if (left <= 0) this.inUse.delete(inbox); else this.inUse.set(inbox, left);
+      dec(this.byInbox, inbox);
+      dec(this.byOrg, org);
     };
   }
-  active(inbox?: string): number {
-    return inbox === undefined ? this.total : this.inUse.get(inbox) ?? 0;
+  active(scope?: { inbox?: string; org?: string }): number {
+    if (scope?.inbox !== undefined) return this.byInbox.get(scope.inbox) ?? 0;
+    if (scope?.org !== undefined) return this.byOrg.get(scope.org) ?? 0;
+    return this.total;
   }
 }
 

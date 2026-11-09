@@ -11,7 +11,10 @@ function previewResponse(r: HookResponse): string {
   const lines = [`HTTP/1.1 ${r.status}`];
   for (const h of r.headers) if (h.name.trim()) lines.push(`${h.name.trim()}: ${h.value}`);
   if (r.status >= 300 && r.status <= 399 && r.location) lines.push(`location: ${r.location}`);
-  if (!BODYLESS.has(r.status)) lines.push(`content-type: ${r.contentType}; charset=utf-8`);
+  if (!BODYLESS.has(r.status)) {
+    lines.push(`content-type: ${r.contentType}; charset=utf-8`);
+    if (r.contentType !== "text/plain" && r.contentType !== "application/json") lines.push(`content-disposition: attachment; filename="response.${r.contentType === "text/csv" ? "csv" : "xml"}"`);
+  }
   lines.push("cache-control: private, no-store", "referrer-policy: no-referrer", "x-content-type-options: nosniff", "x-robots-tag: noindex, nofollow", "content-security-policy: default-src 'none'; sandbox; frame-ancestors 'none'");
   return lines.join("\n") + "\n\n" + (BODYLESS.has(r.status) ? "" : r.body);
 }
@@ -96,7 +99,7 @@ function ResponseEditor({ inbox }: { inbox: string }) {
           <button type="button" className="btn sm" aria-label={`${t("Remove response header")} ${i + 1}`} onClick={() => set({ headers: draft.headers.filter((_, n) => n !== i) })}>{t("Remove")}</button>
         </div>)}
         <div><button type="button" className="btn sm" disabled={draft.headers.length >= 20} onClick={() => set({ headers: [...draft.headers, { name: "", value: "" }] })}>{t("+ Response header")}</button></div>
-        <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Up to 20 headers. Cookies, CORS, caching, security-policy and connection headers cannot be set, and the privacy headers below are always sent. HTML responses are not supported.")}</p>
+        <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Up to 20 headers: x-* names (outside reserved families) and a few standard ones such as retry-after, content-language, ratelimit-* and traceparent. The privacy headers below are always sent. HTML is not supported; XML and CSV bodies are sent as downloads.")}</p>
       </fieldset>
       {draft.methods && <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Per-method overrides set through the API are kept when you save.")} ({Object.keys(draft.methods).join(", ")})</p>}
       <div>

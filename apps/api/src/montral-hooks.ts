@@ -152,7 +152,7 @@ export type HookEvent = {
   response_status?: number | null;
 };
 /** Delayed responses in flight on this process; see DelaySlots. */
-export const hookDelaySlots = new DelaySlots(5, 200);
+export const hookDelaySlots = new DelaySlots(5, 20, 200);
 
 export const fingerprint = async (token: string) => {
   const bytes = new TextEncoder().encode(token);
@@ -588,55 +588,56 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const { id, token } = c.req.param();
     if (!UUID.test(id) || !TOKEN.test(token)) return c.json({ error: "Not found" }, 404);
     const db = c.get("database");
-    // Only the configured delay is read here (the body can be 64 KiB); the full
-    // configuration comes back from the capture, under the inbox row lock.
-    const found = await db.query<HookInbox & { delay_ms: number | null }>(
-      "SELECT id,organization_id,project_id,token_hash,COALESCE((response->>'delayMs')::int,0) AS delay_ms FROM montral_hook_inbox WHERE id=$1", [id],
+    const found = await db.query<HookInbox>(
+      "SELECT id,organization_id,project_id,token_hash FROM montral_hook_inbox WHERE id=$1", [id],
     );
     const inbox = found[0];
     if (!inbox || !sameHash(await fingerprint(token), inbox.token_hash)) return c.json({ error: "Not found" }, 404);
     if (!(await allow(c.get("repo"), `montral:hook:${id}`, 120, 60))) return c.json({ error: "Too many events" }, 429);
-    // A delayed response holds a slot from here until it is sent, so a sender
-    // cannot pile up sleeping requests; without a free slot nothing is captured.
-    let release: (() => void) | null = null;
-    if (Number(inbox.delay_ms) > 0) {
-      release = hookDelaySlots.acquire(id);
-      if (!release) return c.json({ error: "Too many delayed responses in progress" }, 429);
-    }
+    let payload: string | null;
     try {
-      let payload: string | null;
-      try {
-        payload = await readPayload(c.req.raw);
-      } catch (error) {
-        if (error instanceof InvalidWebhookPayloadError) return c.json({ error: error.message }, 422);
-        if (error instanceof WebhookPayloadTimeoutError) return c.json({ error: error.message }, 408);
-        throw error;
-      }
-      if (payload === null) return c.json({ error: "Payload too large (32 KiB)" }, 413);
-      // Re-check the secret and inbox under a row lock in the same transaction as
-      // the INSERT and retention pruning. If it was deleted while we streamed the
-      // body, return 404 instead of raising a foreign-key error or leaking data.
-      const captured = await db.query<{ result: { status: number; response: unknown } | null }>(
-        "SELECT montral_capture_hook_event_v2($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS result",
-        [id, await fingerprint(token), crypto.randomUUID(), c.req.method,
-          (c.req.header("content-type") ?? "").slice(0, 256) || null,
-          JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
-      );
-      const result = captured[0]?.result;
-      if (!result) return c.json({ error: "Not found" }, 404);
-      const stored = typeof result.response === "string" ? JSON.parse(result.response) as unknown : result.response;
-      const config = stored ? parseHookResponseConfig(stored) : null;
-      if (!config?.ok) return c.json({ received: true }, 202);
-      if (config.value.delayMs > 0) {
-        // The configuration may have gained a delay after the first read.
-        release ??= hookDelaySlots.acquire(id);
-        if (release) await boundedDelay(config.value.delayMs, c.req.raw.signal);
-      }
-      const out = buildConfiguredResponse(responseVariant(config.value, c.req.method));
-      return out.body === null ? c.body(null, out.status as 204, out.headers) : c.body(out.body, out.status as 200, out.headers);
-    } finally {
-      release?.();
+      payload = await readPayload(c.req.raw);
+    } catch (error) {
+      if (error instanceof InvalidWebhookPayloadError) return c.json({ error: error.message }, 422);
+      if (error instanceof WebhookPayloadTimeoutError) return c.json({ error: error.message }, 408);
+      throw error;
     }
+    if (payload === null) return c.json({ error: "Payload too large (32 KiB)" }, 413);
+    // Re-check the secret and inbox under a row lock in the same transaction as
+    // the INSERT and retention pruning. If it was deleted while we streamed the
+    // body, return 404 instead of raising a foreign-key error or leaking data.
+    // The full response configuration comes back from the capture, read under that lock.
+    const eventId = crypto.randomUUID();
+    const captured = await db.query<{ result: { status: number; response: unknown } | null }>(
+      "SELECT montral_capture_hook_event_v2($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS result",
+      [id, await fingerprint(token), eventId, c.req.method,
+        (c.req.header("content-type") ?? "").slice(0, 256) || null,
+        JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
+    );
+    const result = captured[0]?.result;
+    if (!result) return c.json({ error: "Not found" }, 404);
+    const stored = typeof result.response === "string" ? JSON.parse(result.response) as unknown : result.response;
+    const config = stored ? parseHookResponseConfig(stored) : null;
+    const variant = config?.ok ? responseVariant(config.value, c.req.method) : null;
+    // The event records what is actually sent. The SQL function's choice can
+    // only differ for a stored configuration that fails validation here (the
+    // default 202 is sent instead); correct the record before answering.
+    const sent = variant ? variant.status : 202;
+    if (Number(result.status) !== sent) {
+      await db.query("UPDATE montral_hook_event SET response_status=$2 WHERE id=$1 AND inbox_id=$3", [eventId, sent, id]);
+    }
+    if (!config?.ok || !variant) return c.json({ received: true }, 202);
+    if (config.value.delayMs > 0) {
+      // Taken only now, after the body was read and the event stored. No free
+      // slot (inbox, organization or process) means: answer at once, without
+      // the delay. The delay never prevents capture.
+      const release = hookDelaySlots.acquire(id, inbox.organization_id);
+      if (release) {
+        try { await boundedDelay(config.value.delayMs, c.req.raw.signal); } finally { release(); }
+      }
+    }
+    const out = buildConfiguredResponse(variant);
+    return out.body === null ? c.body(null, out.status as 204, out.headers) : c.body(out.body, out.status as 200, out.headers);
   });
   app.route("/api/hooks/receive", publicHooks);
 }

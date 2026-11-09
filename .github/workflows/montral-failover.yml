@@ -14,9 +14,15 @@ permissions:
   contents: read
 jobs:
   failover:
-    name: Network partition and primary promotion
+    name: Network partition and primary promotion (${{ matrix.image }})
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["postgres:17", "postgres:18.6-alpine"]
+    env:
+      MONTRAL_FAILOVER_PG_IMAGE: ${{ matrix.image }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -31,6 +37,6 @@ jobs:
       - name: Build Node API
         run: pnpm --filter @montral/api build:node
       - name: Pull qualification images
-        run: docker pull postgres:17 && docker pull ghcr.io/shopify/toxiproxy:2.9.0
+        run: docker pull "$MONTRAL_FAILOVER_PG_IMAGE" && docker pull ghcr.io/shopify/toxiproxy:2.9.0
       - name: Qualify partition and failover
         run: node scripts/qualify-failover.mjs

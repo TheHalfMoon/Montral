@@ -24,6 +24,12 @@ describe("UTC on-call resolution", () => {
     expect(resolveOnCall(rotation,os,d("2026-03-28T14:00:00Z")).participantId).toBe("bob");
     expect(resolveOnCall(rotation,os,d("2026-03-28T16:00:00Z")).participantId).toBe("alice");
   });
+  it("ends a lower-priority override when a higher-priority override starts", () => {
+    const os = [override("2026-03-28T10:00:00Z","2026-03-28T20:00:00Z","bob",1),
+      override("2026-03-28T12:00:00Z","2026-03-28T14:00:00Z","carol",2)];
+    expect(resolveOnCall(rotation,os,d("2026-03-28T11:00:00Z")).validUntil)
+      .toEqual(d("2026-03-28T12:00:00Z"));
+  });
   it("rejects ambiguous equal-priority overlaps regardless of row order", () => {
     const os=[override("2026-03-28T10:00:00Z","2026-03-28T16:00:00Z","bob"),
       override("2026-03-28T12:00:00Z","2026-03-28T18:00:00Z","carol")];

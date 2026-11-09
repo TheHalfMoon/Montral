@@ -1,5 +1,7 @@
 # Montral Engineering Status — 2026-11-01
 
+> **Historical log.** Entries below record the state at the time they were written (some say "private repository" or "CI not green", which no longer holds). The current release-readiness state is [FINAL-REPORT.md](FINAL-REPORT.md) and the task list is [TASK-LEDGER.md](TASK-LEDGER.md).
+
 ## Completed in this private engineering wave
 
 - Three immutable donor snapshots remain intact, with 638 source files verified by hash.

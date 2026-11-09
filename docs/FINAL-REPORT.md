@@ -13,7 +13,7 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release candidate** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence. All eight CI workflows pass at the candidate revision on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image and compose stack are qualified as shipped. No critical or high security finding is open. |
+| **Self-hosted Docker release candidate** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence. All seven CI workflows pass at the candidate revision on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image and compose stack are qualified as shipped. No critical or high security finding is open. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed backup/PITR, no third-party penetration test. |
 
 Known limitations a self-hoster should accept are in section 8.
@@ -53,7 +53,7 @@ Earlier work (#12–#30) is listed in the git history and the previous version o
 
 ## 4. Test results at the candidate revision
 
-GitHub Actions on `c58c24a` (Linux runners are ubuntu-24.04, 4 vCPU / 16 GB):
+GitHub Actions on `c58c24a` (Linux runners: `ubuntu-latest`, which was the ubuntu-26.04 image in these runs, 4 vCPU / 16 GB):
 
 | Workflow | Result |
 |---|---|
@@ -76,10 +76,10 @@ Demonstrated on real processes and real PostgreSQL, not mocks:
 | Network partition (45 s black-hole) | FAILOVER_PASS (#23, #31) | No writes or DB-backed answers during it; service resumes |
 | Primary killed, synchronous replica promoted | FAILOVER_PASS on PostgreSQL 17 and 18 | No committed row lost |
 | Migration interruption / concurrent migrators | Advisory lock + transactional migrations; four-replica drill (2026-10-30); deadlock retry (#35) | Interrupted migration rolls back |
-| Backup and restore | RESTORE_DRILL_PASS + catalog negative control, Linux and macOS | 47 tables, row counts and SHA-256 content match |
+| Backup and restore | RESTORE_DRILL_PASS + catalog negative control, Linux and macOS | 48 tables, row counts and SHA-256 content match |
 | PostgreSQL major mismatch | DOCKER_COMPOSE_PASS (#37) | 17 refuses 18 data; data intact |
-| Sustained load (#40) | LOAD_QUALIFICATION_PASS | ~4,010 checks/min for 4,000 monitors, lag p95 ~61 s; 0 lost or duplicated checks (results == target requests exactly) |
-| Backpressure: slow target (10 s) | #40 | Queue bounded (≤ 80 in flight, ≤ 13,800 unstarted claims), RSS +40 MB, `/health` ≤ 11 ms, no false watchdog restart; backlog drained in 131–141 s |
+| Sustained load (#40) | LOAD_QUALIFICATION_PASS | 4,001 checks/min for 4,000 monitors at the candidate (4,001–4,016 across runs), lag p95 61.9 s; 0 lost or duplicated checks (results == target requests exactly) |
+| Backpressure: slow target (10 s) | #40 | Queue bounded (≤ 80 in flight, ≤ 13,800 unstarted claims), RSS +45 MB, `/health` ≤ 17 ms (candidate run; 10–17 ms across runs), no false watchdog restart; backlog drained in 131 s (131–141 s across runs) |
 | Duplicate / delayed events | #40, #17 | Webhook store == accepted (cap 250 per inbox); 429 beyond the rate limit; replay never mutates the stored event |
 | Connection pool exhaustion (`DB_POOL_MAX=2`) | #40 | Never above 2 connections, 0 errors, every monitor still checked (lag p95 ~110–170 s) |
 
@@ -96,7 +96,7 @@ Each control has a regression test that runs in CI.
 | CSRF | Cookie-authenticated writes need a same-origin Origin | #14 |
 | XSS / CSP | Hash-based script CSP on every page incl. landing; React rendering | #19, #22, CSP_PASS, 0 violations in 3 engines |
 | Clickjacking, sniffing | Frame, nosniff, referrer headers | #15 |
-| Sessions and status page access | PBKDF2 passwords, HMAC access cookies (≤ 12 h, versioned), hashed revocable share links, atomic unlock rate limits | #21 |
+| Status page access | PBKDF2 status-page passwords (account passwords via Better Auth), HMAC access cookies (≤ 12 h, versioned), hashed revocable share links, atomic unlock rate limits | #21 |
 | Tenant isolation | Org/project scoping on every route; audit log isolation incl. forged cursors | e2e suites, #39 |
 | Authorization | Owner/admin checks re-read membership from the database | #39 review |
 | Secrets in logs and storage | Fixed log categories; audit log stores field names only for secret-bearing fields; ping child gets no server secrets | #20, #38, #39 |
@@ -119,13 +119,14 @@ deletes a workspace also deletes its audit trail (by design, documented).
 | Linux x86-64 | Qualified on every PR: PostgreSQL 17 and 18.6 (Alpine, as shipped) |
 | macOS 15 ARM64 | Qualified on every PR at the candidate revision (PostgreSQL 18.6, Homebrew) |
 | Docker / Docker Compose | Qualified on every PR with the shipped Dockerfile and compose file |
-| Windows | **Not supported as a server platform.** Development tooling runs there (unit tests, typecheck); the database suites and Docker were not runnable on the development machine. On Windows, Docker Desktop (WSL 2) runs the same Linux image; that path is expected to work but was not tested |
+| Windows | **Not supported as a server platform.** During this programme, development tooling ran there (unit tests, typecheck); the database suites and Docker were not runnable on that machine. On Windows, Docker Desktop (WSL 2) runs the same Linux image; that path is expected to work but was not tested |
 | Browsers | Chromium, Firefox, WebKit (Playwright's Linux build), Pixel 7 and iPhone 14 emulation. Real Safari on macOS/iOS hardware is not covered |
 
 ## 8. Known limitations for a self-hosted release candidate
 
 1. TLS certificate monitors, ping monitors and custom domains need the Node/Docker server; the Cloudflare Workers
-   build refuses them with 400.
+   build refuses them with 400. Members-only status pages are not served on custom domains (sign-in lives on the
+   main address), and share links point at the main address.
 2. Not yet implemented: on-call schedules, SSO (OIDC/SAML), Terraform provider, browser checks, custom webhook
    responses, SMS/voice (paid provider). Ranked in the ledger.
 3. External email deliverability, live APNs push and live payments are not qualified; billing is off.

@@ -31,6 +31,7 @@ PUBLIC_URL=${base}
 PORT=${port}
 MONTRAL_IMAGE=montral:qualify
 SELFCHECK_URLS=
+ALLOW_PRIVATE_TARGETS=true
 EOF
 
 wait_healthy() {
@@ -71,6 +72,12 @@ api GET /api/monitors | grep "$monitor_name" >/dev/null || { echo "created monit
 
 echo "== unprivileged ICMP inside the image (ping monitors)"
 "${compose[@]}" exec -T montral ping -c 1 -W 2 127.0.0.1 >/dev/null || { echo "ping as node user failed inside the image" >&2; exit 1; }
+# and the app's own ping monitor, end to end: create, run a check, read the stored status
+created="$(api POST /api/monitors '{"name":"Docker ping","type":"ping","target":"127.0.0.1"}')"
+ping_id="$(sed -n 's/.*"id":"\([^"]*\)".*//p' <<<"$created")"
+[[ -n "$ping_id" ]] || { echo "ping monitor create failed: $created" >&2; exit 1; }
+api POST "/api/monitors/${ping_id}/check" '{}' | grep '"ok":true' >/dev/null || { echo "ping monitor check request failed" >&2; exit 1; }
+api GET "/api/monitors/${ping_id}" | grep '"status":"up"' >/dev/null || { echo "ping monitor is not up after its check: $(api GET "/api/monitors/${ping_id}")" >&2; exit 1; }
 
 echo "== full stop and start: data must survive in the named volume"
 "${compose[@]}" stop
@@ -110,4 +117,4 @@ clusters="$("${compose[@]}" run --rm --no-deps -T --entrypoint sh postgres -c 'f
 wait_healthy
 api GET /api/monitors | grep "$monitor_name" >/dev/null || { echo "data missing after the refused downgrade" >&2; exit 1; }
 
-echo "DOCKER_COMPOSE_PASS: image built, ${compose_image} (server ${pg_version}) healthy, sign-up and monitor write/read, ping as node, data survived stop/start and app container recreation, PostgreSQL 17 refused the 18 volume without touching it"
+echo "DOCKER_COMPOSE_PASS: image built, ${compose_image} (server ${pg_version}) healthy, sign-up and monitor write/read, ping as node and a ping monitor up, data survived stop/start and app container recreation, PostgreSQL 17 refused the 18 volume without touching it"

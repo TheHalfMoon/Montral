@@ -38,7 +38,6 @@ async function until(label, fn, timeout = 20000) {
   throw new Error("Timed out waiting for " + label + (last ? " (" + last.message + ")" : ""));
 }
 const portHttp = await port();
-const portCdp = await port();
 const base = `http://127.0.0.1:${portHttp}`;
 const chromeProfile = `/tmp/montral-browser-profile-${process.pid}`;
 const api = spawn(process.execPath, [resolve("apps/api/dist/server.mjs")], {
@@ -69,10 +68,27 @@ try {
   chrome = spawn(executable, [
     "--headless", "--no-first-run", "--no-default-browser-check", "--disable-gpu",
     "--disable-background-networking", "--disable-extensions", "--no-sandbox",
-    `--remote-debugging-port=${portCdp}`, "--remote-debugging-address=127.0.0.1",
+    // port 0: Chromium binds a free port itself and prints it, so no other process can take it in between
+    "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
     `--user-data-dir=${chromeProfile}`,
     "about:blank",
-  ], { stdio: "ignore" });
+  ], { stdio: ["ignore", "ignore", "pipe"] });
+  let chromeLog = "";
+  let devtoolsPort = null;
+  chrome.stderr.setEncoding("utf8");
+  chrome.stderr.on("data", t => {
+    // matched per chunk before the log is trimmed, so a chatty Chromium cannot push the line out of the buffer
+    const m = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(chromeLog.slice(-200) + t);
+    if (m && devtoolsPort === null) devtoolsPort = Number(m[1]);
+    chromeLog = (chromeLog + t).slice(-4000);
+  });
+  // a busy runner can take well over 20 s to start a cold Chromium; an early exit ends the wait at once
+  const started = await until("Chromium DevTools port", async () => {
+    if (chrome.exitCode !== null || chrome.signalCode !== null) return { exited: true };
+    return devtoolsPort === null ? null : { port: devtoolsPort };
+  }, 60000).catch((e) => { throw new Error(e.message + (chromeLog ? "\nChromium output: " + chromeLog.slice(-1500) : "")); });
+  if (started.exited) throw new Error("Chromium exited early: " + chromeLog.slice(-1500));
+  const portCdp = started.port;
   const tab = await until("Chromium CDP", async () => {
     const response = await fetch(`http://127.0.0.1:${portCdp}/json/list`, { signal: AbortSignal.timeout(700) });
     return (await response.json()).find(t => t.type === "page" && t.webSocketDebuggerUrl);

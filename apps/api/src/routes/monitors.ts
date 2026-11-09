@@ -479,17 +479,18 @@ export const monitors = new Hono<AppEnv>()
       }
       if (!isRegionConfigured(region)) return c.json({ error: `Unknown region: ${region}`, code: "unknown_region", regions: [region] }, 400);
     }
-    // bounded per workspace (shared by every server) and per process (sockets, ping processes): see manual-check-gate.ts
-    if (!(await repo.withinLimit(`mcheck:${m.organizationId}`, MANUAL_CHECKS_PER_WINDOW, MANUAL_CHECK_WINDOW_SEC))) {
-      c.header("retry-after", "60");
-      return c.json({ error: "Too many manual checks, try again in a few minutes", code: "manual_check_rate_limited" }, 429);
-    }
+    // bounded per process (sockets, ping processes) and per workspace (shared by every server): see manual-check-gate.ts.
+    // The process slot comes first, so a request refused as busy does not use up the workspace's allowance.
     const release = manualChecks.tryEnter();
     if (!release) {
       c.header("retry-after", "5");
       return c.json({ error: "This server is busy running other checks, try again shortly", code: "manual_check_busy" }, 429);
     }
     try {
+      if (!(await repo.withinLimit(`mcheck:${m.organizationId}`, MANUAL_CHECKS_PER_WINDOW, MANUAL_CHECK_WINDOW_SEC))) {
+        c.header("retry-after", "60");
+        return c.json({ error: "Too many manual checks, try again in a few minutes", code: "manual_check_rate_limited" }, 429);
+      }
       const cost = region !== undefined ? 1 : creditCost(m);
       // a manual check is a request like any other: it takes a credit
       if ((await c.get("entitlements").spendCredits(m.organizationId, cost)) < cost) {

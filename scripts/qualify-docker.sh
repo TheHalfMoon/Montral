@@ -103,7 +103,7 @@ fi
 grep -q 'Skipping initialization' <<<"$downgrade_log" || { echo "the older image did not recognise the existing cluster:" >&2; echo "$downgrade_log" | tail -20 >&2; exit 1; }
 grep -q -i -E 'incompatible|configuration file .* contains errors' <<<"$downgrade_log" || { echo "downgrade refused for an unexpected reason:" >&2; echo "$downgrade_log" | tail -20 >&2; exit 1; }
 # the volume still holds exactly the one PostgreSQL 18 cluster: nothing new beside it, nothing rewritten in it
-clusters="$("${compose[@]}" run --rm --no-deps -T --entrypoint sh postgres -c 'find /var/lib/postgresql -name PG_VERSION -exec sh -c "echo \$1 \$(cat \$1)" _ {} \;')"
+clusters="$("${compose[@]}" run --rm --no-deps -T --entrypoint sh postgres -c 'find /var/lib/postgresql -name PG_VERSION -not -path "*/base/*" -exec sh -c "echo \$1 \$(cat \$1)" _ {} \;')"
 [[ "$clusters" == "${pgdata}/PG_VERSION 18" ]] || { echo "unexpected clusters in the volume after the refused downgrade: $clusters" >&2; exit 1; }
 "${compose[@]}" up -d --wait postgres
 "${compose[@]}" up -d montral

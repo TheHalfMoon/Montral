@@ -51,17 +51,15 @@ correctly empty. Nothing in the OAuth path is at fault: grant decoding, `cachedP
 
 - **Certain** (from the source and a run of the real library): a sign-up session stores `activeOrganizationId = null`,
   and `anyWorkspaceOf` had no ordering.
-- **Strong** (deterministic reproduction): `active-workspace.e2e.test.ts` puts the personal workspace's membership
-  behind the second one on disk. It deletes both membership rows and re-inserts them, unchanged, in one `INSERT`
-  with the second workspace's row first. One statement fills its target page in order, so this gives both rows new
-  heap positions and new index entries in the inverted order. The test then checks the precondition with the exact
-  old query: the unordered `LIMIT 1` must now answer the second workspace. Re-inserting only the personal workspace's
-  row was not reliable. On the macOS runner (`c9127b1`, job 129429339954) the free-space map put it back on an
-  earlier page five times in a row, so the precondition failed before any assertion about the fix was reached. A plain `UPDATE member SET role = role` is not enough. It is a HOT update,
-  so the index entry keeps pointing at the original position and the lookup still finds the personal workspace
-  first. The first RED run (commit `77364d6`) showed exactly that. On unfixed code the user's session then resolves
-  to the second workspace (RED run on `82a1bc1`, recorded on the PR). `any-workspace.test.ts` reproduces the same
-  physical order with a fake database.
+- **Strong, observed once on real PostgreSQL**: in the RED run on `82a1bc1` (run 42695712956, PostgreSQL 18),
+  the e2e rewrote the personal workspace's membership row (delete + re-insert, unchanged), and the old unordered
+  `LIMIT 1` then answered the second workspace. `repo.anyWorkspaceOf` returned the second workspace instead of the
+  personal one. A plain `UPDATE member SET role = role` did not do this: it is a HOT update, so the index entry
+  keeps the original position (RED run on `77364d6`). Forcing a physical order is not reliable, though. On the macOS
+  runner (`c9127b1`, job 129429339954) the free-space map put the re-inserted row back on an earlier page five times
+  in a row. SQL without ORDER BY guarantees no order at all, so `a64f235` (by the repository owner) removed the
+  heap-order precondition from the e2e. The deterministic check of the ordering is `any-workspace.test.ts`, which
+  feeds the memberships in reverse physical order to a fake database.
 - **Inferred, not observed directly**: that the failing CI run had exactly this physical order. The run kept no
   database dump. However, the only way for the agent to list nothing while the session's create returned 201 is
   for the two requests to resolve to different (org, project) pairs, and the token's pair is fixed by its signed
@@ -95,18 +93,19 @@ now stable, a session no longer ends up in a workspace it did not choose.
   library's hook order, checks that the sign-up session gets the personal workspace once `givePersonalWorkspace`
   runs, and checks that a session that already has a workspace is never overridden.
 - `apps/api/src/active-workspace.e2e.test.ts` (PostgreSQL): checks that the sign-up session stores the personal
-  workspace; then, with the active workspace cleared and the membership rows inverted on disk, checks that
-  `anyWorkspaceOf` and `/api/workspaces` stay on the personal workspace and that an inbox created with its project
-  is stored there.
+  workspace. Then, for a legacy session whose active workspace is cleared and whose user has a second workspace, it
+  checks that `anyWorkspaceOf` and `/api/workspaces` stay on the personal workspace, and that an inbox created with
+  its project is stored there. It does not require any physical row order (see `a64f235`).
 - `apps/api/src/oauth-scope.e2e.test.ts`: none of its assertions were changed or weakened. One assertion was added:
   after Ada creates her second workspace, her session's current workspace is still `home`. If this ever regresses,
   the test now fails at the cause instead of at the inbox list 60 lines later.
 
-RED/GREEN: the first two commits of #53 contain only tests, and the commit after them contains the fix.
+RED/GREEN: the first two commits of #53 contain only tests, `c9127b1` contains the fix, and `c1c5f94` / `a64f235`
+only change the e2e setup.
 On `77364d6`, PostgreSQL 18 CI failed `any-workspace.test.ts` (`expected 'ada-other' to be 'ada-home'`) and the
 sign-up check in the e2e (`expected [ null ] to deeply equal [ Array(1) ]`). The second failure is the stored
 `activeOrganizationId` of a fresh sign-up session, observed on real PostgreSQL. On `82a1bc1` (run 42695712956, job 129426898767,
-PostgreSQL 18), the precondition held: the old unordered `LIMIT 1` answered the second workspace. Then
+PostgreSQL 18), the then-precondition held: the old unordered `LIMIT 1` answered the second workspace. Then
 `repo.anyWorkspaceOf` returned the second workspace instead of the personal one (`active-workspace.e2e.test.ts:64`,
-`expected 'dcc70877-…' to be '4573513e-…'`). This is the flake's mechanism reproduced deterministically on real
-PostgreSQL. The fix commit turns both the e2e test and the unit tests green.
+`expected 'dcc70877-…' to be '4573513e-…'`). That is the flake's mechanism, observed on real PostgreSQL. On
+`c9127b1`, both PostgreSQL 17 and 18 app-CI jobs are green with the fix.

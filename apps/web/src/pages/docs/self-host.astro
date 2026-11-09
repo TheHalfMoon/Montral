@@ -51,6 +51,7 @@ docker compose up -d --build</code></pre>
     <h3>Operate</h3>
     <ul>
       <li><strong>Upgrade</strong>: pull the latest private source commit, then <code>docker compose up -d --build</code>. Migrations run on start.</li>
+      <li><strong>PostgreSQL version</strong>: <code>docker-compose.yml</code> pins <code>postgres:18.6-alpine</code> and its data directory. Never change the tag to another major version: PostgreSQL cannot read another major's data, and with the pinned directory an older or newer image refuses to start rather than creating a new, empty database. Move between majors with a dump and restore (<a href="/docs/backup">Backup and restore</a>).</li>
       <li><strong>Backup</strong>: <code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>. Restore steps are in <a href="/docs/backup">Backup and restore</a>.</li>
       <li><strong>Several containers</strong>: checks are leased with <code>FOR UPDATE SKIP LOCKED</code>, so more containers can share one database without duplicating checks.</li>
       <li><strong>Logs</strong>: <code>docker compose logs -f montral</code>. A health endpoint is at <code>/health</code>.</li>
@@ -305,6 +306,7 @@ docker compose up -d --build</code></pre>
     <h3>运维</h3>
     <ul>
       <li><strong>升级</strong>：目前无公开镜像；从私有源码更新时拉取新代码后执行 <code>docker compose up -d --build</code>。迁移在启动时自动运行。</li>
+      <li><strong>PostgreSQL 版本</strong>：<code>docker-compose.yml</code> 固定了 <code>postgres:18.6-alpine</code> 及其数据目录。切勿把标签改为其他大版本：PostgreSQL 无法读取其他大版本的数据；固定数据目录后，较旧或较新的镜像会拒绝启动，而不是新建一个空数据库。跨大版本请通过导出和恢复迁移（<a href="/docs/backup">备份与恢复</a>）。</li>
       <li><strong>备份</strong>：<code>docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral.dump</code>。恢复步骤见<a href="/docs/backup">备份与恢复</a>。</li>
       <li><strong>多个容器</strong>：检测通过 <code>FOR UPDATE SKIP LOCKED</code> 加租约，多个容器共用一个数据库也不会重复检测。</li>
       <li><strong>日志</strong>：<code>docker compose logs -f montral</code>。健康检查接口为 <code>/health</code>。</li>

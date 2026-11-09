@@ -78,7 +78,7 @@ container on the same host.
 | Claimed but unstarted runs | max 11,469 (bound 13,800 = 512 x 25 + one 1,000-claim round) | 11,427-11,491 |
 | RSS while slow | max 390 MB (+40 MB) | 378-390 MB |
 | `/health` while slow (1 probe/s) | p99 8.1 ms, max 10.4 ms, 0 failures | max 5.6-10.4 ms |
-| **Recovery** (backlog drained, last-60 s lag p95 back under 90 s) | **131 s** | 131 s |
+| **Recovery** (backlog drained, last-60 s lag p95 back under 90 s) | **131 s** | 131-141 s (141 s on the merged head, run 42593740378) |
 | After recovery (120 s window) | 3,658 checks/min, lag p95 62.2 s, every monitor checked | p95 62.2-70.7 s |
 | Catch-up after recovery | up to 6 results for one monitor in the first 120 s | 5-6 |
 | Webhook fan-out (5,000 at concurrency 50) | **336 accepted/s**, all 202; p50 / p95 / p99 140 / 216 / 262 ms; stored 5,000 (5,000 distinct ids) | 259-338/s; p99 246-471 ms |

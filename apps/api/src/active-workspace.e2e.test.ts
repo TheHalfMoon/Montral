@@ -1,0 +1,75 @@
+import { openDatabase } from "@montral/db-pg";
+import { randomBytes } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { createApp } from "./app";
+
+// The workspace a signed-in user acts in must not change from one request to the next. Before the fix a fresh
+// sign-up's session had no active workspace (Better Auth creates the session before the hook that creates the
+// personal workspace), and every request then took "any" membership: the first row PostgreSQL returned, with no
+// ORDER BY. Once the user had a second workspace, a row moved on disk switched the user into it, and a request naming
+// a project of the first workspace silently landed in the second one's default project (oauth-scope.e2e flake).
+const url = process.env.TEST_DATABASE_URL;
+const ORIGIN = "http://localhost:8787";
+const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron" };
+const JSON_HEADERS = { "content-type": "application/json" };
+
+describe.skipIf(!url)("the active workspace of a session (PostgreSQL)", () => {
+  const app = createApp(openDatabase);
+  const req = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
+
+  it("is the personal workspace from sign-up on, and stays the oldest one even when membership rows move on disk", async () => {
+    expect((await req("/internal/migrate", { method: "POST", headers: { "x-cron-secret": "cron" } })).status).toBe(200);
+    const db = openDatabase(url!, { max: 2 });
+    const orgs: string[] = [];
+    try {
+      const r = await req("/api/auth/sign-up/email", {
+        method: "POST", headers: JSON_HEADERS,
+        body: JSON.stringify({ email: `active-${Date.now()}-${randomBytes(3).toString("hex")}@example.com`, password: "correct horse battery", name: "Active" }),
+      });
+      expect(r.status).toBe(200);
+      const cookie = r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+      const as = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
+        const res = await req(`/api${path}`, { method, headers: { ...JSON_HEADERS, cookie, ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+        return { status: res.status, body: (await res.json().catch(() => null)) as any };
+      };
+      const userId = (await as("GET", "/me")).body.userId as string;
+      const first = (await as("GET", "/workspaces")).body;
+      const home = first.workspaces[0] as { id: string; projects: { id: string }[] };
+      orgs.push(home.id);
+      expect(first.workspaces).toHaveLength(1);
+      expect(first.current.workspace).toBe(home.id);
+
+      // the sign-up session now carries the personal workspace itself
+      const stored = await db.query<{ active_organization_id: string | null }>("select active_organization_id from session where user_id = $1", [userId]);
+      // soft: on failure the run still goes on to prove the second half (a session with no active workspace)
+      expect.soft(stored.map((s) => s.active_organization_id)).toEqual([home.id]);
+
+      const other = (await as("POST", "/workspaces", { name: "Second" })).body as { id: string };
+      orgs.push(other.id);
+
+      // A session without an active workspace (every sign-up session before the fix, still alive in production) with
+      // its memberships inverted on disk: an UPDATE writes a new version of the personal workspace's row behind the
+      // second one's, which is what vacuum + reuse of space freed by deleted rows did in the shared CI database.
+      await db.query("update session set active_organization_id = null where user_id = $1", [userId]);
+      const physicallyFirst = () => db.query<{ organization_id: string }>("select organization_id from member where user_id = $1 order by ctid limit 1", [userId]);
+      for (let i = 0; i < 5 && (await physicallyFirst())[0].organization_id !== other.id; i++) {
+        await db.query("update member set role = role where user_id = $1 and organization_id = $2", [userId, home.id]);
+      }
+      expect((await physicallyFirst())[0].organization_id).toBe(other.id);
+
+      expect(await db.repo.anyWorkspaceOf(userId)).toBe(home.id);
+      for (let i = 0; i < 3; i++) expect((await as("GET", "/workspaces")).body.current.workspace).toBe(home.id);
+      // and a write that names the personal workspace's project lands there, not in the second workspace's default
+      const inbox = await as("POST", "/hooks/inboxes", { name: "Lands in home" }, { "x-project-id": home.projects[0].id });
+      expect(inbox.status).toBe(201);
+      const rows = await db.query<{ organization_id: string; project_id: string }>("select organization_id, project_id from montral_hook_inbox where id = $1", [inbox.body.id]);
+      expect(rows).toEqual([{ organization_id: home.id, project_id: home.projects[0].id }]);
+    } finally {
+      for (const id of orgs) {
+        await db.query("delete from montral_hook_inbox where organization_id = $1", [id]);
+        await db.query("delete from organization where id = $1", [id]);
+      }
+      await db.close(1);
+    }
+  }, 30_000);
+});

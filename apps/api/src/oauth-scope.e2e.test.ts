@@ -46,6 +46,9 @@ describe.skipIf(!url)("an agent sees only what the user authorized", () => {
     const alpha = home.projects[0].id;
     const beta = (await ada("POST", "/projects", { name: "Beta" })).body.id as string;
     const other = (await ada("POST", "/workspaces", { name: "Ada other" })).body as { id: string; projects: { id: string }[] };
+    // Ada's session keeps acting in her home workspace after she gains a second one: every x-project-id she sends
+    // below names a project of `home`, and in another workspace it would silently resolve to that one's default.
+    expect((await ada("GET", "/workspaces")).body.current.workspace).toBe(home.id);
 
     const mon = async (who: ReturnType<typeof as>, name: string, projectId: string) => {
       const r = await who("POST", "/monitors", { name, type: "http", target: "https://example.com" }, { "x-project-id": projectId });

@@ -3,6 +3,7 @@ import type { AppEnv, Bindings } from "./env";
 import type { Hono } from "hono";
 import { Hono as Router } from "hono";
 import { requireManager } from "./middleware";
+import { columnExists, relationExists } from "./schema-catalog";
 import { z } from "zod";
 
 const BODY_LIMIT = 64 * 1024;
@@ -48,15 +49,38 @@ export function billingReady(env: Bindings): boolean {
 }
 
 export async function migrateMontralBilling(db: Database): Promise<string[]> {
+  // This runs inside the single edition-migration transaction on EVERY replica
+  // startup, while checkouts may be in flight. montral_reserve_billing_intent
+  // reads montral_subscription and then montral_billing_intent. An
+  // unconditional `ADD COLUMN IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`
+  // locks the table even when the object exists, and the old order (intent,
+  // then subscription) deadlocked (40P01) with a concurrent reservation. Decide
+  // from the catalog first: an up-to-date schema takes no table-locking DDL.
+  const hasSubscription = await relationExists(db, "montral_subscription");
+  const hasIntent = await relationExists(db, "montral_billing_intent");
+  const addIntentConsumedAt = hasIntent && !await columnExists(db, "montral_billing_intent", "consumed_at");
+  const createIntentIndex = !await relationExists(db, "montral_billing_intent_pending");
+  const addSubscriptionEndsAt = hasSubscription && !await columnExists(db, "montral_subscription", "ends_at");
+  // Genuine upgrade of existing tables: take every lock this migration needs
+  // up front, in the checkout function's order (subscription, then intent).
+  const upgrade = [
+    addSubscriptionEndsAt && "montral_subscription",
+    (addIntentConsumedAt || (hasIntent && createIntentIndex)) && "montral_billing_intent",
+  ].filter((name): name is string => !!name);
+  if (upgrade.length) await db.query(`LOCK TABLE ${upgrade.join(", ")} IN ACCESS EXCLUSIVE MODE`);
   await db.query(`CREATE TABLE IF NOT EXISTS montral_billing_intent (
     id uuid PRIMARY KEY, organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
     created_by text NOT NULL, plan text NOT NULL CHECK (plan IN ('pro','business')),
     variant_id text NOT NULL, expires_at timestamptz NOT NULL,
     created_at timestamptz NOT NULL DEFAULT NOW(), consumed_at timestamptz
   )`);
-  await db.query("ALTER TABLE montral_billing_intent ADD COLUMN IF NOT EXISTS consumed_at timestamptz");
-  await db.query(`CREATE INDEX IF NOT EXISTS montral_billing_intent_pending
-    ON montral_billing_intent (organization_id,expires_at) WHERE consumed_at IS NULL`);
+  if (addIntentConsumedAt) {
+    await db.query("ALTER TABLE montral_billing_intent ADD COLUMN IF NOT EXISTS consumed_at timestamptz");
+  }
+  if (createIntentIndex) {
+    await db.query(`CREATE INDEX IF NOT EXISTS montral_billing_intent_pending
+      ON montral_billing_intent (organization_id,expires_at) WHERE consumed_at IS NULL`);
+  }
   // Atomically reserve a single unexpired checkout per workspace. This lock is
   // scoped to the workspace, so independent customers are never serialized.
   await db.query(`
@@ -91,7 +115,9 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
     ends_at timestamptz, provider_updated_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT NOW()
   )`);
-  await db.query("ALTER TABLE montral_subscription ADD COLUMN IF NOT EXISTS ends_at timestamptz");
+  if (addSubscriptionEndsAt) {
+    await db.query("ALTER TABLE montral_subscription ADD COLUMN IF NOT EXISTS ends_at timestamptz");
+  }
   // An earlier checkout preview exposed a seven-argument SQL function. Drop
   // it so existing installations cannot accidentally call the old behavior.
   await db.query("DROP FUNCTION IF EXISTS montral_apply_billing_event(text,text,text,text,text,timestamptz,uuid)");

@@ -52,9 +52,12 @@ correctly empty. Nothing in the OAuth path is at fault: grant decoding, `cachedP
 - **Certain** (from the source and a run of the real library): a sign-up session stores `activeOrganizationId = null`,
   and `anyWorkspaceOf` had no ordering.
 - **Strong** (deterministic reproduction): `active-workspace.e2e.test.ts` puts the personal workspace's membership
-  behind the second one on disk. It deletes the row and re-inserts it with the same values, which gives it a new heap
-  position and a new index entry, and it checks the precondition with the exact old query: the unordered `LIMIT 1`
-  must now answer the second workspace. A plain `UPDATE member SET role = role` is not enough. It is a HOT update,
+  behind the second one on disk. It deletes both membership rows and re-inserts them, unchanged, in one `INSERT`
+  with the second workspace's row first. One statement fills its target page in order, so this gives both rows new
+  heap positions and new index entries in the inverted order. The test then checks the precondition with the exact
+  old query: the unordered `LIMIT 1` must now answer the second workspace. Re-inserting only the personal workspace's
+  row was not reliable. On the macOS runner (`c9127b1`, job 129429339954) the free-space map put it back on an
+  earlier page five times in a row, so the precondition failed before any assertion about the fix was reached. A plain `UPDATE member SET role = role` is not enough. It is a HOT update,
   so the index entry keeps pointing at the original position and the lookup still finds the personal workspace
   first. The first RED run (commit `77364d6`) showed exactly that. On unfixed code the user's session then resolves
   to the second workspace (RED run on `82a1bc1`, recorded on the PR). `any-workspace.test.ts` reproduces the same

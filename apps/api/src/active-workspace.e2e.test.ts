@@ -49,14 +49,16 @@ describe.skipIf(!url)("the active workspace of a session (PostgreSQL)", () => {
       orgs.push(other.id);
 
       // A session without an active workspace (every sign-up session before the fix, still alive in production) with
-      // its memberships inverted on disk. Rewriting the personal workspace's row (same values, new heap position and
-      // new index entry) puts it behind the second one's, which is what reuse of space freed by deleted rows did in
-      // the shared CI database. (A plain UPDATE is not enough: it is HOT, and the index keeps the old position.)
+      // its memberships inverted on disk, which is what reuse of space freed by deleted rows did in the shared CI
+      // database. Both membership rows are rewritten (same values) by one INSERT, the second workspace's first: one
+      // statement fills its target page in order, so the personal workspace's row lands behind it, with new index
+      // entries too. (Rewriting only the personal row is not enough: the free-space map may put it on an earlier page,
+      // as seen on the macOS runner; a plain UPDATE is HOT and the index keeps the old position.)
       await db.query("update session set active_organization_id = null where user_id = $1", [userId]);
       // exactly the lookup anyWorkspaceOf made before the fix
       const unordered = () => db.query<{ organization_id: string }>("select organization_id from member where user_id = $1 limit 1", [userId]);
       for (let i = 0; i < 5 && (await unordered())[0].organization_id !== other.id; i++) {
-        await db.query("with moved as (delete from member where user_id = $1 and organization_id = $2 returning *) insert into member select * from moved", [userId, home.id]);
+        await db.query("with moved as (delete from member where user_id = $1 returning *) insert into member select * from moved order by organization_id = $2", [userId, home.id]);
       }
       // precondition: the unordered lookup now answers the second workspace
       expect((await unordered())[0].organization_id).toBe(other.id);

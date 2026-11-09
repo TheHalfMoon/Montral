@@ -63,7 +63,7 @@ function Create({ onClose }: { onClose: () => void }) {
       <form className="card" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2 style={{ fontSize: 30 }}>{t("New status page")}</h2>
         <label className="fld">{t("Title")}<input className="in" required autoFocus value={title} onChange={(e) => { setTitle(e.target.value); if (!slug) setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")); }} placeholder={t("Acme Status")} /></label>
-        <label className="fld">{t("Slug")}<input className="in mono" required pattern="[a-z0-9-]{3,40}" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder={t("acme")} /></label>
+        <label className="fld">{t("Slug")}<input className="in mono" required pattern="[a-z0-9\-]{3,40}" value={slug} onChange={(e) => setSlug(e.target.value)} placeholder={t("acme")} /></label>
         {err && <p className="err">{err}</p>}
         <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>
           <button type="button" className="btn" onClick={onClose}>{t("Cancel")}</button><button className="btn primary" disabled={busy}>{busy ? t("Creating…") : t("Create")}</button>
@@ -85,6 +85,9 @@ export function StatusPageEditor({ id }: { id: string }) {
   const [pending, setPending] = useState("");
   const [err, setErr] = useState("");
   const [upgrade, setUpgrade] = useState<string | undefined>();
+  // every hook runs before the "Loading…" early return: a hook declared after it crashed the editor (React #310) as soon
+  // as the page loaded
+  const [newPassword, setNewPassword] = useState("");
   useEffect(() => {
     api.statusPage(id).then((p) => {
       adoptProject(p.projectId);
@@ -106,7 +109,6 @@ export function StatusPageEditor({ id }: { id: string }) {
   };
   const groups = [...new Set(shown.map((c) => c.groupName))];
   const overall = shown.some((c) => byId.get(c.monitorId)!.status === "down") ? "outage" : shown.some((c) => byId.get(c.monitorId)!.status === "degraded") ? "degraded" : "operational";
-  const [newPassword, setNewPassword] = useState("");
   async function save() {
     setPending("save");
     setErr("");

@@ -240,7 +240,7 @@ export default function Alerting() {
             )}
             {f.type === "ntfy" && <>
               <label className="fld">{t("ntfy server URL")}<input className="in" type="url" value={f.url} placeholder="https://ntfy.sh" onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
-              <label className="fld">{t("Topic")}<input className="in" required pattern="[A-Za-z0-9_-]{1,64}" value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} /></label>
+              <label className="fld">{t("Topic")}<input className="in" required pattern="[A-Za-z0-9_\-]{1,64}" value={f.topic} onChange={(e) => setF({ ...f, topic: e.target.value })} /></label>
               <label className="fld">{t("Access token (optional)")}<input className="in" type="password" value={f.token} onChange={(e) => setF({ ...f, token: e.target.value })} /></label>
               <label className="fld">{t("Notification priority")}<select className="in" value={f.priority} onChange={(e) => setF({ ...f, priority: e.target.value })}>{["1", "2", "3", "4", "5"].map((p) => <option key={p} value={p}>{p}</option>)}</select></label>
             </>}

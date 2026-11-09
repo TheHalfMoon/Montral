@@ -5,7 +5,7 @@ import { checkA11y, expect, synthetic, test } from "../support/fixtures";
 
 test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
 
-test("signed-in journey: monitors, status pages, password page, webhook inbox", async ({ page, context, request, baseURL }, testInfo) => {
+test("signed-in journey: monitors, status pages, password page, webhook inbox", async ({ page, context, request, baseURL, guard }, testInfo) => {
   test.setTimeout(180_000);
   const who = synthetic(testInfo);
   const monitorName = `Synthetic heartbeat ${who.id}`;
@@ -128,4 +128,10 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await expect(page.getByText(lockedTitle).first()).toBeVisible({ timeout: 25_000 });
     expect(await page.evaluate(() => document.cookie.includes("montral_sa_")), "status access cookie must be HttpOnly").toBe(false);
   });
+
+  // Crashes (React render errors, invalid pattern attributes, uncaught exceptions) fail the journey in every engine.
+  // Excluded: a fetch the journey itself aborts by navigating away (WebKit "Load failed", Firefox "NetworkError when
+  // attempting to fetch resource", Chromium "Failed to fetch"), and the designed 401 of the locked page / wrong password.
+  const aborted = /Load failed|NetworkError when attempting to fetch resource|Failed to fetch/;
+  expect(guard.errors.filter((e) => !aborted.test(e)), "console errors or uncaught exceptions during the journey").toEqual([]);
 });

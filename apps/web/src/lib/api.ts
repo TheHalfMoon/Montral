@@ -75,7 +75,9 @@ export type MonthlyReviewInput = {
 export type ShareLink = { id: string; label: string | null; createdAt: string; expiresAt: string; revokedAt: string | null; lastUsedAt: string | null };
 /** The DNS record that proves control of a status page's custom domain. */
 export type DomainRecord = { type: "TXT"; name: string; value: string };
-export type StatusPage = { id: string; projectId?: string | null; slug: string; customDomain?: string | null; customDomainVerifiedAt?: string | null; customDomainRecord?: DomainRecord | null; title: string; theme: "light" | "dark" | "auto"; showLatency: boolean; externalUrl?: string | null; hideBranding?: boolean; uptimeOkPct?: number; uptimeWarnPct?: number; mcpEnabled?: boolean; maintenanceReminderHours?: number; visibility?: "public" | "members" | "password"; hasPassword?: boolean; password?: string; branding?: { allowed: boolean; upgradeUrl?: string }; monitorIds?: string[]; components?: { monitorId: string; groupName: string | null }[] };
+/** why the last scheduled TXT re-check failed */
+export type DomainCheckError = "missing" | "mismatch" | "lookup_failed";
+export type StatusPage = { id: string; projectId?: string | null; slug: string; customDomain?: string | null; customDomainVerifiedAt?: string | null; customDomainRecord?: DomainRecord | null; customDomainCheckedAt?: string | null; customDomainFailingSince?: string | null; customDomainCheckError?: DomainCheckError | null; title: string; theme: "light" | "dark" | "auto"; showLatency: boolean; externalUrl?: string | null; hideBranding?: boolean; uptimeOkPct?: number; uptimeWarnPct?: number; mcpEnabled?: boolean; maintenanceReminderHours?: number; visibility?: "public" | "members" | "password"; hasPassword?: boolean; password?: string; branding?: { allowed: boolean; upgradeUrl?: string }; monitorIds?: string[]; components?: { monitorId: string; groupName: string | null }[] };
 
 // Requests started as soon as the page's HTML is parsed (lib/boot.ts), in parallel with the JS bundles loading:
 // the first GET for a path is answered by that in-flight request, so a page load is HTML (static) + one parallel API round.
@@ -219,7 +221,7 @@ export const api = {
     req<{ customDomain: string; customDomainVerifiedAt: null; customDomainRecord: DomainRecord }>(`/status-pages/${id}/domain`, { method: "PUT", body: JSON.stringify({ domain }) }),
   clearStatusDomain: (id: string) => req<void>(`/status-pages/${id}/domain`, { method: "DELETE" }),
   verifyStatusDomain: (id: string) =>
-    req<{ verified: true; customDomain: string; customDomainVerifiedAt: string; record: DomainRecord }>(`/status-pages/${id}/domain/verify`, { method: "POST" }),
+    req<{ verified: true; customDomain: string; customDomainVerifiedAt: string; customDomainCheckedAt: string; record: DomainRecord }>(`/status-pages/${id}/domain/verify`, { method: "POST" }),
   shareLinks: (id: string) => req<ShareLink[]>(`/status-pages/${id}/share-links`),
   createShareLink: (id: string, b: { label?: string; expiresInHours?: number }) =>
     req<{ id: string; label: string | null; expiresAt: string; url: string; warning: string }>(`/status-pages/${id}/share-links`, { method: "POST", body: JSON.stringify(b) }),

@@ -351,6 +351,13 @@
       "when": 1794168929014,
       "tag": "0049_status_page_custom_domain",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1794195384833,
+      "tag": "0050_status_page_domain_recheck",
+      "breakpoints": true
     }
   ]
 }

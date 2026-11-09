@@ -249,5 +249,10 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
     "tag": "0049_status_page_custom_domain",
     "when": 1794168929014,
     "sql": "ALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_token\" text;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_verified_at\" timestamp with time zone;--> statement-breakpoint\nCREATE UNIQUE INDEX \"status_page_custom_domain_verified_idx\" ON \"status_page\" USING btree (\"custom_domain\") WHERE \"status_page\".\"custom_domain_verified_at\" is not null;"
+  },
+  {
+    "tag": "0050_status_page_domain_recheck",
+    "when": 1794195384833,
+    "sql": "ALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_checked_at\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_failing_since\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_failures\" integer DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_check_error\" text;"
   }
 ];

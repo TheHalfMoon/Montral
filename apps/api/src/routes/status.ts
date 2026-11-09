@@ -232,7 +232,7 @@ export const statusPages = new Hono<AppEnv>()
     // so a domain that changes hands can be claimed by its new owner without the former page's cooperation.
     const token = newDomainToken();
     await db.query(
-      "UPDATE status_page SET custom_domain = $2, custom_domain_token = $3, custom_domain_verified_at = NULL WHERE id = $1",
+      "UPDATE status_page SET custom_domain = $2, custom_domain_token = $3, custom_domain_verified_at = NULL, custom_domain_checked_at = NULL, custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL WHERE id = $1",
       [page.id, checked.domain, token],
     );
     return c.json({ customDomain: checked.domain, customDomainVerifiedAt: null, customDomainRecord: { type: "TXT", name: challengeName(checked.domain), value: token } });
@@ -241,7 +241,7 @@ export const statusPages = new Hono<AppEnv>()
     const page = await c.get("repo").getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!page) return c.json({ error: "Not found" }, 404);
     await c.get("database").query(
-      "UPDATE status_page SET custom_domain = NULL, custom_domain_token = NULL, custom_domain_verified_at = NULL WHERE id = $1",
+      "UPDATE status_page SET custom_domain = NULL, custom_domain_token = NULL, custom_domain_verified_at = NULL, custom_domain_checked_at = NULL, custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL WHERE id = $1",
       [page.id],
     );
     return c.body(null, 204);
@@ -267,18 +267,20 @@ export const statusPages = new Hono<AppEnv>()
           : `The TXT record at ${record.name} does not match. Its value must be exactly the one shown.`;
       return c.json({ verified: false, reason: outcome.reason, error, record }, 422);
     }
-    let rows: { verified_at: Date }[];
+    let rows: { verified_at: Date; checked_at: Date }[];
     try {
       // The TXT record just proved control of the domain for this page's token: release it from any other page first
       // (a domain that changed hands, or one its DNS owner moved). A concurrent verification can still lose the race on
       // the partial unique index and answers 409 below; trying again settles it.
       await c.get("database").query(
-        "UPDATE status_page SET custom_domain_verified_at = NULL WHERE custom_domain = $1 AND id <> $2 AND custom_domain_verified_at IS NOT NULL",
+        "UPDATE status_page SET custom_domain_verified_at = NULL, custom_domain_checked_at = NULL, custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL WHERE custom_domain = $1 AND id <> $2 AND custom_domain_verified_at IS NOT NULL",
         [page.customDomain, page.id],
       );
-      rows = await c.get("database").query<{ verified_at: Date }>(
-        `UPDATE status_page SET custom_domain_verified_at = coalesce(custom_domain_verified_at, now())
-         WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 RETURNING custom_domain_verified_at AS verified_at`,
+      rows = await c.get("database").query<{ verified_at: Date; checked_at: Date }>(
+        // A fresh proof also ends any failing streak of the scheduled re-checks; the next one is due in the healthy interval.
+        `UPDATE status_page SET custom_domain_verified_at = coalesce(custom_domain_verified_at, now()),
+           custom_domain_checked_at = now(), custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL
+         WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 RETURNING custom_domain_verified_at AS verified_at, custom_domain_checked_at AS checked_at`,
         [page.id, page.customDomain, page.customDomainToken],
       );
     } catch (e) {
@@ -288,7 +290,7 @@ export const statusPages = new Hono<AppEnv>()
       throw e;
     }
     if (!rows[0]) return c.json({ error: "The domain changed while it was being verified. Try again." }, 409);
-    return c.json({ verified: true, customDomain: page.customDomain, customDomainVerifiedAt: rows[0].verified_at, record });
+    return c.json({ verified: true, customDomain: page.customDomain, customDomainVerifiedAt: rows[0].verified_at, customDomainCheckedAt: rows[0].checked_at, record });
   })
   .get("/:id/subscribers", uuidParams, requireManager, async (c) => {
     const repo = c.get("repo");

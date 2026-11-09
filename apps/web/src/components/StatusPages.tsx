@@ -1,7 +1,7 @@
 import { adoptProject, backToAll, navigate } from "../lib/nav";
 import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
-import { api, type Monitor, type StatusPage, type Subscriber, type ShareLink } from "../lib/api";
+import { api, type DomainCheckError, type Monitor, type StatusPage, type Subscriber, type ShareLink } from "../lib/api";
 
 export default function StatusPages() {
   const [pages, setPages] = useState<StatusPage[] | null>(null);
@@ -420,7 +420,7 @@ function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Part
         void run("save", async () => {
           const r = await api.setStatusDomain(page.id, domain.trim());
           setDomain(r.customDomain);
-          onChange({ customDomain: r.customDomain, customDomainVerifiedAt: null, customDomainRecord: r.customDomainRecord });
+          onChange({ customDomain: r.customDomain, customDomainVerifiedAt: null, customDomainRecord: r.customDomainRecord, customDomainCheckedAt: null, customDomainFailingSince: null, customDomainCheckError: null });
           setNote(t("Saved. Create the TXT record below, then verify."));
         });
       }}>
@@ -433,10 +433,11 @@ function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Part
           void run("remove", async () => {
             await api.clearStatusDomain(page.id);
             setDomain("");
-            onChange({ customDomain: null, customDomainVerifiedAt: null, customDomainRecord: null });
+            onChange({ customDomain: null, customDomainVerifiedAt: null, customDomainRecord: null, customDomainCheckedAt: null, customDomainFailingSince: null, customDomainCheckError: null });
           });
         }}>{busy === "remove" ? t("Removing…") : t("Remove")}</button>}
       </form>
+      <DomainHealth page={page} verified={verified} />
       {page.visibility === "members" && page.customDomain && (
         <p className="err" role="note" style={{ marginTop: 12 }}>{t("Members-only pages are never served on a custom domain, because sign-in lives on the main address. The domain answers “not found” until the page is public or password-protected.")}</p>
       )}
@@ -453,7 +454,7 @@ function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Part
           <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 4 }}>
             <button type="button" className="btn sm primary" disabled={!!busy} onClick={() => void run("verify", async () => {
               const r = await api.verifyStatusDomain(page.id);
-              onChange({ customDomainVerifiedAt: r.customDomainVerifiedAt });
+              onChange({ customDomainVerifiedAt: r.customDomainVerifiedAt, customDomainCheckedAt: r.customDomainCheckedAt, customDomainFailingSince: null, customDomainCheckError: null });
               setNote(t("Verified. Montral serves the page on this domain as soon as your reverse proxy forwards it."));
             })}>{busy === "verify" ? t("Checking DNS…") : verified ? t("Verify again") : t("Verify")}</button>
             {verified && <a className="mono" href={`https://${page.customDomain}/`} target="_blank" rel="noopener">{page.customDomain} ↗</a>}
@@ -464,6 +465,28 @@ function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Part
       {err && <p className="err" role="alert" style={{ marginTop: 10 }}>{err}</p>}
     </div>
   );
+}
+
+const checkReason = (e: DomainCheckError | null | undefined) =>
+  e === "mismatch" ? t("The TXT record no longer holds this page's value.")
+  : e === "lookup_failed" ? t("The domain's DNS could not be reached.")
+  : t("The TXT record is missing.");
+
+/** What the scheduled TXT re-checks found: a withdrawal, a failing streak still within its grace period, or the last good check. */
+function DomainHealth({ page, verified }: { page: StatusPage; verified: boolean }) {
+  if (!page.customDomain) return null;
+  if (!verified && page.customDomainCheckError)
+    return <p className="err" role="alert" style={{ marginTop: 12 }}>{t("Verification was withdrawn and the domain is no longer served.")} {checkReason(page.customDomainCheckError)} {t("Restore the record, then verify again.")}</p>;
+  if (verified && page.customDomainFailingSince)
+    return (
+      <p className="err" role="status" style={{ marginTop: 12 }}>
+        {t("Re-check failing since {time}.").replace("{time}", new Date(page.customDomainFailingSince).toLocaleString())} {checkReason(page.customDomainCheckError)}{" "}
+        {t("The page is still served. Verification is withdrawn after 24 hours without the record, or 7 days if DNS stays unreachable.")}
+      </p>
+    );
+  if (verified && page.customDomainCheckedAt)
+    return <p className="faint" style={{ marginTop: 12, fontSize: 13 }}>{t("TXT record last confirmed {time}. Montral re-checks it about every 6 hours.").replace("{time}", new Date(page.customDomainCheckedAt).toLocaleString())}</p>;
+  return null;
 }
 
 /** Copy-paste snippets for showing this page's state on another site. */

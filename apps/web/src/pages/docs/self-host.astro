@@ -237,6 +237,14 @@ status.example.com {
       <li>Changes made through the API apply at once on the server that handled them. With several servers, others pick a change up within 60 seconds.</li>
     </ul>
 
+    <h3>Keep the TXT record</h3>
+    <p>A verified domain keeps proving control. The server looks the TXT record up again about every 6 hours, and about every 30 minutes once a lookup failed (failing domains are checked first). A short DNS problem never takes the page offline: while a failure streak is young, the domain keeps serving and the editor shows when the streak started and why.</p>
+    <ul>
+      <li>If the record has been <strong>missing or holds another value</strong> for 24 hours, over at least three checks, verification is withdrawn and the domain answers <code>404</code>.</li>
+      <li>If the domain's <strong>DNS cannot be reached at all</strong> (timeouts, SERVFAIL, dead nameservers), the page stays served for 7 days before verification is withdrawn. A streak that switches between unreachable DNS and a missing record starts over.</li>
+      <li>The editor shows the reason for a withdrawal. Restore the record and press <strong>Verify</strong> to serve the domain again.</li>
+      <li>Several servers share the re-checks: each domain is claimed in the database, so it is looked up once per round. A withdrawal applies at once on the server that made it, and within 60 seconds on the others.</li>
+    </ul>
     <h2 id="after">After install</h2>
     <ul>
       <li>Create your first monitor, then a <a href="/docs/embed">status page</a> and, optionally, embed its state on your site.</li>
@@ -457,7 +465,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li>在状态页编辑器中打开<strong>自定义域名</strong>，填写主机名并保存。仅所有者和管理员可以操作。</li>
       <li>按显示内容创建 TXT 记录：名称 <code>_montral-challenge.status.example.com</code>，值 <code>montral-verify=…</code>，必须完全一致。</li>
       <li>点击<strong>验证</strong>。Montral 从服务器查询该记录，要求完全匹配。再次保存域名（即使名称相同）会生成新的值，需要重新验证。</li>
-      <li>已为某个页面验证的域名不能被其他页面或工作区认领。未验证的认领不会阻止任何人：先通过 DNS 验证的一方获得该域名。</li>
+      <li>域名归属由 DNS 决定。任何页面都可以填写某个域名，但只有已发布其 TXT 记录的页面才持有它，且同一时间只有一个页面持有。域名易主时，新所有者发布自己的记录并验证：域名转移到其页面，原页面失去该域名，无需原页面配合。</li>
     </ul>
     <h3>2. 把域名指向你的代理</h3>
     <p>为该主机名添加指向代理的 <code>A</code>/<code>AAAA</code> 或 <code>CNAME</code> 记录，然后在代理中添加站点。Caddy 会自动申请证书，并默认保留 <code>Host</code> 头：</p>
@@ -472,11 +480,20 @@ status.example.com {
     <h3>域名上提供的内容</h3>
     <ul>
       <li><code>/</code> 是状态页；<code>/rss.xml</code>、<code>/maintenance.ics</code>、<code>/badge.svg</code> 和 <code>/llms.txt</code> 是它的订阅源；页面自身发起的 <code>/api/public/status/&lt;slug&gt;/…</code> 请求照常可用。</li>
-      <li>其他路径一律返回 <code>404</code>：应用、登录和注册、私有 API、Webhook 接收地址、文档以及其他状态页。该域名永远不会提供已登录的应用，也不会读取登录 Cookie。</li>
+      <li>到达服务器、但既不是应用自身地址也不是已验证状态域名的主机名，所有路径都返回 <code>404</code>：在验证之前、或在页面或域名被移除之后指向服务器的域名，永远不会显示应用或其登录页。IP 地址、<code>localhost</code> 和单标签名称（如 compose 服务名）仍可访问应用。</li>
+      <li>在已验证的域名上，其他路径一律返回 <code>404</code>：应用、登录和注册、私有 API、Webhook 接收地址、文档以及其他状态页。该域名永远不会提供已登录的应用，也不会读取登录 Cookie。</li>
       <li>公开页面照常可用。密码页面显示密码表单，解锁后只为该域名设置访问 Cookie。仅成员可见的页面在自定义域名上返回 <code>404</code>，因为登录只在主地址进行。分享链接仍指向主地址。</li>
       <li>通过 API 所做的修改会在处理该请求的服务器上立即生效；多台服务器时，其他服务器会在 60 秒内同步。</li>
     </ul>
 
+    <h3>保留 TXT 记录</h3>
+    <p>已验证的域名需要持续证明控制权。服务器大约每 6 小时重新查询一次 TXT 记录，查询失败后改为大约每 30 分钟一次（优先检查失败的域名）。短暂的 DNS 问题不会让页面下线：失败记录刚开始时，域名继续提供页面，编辑器会显示失败开始的时间和原因。</p>
+    <ul>
+      <li>如果记录<strong>缺失或内容不符</strong>已持续 24 小时、且至少检查了三次，验证将被撤销，该域名返回 <code>404</code>。</li>
+      <li>如果该域名的 <strong>DNS 完全无法访问</strong>（超时、SERVFAIL、名称服务器失效），页面会继续提供 7 天，之后撤销验证。失败类型在 DNS 无法访问与记录缺失之间切换时，重新开始计算。</li>
+      <li>编辑器会显示撤销原因。恢复记录后点击<strong>验证</strong>即可重新在该域名上提供页面。</li>
+      <li>多台服务器共同承担复查：每个域名在数据库中被认领，因此每轮只查询一次。撤销在执行它的服务器上立即生效，其他服务器在 60 秒内同步。</li>
+    </ul>
     <h2 id="after-zh">安装之后</h2>
     <ul>
       <li>创建第一个监控项，再创建<a href="/docs/embed">状态页</a>，需要的话把状态嵌入到你的网站。</li>

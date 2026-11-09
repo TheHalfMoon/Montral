@@ -254,6 +254,29 @@ status.example.com {
       <li>The editor shows the reason for a withdrawal. Restore the record and press <strong>Verify</strong> to serve the domain again.</li>
       <li>Several servers share the re-checks: each domain is claimed in the database, so it is looked up once per round. A withdrawal applies at once on the server that made it, and within 60 seconds on the others.</li>
     </ul>
+    <h2 id="oncall">On-call schedules and escalation</h2>
+    <p>The <strong>On-call</strong> page (workspace section of the sidebar) holds schedules, overrides and escalation policies. Nothing needs configuring on the server beyond what alerts already use: people are paged by email at their account address (set up email delivery) and by push on phones they registered (needs <a href="#apns">APNs</a>).</p>
+    <h3>Schedules</h3>
+    <ul>
+      <li>A schedule has an IANA time zone and one or more <strong>layers</strong>. Each layer rotates through its people daily, weekly (on a chosen weekday) or every N hours, handing off at a local time from a start date. A layer can be limited to time windows, such as weekdays 09:00-17:00.</li>
+      <li>Rotations shorter than 24 hours are measured in elapsed time from the first handoff, so every slot keeps its full length across daylight saving changes (a 1-hour rotation never loses anyone's hour on the spring night). Daily, weekly and longer rotations keep the local wall clock.</li>
+      <li>A later layer covers the ones above it wherever it has someone on call; outside its windows the earlier layers show through.</li>
+      <li>Handoffs follow the local clock, also across daylight saving changes: a handoff at a time the spring change skips (02:30 in New York) happens when the clocks jump; a time the autumn change repeats is used once, at its first occurrence. 30-minute changes (Lord Howe Island) work the same way.</li>
+      <li><strong>Overrides</strong> put someone on call for a while and beat every layer; where they overlap, the latest created wins.</li>
+      <li>Someone who leaves the workspace is skipped: their turn goes to the next person in the layer, and their overrides stop counting. Edit the layer to remove them for good.</li>
+      <li>Each person can subscribe to their own shifts with a private iCalendar link (past week and next 60 days), and replace or turn it off at any time.</li>
+    </ul>
+    <h3>Who may change what</h3>
+    <p>Owners and admins create and change schedules, layers, policies and anyone's overrides. Members see everything, including who is on call, and can add an override for themselves (to take a shift or swap) and remove one they added for themselves. Every change is in the audit log. Two people saving the same schedule at once cannot overwrite each other: the second save is refused with a conflict and shows what changed.</p>
+    <h3>Escalation</h3>
+    <ul>
+      <li>An <strong>escalation policy</strong> is a list of steps. A step notifies channels, named people and whoever is on call on its schedules, then waits its timeout for someone to acknowledge before the next step. After the last step it can start over a few times, then stops.</li>
+      <li>Choose a policy for a monitor in its settings. Its first step is paged as soon as an incident opens (the scheduler runs every minute). Monitors without a policy keep the project's escalation levels under Alerting, which can now also notify on-call schedules.</li>
+      <li>Acknowledging an incident stops escalation, also for a page that was about to go out, and makes the acknowledger its owner if nobody owns it yet (it used to always reassign the incident). Resolving stops everything.</li>
+      <li>A policy's first step does not page a channel again that already got the incident's down alert. Deleting a policy stops the escalation of its open incidents; new incidents of its monitors use the project's levels.</li>
+      <li>A schedule keeps at most 500 overrides that have not ended (50 per person), each at most 90 days long and starting at most a year ahead. The calendar link can only be created while signed in, and replacing it says that the old link stopped working.</li>
+      <li>Each step is sent once, even with several servers, and is written to the incident's timeline (team only) and to the audit log. Failed emails and pushes are retried like any alert and appear in the alert log.</li>
+    </ul>
     <h2 id="after">After install</h2>
     <ul>
       <li>Create your first monitor, then a <a href="/docs/embed">status page</a> and, optionally, embed its state on your site.</li>
@@ -511,6 +534,29 @@ status.example.com {
       <li>如果该域名的 <strong>DNS 完全无法访问</strong>（超时、SERVFAIL、名称服务器失效），页面会继续提供 7 天，之后撤销验证。失败类型在 DNS 无法访问与记录缺失之间切换时，重新开始计算。</li>
       <li>编辑器会显示撤销原因。恢复记录后点击<strong>验证</strong>即可重新在该域名上提供页面。</li>
       <li>多台服务器共同承担复查：每个域名在数据库中被认领，因此每轮只查询一次。撤销在执行它的服务器上立即生效，其他服务器在 60 秒内同步。</li>
+    </ul>
+    <h2 id="oncall-zh">值班表与升级</h2>
+    <p>侧边栏工作区部分的<strong>值班</strong>页面用于管理值班表、替班和升级策略。服务器无需额外配置，只依赖告警已在使用的设置：被通知的人会收到发往其账号邮箱的邮件（需配置邮件发送），以及发往其注册手机的推送（需配置 <a href="#apns-zh">APNs</a>）。</p>
+    <h3>值班表</h3>
+    <ul>
+      <li>值班表有一个 IANA 时区和一个或多个<strong>层级</strong>。每个层级按每天、每周（指定星期几）或每 N 小时在成员之间轮换，从开始日期起在当地时间交接。层级可以限定在某些时段内生效，例如工作日 09:00-17:00。</li>
+      <li>在后面的层级有人值班的时段，它会覆盖前面的层级；不在其时段内时，由前面的层级补上。</li>
+      <li>短于 24 小时的轮值按从第一次交接起经过的实际时间计算，因此夏令时切换时每个班次都保持完整时长（1 小时轮值在春季切换当晚不会少掉任何人的一小时）。每天、每周及更长的轮值按当地墙钟时间进行。</li>
+      <li>交接按当地时间进行，夏令时切换时也是如此：如果交接时间在春季切换时被跳过（例如纽约的 02:30），则在时钟跳变时交接；秋季切换时重复出现的时间只使用一次，即第一次出现时。30 分钟的切换（豪勋爵岛）同样适用。</li>
+      <li><strong>替班</strong>让某人在一段时间内值班，优先于所有层级；替班重叠时以最新创建的为准。</li>
+      <li>离开工作区的人会被跳过：其轮次交给层级中的下一个人，其替班也不再生效。如需彻底移除，请编辑该层级。</li>
+      <li>每个人都可以通过私密 iCalendar 链接订阅自己的班次（过去一周和未来 60 天），并可随时更换或关闭该链接。</li>
+    </ul>
+    <h3>权限</h3>
+    <p>所有者和管理员可以创建和修改值班表、层级、策略以及任何人的替班。成员可以查看全部内容（包括当前值班人），可以为自己添加替班（顶班或换班），也可以删除自己为自己添加的替班。每次更改都会记入审计日志。两个人同时保存同一个值班表时不会互相覆盖：后保存的会因冲突被拒绝，并提示内容已被修改。</p>
+    <h3>升级</h3>
+    <ul>
+      <li><strong>升级策略</strong>由若干步骤组成。每一步通知渠道、指定的人员以及其值班表上的值班人，然后等待超时时间内有人确认，否则进入下一步。最后一步之后可以从头重复几次，然后停止。</li>
+      <li>在监控设置中为监控选择策略。事件一开启就会通知第一步（调度器每分钟运行一次）。未选择策略的监控继续使用告警页面中项目的升级级别，这些级别现在也可以通知值班表。</li>
+      <li>确认事件即停止升级（包括即将发出的通知）；若事件还没有负责人，确认者会成为负责人（此前确认总会重新指派事件）。解决事件则全部停止。</li>
+      <li>策略的第一步不会再次通知已收到该事件故障告警的渠道。删除策略后，其未结束事件停止升级；其监控的新事件使用项目的升级级别。</li>
+      <li>每个值班表最多保留 500 个未结束的替班（每人 50 个），每个最长 90 天，最多提前一年开始。日历链接只能在登录状态下创建，更换时会提示旧链接已失效。</li>
+      <li>即使有多台服务器，每一步也只发送一次，并会写入事件时间线（仅团队可见）和审计日志。发送失败的邮件和推送会像其他告警一样重试，并显示在告警日志中。</li>
     </ul>
     <h2 id="after-zh">安装之后</h2>
     <ul>

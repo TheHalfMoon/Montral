@@ -4,7 +4,7 @@ import { monitorState } from "../lib/domain-expiry";
 import Select from "./Select";
 import { t } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
-import { ago, api, everyShort, type Channel, type Incident, type Monitor, type ProjectOverview } from "../lib/api";
+import { ago, api, everyShort, type Channel, type EscalationPolicy, type Incident, type Monitor, type ProjectOverview } from "../lib/api";
 import { pollWhileVisible } from "../lib/poll";
 import { regionLocked, toggleRegion } from "../lib/regions";
 import { isAllProjects } from "../lib/scope";
@@ -303,7 +303,11 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
     slowThresholdMs: monitor?.slowThresholdMs ?? 1500, slowAlertAfter: monitor?.slowAlertAfter ?? 0,
     regions: monitor?.regions?.length ? monitor.regions : ["auto"],
     dependsOnMonitorId: monitor?.dependsOnMonitorId ?? (null as string | null), minRegionsFailing: monitor?.minRegionsFailing ?? 0,
+    escalationPolicyId: monitor?.escalationPolicyId ?? (null as string | null),
   });
+  // the workspace's escalation policies, to pick the one this monitor follows (none: the project's escalation levels)
+  const [policies, setPolicies] = useState<EscalationPolicy[]>([]);
+  useEffect(() => { api.escalationPolicies().then(setPolicies).catch(() => {}); }, []);
   // the project's other monitors, to pick the one this depends on
   const [others, setOthers] = useState<Monitor[]>([]);
   useEffect(() => { api.monitors().then((l) => setOthers(l.filter((x) => x.id !== monitor?.id))).catch(() => {}); }, []);
@@ -524,6 +528,13 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
             <Select className="in" value={f.dependsOnMonitorId ?? ""} onChange={(v) => set("dependsOnMonitorId", v || null)}
               options={[{ value: "", label: t("Nothing") }, ...others.map((o) => ({ value: o.id, label: o.name }))]} />
             <small className="faint">{t("While that monitor is down, this one opens no incidents and sends no alerts.")}</small>
+          </label>
+        )}
+        {(policies.length > 0 || f.escalationPolicyId) && (
+          <label className="fld">{t("Escalation policy")}
+            <Select className="in" value={f.escalationPolicyId ?? ""} onChange={(v) => set("escalationPolicyId", v || null)}
+              options={[{ value: "", label: t("The project's escalation levels") }, ...policies.map((p) => ({ value: p.id, label: p.name }))]} />
+            <small className="faint">{t("While nobody acknowledges an incident of this monitor, the policy pages whoever is on call and its other steps. Manage policies on the On-call page.")}</small>
           </label>
         )}
         {channels.length > 0 && (

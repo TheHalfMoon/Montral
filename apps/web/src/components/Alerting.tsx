@@ -1,7 +1,7 @@
 import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
 import { useBusy } from "../lib/use-busy";
-import { api, ago, type AlertDelivery, type Channel, type ProjectAlerting } from "../lib/api";
+import { api, ago, type AlertDelivery, type Channel, type OncallSchedule, type ProjectAlerting } from "../lib/api";
 import { deliveryReason, deliveryState, stateClass } from "../lib/delivery";
 
 const TYPES: { id: Channel["type"]; label: string; desc: string }[] = [
@@ -57,6 +57,7 @@ export default function Alerting() {
   const [days, setDays] = useState(30);
   const [push, setPush] = useState(false);
   const [rules, setRules] = useState<ProjectAlerting | null>(null);
+  const [schedules, setSchedules] = useState<OncallSchedule[]>([]);
   const [projectId, setProjectId] = useState("");
   const [rulesErr, setRulesErr] = useState("");
   const [rulesNote, setRulesNote] = useState("");
@@ -64,12 +65,12 @@ export default function Alerting() {
   const saveRules = () => saveRulesBusy(async () => {
     setRulesErr(""); setRulesNote("");
     if (!rules) return;
-    if (rules.escalation.some((x) => !x.channelIds.length)) { setRulesErr(t("Pick at least one channel for each level.")); return; }
+    if (rules.escalation.some((x) => !x.channelIds.length && !x.scheduleIds?.length && !x.userIds?.length)) { setRulesErr(t("Pick at least one channel or on-call schedule for each level.")); return; }
     try { setRules(await api.saveProjectAlerting(projectId, rules)); setRulesNote(t("Saved")); } catch (e) { setRulesErr((e as Error).message); }
   });
   const loadLog = () => api.alertLog(30).then(setLog).catch(() => setLog([]));
   const load = () => api.channels().then(setItems);
-  useEffect(() => { load(); loadLog(); api.config().then((c) => setPush(!!c.push?.apns)).catch(() => {}); api.settings().then((s) => setDays(s.alertLogRetentionDays)).catch(() => {}); api.me().then((m) => { setProjectId(m.projectId); return api.projectAlerting(m.projectId).then(setRules); }).catch(() => {}); }, []);
+  useEffect(() => { load(); loadLog(); api.config().then((c) => setPush(!!c.push?.apns)).catch(() => {}); api.settings().then((s) => setDays(s.alertLogRetentionDays)).catch(() => {}); api.oncallSchedules().then(setSchedules).catch(() => {}); api.me().then((m) => { setProjectId(m.projectId); return api.projectAlerting(m.projectId).then(setRules); }).catch(() => {}); }, []);
 
   const blank = { type: "slack" as Channel["type"], name: "", url: "", to: "", botToken: "", chatId: "", routingKey: "", secret: "", topic: "", token: "", priority: "3", userKey: "", device: "", auto: false };
   const openAdd = () => { setErr(""); setEditId(""); setF(blank); setAdding(true); };
@@ -208,8 +209,12 @@ export default function Alerting() {
               <span>{t("min, notify")}</span>
               <span style={{ display: "flex", gap: 6, flexWrap: "wrap", flex: 1 }}>
                 {items.map((c) => (
-                  <button type="button" key={c.id} className={`btn sm ${st.channelIds.includes(c.id) ? "primary" : ""}`} onClick={() => setRules({ ...rules, escalation: rules.escalation.map((x, j) => j === i ? { ...x, channelIds: x.channelIds.includes(c.id) ? x.channelIds.filter((id) => id !== c.id) : [...x.channelIds, c.id] } : x) })}>{c.name}</button>
+                  <button type="button" key={c.id} className={`btn sm ${st.channelIds.includes(c.id) ? "primary" : ""}`} aria-pressed={st.channelIds.includes(c.id)} onClick={() => setRules({ ...rules, escalation: rules.escalation.map((x, j) => j === i ? { ...x, channelIds: x.channelIds.includes(c.id) ? x.channelIds.filter((id) => id !== c.id) : [...x.channelIds, c.id] } : x) })}>{c.name}</button>
                 ))}
+                {schedules.map((s) => {
+                  const on = !!st.scheduleIds?.includes(s.id);
+                  return <button type="button" key={s.id} className={`btn sm ${on ? "primary" : ""}`} aria-pressed={on} onClick={() => setRules({ ...rules, escalation: rules.escalation.map((x, j) => j === i ? { ...x, scheduleIds: on ? (x.scheduleIds ?? []).filter((id) => id !== s.id) : [...(x.scheduleIds ?? []), s.id] } : x) })}>{t("On call: {name}").replace("{name}", s.name)}</button>;
+                })}
               </span>
               <button type="button" className="btn sm" onClick={() => setRules({ ...rules, escalation: rules.escalation.filter((_, j) => j !== i) })}>{t("Remove")}</button>
             </div>

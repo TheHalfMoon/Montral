@@ -11,6 +11,7 @@ import Incidents from "./Incidents";
 import IncidentDetail from "./IncidentDetail";
 import StatusPages, { StatusPageEditor } from "./StatusPages";
 import Alerting from "./Alerting";
+import Oncall from "./Oncall";
 import Maintenance from "./Maintenance";
 import WebhookInboxes from "./WebhookInboxes";
 import Billing from "./Billing";
@@ -38,7 +39,7 @@ function syncShell(pathname: string) {
       else el.removeAttribute("aria-current");
     }
   });
-  document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "audit-log", "usage", "billing"].includes(key));
+  document.getElementById("tab-more")?.classList.toggle("on", ["maintenance", "team", "settings", "audit-log", "usage", "billing", "oncall"].includes(key));
   const label = hit ? t(NAV_LABEL[hit.route.key]) : t("Not found");
   const crumb = document.querySelector(".crumb b");
   if (crumb) crumb.textContent = label;
@@ -69,6 +70,7 @@ function View({ name, params, title }: { name: string; params: string[]; title: 
     case "StatusPages": return <StatusPages />;
     case "StatusPageEditor": return <StatusPageEditor id={params[0]} />;
     case "Alerting": return <Alerting />;
+    case "Oncall": return <Oncall />;
     case "Maintenance": return <Maintenance />;
     case "WebhookInboxes": return <WebhookInboxes />;
     case "Billing": return <Billing />;

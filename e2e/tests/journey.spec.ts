@@ -120,6 +120,27 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await checkA11y(page, testInfo, "webhook-inbox");
   });
 
+  await test.step("on-call page: schedule, who is on call, timeline, overrides and escalation policy are accessible", async () => {
+    const me = await (await page.request.get("/api/me")).json() as { userId: string };
+    const created = await page.request.post("/api/oncall/schedules", { data: {
+      name: `Synthetic rotation ${who.id}`, timeZone: "Europe/London",
+      layers: [{ name: "Primary rotation", userIds: [me.userId], rotationType: "weekly", handoffTime: "09:00", handoffWeekday: 1, startDate: "2026-01-05", restrictions: [] }],
+    } });
+    expect(created.status()).toBe(201);
+    const schedule = await created.json() as { id: string };
+    const policy = await page.request.post("/api/escalation-policies", { data: { name: `Synthetic Sev1 ${who.id}`, steps: [{ timeoutMin: 5, scheduleIds: [schedule.id] }] } });
+    expect(policy.status()).toBe(201);
+    await page.goto("/app/oncall");
+    await expect(page.getByRole("heading", { level: 1, name: "On-call" })).toBeVisible();
+    await expect(page.locator("nav.nl a[data-nav=oncall]")).toHaveAttribute("aria-current", "page");
+    // the one-person rotation means the journey's user is on call now, and for the next two weeks
+    await expect(page.getByRole("heading", { name: "Next two weeks" })).toBeVisible();
+    await expect(page.getByRole("region", { name: `Shifts of Synthetic rotation ${who.id} in the next two weeks` }).locator("tbody tr").first()).toContainText("Montral Cross-browser QA");
+    await expect(page.getByLabel("Name", { exact: true }).first()).toHaveValue(`Synthetic rotation ${who.id}`);
+    await expect(page.getByRole("region", { name: "Escalation policies" }).locator("b", { hasText: `Synthetic Sev1 ${who.id}` })).toBeVisible();
+    await checkA11y(page, testInfo, "oncall");
+  });
+
   await test.step("audit log lists the journey's changes and is accessible", async () => {
     await page.goto("/app/audit-log");
     await expect(page.getByRole("heading", { level: 1, name: "Audit log" })).toBeVisible();

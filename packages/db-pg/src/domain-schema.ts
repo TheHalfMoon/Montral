@@ -40,7 +40,7 @@ export const project = pgTable(
     /** Whether repeats also go to email channels (push channels always get them when repeats are on). */
     reminderEmail: boolean("reminder_email").notNull().default(false),
     /** Ordered escalation steps: [{ channelIds, escalateAfterMin }], minutes counted from the start of the incident. */
-    escalation: jsonb("escalation").$type<{ channelIds: string[]; escalateAfterMin: number }[]>().notNull().default([]),
+    escalation: jsonb("escalation").$type<{ channelIds: string[]; escalateAfterMin: number; userIds?: string[]; scheduleIds?: string[] }[]>().notNull().default([]),
     /** Last incident number handed out in this project; bumped atomically when an incident is created. */
     incidentSeq: integer("incident_seq").notNull().default(0),
   },
@@ -122,6 +122,8 @@ export const monitor = pgTable(
     dependsOnMonitorId: uuid("depends_on_monitor_id").references((): AnyPgColumn => monitor.id, { onDelete: "set null" }),
     /** several regions: this many must fail before the monitor goes down; 0 = a majority of the regions that answered */
     minRegionsFailing: integer("min_regions_failing").notNull().default(0),
+    /** a workspace escalation policy that drives this monitor's escalation instead of the project's levels; null = the project's */
+    escalationPolicyId: uuid("escalation_policy_id").references((): AnyPgColumn => escalationPolicy.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("monitor_org_idx").on(t.organizationId), index("monitor_due_idx").on(t.nextCheckAt), uniqueIndex("monitor_import_source_unique").on(t.organizationId, t.projectId, t.importSource, t.importSourceId),
@@ -299,6 +301,8 @@ export const alertDelivery = pgTable(
     attempts: integer("attempts").notNull().default(1),
     /** set while a failed incident alert is waiting for another attempt */
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
+    /** a person notified directly (on call, or named in an escalation step) rather than through a channel; no foreign key, like channel_id */
+    targetUserId: text("target_user_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("alert_delivery_org_time_idx").on(t.organizationId, t.createdAt), index("alert_delivery_retry_idx").on(t.nextAttemptAt), index("alert_delivery_status_idx").on(t.status, t.claimedAt), index("alert_delivery_incident_idx").on(t.incidentId)],
@@ -546,6 +550,115 @@ export const statusPageComponent = pgTable("status_page_component", {
   position: integer("position").notNull().default(0),
   visible: boolean("visible").notNull().default(true),
 });
+
+/**
+ * An on-call schedule (apps/api/src/oncall-engine.ts computes who is on call from it). Workspace-wide when project_id is
+ * null. `version` is bumped by every change to the schedule or its layers: writers send the version they read and a
+ * stale one is refused (optimistic concurrency), so two people editing at once cannot silently lose an update.
+ */
+export const oncallSchedule = pgTable(
+  "oncall_schedule",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    projectId: projectRef(),
+    name: text("name").notNull(),
+    /** IANA zone the handoff times and restriction windows are read in */
+    timeZone: text("time_zone").notNull(),
+    version: integer("version").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("oncall_schedule_org_idx").on(t.organizationId), check("oncall_schedule_version_chk", sql`${t.version} >= 1`)],
+);
+
+/** One rotation of a schedule; a higher `position` takes precedence wherever it has someone on call. */
+export const oncallLayer = pgTable(
+  "oncall_layer",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scheduleId: uuid("schedule_id").notNull().references(() => oncallSchedule.id, { onDelete: "cascade" }),
+    position: integer("position").notNull(),
+    name: text("name").notNull(),
+    /** rotation order; no foreign key: a person removed from the workspace is skipped by the engine, not deleted from history */
+    userIds: text("user_ids").array().notNull().default([]),
+    rotationType: text("rotation_type").$type<"daily" | "weekly" | "custom">().notNull(),
+    shiftLengthHours: integer("shift_length_hours"),
+    /** local "HH:MM" in the schedule's zone */
+    handoffTime: text("handoff_time").notNull(),
+    /** weekly: 0 = Sunday … 6 = Saturday */
+    handoffWeekday: integer("handoff_weekday"),
+    /** local "YYYY-MM-DD" the first shift starts on */
+    startDate: text("start_date").notNull(),
+    restrictions: jsonb("restrictions").$type<{ days: number[]; start: string; end: string }[]>().notNull().default([]),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("oncall_layer_schedule_idx").on(t.scheduleId, t.position),
+    check("oncall_layer_rotation_chk", sql`${t.rotationType} in ('daily', 'weekly', 'custom')`),
+    check("oncall_layer_shift_chk", sql`(${t.rotationType} <> 'custom' and ${t.shiftLengthHours} is null) or (${t.rotationType} = 'custom' and ${t.shiftLengthHours} between 1 and 2016)`),
+    check("oncall_layer_handoff_chk", sql`${t.handoffTime} ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'`),
+    check("oncall_layer_weekday_chk", sql`${t.handoffWeekday} is null or ${t.handoffWeekday} between 0 and 6`),
+    check("oncall_layer_start_chk", sql`${t.startDate} ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'`),
+  ],
+);
+
+/** Someone covers part of a schedule (a swap, a holiday). Overrides beat every layer; on overlap the latest created wins. */
+export const oncallOverride = pgTable(
+  "oncall_override",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    scheduleId: uuid("schedule_id").notNull().references(() => oncallSchedule.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    startsAt: timestamp("starts_at", { withTimezone: true }).notNull(),
+    endsAt: timestamp("ends_at", { withTimezone: true }).notNull(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("oncall_override_schedule_idx").on(t.scheduleId, t.endsAt), check("oncall_override_span_chk", sql`${t.endsAt} > ${t.startsAt}`)],
+);
+
+/**
+ * Ordered escalation steps a monitor can use instead of its project's levels. Each step notifies channels, people and
+ * whoever is on call on the named schedules, then waits `timeoutMin` for an acknowledgement before the next step; after
+ * the last step the policy starts over `repeatCount` more times. Optimistic concurrency like schedules.
+ */
+export const escalationPolicy = pgTable(
+  "escalation_policy",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    projectId: projectRef(),
+    name: text("name").notNull(),
+    steps: jsonb("steps").$type<{ timeoutMin: number; channelIds: string[]; userIds: string[]; scheduleIds: string[] }[]>().notNull().default([]),
+    repeatCount: integer("repeat_count").notNull().default(0),
+    version: integer("version").notNull().default(1),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("escalation_policy_org_idx").on(t.organizationId),
+    check("escalation_policy_repeat_chk", sql`${t.repeatCount} between 0 and 5`),
+    check("escalation_policy_version_chk", sql`${t.version} >= 1`),
+    check("escalation_policy_steps_chk", sql`jsonb_typeof(${t.steps}) = 'array'`),
+  ],
+);
+
+/** A revocable secret link to one person's shifts as an iCalendar feed. Only the SHA-256 of the token is stored. */
+export const oncallCalendarToken = pgTable(
+  "oncall_calendar_token",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+  },
+  (t) => [uniqueIndex("oncall_calendar_token_hash_idx").on(t.tokenHash), index("oncall_calendar_token_user_idx").on(t.organizationId, t.userId)],
+);
 
 export const monitorRelations = relations(monitor, ({ many }) => ({
   results: many(checkResult),

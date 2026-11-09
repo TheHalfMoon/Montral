@@ -39,6 +39,8 @@ const zh: Record<string, string> = {
   "{name} is still responding slowly": "{name} 仍然响应缓慢",
   "Nobody has acknowledged this incident yet. This is reminder {n} of {max}.": "这个事件还没有人确认。这是第 {n} 次提醒（最多 {max} 次）。",
   "Nobody acknowledged this incident in time, so it was escalated to this channel.": "这个事件没有及时被确认，因此升级通知到了此渠道。",
+  "Nobody acknowledged this incident in time, so it was escalated to you.": "这个事件没有及时被确认，因此升级通知到了你。",
+  "You get this because an escalation step of your workspace notifies you directly, for example while you are on call.": "你收到此邮件，是因为你工作区的某个升级步骤会直接通知你，例如在你值班期间。",
   "Verify your email address": "验证你的邮箱地址",
   "Confirm this address so we can reach you about your Montral account and recover it if you lose access.": "确认此邮箱后，我们才能就你的 Montral 账号联系你，并在你无法登录时帮你找回账号。",
   "Didn't create a Montral account? Ignore this email.": "没有注册过 Montral？忽略这封邮件即可。",

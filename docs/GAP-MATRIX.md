@@ -27,8 +27,8 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | SMS / voice | N | via providers | Y | ? | Y | via providers | N |
 | Manual incidents + timeline | Y | N | Y | Y | P | P | n/a |
 | Acknowledge | Y | N | Y | ? | ? | N | n/a |
-| Reminders / escalation | Y | N | Y | ? | N | N | n/a |
-| On-call schedules | N | N | Y | ? | N | N | n/a |
+| Reminders / escalation | Y (policies with step timeouts and repeats, people and on-call schedules as targets: #48) | N | Y | ? | N | N | n/a |
+| On-call schedules | Y (#48; layered rotations in an IANA zone, restriction windows, overrides, iCal feed; awaiting review) | N | Y | ? | N | N | n/a |
 | Postmortems | Y | N | Y | ? | P | N | n/a |
 | Public status page | Y | Y | Y | Y | Y | Y | n/a |
 | Members-only page | Y (#18) | N | $ (SSO) | $ | ? | P | n/a |
@@ -83,16 +83,16 @@ Ranked by user value, reliability and security, then cost.
 
 Done since the matrix was first written: TLS certificate expiry (#26), JSON body
 assertions (#27), Google Chat / Mattermost / Gotify / Pushover (#28), custom domains
-(#29) with periodic re-verification (#33), ICMP ping (#38), workspace audit log (#39).
+(#29) with periodic re-verification (#33), ICMP ping (#38), workspace audit log (#39), on-call
+schedules with escalation policies (#48, awaiting review).
 
 Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
-1. **On-call schedules** (rotations, overrides): escalation policies already exist; large.
-2. **SSO (OIDC; SAML if justified)**: GitHub sign-in only today; large.
-3. **Terraform provider / config-as-code**: REST API and Uptime Kuma import exist; large.
-4. **Browser / multi-step checks**: needs an isolated headless runtime; large.
-5. **Custom webhook responses** (webhook.site parity): implemented in #47, in review (`docs/evidence/2026-11-10-webhook-responses.md`).
-6. **SMS / voice**: requires a paid provider; out of scope without owner approval.
+1. **SSO (OIDC; SAML if justified)**: GitHub sign-in only today; large.
+2. **Terraform provider / config-as-code**: REST API and Uptime Kuma import exist; large.
+3. **Browser / multi-step checks**: needs an isolated headless runtime; large.
+4. **Custom webhook responses** (webhook.site parity): implemented in #47, in review (`docs/evidence/2026-11-10-webhook-responses.md`).
+5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
 
 Grafana OnCall and other incident-response tools named in the brief are not yet in
 the table: their entries need the same primary-source verification before they are added.

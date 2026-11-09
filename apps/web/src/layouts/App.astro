@@ -11,6 +11,7 @@ const I: Record<string, string> = {
   "status-pages": "<circle cx='12' cy='12' r='9'/><path d='M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18'/>",
   hooks: "<path d='M8 8h8M8 12h8M8 16h8'/><rect x='3' y='3' width='18' height='18' rx='3'/>",
   alerting: "<path d='M6 17V11a6 6 0 1 1 12 0v6l1.5 2h-15L6 17z'/><path d='M10 21h4'/>",
+  oncall: "<circle cx='12' cy='13' r='8'/><path d='M12 9v4l2.5 2.5M9 2.5h6'/>",
   maintenance: "<rect x='3' y='5' width='18' height='16' rx='2.5'/><path d='M3 10h18M8 3v4M16 3v4'/>",
   billing: "<rect x='3' y='5' width='18' height='14' rx='3'/><path d='M3 10h18'/>",
   team: "<circle cx='9' cy='8' r='3.4'/><path d='M2.8 19a6.2 6.2 0 0 1 12.4 0M16 5a3.4 3.4 0 0 1 0 6.3M18.5 14.2A6.2 6.2 0 0 1 21.5 19'/>",
@@ -28,6 +29,7 @@ const main = [
 // alert channels belong to the workspace: one set shared by every project
 const workspace = [
   ["alerting", "/app/alerting", "Alerting"],
+  ["oncall", "/app/oncall", "On-call"],
   ["team", "/app/team", "Team"],
   ["usage", "/app/usage", "Plan & usage"],
   ["billing", "/app/billing", "Billing"],
@@ -82,7 +84,7 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
       {main.slice(0, 4).map(([k, href, label]) => (
         <a data-nav={k} class={active === k ? "on" : ""} href={href} aria-current={active === k ? "page" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
       ))}
-      <button id="tab-more" class={["alerting", "team", "settings", "audit-log"].includes(active) ? "on" : ""}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg><span data-t>More</span></button>
+      <button id="tab-more" class={["alerting", "oncall", "team", "settings", "audit-log"].includes(active) ? "on" : ""}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/></svg><span data-t>More</span></button>
     </nav>
   </div>
   <script>import "../lib/boot";</script>

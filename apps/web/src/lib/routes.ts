@@ -1,7 +1,7 @@
 import { stripLocale } from "./locale-path";
 
 /** The back-office route table, shared by the static shell (404 status for deep links) and the client router. */
-export type NavKey = "monitors" | "incidents" | "status-pages" | "hooks" | "billing" | "alerting" | "maintenance" | "team" | "account" | "api-keys" | "settings" | "audit-log" | "usage";
+export type NavKey = "monitors" | "incidents" | "status-pages" | "hooks" | "billing" | "alerting" | "oncall" | "maintenance" | "team" | "account" | "api-keys" | "settings" | "audit-log" | "usage";
 export type Route = {
   re: RegExp;
   name: string;
@@ -14,7 +14,7 @@ export type Route = {
 };
 
 export const NAV_LABEL: Record<NavKey, string> = {
-  monitors: "Monitors", incidents: "Incidents", "status-pages": "Status pages", hooks: "Webhooks", billing: "Billing", alerting: "Alerting",
+  monitors: "Monitors", incidents: "Incidents", "status-pages": "Status pages", hooks: "Webhooks", billing: "Billing", alerting: "Alerting", oncall: "On-call",
   maintenance: "Maintenance", team: "Team", account: "Account", "api-keys": "API keys", settings: "Settings", "audit-log": "Audit log", usage: "Plan & usage",
 };
 
@@ -28,6 +28,7 @@ export const ROUTES: Route[] = [
   { re: /^\/app\/hooks$/, name: "WebhookInboxes", key: "hooks", title: "Webhooks", data: () => ["/hooks/inboxes"] },
   { re: /^\/app\/billing$/, name: "Billing", key: "billing", title: "Billing", data: () => ["/billing"] },
   { re: /^\/app\/alerting$/, name: "Alerting", key: "alerting", title: "Alerting", data: () => ["/channels"] },
+  { re: /^\/app\/oncall$/, name: "Oncall", key: "oncall", title: "On-call", data: () => ["/oncall/members", "/escalation-policies"] },
   { re: /^\/app\/maintenance$/, name: "Maintenance", key: "maintenance", title: "Maintenance", data: () => ["/maintenance", "/monitors"] },
   { re: /^\/app\/team$/, name: "Team", key: "team", title: "Team", data: () => [] },
   { re: /^\/app\/account$/, name: "Account", key: "account", title: "Account", data: () => [] },

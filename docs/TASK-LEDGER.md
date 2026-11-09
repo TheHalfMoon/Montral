@@ -38,7 +38,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 17 | SMS / voice alerts | P3 | Blocked: paid provider, needs owner approval |
 | 18 | Custom webhook responses (webhook.site parity) | P3 | Not started |
 | 19 | Owner email when a custom domain is withdrawn | P3 | Not started; shown in the editor and audit log |
-| 20 | Merge stale queued check runs after a slow-target backlog (one monitor can get up to 6 catch-up checks in 2 min) | P3 | Not started; measured in #40 |
+| 20 | Merge stale queued check runs after a slow-target backlog (one monitor can get up to 6 catch-up checks in 2 min) | P3 | In review (#51): `beginRuns` fences superseded generations; six-lease real-DB negative test; exact-head CI and independent review pending |
 | 21 | Dark-mode contrast scan, screen-reader testing, real Safari/iOS devices | P2 | Not started; WebKit coverage is Playwright's Linux build |
 | 22 | Grafana OnCall and other incident tools in the competitor matrix | P3 | Not started; needs primary-source verification |
 

@@ -74,14 +74,21 @@ try {
     "about:blank",
   ], { stdio: ["ignore", "ignore", "pipe"] });
   let chromeLog = "";
+  let devtoolsPort = null;
   chrome.stderr.setEncoding("utf8");
-  chrome.stderr.on("data", t => { chromeLog = (chromeLog + t).slice(-4000); });
-  // a busy runner can take well over 20 s to start a cold Chromium; an early exit fails at once with its output
-  const portCdp = await until("Chromium DevTools port", async () => {
-    if (chrome.exitCode !== null || chrome.signalCode !== null) throw new Error("Chromium exited early: " + chromeLog.slice(-1500));
-    const m = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(chromeLog);
-    return m ? Number(m[1]) : null;
+  chrome.stderr.on("data", t => {
+    // matched per chunk before the log is trimmed, so a chatty Chromium cannot push the line out of the buffer
+    const m = /DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//.exec(chromeLog.slice(-200) + t);
+    if (m && devtoolsPort === null) devtoolsPort = Number(m[1]);
+    chromeLog = (chromeLog + t).slice(-4000);
+  });
+  // a busy runner can take well over 20 s to start a cold Chromium; an early exit ends the wait at once
+  const started = await until("Chromium DevTools port", async () => {
+    if (chrome.exitCode !== null || chrome.signalCode !== null) return { exited: true };
+    return devtoolsPort === null ? null : { port: devtoolsPort };
   }, 60000).catch((e) => { throw new Error(e.message + (chromeLog ? "\nChromium output: " + chromeLog.slice(-1500) : "")); });
+  if (started.exited) throw new Error("Chromium exited early: " + chromeLog.slice(-1500));
+  const portCdp = started.port;
   const tab = await until("Chromium CDP", async () => {
     const response = await fetch(`http://127.0.0.1:${portCdp}/json/list`, { signal: AbortSignal.timeout(700) });
     return (await response.json()).find(t => t.type === "page" && t.webSocketDebuggerUrl);

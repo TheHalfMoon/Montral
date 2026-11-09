@@ -10,6 +10,9 @@ export const ROLLUP_RETENTION_DAYS = 400;
 /** Push devices not re-registered for this long are dropped by housekeeping. */
 export const PUSH_DEVICE_STALE_DAYS = 180;
 export const DEFAULT_ALERT_LOG_DAYS = 30;
+/** Audit retention deletes at most this many rows per statement, and at most AUDIT_PRUNE_MAX_BATCHES statements per run. */
+export const AUDIT_PRUNE_BATCH = 5000;
+export const AUDIT_PRUNE_MAX_BATCHES = 20;
 
 export type MonitorType = "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping";
 export type MonitorStatus = "pending" | "up" | "degraded" | "down" | "paused";
@@ -560,7 +563,7 @@ export interface Repo {
    * Delete workspace audit events older than `olderThanDays` (at least 30) through the database's retention function,
    * the only deletion the append-only audit table allows. Returns how many were removed. Optional for test backends.
    */
-  pruneAuditEvents?(olderThanDays: number): Promise<number>;
+  pruneAuditEvents?(olderThanDays: number, options?: { batch?: number; maxBatches?: number }): Promise<number>;
   /** Fixed-window counter shared across isolates; true while within `limit`. */
   withinLimit(key: string, limit: number, windowSec: number): Promise<boolean>;
 
@@ -663,9 +666,10 @@ export interface Repo {
 
   listMaintenance(orgId: string, projectId: string): Promise<MaintenanceWindow[]>;
   createMaintenance(orgId: string, projectId: string, w: NewMaintenance): Promise<MaintenanceWindow>;
-  deleteMaintenance(orgId: string, id: string, scope: Scope): Promise<void>;
-  endMaintenance(orgId: string, id: string, scope: Scope): Promise<void>;
-  cancelMaintenanceSeries(orgId: string, seriesId: string, scope: Scope): Promise<void>;
+  /** Each returns the windows it actually changed (empty when nothing matched). */
+  deleteMaintenance(orgId: string, id: string, scope: Scope): Promise<MaintenanceChange[]>;
+  endMaintenance(orgId: string, id: string, scope: Scope): Promise<MaintenanceChange[]>;
+  cancelMaintenanceSeries(orgId: string, seriesId: string, scope: Scope): Promise<MaintenanceChange[]>;
 
   // ── status pages ─────────────────────────────────────────────────────────────
   listStatusPages(orgId: string, projectId: string): Promise<StatusPage[]>;
@@ -763,6 +767,9 @@ export interface Repo {
   confirmSubscriber(token: string): Promise<string | null>;
   removeSubscriber(token: string): Promise<string | null>;
 }
+
+/** A maintenance window a delete, end or cancel touched. */
+export type MaintenanceChange = { id: string; projectId: string | null };
 
 /** An open database: the repo plus the pieces that are tied to a specific backend. */
 export interface Database {

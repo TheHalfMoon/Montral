@@ -20,10 +20,17 @@ export type AuthCall = {
 };
 /** What a before-hook learned about an API key that is about to be deleted (its row is gone afterwards). */
 export type KeyNote = { id: string; orgId: string | null };
+/**
+ * The acting user was a member of `orgId` just before a call that may end that membership (removing oneself, leaving):
+ * afterwards the usual "actor is still a member" check would wrongly drop the event.
+ */
+export type MemberNote = { userId: string; orgId: string };
+/** Calls after which the actor may no longer be a member of the workspace the event belongs to. */
+export const MEMBERSHIP_ENDING_PATHS = new Set(["/organization/remove-member", "/organization/leave"]);
 
 export const AUDITED_AUTH_PATHS = new Set([
   "/organization/invite-member", "/organization/cancel-invitation", "/organization/update-member-role", "/organization/remove-member",
-  "/organization/update", "/api-key/create", "/api-key/delete",
+  "/organization/update", "/organization/leave", "/api-key/create", "/api-key/delete",
 ]);
 
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Error) && !(v instanceof Response) ? (v as Record<string, unknown>) : null);
@@ -42,6 +49,15 @@ export async function noteKeyBeforeDelete(query: Query, body: unknown): Promise<
   if (!id) return null;
   const rows = await query<{ metadata: unknown }>("SELECT metadata FROM apikey WHERE id = $1::text", [id]);
   return rows[0] ? { id, orgId: metaOrg(rows[0].metadata) } : null;
+}
+
+/** Before a membership-ending call: confirm (in the database) that the acting user is a member of the workspace it names. */
+export async function noteMembershipBefore(query: Query, session: Session, body: unknown): Promise<MemberNote | null> {
+  if (!session) return null;
+  const orgId = str(obj(body)?.organizationId) ?? str(session.session.activeOrganizationId);
+  if (!orgId) return null;
+  const rows = await query<{ one: number }>("SELECT 1 AS one FROM member WHERE organization_id = $1::text AND user_id = $2::text", [orgId, session.user.id]);
+  return rows.length ? { userId: session.user.id, orgId } : null;
 }
 
 /** The audit event for one finished Better Auth call, or null when there is nothing to record. */
@@ -68,6 +84,10 @@ export function authAuditEvent(call: AuthCall, note: KeyNote | null): { orgId: s
       const member = obj(out.member);
       const orgId = str(member?.organizationId);
       return orgId ? { orgId, action: "member.remove", targetType: "member", targetId: str(member?.id), changes: auditChanges({}, { role: roleOf(member?.role) }) } : null;
+    }
+    case "/organization/leave": {
+      const orgId = str(out.organizationId);
+      return orgId ? { orgId, action: "member.leave", targetType: "member", targetId: str(out.id), changes: auditChanges({}, { role: roleOf(out.role) }) } : null;
     }
     case "/organization/update": {
       const orgId = str(out.id);
@@ -96,7 +116,7 @@ export function authAuditEvent(call: AuthCall, note: KeyNote | null): { orgId: s
  * member of the workspace the event goes to, so a key whose metadata names someone else's workspace cannot write
  * into that workspace's log.
  */
-export async function auditAuthCall(query: Query, env: Pick<Bindings, "TRUST_PROXY">, call: AuthCall, note: KeyNote | null): Promise<void> {
+export async function auditAuthCall(query: Query, env: Pick<Bindings, "TRUST_PROXY">, call: AuthCall, note: KeyNote | null, member: MemberNote | null = null): Promise<void> {
   try {
     const event = authAuditEvent(call, note);
     if (!event || !call.session) return;
@@ -110,7 +130,8 @@ export async function auditAuthCall(query: Query, env: Pick<Bindings, "TRUST_PRO
       targetId: event.targetId,
       changes: event.changes,
       ip: clientIpFromHeaders((name) => call.headers?.get(name), env),
-      requireMember: userId,
+      // membership was confirmed just before a call that may have ended it (removing oneself, leaving)
+      requireMember: member && member.userId === userId && member.orgId === event.orgId ? null : userId,
     });
   } catch {
     console.error("audit event could not be recorded; private diagnostics suppressed");

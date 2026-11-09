@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import {
   DEFAULT_ALERT_LOG_DAYS,
+  AUDIT_PRUNE_BATCH,
+  AUDIT_PRUNE_MAX_BATCHES,
   PUSH_DEVICE_STALE_DAYS,
   DEFAULT_CHECK_RETENTION_DAYS,
   MAX_REMINDERS,
@@ -733,11 +735,20 @@ export function createRepo(db: Db): Repo {
       // a phone that has not opened the app (which re-registers on launch) for half a year is gone or has a stale token
       await db.delete(schema.pushDevice).where(lte(schema.pushDevice.lastSeenAt, new Date(Date.now() - PUSH_DEVICE_STALE_DAYS * 864e5)));
     },
-    async pruneAuditEvents(olderThanDays) {
+    async pruneAuditEvents(olderThanDays, options = {}) {
       if (!Number.isInteger(olderThanDays) || olderThanDays < 30) throw new Error("audit retention must be at least 30 days");
-      // the only path that may delete audit rows: the append-only trigger lets this function's cutoff through
-      const rows = await db.execute<{ removed: number }>(sql`select montral_prune_audit(make_interval(days => ${olderThanDays})) as removed`);
-      return Number((rows as unknown as { removed: number }[])[0]?.removed ?? 0);
+      const batch = options.batch ?? AUDIT_PRUNE_BATCH;
+      const maxBatches = options.maxBatches ?? AUDIT_PRUNE_MAX_BATCHES;
+      // the only path that may delete audit rows: the append-only trigger lets this function's cutoff through. Each call
+      // is its own short statement of at most `batch` rows; whatever is left over waits for the next run.
+      let removed = 0;
+      for (let i = 0; i < maxBatches; i++) {
+        const rows = await db.execute<{ removed: number }>(sql`select montral_prune_audit(make_interval(days => ${olderThanDays}), ${batch}::int) as removed`);
+        const n = Number((rows as unknown as { removed: number }[])[0]?.removed ?? 0);
+        removed += n;
+        if (n < batch) break;
+      }
+      return removed;
     },
     async withinLimit(key, limit, windowSec) {
       const t = schema.rateLimit;
@@ -1342,20 +1353,25 @@ export function createRepo(db: Db): Repo {
       return result.sort((a, b) => +a.startsAt - +b.startsAt)[0];
     },
     async endMaintenance(orgId, id, scope) {
-      await db.update(schema.maintenanceWindow).set({ endsAt: sql`now()` })
-        .where(and(eq(schema.maintenanceWindow.id, id), eq(schema.maintenanceWindow.organizationId, orgId), inScope(scope, schema.maintenanceWindow.projectId), lte(schema.maintenanceWindow.startsAt, sql`now()`), gte(schema.maintenanceWindow.endsAt, sql`now()`)));
+      const w = schema.maintenanceWindow;
+      return db.update(w).set({ endsAt: sql`now()` })
+        .where(and(eq(w.id, id), eq(w.organizationId, orgId), inScope(scope, w.projectId), lte(w.startsAt, sql`now()`), gte(w.endsAt, sql`now()`)))
+        .returning({ id: w.id, projectId: w.projectId });
     },
     async cancelMaintenanceSeries(orgId, seriesId, scope) {
-      await db.transaction(async (tx) => {
-        const owned = and(eq(schema.maintenanceWindow.organizationId, orgId), eq(schema.maintenanceWindow.seriesId, seriesId), inScope(scope, schema.maintenanceWindow.projectId));
-        await tx.delete(schema.maintenanceWindow).where(and(owned, gte(schema.maintenanceWindow.startsAt, sql`now()`)));
-        await tx.update(schema.maintenanceWindow).set({ endsAt: sql`now()` }).where(and(owned, lt(schema.maintenanceWindow.startsAt, sql`now()`), gte(schema.maintenanceWindow.endsAt, sql`now()`)));
+      const w = schema.maintenanceWindow;
+      return db.transaction(async (tx) => {
+        const owned = and(eq(w.organizationId, orgId), eq(w.seriesId, seriesId), inScope(scope, w.projectId));
+        const removed = await tx.delete(w).where(and(owned, gte(w.startsAt, sql`now()`))).returning({ id: w.id, projectId: w.projectId });
+        const ended = await tx.update(w).set({ endsAt: sql`now()` }).where(and(owned, lt(w.startsAt, sql`now()`), gte(w.endsAt, sql`now()`))).returning({ id: w.id, projectId: w.projectId });
+        return [...removed, ...ended];
       });
     },
     async deleteMaintenance(orgId, id, scope) {
-      await db
-        .delete(schema.maintenanceWindow)
-        .where(and(eq(schema.maintenanceWindow.id, id), eq(schema.maintenanceWindow.organizationId, orgId), inScope(scope, schema.maintenanceWindow.projectId)));
+      const w = schema.maintenanceWindow;
+      return db.delete(w)
+        .where(and(eq(w.id, id), eq(w.organizationId, orgId), inScope(scope, w.projectId)))
+        .returning({ id: w.id, projectId: w.projectId });
     },
 
     // ── status pages ───────────────────────────────────────────────────────────

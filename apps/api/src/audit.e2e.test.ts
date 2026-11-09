@@ -102,6 +102,10 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     expect(window.status).toBe(201);
     ids.maintenance = window.body.id;
     expect((await call(`/api/maintenance/${ids.maintenance}`, { method: "DELETE", cookie: c })).status).toBe(204);
+    // repeats and unknown ids still succeed (idempotent) but change nothing, so they are not recorded
+    expect((await call(`/api/maintenance/${ids.maintenance}`, { method: "DELETE", cookie: c })).status).toBe(204);
+    expect((await call(`/api/maintenance/${crypto.randomUUID()}/end`, { method: "POST", cookie: c })).status).toBe(200);
+    expect((await call(`/api/maintenance/series/${crypto.randomUUID()}`, { method: "DELETE", cookie: c })).status).toBe(204);
 
     const inbox = await call("/api/hooks/inboxes", { method: "POST", cookie: c, body: { name: "Audit inbox" } });
     expect(inbox.status).toBe(201);
@@ -135,6 +139,8 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
       actor_type: "user", actor_id: owner.id, actor_label: owner.email, target_type: "monitor", target_id: ids.monitor, project_id: owner.projectId,
       changes: { fields: expect.arrayContaining(["name", "paused"]), values: expect.objectContaining({ name: "Audit API v2", paused: true }) },
     });
+    expect(rows.filter((r) => String(r.action).startsWith("maintenance."))).toHaveLength(2);
+    expect(one("maintenance.delete", ids.maintenance)).toMatchObject({ target_type: "maintenance", project_id: owner.projectId });
     expect(one("monitor.delete", ids.doomed)).toMatchObject({ target_type: "monitor", changes: { values: { name: "Doomed" } } });
     expect(one("channel.update", ids.channel)).toMatchObject({ target_type: "channel", changes: { fields: ["config", "name"], values: { name: "Ops" } } });
     expect(JSON.stringify(one("channel.update", ids.channel).changes)).not.toContain("discord");
@@ -191,6 +197,28 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     const removed = await call(`/api/audit-events?action=member.remove&targetId=${m.id}`, { cookie: owner.cookie });
     expect(removed.body.events).toHaveLength(1);
     expect(removed.body.events[0]).toMatchObject({ targetType: "member", changes: { values: { role: "admin" } } });
+  });
+
+  it("records an admin removing themselves and a member leaving", async () => {
+    const join = async (name: string, role: "admin" | "member") => {
+      const u = await signUp(name);
+      const invite = await call("/api/auth/organization/invite-member", { method: "POST", cookie: owner.cookie, body: { organizationId: owner.orgId, email: u.email, role } });
+      expect((await call("/api/auth/organization/accept-invitation", { method: "POST", cookie: u.cookie, body: { invitationId: invite.body.id } })).status).toBe(200);
+      const active = await call("/api/auth/organization/set-active", { method: "POST", cookie: u.cookie, body: { organizationId: owner.orgId } });
+      const [m] = await q<{ id: string }>("SELECT id FROM member WHERE organization_id = $1 AND user_id = $2", [owner.orgId, u.id]);
+      return { ...u, cookie: active.cookie || u.cookie, memberId: m.id };
+    };
+    const admin = await join("self-admin", "admin");
+    expect((await call("/api/auth/organization/remove-member", { method: "POST", cookie: admin.cookie, body: { organizationId: owner.orgId, memberIdOrEmail: admin.memberId } })).status).toBe(200);
+    const leaver = await join("leaver", "member");
+    expect((await call("/api/auth/organization/leave", { method: "POST", cookie: leaver.cookie, body: { organizationId: owner.orgId } })).status).toBe(200);
+    const rows = await rowsOf(owner.orgId);
+    expect(rows.find((r) => r.action === "member.remove" && r.target_id === admin.memberId)).toMatchObject({ actor_id: admin.id, actor_label: admin.email, changes: { values: { role: "admin" } } });
+    expect(rows.find((r) => r.action === "member.leave" && r.target_id === leaver.memberId)).toMatchObject({ actor_id: leaver.id, actor_label: leaver.email, changes: { values: { role: "member" } } });
+    // someone who is not a member of the workspace cannot write a leave into its log
+    const outsider = await signUp("outsider");
+    await call("/api/auth/organization/leave", { method: "POST", cookie: outsider.cookie, body: { organizationId: owner.orgId } });
+    expect((await rowsOf(owner.orgId)).some((r) => r.actor_id === outsider.id)).toBe(false);
   });
 
   it("revoking an API key is recorded against the key's workspace", async () => {
@@ -256,27 +284,53 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     // the prune setting only lets rows older than a cutoff at least 30 days back through
     const org = owner.orgId.replace(/'/g, "");
     await expect(q(`DO $t$ BEGIN PERFORM set_config('montral.audit_prune_before', extract(epoch FROM now())::text, true); DELETE FROM audit_event WHERE organization_id = '${org}'; END $t$`)).rejects.toThrow(/append-only/);
+    // a session's temporary tables cannot stand in for the real ones (the guard is schema-qualified, search_path pinned)
+    await expect(q(`DO $t$ BEGIN CREATE TEMP TABLE organization (id text); DELETE FROM audit_event WHERE id = '${row.id}'; END $t$`)).rejects.toThrow(/append-only/);
+    await expect(q(`DO $t$ BEGIN CREATE TEMP TABLE organization (id text); CREATE TEMP TABLE audit_event (id uuid, created_at timestamptz); DELETE FROM public.audit_event WHERE id = '${row.id}'; END $t$`)).rejects.toThrow(/append-only/);
     expect((await q<{ id: string }>("SELECT id FROM audit_event WHERE id = $1", [row.id]))).toHaveLength(1);
   });
 
-  it("retention prunes only events older than the cutoff, and refuses a cutoff under 30 days", async () => {
+  it("retention prunes only events older than the cutoff, in bounded batches, and refuses a cutoff under 30 days", async () => {
     const ws = await signUp("retention");
     const insert = (action: string, age: string) =>
       q(`INSERT INTO audit_event (organization_id, actor_type, action, target_type, created_at) VALUES ($1, 'system', $2, 'test', now() - $3::interval)`, [ws.orgId, action, age]);
-    await insert("test.ancient", "400 days");
+    for (const a of ["test.ancient", "test.ancient", "test.ancient"]) await insert(a, "400 days");
     await insert("test.old", "200 days");
+    await insert("test.month_plus", "31 days");
+    await insert("test.month_minus", "29 days");
     await insert("test.recent", "1 day");
+    const actions = async () => (await rowsOf(ws.orgId)).map((r) => r.action as string);
     await expect(q("SELECT montral_prune_audit(interval '10 days')")).rejects.toThrow(/at least 30 days/);
+    // the floor is exact: just under 30 days is refused, 30 days is allowed
+    await expect(q("SELECT montral_prune_audit(interval '29 days 23:59:59')")).rejects.toThrow(/at least 30 days/);
     await expect(database!.repo.pruneAuditEvents!(10)).rejects.toThrow();
-    const removed = await database!.repo.pruneAuditEvents!(365);
-    expect(removed).toBeGreaterThanOrEqual(1);
-    const left = (await rowsOf(ws.orgId)).map((r) => r.action);
-    expect(left).not.toContain("test.ancient");
-    expect(left).toEqual(expect.arrayContaining(["test.old", "test.recent"]));
+    await expect(database!.repo.pruneAuditEvents!(29)).rejects.toThrow();
+    // bounded: one row per statement, two statements, so one of the three ancient rows is left for the next run
+    expect(await database!.repo.pruneAuditEvents!(365, { batch: 1, maxBatches: 2 })).toBe(2);
+    expect((await actions()).filter((a) => a === "test.ancient")).toHaveLength(1);
+    expect(await database!.repo.pruneAuditEvents!(365)).toBeGreaterThanOrEqual(1);
+    expect(await actions()).not.toContain("test.ancient");
+    expect(await actions()).toEqual(expect.arrayContaining(["test.old", "test.month_plus", "test.month_minus", "test.recent"]));
     // the owner's real history is untouched
     expect((await rowsOf(owner.orgId)).length).toBeGreaterThan(10);
     await q("SELECT montral_prune_audit(interval '100 days')");
-    expect((await rowsOf(ws.orgId)).map((r) => r.action)).not.toContain("test.old");
+    expect(await actions()).not.toContain("test.old");
+    await q("SELECT montral_prune_audit(interval '30 days')");
+    expect((await actions()).sort()).toEqual(["test.month_minus", "test.recent"]);
+  });
+
+  it("a forged prune cutoff only reaches rows past the 30-day floor", async () => {
+    const ws = await signUp("forged");
+    const org = ws.orgId.replace(/'/g, "");
+    await q(`INSERT INTO audit_event (organization_id, actor_type, action, target_type, created_at) VALUES ($1, 'system', 'test.forty_days', 'test', now() - interval '40 days')`, [ws.orgId]);
+    const forged = (cutoffAge: string) =>
+      q(`DO $t$ BEGIN PERFORM set_config('montral.audit_prune_before', extract(epoch FROM now() - interval '${cutoffAge}')::text, true); DELETE FROM audit_event WHERE organization_id = '${org}'; END $t$`);
+    // a cutoff just inside the floor (29 days 23 h) lets nothing through
+    await expect(forged("29 days 23 hours")).rejects.toThrow(/append-only/);
+    expect(await rowsOf(ws.orgId)).toHaveLength(1);
+    // a cutoff just past it (30 days and a minute) reaches the 40-day-old row
+    await forged("30 days 1 minute");
+    expect(await rowsOf(ws.orgId)).toHaveLength(0);
   });
 
   it("deleting a workspace removes its audit events through the cascade", async () => {
@@ -309,11 +363,20 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     expect(events.every((e) => e.action.startsWith("monitor."))).toBe(true);
     expect(events.map((e) => e.id)).toEqual(listed.filter((e) => e.action.startsWith("monitor.")).map((e) => e.id));
     expect((await call("/api/audit-events/export?format=xml", { cookie: owner.cookie })).status).toBe(400);
+    // exporting is recorded: the format and the filter names, not their values
+    await call(`/api/audit-events/export?format=jsonl&actorId=${owner.id}&targetType=monitor`, { cookie: owner.cookie });
+    const exports = (await call("/api/audit-events?action=audit.export&limit=1", { cookie: owner.cookie })).body.events as any[];
+    expect(exports[0]).toMatchObject({ actorId: owner.id, targetType: "audit_log", projectId: null, changes: { fields: ["actorId", "targetType"], values: { format: "jsonl" } } });
+    expect(JSON.stringify(exports[0].changes)).not.toContain(owner.id);
   });
 
   it("is not available to an API key limited to some projects", async () => {
     const key = await call("/api/auth/api-key/create", { method: "POST", cookie: owner.cookie, body: { name: "limited", metadata: { organizationId: owner.orgId, projectIds: [owner.projectId] } } });
-    expect((await call("/api/audit-events", { key: key.body.key })).status).toBe(403);
+    for (const path of ["/api/audit-events", "/api/audit-events/export?format=csv", "/api/audit-events/export?format=jsonl"]) {
+      const r = await call(path, { key: key.body.key });
+      expect(r.status, path).toBe(403);
+      expect(r.text, path).not.toContain(owner.email);
+    }
     // an unrestricted key of an owner reads it, like the owner
     expect((await call("/api/audit-events?limit=1", { key: apiKey })).status).toBe(200);
   });

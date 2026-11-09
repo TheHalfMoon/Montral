@@ -243,12 +243,13 @@ export async function listAuditEvents(query: Query, orgId: string, f: AuditFilte
 export const CSV_COLUMNS = ["created_at", "id", "action", "actor_type", "actor_id", "actor_label", "target_type", "target_id", "project_id", "ip", "changes"] as const;
 
 /**
- * One CSV cell. Text that a spreadsheet would run as a formula (= + - @, and tab or carriage return that some apps
- * strip first) is prefixed with an apostrophe; cells with a comma, quote or line break are quoted.
+ * One CSV cell. Text that a spreadsheet would run as a formula is prefixed with an apostrophe: a cell starting with
+ * = + - @, tab, carriage return or line feed, or with leading whitespace followed by = + - @ (spreadsheets trim it
+ * first). Cells with a comma, quote or line break are quoted.
  */
 export function csvCell(v: unknown): string {
   let s = v === null || v === undefined ? "" : typeof v === "string" ? v : typeof v === "object" ? JSON.stringify(v) : String(v);
-  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  if (/^[=+\-@\t\r\n]/.test(s) || /^\s*[=+\-@]/.test(s)) s = "'" + s;
   return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 

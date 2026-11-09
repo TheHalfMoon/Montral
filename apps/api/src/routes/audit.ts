@@ -1,7 +1,7 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono } from "hono";
 import { z } from "zod";
-import { AUDIT_EXPORT_CAP, decodeCursor, exportAuditEvents, listAuditEvents, type AuditFilters } from "../audit";
+import { audit, auditChanges, AUDIT_EXPORT_CAP, decodeCursor, exportAuditEvents, listAuditEvents, type AuditFilters } from "../audit";
 import type { AppEnv } from "../env";
 import { requireManager } from "../middleware";
 
@@ -49,6 +49,9 @@ export const auditEvents = new Hono<AppEnv>()
   .get("/export", zValidator("query", exportQuery), async (c) => {
     const q = c.req.valid("query");
     const database = c.get("database");
+    // exporting the log is itself recorded: the format and which filters were used, never their values
+    const { format, ...filters } = q;
+    await audit(c, "audit.export", { type: "audit_log", id: null, projectId: null }, auditChanges(filters, { format }));
     // the stream reads after this handler has returned: keep the request's database open until it is finished
     let release!: () => void;
     c.set("databaseHeldUntil", new Promise<void>((resolve) => { release = resolve; }));

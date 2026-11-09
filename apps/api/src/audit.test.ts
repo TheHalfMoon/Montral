@@ -211,3 +211,31 @@ describe("MCP tool", () => {
     expect(tool.build({} as never)).toEqual({ method: "GET", path: "/api/audit-events" });
   });
 });
+
+describe("review follow-ups", () => {
+  it.each([
+    [" =HYPERLINK(\"http://x\",\"y\")", `"' =HYPERLINK(""http://x"",""y"")"`],
+    ["\n=1+1", "\"'\n=1+1\""],
+    ["  +1", "'  +1"],
+    ["\t @x", "'\t @x"],
+    [" plain", " plain"],
+  ])("neutralises %j even after leading whitespace", (input, expected) => expect(csvCell(input)).toBe(expected));
+
+  const session = { user: { id: "u1", email: "admin@example.com" }, session: { activeOrganizationId: "org-a" } };
+  it("records leaving a workspace as member.leave", () => {
+    expect(authAuditEvent({ headers: undefined, session, path: "/organization/leave", body: { organizationId: "org-a" }, returned: { id: "m9", organizationId: "org-a", role: "member" } }, null))
+      .toEqual({ orgId: "org-a", action: "member.leave", targetType: "member", targetId: "m9", changes: { fields: [], values: { role: "member" } } });
+  });
+
+  it("drops the membership condition only when membership was confirmed for that workspace before the call", async () => {
+    const calls: unknown[][] = [];
+    const query: Query = async <T,>(_sql: string, params: unknown[] = []) => { calls.push(params); return [] as T[]; };
+    const removed = { headers: undefined, session, path: "/organization/remove-member", body: {}, returned: { member: { id: "m1", organizationId: "org-a", role: "admin" } } };
+    await auditAuthCall(query, {}, removed, null, { userId: "u1", orgId: "org-a" });
+    expect(calls[0][13]).toBeNull();
+    await auditAuthCall(query, {}, removed, null, { userId: "u1", orgId: "org-b" });
+    expect(calls[1][13]).toBe("u1");
+    await auditAuthCall(query, {}, removed, null, { userId: "someone-else", orgId: "org-a" });
+    expect(calls[2][13]).toBe("u1");
+  });
+});

@@ -492,6 +492,8 @@ export const auditEvent = pgTable(
   (t) => [
     index("audit_event_org_created_idx").on(t.organizationId, t.createdAt.desc(), t.id.desc()),
     index("audit_event_org_target_idx").on(t.organizationId, t.targetType, t.targetId),
+    // retention prunes the oldest rows first, in bounded batches, across every workspace
+    index("audit_event_created_idx").on(t.createdAt),
     check("audit_event_actor_type_chk", sql`${t.actorType} in ('user', 'api_key', 'system')`),
     check("audit_event_action_chk", sql`${t.action} ~ '^[a-z_]+(\\.[a-z_]+)+$' and length(${t.action}) <= 64`),
     check("audit_event_changes_chk", sql`${t.changes} is null or (jsonb_typeof(${t.changes}) = 'object' and octet_length(${t.changes}::text) <= 4096)`),

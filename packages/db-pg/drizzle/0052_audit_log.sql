@@ -19,23 +19,28 @@ CREATE TABLE "audit_event" (
 ALTER TABLE "audit_event" ADD CONSTRAINT "audit_event_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "audit_event_org_created_idx" ON "audit_event" USING btree ("organization_id","created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
 CREATE INDEX "audit_event_org_target_idx" ON "audit_event" USING btree ("organization_id","target_type","target_id");--> statement-breakpoint
+CREATE INDEX "audit_event_created_idx" ON "audit_event" USING btree ("created_at");--> statement-breakpoint
 -- The audit log is append-only. UPDATE and TRUNCATE are always refused. DELETE is allowed in two cases only:
 --   * retention: montral_prune_audit() sets a transaction-local cutoff, and only rows older than that cutoff go; a
 --     cutoff less than 30 days old is ignored, so even a hand-set setting cannot erase recent history;
 --   * workspace deletion: the organization row is already gone when its FK cascade reaches these rows.
+-- Every table is schema-qualified and search_path is pinned with pg_temp last, so a session's temporary table named
+-- "organization" or "audit_event" cannot stand in for the real one.
 -- This guards against application bugs and stray SQL; the table owner can still drop the trigger.
 CREATE FUNCTION montral_audit_event_guard() RETURNS trigger
-LANGUAGE plpgsql AS $montral$
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $montral$
 DECLARE v_cutoff text;
 BEGIN
   IF TG_OP = 'DELETE' THEN
-    IF NOT EXISTS (SELECT 1 FROM organization WHERE id = OLD.organization_id) THEN
+    IF NOT EXISTS (SELECT 1 FROM public.organization WHERE id = OLD.organization_id) THEN
       RETURN OLD;
     END IF;
-    v_cutoff := current_setting('montral.audit_prune_before', true);
+    v_cutoff := pg_catalog.current_setting('montral.audit_prune_before', true);
     IF v_cutoff IS NOT NULL AND v_cutoff ~ '^[0-9]+(\.[0-9]+)?$'
-       AND to_timestamp(v_cutoff::double precision) <= now() - interval '30 days'
-       AND OLD.created_at < to_timestamp(v_cutoff::double precision) THEN
+       AND pg_catalog.to_timestamp(v_cutoff::double precision) <= pg_catalog.now() - interval '30 days'
+       AND OLD.created_at < pg_catalog.to_timestamp(v_cutoff::double precision) THEN
       RETURN OLD;
     END IF;
   END IF;
@@ -44,27 +49,35 @@ END;
 $montral$;
 --> statement-breakpoint
 CREATE TRIGGER montral_audit_event_guard_trigger
-BEFORE UPDATE OR DELETE ON audit_event FOR EACH ROW
+BEFORE UPDATE OR DELETE ON public.audit_event FOR EACH ROW
 EXECUTE FUNCTION montral_audit_event_guard();
 --> statement-breakpoint
 CREATE TRIGGER montral_audit_event_no_truncate_trigger
-BEFORE TRUNCATE ON audit_event FOR EACH STATEMENT
+BEFORE TRUNCATE ON public.audit_event FOR EACH STATEMENT
 EXECUTE FUNCTION montral_audit_event_guard();
 --> statement-breakpoint
--- Retention: deletes audit rows older than p_older_than (at least 30 days) and returns how many went.
-CREATE FUNCTION montral_prune_audit(p_older_than interval) RETURNS integer
-LANGUAGE plpgsql AS $montral$
+-- Retention: deletes at most p_batch of the oldest audit rows older than p_older_than (at least 30 days) and returns
+-- how many went. Callers repeat it while it returns a full batch, so no single statement holds locks for long.
+CREATE FUNCTION montral_prune_audit(p_older_than interval, p_batch integer DEFAULT 5000) RETURNS integer
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public, pg_temp
+AS $montral$
 DECLARE
-  v_cutoff timestamptz := date_trunc('second', now() - p_older_than);
+  v_cutoff timestamptz := pg_catalog.date_trunc('second', pg_catalog.now() - p_older_than);
   v_count integer;
 BEGIN
   IF p_older_than IS NULL OR p_older_than < interval '30 days' THEN
     RAISE EXCEPTION 'audit retention must be at least 30 days';
   END IF;
-  PERFORM set_config('montral.audit_prune_before', extract(epoch FROM v_cutoff)::text, true);
-  DELETE FROM audit_event WHERE created_at < v_cutoff;
+  IF p_batch IS NULL OR p_batch < 1 OR p_batch > 50000 THEN
+    RAISE EXCEPTION 'audit prune batch must be 1 to 50000 rows';
+  END IF;
+  PERFORM pg_catalog.set_config('montral.audit_prune_before', pg_catalog.date_part('epoch', v_cutoff)::text, true);
+  DELETE FROM public.audit_event WHERE id IN (
+    SELECT id FROM public.audit_event WHERE created_at < v_cutoff ORDER BY created_at LIMIT p_batch
+  );
   GET DIAGNOSTICS v_count = ROW_COUNT;
-  PERFORM set_config('montral.audit_prune_before', '', true);
+  PERFORM pg_catalog.set_config('montral.audit_prune_before', '', true);
   RETURN v_count;
 END;
 $montral$;

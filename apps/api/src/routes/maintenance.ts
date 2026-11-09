@@ -43,19 +43,19 @@ export const maintenance = new Hono<AppEnv>()
     await audit(c, "maintenance.create", { type: "maintenance", id: created.id }, auditChanges(v, { frequency: v.recurrence?.frequency ?? null }));
     return c.json(created, 201);
   })
-  // end, skip and cancel are idempotent and report no result: the audit event records the request that succeeded
+  // end, skip and cancel stay idempotent; an audit event is written only when a window actually changed, in its own project
   .post("/:id/end", uuidParams, requireManager, async (c) => {
-    await c.get("repo").endMaintenance(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
-    await audit(c, "maintenance.update", { type: "maintenance", id: c.req.param("id") }, auditChanges({ endsAt: true }));
+    const [ended] = await c.get("repo").endMaintenance(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (ended) await audit(c, "maintenance.update", { type: "maintenance", id: ended.id, projectId: ended.projectId }, auditChanges({ endsAt: true }));
     return c.json({ ok: true });
   })
   .delete("/series/:id", uuidParams, requireManager, async (c) => {
-    await c.get("repo").cancelMaintenanceSeries(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
-    await audit(c, "maintenance.delete", { type: "maintenance_series", id: c.req.param("id") });
+    const changed = await c.get("repo").cancelMaintenanceSeries(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (changed.length) await audit(c, "maintenance.delete", { type: "maintenance_series", id: c.req.param("id"), projectId: changed[0].projectId }, auditChanges({}, { count: changed.length }));
     return c.body(null, 204);
   })
   .delete("/:id", uuidParams, requireManager, async (c) => {
-    await c.get("repo").deleteMaintenance(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
-    await audit(c, "maintenance.delete", { type: "maintenance", id: c.req.param("id") });
+    const [removed] = await c.get("repo").deleteMaintenance(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (removed) await audit(c, "maintenance.delete", { type: "maintenance", id: removed.id, projectId: removed.projectId });
     return c.body(null, 204);
   });

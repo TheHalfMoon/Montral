@@ -247,6 +247,32 @@ from, to    ISO 8601 date-time with offset`,
     noteZh: "在更改成功后记录：监控项（创建、更新、删除、导入）、状态页（创建、更新、删除、撤销访问、分享链接、自定义域名的设置、验证和移除、移除订阅者，以及定期复查撤销域名时由系统记录的 domain.withdrawn）、告警渠道、事件（创建、更新、解决、确认）、维护窗口、项目、工作区设置、成员（邀请、取消邀请、角色变更、移除，包括移除自己和主动退出）、工作区重命名、API 密钥（创建、撤销）、Webhook 收件箱和事件，以及审计日志本身的导出（audit.export，记录格式和所用筛选条件的名称）。维护窗口的结束、跳过和取消仅在确实改变了窗口时记录。另外还会记录：值班表、层级、替班、升级策略和日历链接（oncall_schedule.*、oncall_layer.*、oncall_override.*、escalation_policy.*、oncall_calendar.*），以及系统发出的每个升级步骤（incident.escalate，以及以被通知者为对象的 incident.escalation_notify）。changes 列出请求设置的字段名；只有名称、角色、可见性、开关等无害设置会保留取值。密码、令牌、API 密钥值、渠道配置（Webhook 地址、机器人令牌）、监控目标、请求头和请求体从不保存。日志只能追加：数据库拒绝对其执行 UPDATE 和 DELETE，唯一例外是保留期清理，默认删除 365 天前的事件（自托管时可用 AUDIT_RETENTION_DAYS 调整）。",
   },
   {
+    id: "sso", en: "Single sign-on (OIDC)", zh: "单点登录（OIDC）",
+    eps: [
+      { m: "GET", p: "/sso", en: "The active workspace's OpenID Connect connection and its email domains, with the TXT record that verifies each one. Workspace owner only, from a signed-in session: admins, members, API keys and agents get 403. The client secret is write-only and never returned.", zh: "当前工作区的 OpenID Connect 连接及其邮箱域名，并附带验证每个域名所需的 TXT 记录。仅限工作区所有者在已登录的会话中调用：管理员、普通成员、API 密钥和智能体均返回 403。客户端密钥只写不读，从不返回。",
+        res: `{ callbackUrl, instanceProvider: boolean, connection: null | { id, issuer, clientId, hasClientSecret: true, defaultRole: "member" | "admin", requireSso, enabled, domains: [{ domain, verified, verifiedAt, txtName, txtValue }] } }` },
+      { m: "PUT", p: "/sso", en: "Create (201) or update (200) the connection. The issuer's discovery document is fetched and checked first (exact issuer, code flow, PKCE S256, an asymmetric id_token algorithm); a provider on a private address or over http is refused (400, code blocked_target or invalid_issuer) unless the server sets SSO_ALLOW_PRIVATE_IDP=true. clientSecret is required on create; leave it out to keep the stored one. Domains get a fresh TXT value; removing a domain removes its verification. Changing the issuer removes existing identity links. requireSso is turned off (with a warning) while no domain is verified.", zh: "创建（201）或更新（200）连接。保存前会先获取并检查颁发者的发现文档（颁发者完全一致、支持授权码流程与 PKCE S256、使用非对称的 id_token 签名算法）；除非服务器设置了 SSO_ALLOW_PRIVATE_IDP=true，否则私有地址或 http 上的提供商会被拒绝（400，code 为 blocked_target 或 invalid_issuer）。创建时必须提供 clientSecret；更新时省略即保留已存的密钥。新增域名会获得新的 TXT 值；移除域名会同时移除其验证状态。更换颁发者会删除已有的身份关联。在没有已验证域名时，requireSso 会被关闭并返回提示。",
+        req: `issuer        https URL, e.g. "https://idp.example.com/realms/acme" (exactly as the provider names itself)
+clientId      string
+clientSecret  string (write-only)
+domains       string[] (up to 20 email domains)
+defaultRole   "member" | "admin" (default "member"; for people provisioned on first sign-in)
+requireSso    boolean (default false)
+enabled       boolean (default true)` },
+      { m: "POST", p: "/sso/test", en: "Fetch and check an issuer's discovery document without saving anything.", zh: "获取并检查颁发者的发现文档，不保存任何内容。", req: `issuer  string`, res: `{ ok: true, issuer, authorizationEndpoint, tokenEndpoint, jwksUri, algorithms }` },
+      { m: "POST", p: "/sso/domains/:domain/verify", en: "Look up _montral-challenge.<domain> and mark the domain verified when its TXT record holds the value exactly. A domain is verified for one connection on the whole instance (409 when another workspace holds it).", zh: "查询 _montral-challenge.<domain>，当其 TXT 记录与给定值完全一致时将该域名标记为已验证。一个域名在整个实例中只能被一个连接验证（被其他工作区占用时返回 409）。", res: `{ verified: true }` },
+      { m: "DELETE", p: "/sso", en: "Delete the connection, its domains and every identity link made through it.", zh: "删除连接、其域名以及通过它建立的所有身份关联。" },
+      { m: "POST", p: "/auth/sso/start", en: "Start a sign-in (no session needed): by work email (its verified domain, else the instance-wide provider) or by workspace slug. With intent \"link\" the signed-in user links an identity whose verified email equals their own. Returns the identity provider's URL to open in the browser and sets a short-lived cookie that binds the attempt to this browser. 404 (code SSO_NOT_CONFIGURED) when nothing matches.", zh: "发起登录（无需会话）：按工作邮箱（其已验证的域名，否则使用全实例提供商）或按工作区 slug。intent 为 \"link\" 时，已登录用户关联一个已验证邮箱与其账号邮箱相同的身份。返回需在浏览器中打开的身份提供商 URL，并设置一个将本次尝试绑定到该浏览器的短期 Cookie。没有匹配项时返回 404（code 为 SSO_NOT_CONFIGURED）。",
+        req: `email      string (optional)
+workspace  string, a workspace slug (optional)
+intent     "signin" | "link" (default "signin")
+returnTo   a path inside the app (default "/app")`, res: `{ url }` },
+      { m: "GET", p: "/auth/sso/callback", en: "The redirect URI to register at the identity provider: <BETTER_AUTH_URL origin>/api/auth/sso/callback. Browsers only; it redirects to the app, or to /login?sso_error=<code> when the sign-in is refused.", zh: "需要在身份提供商处注册的重定向 URI：<BETTER_AUTH_URL 的源>/api/auth/sso/callback。仅供浏览器使用；成功时跳转到应用，被拒绝时跳转到 /login?sso_error=<code>。" },
+    ],
+    noteEn: "Sign-in uses the authorization code flow with PKCE (S256), a single-use state bound to the browser and a nonce; id_tokens must be signed with an asymmetric algorithm by a key from the provider's JWKS, and iss, aud, azp, exp, nbf and iat are checked. Only an email the provider marks email_verified: true in a verified domain of the connection is used. An existing Montral account is never linked because its email matches: its owner signs in first and links from Account settings (sso_error=link_required otherwise). Audit actions: sso.connection_create, sso.connection_update, sso.connection_delete, sso.domain_verify, sso.sign_in (changes.values.type: provisioned, existing or linked) and sso.sign_in_refused (changes.values.reason).",
+    noteZh: "登录使用带 PKCE（S256）的授权码流程、绑定到浏览器的一次性 state 以及 nonce；id_token 必须由提供商 JWKS 中的密钥以非对称算法签名，并会检查 iss、aud、azp、exp、nbf 和 iat。只使用提供商标记为 email_verified: true、且属于该连接已验证域名的邮箱。不会因为邮箱相同就关联已有的 Montral 账号：账号所有者需先登录，再在账户设置中关联（否则返回 sso_error=link_required）。审计操作：sso.connection_create、sso.connection_update、sso.connection_delete、sso.domain_verify、sso.sign_in（changes.values.type：provisioned、existing 或 linked）以及 sso.sign_in_refused（changes.values.reason）。",
+  },
+  {
     id: "me", en: "Me and counts", zh: "当前用户与计数",
     eps: [
       { m: "GET", p: "/me", en: "The caller, the workspace and the active project.", zh: "当前调用者、工作区和当前项目。", res: `{ userId, user: { name, email, locale }, organization, projectId }` },
@@ -257,7 +283,7 @@ from, to    ISO 8601 date-time with offset`,
   },
 ];
 ---
-<Doc titleZh="API 参考" descriptionZh="REST API 参考：认证、监控、故障、告警渠道、状态页和心跳。" description="REST API reference: authentication, monitors, incidents, alert channels, status pages and heartbeats." title="API Reference" updated="2026-11-09" toc>
+<Doc titleZh="API 参考" descriptionZh="REST API 参考：认证、监控、故障、告警渠道、状态页和心跳。" description="REST API reference: authentication, monitors, incidents, alert channels, status pages and heartbeats." title="API Reference" updated="2026-11-10" toc>
   <div lang="en">
     <h1>API reference</h1>
     <p class="lede">Manage monitors, incidents, alert channels and status pages programmatically. The API is JSON over HTTPS.</p>

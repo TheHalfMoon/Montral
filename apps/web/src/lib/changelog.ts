@@ -26,6 +26,18 @@ export interface ChangelogEntry {
 
 /** Community entries, newest first within a day. Cloud-only entries are added by changelog-cloud.ts. */
 export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
+  { id: "oidc-single-sign-on", date: "2026-11-10", edition: "community",
+    title: { en: "Single sign-on with OpenID Connect", zh: "OpenID Connect 单点登录" },
+    summary: { en: "Workspace owners can let their team sign in through their own identity provider.", zh: "工作区所有者可以让团队通过自己的身份提供商登录。" },
+    points: [
+      { en: "Any OpenID Connect provider works (Keycloak, Authentik, Entra ID, Google Workspace, Okta…): authorization code flow with PKCE, state and nonce, and signed id_tokens checked against the provider's keys.", zh: "支持任意 OpenID Connect 提供商（Keycloak、Authentik、Entra ID、Google Workspace、Okta 等）：使用带 PKCE、state 与 nonce 的授权码流程，并用提供商的密钥校验已签名的 id_token。" },
+      { en: "Email domains are verified with a DNS TXT record; people from those domains get an account in the workspace on their first sign-in.", zh: "邮箱域名通过 DNS TXT 记录验证；这些域名下的用户首次登录时会自动在该工作区获得账号。" },
+      { en: "An existing account is never taken over by email alone: its owner signs in as usual once and links single sign-on from Account settings.", zh: "现有账号不会仅凭邮箱被接管：账号所有者需先照常登录一次，再在账户设置中关联单点登录。" },
+      { en: "Owners can require single sign-on for the workspace; the owner keeps password sign-in as the break-glass account.", zh: "所有者可以要求工作区成员必须使用单点登录；所有者本人保留密码登录，作为应急账号。" },
+      { en: "Self-hosters can also configure one instance-wide provider with OIDC_ISSUER, OIDC_CLIENT_ID and OIDC_CLIENT_SECRET.", zh: "自托管用户还可以通过 OIDC_ISSUER、OIDC_CLIENT_ID 和 OIDC_CLIENT_SECRET 配置一个全实例范围的提供商。" },
+    ],
+    link: { href: "/docs/self-host#sso", label: { en: "Set up single sign-on", zh: "设置单点登录" } },
+  },
   { id: "more-alert-channels", date: "2026-11-09", edition: "community",
     title: { en: "Google Chat, Mattermost, Gotify and Pushover alerts", zh: "Google Chat、Mattermost、Gotify 与 Pushover 告警" },
     summary: { en: "Four more places to receive monitor alerts.", zh: "新增四种接收监控告警的渠道。" },

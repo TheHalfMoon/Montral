@@ -1,6 +1,6 @@
 import type { OpenDatabase } from "@montral/repo";
 import { isLang } from "./mail-i18n";
-import { Hono, type ErrorHandler } from "hono";
+import { Hono, type Context, type ErrorHandler } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { createAuth, currentSession, NATIVE_CALLBACK, signupDisabled, slugify, turnstile } from "./auth";
@@ -22,6 +22,9 @@ import { publicStatus, statusPages } from "./routes/status";
 import { configureEmail, emailEnabled } from "./email";
 import { apnsConfigured, configureApns } from "./apns";
 import { configureNetGuard } from "./netguard";
+import { configureSso } from "./sso-oidc";
+import { instanceConnection } from "./sso-store";
+import { ssoAdmin } from "./routes/sso";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
 import { AuthBodyTimeoutError, limitedAuthBody } from "./auth-body-budget";
@@ -41,6 +44,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   app.use("*", async (c, next) => {
     configureEmail(c.env);
     configureNetGuard(c.env);
+    configureSso(c.env);
     configureProbes(c.env);
     configureApns(c.env);
     const database = openDatabase(connectionString(c.env), { max: 1 });
@@ -84,20 +88,30 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
 
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/api/health", (c) => c.json({ ok: true }));
-  const authInfo = (env: AppEnv["Bindings"]) => ({
-    github: !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
-    signup: !signupDisabled(env),
-    turnstileSiteKey: turnstile(env)?.siteKey ?? null,
-    legal: env.LEGAL_LINKS === "true",
+  // "Sign in with SSO" is offered when the operator configured OIDC_* or some workspace has an enabled connection
+  const ssoOffered = async (c: Context<AppEnv>) => {
+    if (instanceConnection(c.env)) return true;
+    try {
+      return (await c.get("database").query(`SELECT 1 AS one FROM sso_connection WHERE enabled LIMIT 1`)).length > 0;
+    } catch {
+      return false;
+    }
+  };
+  const authInfo = async (c: Context<AppEnv>) => ({
+    github: !!(c.env.GITHUB_CLIENT_ID && c.env.GITHUB_CLIENT_SECRET),
+    signup: !signupDisabled(c.env),
+    turnstileSiteKey: turnstile(c.env)?.siteKey ?? null,
+    legal: c.env.LEGAL_LINKS === "true",
+    sso: await ssoOffered(c),
   });
-  app.get("/api/auth-providers", (c) => c.json(authInfo(c.env)));
+  app.get("/api/auth-providers", async (c) => c.json(await authInfo(c)));
   // what this deployment can do, for clients that must adapt before anyone has signed in (the mobile app). Clients
   // read capabilities, never the edition name, so a hosted build only changes the values here.
-  app.get("/api/config", (c) =>
+  app.get("/api/config", async (c) =>
     c.json({
       apiVersion: 1,
       edition: edition.id ?? "community",
-      auth: { emailPassword: true, ...authInfo(c.env), emailDelivery: emailEnabled(), nativeHandoff: true },
+      auth: { emailPassword: true, ...(await authInfo(c)), emailDelivery: emailEnabled(), nativeHandoff: true },
       features: { multiRegion: availableRegions().length > 2, statusPages: true, webhooks: edition.id === "montral" },
       push: { apns: apnsConfigured() },
     }),
@@ -116,6 +130,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     "/api/auth/one-time-token/verify": { limit: 30, windowSec: 600 },
     "/api/auth/unlink-account": { limit: 20, windowSec: 600 },
     "/api/auth/send-verification-email": { limit: 5, windowSec: 3600, perEmail: 3 },
+    "/api/auth/sso/start": { limit: 30, windowSec: 600 },
   };
   app.post("/api/auth/*", async (c, next) => {
     const rule = AUTH_LIMITS[c.req.path.replace(/\/+$/, "")];
@@ -172,6 +187,14 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const headers = new Headers({ location: url, "cache-control": "no-store" });
     for (const cookie of res.headers.getSetCookie()) headers.append("set-cookie", cookie);
     return new Response(null, { status: 302, headers });
+  });
+  // the SSO redirect URI makes outbound requests to the identity provider: counted per client address like sign-in
+  app.get("/api/auth/sso/callback", async (c, next) => {
+    const ip = clientIp(c);
+    if (!(await allow(c.get("repo"), ip ? `auth:ip:${ip}:/api/auth/sso/callback` : "auth:unknown:/api/auth/sso/callback", ip ? 30 : 450, 600))) {
+      return c.json({ error: "Too many attempts, try again later" }, 429);
+    }
+    await next();
   });
   app.on(["GET", "POST"], "/api/auth/*", (c) => c.get("auth").handler(c.req.raw));
 
@@ -255,6 +278,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // on-call schedules and escalation policies belong to the workspace (optionally to one project), not to the active project
   authed.route("/oncall", oncall);
   authed.route("/escalation-policies", escalationPolicies);
+  authed.route("/sso", ssoAdmin);
   // what this credential may reach: a session sees every workspace of the user, a key or an agent only what it was given
   authed.get("/workspaces", async (c) => {
     const repo = c.get("repo");

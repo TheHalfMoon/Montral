@@ -5,6 +5,7 @@ import { HTTPException } from "hono/http-exception";
 import type { AppEnv, RequestIdentity } from "./env";
 import { currentSession } from "./auth";
 import { verifyOAuthToken } from "./oauth";
+import { isOwnerRole, sessionVia, ssoRequirementOf } from "./sso-store";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -99,6 +100,16 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   if (!orgId) {
     orgId = (await repo.anyWorkspaceOf(userId)) ?? undefined;
     if (!orgId) throw new HTTPException(403, { message: "No workspace" });
+  }
+  // "Require SSO": a session reaches the workspace only when its own SSO connection created it (the owner is exempt as
+  // the break-glass account). Covers sessions from before the switch and sessions from another way of signing in.
+  if (session && identity.kind === "session") {
+    const database = c.get("database");
+    const q = <T,>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
+    const required = await ssoRequirementOf(q, orgId);
+    if (required && !isOwnerRole(await repo.memberRole(userId, orgId)) && !(await sessionVia(q, String((session.session as { id?: unknown }).id ?? ""), required))) {
+      throw new HTTPException(403, { message: "This workspace requires single sign-on. Sign out and use Sign in with SSO." });
+    }
   }
   const projectId = await cachedProject(repo, orgId, wanted);
   if (scope && !scope.includes(projectId)) throw new HTTPException(403, { message: "API key has no access to this project" });

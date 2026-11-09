@@ -4,6 +4,8 @@ import { authClient } from "../lib/auth-client";
 import { AuthShell } from "./AuthShell";
 import { nextPath as safeNext } from "../lib/next-path";
 import { lp } from "../lib/locale-path";
+import { SSO_ERRORS, startSso } from "../lib/sso";
+
 
 // an agent sent the user here to sign in (signed OAuth query): resume its authorization request afterwards
 const oauthResume = () => {
@@ -44,6 +46,11 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const [siteKey, setSiteKey] = useState<string | null>(null);
   const [token, setToken] = useState("");
   const [legal, setLegal] = useState(false);
+  // single sign-on: offered when the server has a provider; the panel asks for a work email or a workspace ID
+  const [sso, setSso] = useState(false);
+  const [ssoOpen, setSsoOpen] = useState(false);
+  const [ssoWho, setSsoWho] = useState("");
+  const [ssoErr, setSsoErr] = useState("");
   const widget = useRef<HTMLDivElement>(null);
   const widgetId = useRef<string | undefined>(undefined);
   const login = mode === "login";
@@ -51,8 +58,33 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
   useEffect(() => {
     // the page is static, so "already signed in" is checked here
     fetch("/api/me", { credentials: "include" }).then((r) => r.ok && (window.location.href = nextPath())).catch(() => {});
-    fetch("/api/auth-providers").then((r) => r.json()).then((d: { github?: boolean; signup?: boolean; turnstileSiteKey?: string | null; legal?: boolean }) => { setLegal(!!d.legal); setGithub(!!d.github); setOpen(d.signup !== false); setSiteKey(d.turnstileSiteKey || null); }).catch(() => {});
+    fetch("/api/auth-providers").then((r) => r.json()).then((d: { github?: boolean; signup?: boolean; turnstileSiteKey?: string | null; legal?: boolean; sso?: boolean }) => { setLegal(!!d.legal); setGithub(!!d.github); setOpen(d.signup !== false); setSiteKey(d.turnstileSiteKey || null); setSso(!!d.sso); }).catch(() => {});
+    // back from a single sign-on that did not work out
+    const failed = new URLSearchParams(location.search).get("sso_error");
+    if (failed) {
+      setSsoErr(t(SSO_ERRORS[failed] ?? "Something went wrong"));
+      setSsoOpen(true);
+      const rest = new URLSearchParams(location.search);
+      rest.delete("sso_error");
+      history.replaceState(null, "", location.pathname + (rest.toString() ? `?${rest}` : ""));
+    }
   }, []);
+
+  async function ssoSubmit(e: React.SyntheticEvent) {
+    e.preventDefault();
+    const who = ssoWho.trim();
+    if (!who) return;
+    setBusy(true);
+    setSsoErr("");
+    try {
+      const problem = await startSso({ ...(who.includes("@") ? { email: who } : { workspace: who }), returnTo: nextPath() });
+      if (!problem) return; // stay disabled while navigating
+      setSsoErr(problem);
+    } catch {
+      setSsoErr(t("Something went wrong"));
+    }
+    setBusy(false);
+  }
 
   useEffect(() => {
     if (login || !siteKey) return;
@@ -86,7 +118,13 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
             { email, password, name: name || email.split("@")[0], callbackURL: "/app/account?verified=1" },
             siteKey ? { headers: { "x-captcha-response": token } } : undefined,
           );
-      if (res.error) {
+      if (res.error && login && (res.error as { code?: string }).code === "SSO_REQUIRED") {
+        // this account's workspace only allows single sign-on: offer it right away, for the same address
+        setError(t(SSO_ERRORS.sso_required));
+        setSsoWho(email);
+        setSsoOpen(true);
+      }
+      else if (res.error) {
         setError(res.error.message ?? t("Something went wrong"));
         // a Turnstile token works once: ask for a fresh one
         if (!login && siteKey) { setToken(""); turnstileApi()?.reset(widgetId.current); }
@@ -161,6 +199,19 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
         {error && <p className="err">{error}</p>}
         <button className="btn primary full auth-go" disabled={busy}>{busy ? t(login ? "Signing in…" : "Creating account…") : t(login ? "Sign in" : "Create account")}</button>
       </form>
+      {login && (sso || ssoOpen) && (
+        <div className="sso-entry">
+          {!ssoOpen && <button type="button" className="btn full auth-oauth" onClick={() => { setSsoOpen(true); setSsoWho(email); }}>{t("Sign in with SSO")}</button>}
+          {ssoOpen && (
+            <form className="auth-fields" onSubmit={ssoSubmit} aria-labelledby="sso-title">
+              <h2 id="sso-title" className="auth-sub" style={{ fontSize: 16, margin: 0 }}>{t("Sign in with SSO")}</h2>
+              <label className="fld">{t("Work email or workspace ID")}<input className="in" required autoComplete="email" value={ssoWho} onChange={(e) => setSsoWho(e.target.value)} placeholder="you@company.com" /></label>
+              {ssoErr && <p className="err" role="alert">{ssoErr}</p>}
+              <button className="btn full auth-go" disabled={busy}>{busy ? t("Redirecting…") : t("Continue with SSO")}</button>
+            </form>
+          )}
+        </div>
+      )}
       {!login && !open && (
         <p className="muted" style={{ fontSize: 13.5, textAlign: "center", marginTop: 14 }}>
           {t("Sign-ups are closed here. Only people who were invited to a workspace can create an account, using the invited email address.")}

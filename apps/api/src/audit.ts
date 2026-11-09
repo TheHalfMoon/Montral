@@ -81,6 +81,7 @@ export const SAFE_VALUE_FIELDS: ReadonlySet<string> = new Set([
   "maintenanceReminderHours", "alertLogRetentionDays", "checkRetentionDays", "monthlyReport",
   "reminderIntervalMin", "domain", "method", "frequency", "count", "verified", "expiresInHours", "format", "reason",
   "timeZone", "repeatCount", "version", "level", "rotationType",
+  "requireSso", "defaultRole",
 ]);
 /**
  * Defense in depth: a value is dropped when its field name looks like a credential or a destination, even if someone

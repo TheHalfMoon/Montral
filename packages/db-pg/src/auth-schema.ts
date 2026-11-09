@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import {
   pgTable,
   text,
@@ -67,7 +67,11 @@ export const account = pgTable(
       .$onUpdate(() => /* @__PURE__ */ new Date())
       .notNull(),
   },
-  (table) => [index("account_userId_idx").on(table.userId)],
+  (table) => [
+    index("account_userId_idx").on(table.userId),
+    // one Montral user per single sign-on identity (provider "sso:<connection>", account "<issuer>|<subject>")
+    uniqueIndex("account_sso_identity_uidx").on(table.providerId, table.accountId).where(sql`${table.providerId} like 'sso:%'`),
+  ],
 );
 
 export const verification = pgTable(

@@ -18,7 +18,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type { DomainExpiry } from "@montral/repo";
-import { organization, user } from "./auth-schema";
+import { organization, session, user } from "./auth-schema";
 
 export const monitorType = pgEnum("monitor_type", ["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping"]);
 export const monitorStatus = pgEnum("monitor_status", ["pending", "up", "degraded", "down", "paused"]);
@@ -503,6 +503,87 @@ export const auditEvent = pgTable(
     check("audit_event_changes_chk", sql`${t.changes} is null or (jsonb_typeof(${t.changes}) = 'object' and octet_length(${t.changes}::text) <= 4096)`),
   ],
 );
+
+/**
+ * Single sign-on (OpenID Connect) for one workspace, configured by its owner (apps/api/src/sso-*.ts). The client secret
+ * is stored AES-256-GCM encrypted with a key derived from BETTER_AUTH_SECRET and bound to the row id; the API never
+ * returns it. At most one connection per workspace.
+ */
+export const ssoConnection = pgTable(
+  "sso_connection",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    issuer: text("issuer").notNull(),
+    clientId: text("client_id").notNull(),
+    clientSecretEnc: text("client_secret_enc").notNull(),
+    /** role given to people provisioned on their first SSO sign-in; never owner */
+    defaultRole: text("default_role").notNull().default("member"),
+    /** members other than the owner may only use this workspace through this connection */
+    requireSso: boolean("require_sso").notNull().default(false),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sso_connection_org_uidx").on(t.organizationId),
+    check("sso_connection_role_chk", sql`${t.defaultRole} in ('member', 'admin')`),
+    check("sso_connection_issuer_chk", sql`length(${t.issuer}) between 8 and 500`),
+    check("sso_connection_client_chk", sql`length(${t.clientId}) between 1 and 255`),
+  ],
+);
+
+/**
+ * Email domains a connection may sign in and provision. A domain counts only once its TXT record was verified, and a
+ * verified domain belongs to one connection on the whole instance.
+ */
+export const ssoDomain = pgTable(
+  "sso_domain",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    connectionId: uuid("connection_id").notNull().references(() => ssoConnection.id, { onDelete: "cascade" }),
+    domain: text("domain").notNull(),
+    /** published in DNS, so not a secret: only unguessable */
+    token: text("token").notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sso_domain_connection_domain_uidx").on(t.connectionId, t.domain),
+    uniqueIndex("sso_domain_verified_uidx").on(t.domain).where(sql`${t.verifiedAt} is not null`),
+  ],
+);
+
+/**
+ * One pending SSO sign-in: single use (deleted when the callback consumes it), short-lived, and bound to the browser
+ * that started it (`binding_hash` is the SHA-256 of a cookie only that browser holds). Only the state's hash is kept.
+ */
+export const ssoFlow = pgTable(
+  "sso_flow",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    bindingHash: text("binding_hash").notNull(),
+    /** a sso_connection id, or "instance" for the operator's OIDC_* provider */
+    connectionId: text("connection_id").notNull(),
+    organizationId: text("organization_id"),
+    nonce: text("nonce").notNull(),
+    codeVerifier: text("code_verifier").notNull(),
+    intent: text("intent").notNull(),
+    linkUserId: text("link_user_id"),
+    returnTo: text("return_to").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sso_flow_expires_idx").on(t.expiresAt), check("sso_flow_intent_chk", sql`${t.intent} in ('signin', 'link')`)],
+);
+
+/** Sessions created by an SSO sign-in, and through which connection: what "require SSO" checks per request. */
+export const ssoSession = pgTable("sso_session", {
+  sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
+  connectionId: text("connection_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
 
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */
 export const rateLimit = pgTable("rate_limit", {

@@ -48,6 +48,10 @@ export default async function globalSetup() {
       BETTER_AUTH_SECRET: "xbrowser-e2e-secret-2026-11-09-only-never-live",
       CRON_SECRET: "xbrowser-e2e-cron-secret-2026-11-09-only",
       MONTRAL_BILLING_ENABLED: "false", MONTRAL_METERING_ENABLED: "false",
+      // an instance-wide OIDC provider, so the sign-in page offers single sign-on and its entry is scanned; the
+      // synthetic issuer is never contacted (no test starts a sign-in with it)
+      OIDC_ISSUER: "https://idp.example.test/realms/xbrowser", OIDC_CLIENT_ID: "xbrowser-e2e",
+      OIDC_CLIENT_SECRET: "xbrowser-e2e-oidc-secret-2026-11-10-never-live",
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

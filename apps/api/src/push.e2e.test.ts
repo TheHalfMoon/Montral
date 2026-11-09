@@ -47,7 +47,7 @@ describe.skipIf(!url)("push devices and the push channel", () => {
     const on = (await (await raw(configured, "/api/config")).json()) as any;
     expect(on.push).toEqual({ apns: true });
     // sign-in providers are unchanged
-    expect(Object.keys((await (await raw(configured, "/api/auth-providers")).json()) as object).sort()).toEqual(["github", "legal", "signup", "turnstileSiteKey"]);
+    expect(Object.keys((await (await raw(configured, "/api/auth-providers")).json()) as object).sort()).toEqual(["github", "legal", "signup", "sso", "turnstileSiteKey"]);
   });
 
   it("registers, lists, updates and deletes a device", async () => {

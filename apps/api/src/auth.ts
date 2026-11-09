@@ -8,6 +8,11 @@ import { actionEmail, appUrl, sendEmail } from "./email";
 import { userLang, tr } from "./mail-i18n";
 import type { Bindings } from "./env";
 import { AUDITED_AUTH_PATHS, auditAuthCall, MEMBERSHIP_ENDING_PATHS, noteKeyBeforeDelete, noteMembershipBefore, type KeyNote, type MemberNote } from "./audit-auth";
+import { ssoPlugin, type SsoSignIn } from "./sso-auth";
+import { ssoRequiredFor } from "./sso-store";
+
+/** Message (and code) of a sign-in refused because a workspace of the user requires single sign-on. */
+export const SSO_REQUIRED_MESSAGE = "Your workspace requires single sign-on. Use “Sign in with SSO”.";
 
 export function slugify(s: string) {
   return (s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace") + "-" + Math.random().toString(36).slice(2, 6);
@@ -143,6 +148,8 @@ export function createAuth(database: Database, env: Bindings) {
   // the acting user's membership, confirmed before a call that may end it (audit log)
   let memberNote: MemberNote | null = null;
   const query = <T>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
+  // set by the SSO callback around the session it creates (sso-auth.ts), read by the session hook below
+  const ssoSignIn: SsoSignIn = { connectionId: null, orgId: null };
   return betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
@@ -281,6 +288,8 @@ export function createAuth(database: Database, env: Bindings) {
       }),
     },
     plugins: [
+      // single sign-on with OpenID Connect: per-workspace connections and the operator's OIDC_* provider (sso-*.ts)
+      ssoPlugin(database, env, ssoSignIn),
       // Native handoff: the app signs in with GitHub inside ASWebAuthenticationSession, whose cookies the app cannot
       // read. A short-lived single-use token is appended to the montral://auth redirect and exchanged for the
       // cookie session at POST /api/auth/one-time-token/verify. Only the handoff below mints tokens: the plugin's
@@ -430,9 +439,18 @@ export function createAuth(database: Database, env: Bindings) {
       },
       session: {
         create: {
-          // keep the workspace of their previous session, else the one they joined most recently (an accepted invitation wins over the personal one)
+          // Every way a session comes to exist (password, GitHub, 2FA, email verification, SSO) passes here. A member
+          // (not the owner, who is the break-glass account) of a workspace that requires single sign-on only gets one
+          // from that workspace's own SSO connection.
+          // Then: keep the workspace of their previous session, else the one they joined most recently (an accepted
+          // invitation wins over the personal one); an SSO sign-in lands in the workspace of its connection.
           before: async (session) => {
-            const orgId = await repo.preferredWorkspace(session.userId);
+            const required = await ssoRequiredFor(query, session.userId);
+            if (required.length && !required.some((r) => r.connectionId === ssoSignIn.connectionId)) {
+              throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
+            }
+            const viaSso = ssoSignIn.orgId && (await repo.isMember(session.userId, ssoSignIn.orgId)) ? ssoSignIn.orgId : null;
+            const orgId = viaSso ?? (await repo.preferredWorkspace(session.userId));
             return { data: { ...session, activeOrganizationId: orgId } };
           },
         },

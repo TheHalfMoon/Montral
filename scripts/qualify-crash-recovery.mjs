@@ -222,9 +222,18 @@ try {
   setMode("down");
   await until("outage incident with two workers", async () => (await incidents()).some((i) => !i.resolved_at), CHECK_WINDOW_MS);
   await sleep(65_000); // at least two more ticks of each process
-  await until("every started run recorded exactly one result", async () =>
-    (await results()).length - res0 === (await monitor()).last_run_generation - gen0, 15_000);
-  const startedRuns = (await monitor()).last_run_generation - gen0;
+  // Coalesced runs (a result was recorded after they were claimed, or an earlier run was still in flight) are
+  // skipped without starting, so started runs are the generations that recorded, not the generation delta. Each
+  // must have recorded exactly once, one check result each, and the latest started run must have recorded.
+  const recorded = () => sql`select generation, count(*)::int as n from monitor_observation
+    where monitor_id = ${monitorId} and generation > ${gen0} group by generation`;
+  await until("every started run recorded exactly one result", async () => {
+    const gens = await recorded();
+    const latest = (await monitor()).last_run_generation;
+    return gens.every((g) => g.n === 1) && (await results()).length - res0 === gens.length
+      && (latest === gen0 || gens.some((g) => g.generation === latest));
+  }, 15_000);
+  const startedRuns = (await recorded()).length;
   if (startedRuns < 2) throw new Error("too few runs with two workers: " + startedRuns);
   const openD = (await incidents()).filter((i) => !i.resolved_at);
   // An outage soon after a resolution reopens that incident (flap handling)

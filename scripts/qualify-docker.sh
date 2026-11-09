@@ -60,14 +60,14 @@ echo "postgres server ${pg_version} from ${compose_image}"
 [[ "$("${compose[@]}" exec -T montral id -un)" == node ]] || { echo "app container is not running as the unprivileged node user" >&2; exit 1; }
 
 echo "== app over HTTP: pages, config, sign-up, write and read"
-curl -fsS "$base/" | grep -q '<html' || { echo "web app did not serve HTML" >&2; exit 1; }
-api GET /api/config | grep -q '"auth"' || { echo "/api/config missing auth section" >&2; exit 1; }
+curl -fsS "$base/" | grep '<html' >/dev/null || { echo "web app did not serve HTML" >&2; exit 1; }
+api GET /api/config | grep '"auth"' >/dev/null || { echo "/api/config missing auth section" >&2; exit 1; }
 email="qualify-$(openssl rand -hex 6)@example.com"
 password="qualify-$(openssl rand -hex 12)"
 api POST /api/auth/sign-up/email "{\"email\":\"$email\",\"name\":\"Docker QA\",\"password\":\"$password\"}" >/dev/null
 monitor_name="Docker persistence $(openssl rand -hex 4)"
-api POST /api/monitors "{\"name\":\"$monitor_name\",\"type\":\"heartbeat\"}" | grep -q '"id"' || { echo "monitor create failed" >&2; exit 1; }
-api GET /api/monitors | grep -q "$monitor_name" || { echo "created monitor not listed" >&2; exit 1; }
+api POST /api/monitors "{\"name\":\"$monitor_name\",\"type\":\"heartbeat\"}" | grep '"id"' >/dev/null || { echo "monitor create failed" >&2; exit 1; }
+api GET /api/monitors | grep "$monitor_name" >/dev/null || { echo "created monitor not listed" >&2; exit 1; }
 
 echo "== unprivileged ICMP inside the image (ping monitors)"
 "${compose[@]}" exec -T montral ping -c 1 -W 2 127.0.0.1 >/dev/null || { echo "ping as node user failed inside the image" >&2; exit 1; }
@@ -79,12 +79,12 @@ echo "== full stop and start: data must survive in the named volume"
 wait_healthy
 rm -f "$jar"
 api POST /api/auth/sign-in/email "{\"email\":\"$email\",\"password\":\"$password\"}" >/dev/null
-api GET /api/monitors | grep -q "$monitor_name" || { echo "monitor did not survive the restart" >&2; exit 1; }
+api GET /api/monitors | grep "$monitor_name" >/dev/null || { echo "monitor did not survive the restart" >&2; exit 1; }
 
 echo "== container recreation (an image upgrade replaces the app container): data still there"
 "${compose[@]}" up -d --force-recreate montral
 wait_healthy
-api GET /api/monitors | grep -q "$monitor_name" || { echo "monitor did not survive recreating the app container" >&2; exit 1; }
+api GET /api/monitors | grep "$monitor_name" >/dev/null || { echo "monitor did not survive recreating the app container" >&2; exit 1; }
 
 echo "== downgrade protection: an older PostgreSQL major refuses the volume instead of starting empty"
 "${compose[@]}" stop
@@ -101,6 +101,6 @@ grep -q -i 'incompatible' <<<"$downgrade_log" || { echo "downgrade refused for a
 "${compose[@]}" up -d --wait postgres
 "${compose[@]}" up -d montral
 wait_healthy
-api GET /api/monitors | grep -q "$monitor_name" || { echo "data missing after the refused downgrade" >&2; exit 1; }
+api GET /api/monitors | grep "$monitor_name" >/dev/null || { echo "data missing after the refused downgrade" >&2; exit 1; }
 
 echo "DOCKER_COMPOSE_PASS: image built, ${compose_image} (server ${pg_version}) healthy, sign-up and monitor write/read, ping as node, data survived stop/start and app container recreation, PostgreSQL 17 refused the 18 volume without touching it"

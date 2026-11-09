@@ -74,8 +74,11 @@ async function appendObservation(db: Db, snapshot: Monitor, result: { ok: boolea
       }).where(eq(schema.monitor.id, current.id)).returning();
       return updated;
     }
-    if (generation !== undefined) await tx.update(schema.monitor).set({
+    // Run coalescing: every run claimed up to now (read under this row lock, which claimDue also takes) was claimed
+    // before this result existed. One of them that starts later would only repeat it, so beginRuns skips it.
+    await tx.update(schema.monitor).set({
       ...(generation !== undefined ? { coverageGeneration: generation } : {}),
+      checkedThroughGeneration: current.runGeneration,
     }).where(eq(schema.monitor.id, current.id));
     return current;
   });

@@ -149,6 +149,9 @@ describe.skipIf(!url)("monitors and maintenance", () => {
     const a = await claim(3600);
     expect(a.generation).toBeGreaterThan(0);
     expect((await Promise.all([repo.beginRuns([a]), repo.beginRuns([a])])).flat()).toEqual([m.id]);
+    // a finished before b was claimed (a run still in flight would hold b back: see the coalescing e2e tests)
+    const [current] = await repo.monitorsByIds([m.id]);
+    expect(await repo.recordObservation(current, { ok: true }, { generation: a.generation })).toBe(true);
     const b = await claim(60);
     expect(b.token.getTime()).toBeLessThan(a.token.getTime());
     expect(b.generation).toBeGreaterThan(a.generation);

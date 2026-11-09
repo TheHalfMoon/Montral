@@ -88,6 +88,13 @@ export const monitor = pgTable(
     coverageGeneration: integer("coverage_generation").notNull().default(0),
     coverageHeartbeatVersion: integer("coverage_heartbeat_version").notNull().default(0),
     lastRunGeneration: integer("last_run_generation").notNull().default(0),
+    /**
+     * Run coalescing: `run_generation` as it stood when the latest result was recorded. Every run up to this generation
+     * was claimed before that result existed, so one of them that starts later is superseded and skipped (beginRuns).
+     */
+    checkedThroughGeneration: integer("checked_through_generation").notNull().default(0),
+    /** when the latest scheduled run started (beginRuns); a run started this recently that has not recorded is in flight */
+    runStartedAt: timestamp("run_started_at", { withTimezone: true }),
     paused: boolean("paused").notNull().default(false),
     heartbeatToken: text("heartbeat_token"),
     /** http: response body must contain (or, with keywordMode "absent", must not contain) this text; websocket: the first message back */
@@ -303,9 +310,14 @@ export const alertDelivery = pgTable(
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     /** a person notified directly (on call, or named in an escalation step) rather than through a channel; no foreign key, like channel_id */
     targetUserId: text("target_user_id"),
+    /** domain.* notices: the status page they are about (no foreign key: the log outlives a removed page) */
+    statusPageId: uuid("status_page_id"),
+    /** one row per event and recipient: a second insert with the same key is ignored (custom-domain notices) */
+    dedupeKey: text("dedupe_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("alert_delivery_org_time_idx").on(t.organizationId, t.createdAt), index("alert_delivery_retry_idx").on(t.nextAttemptAt), index("alert_delivery_status_idx").on(t.status, t.claimedAt), index("alert_delivery_incident_idx").on(t.incidentId)],
+  (t) => [index("alert_delivery_org_time_idx").on(t.organizationId, t.createdAt), index("alert_delivery_retry_idx").on(t.nextAttemptAt), index("alert_delivery_status_idx").on(t.status, t.claimedAt), index("alert_delivery_incident_idx").on(t.incidentId),
+    uniqueIndex("alert_delivery_dedupe_idx").on(t.dedupeKey).where(sql`${t.dedupeKey} is not null`)],
 );
 
 /** Per-workspace preferences; a missing row means defaults. */

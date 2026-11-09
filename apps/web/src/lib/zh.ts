@@ -390,6 +390,8 @@ export const zh: Record<string, string> = {
   "Test alert": "测试告警",
   "Down alert": "故障告警",
   "Down alert muted": "故障告警已静音（频繁抖动）",
+  "Custom domain withdrawn": "自定义域名已撤销",
+  "Custom domain failing": "自定义域名校验失败",
   "Muted": "已静音",
   "Recovery alert": "恢复通知",
   "Sent": "已发送",

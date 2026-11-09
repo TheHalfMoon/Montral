@@ -26,6 +26,8 @@ import { publicMonitorStatus } from "./public-monitor-status";
 import { oncallRepo } from "./oncall-repo";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Run coalescing: an earlier run counts as in flight for its timeout plus this long (timeouts are at most 30 s). */
+export const RUN_IN_FLIGHT_MARGIN_SEC = 15;
 
 /** `col in (scope)` for a limited API key, nothing otherwise; spread into `and(...)`. */
 const inScope = (scope: Scope, col: Parameters<typeof inArray>[0]): SQL | undefined => (scope ? inArray(col, scope) : undefined);
@@ -653,16 +655,25 @@ export function createRepo(db: Db): Repo {
     },
     async beginRuns(runs) {
       // The row lock serializes duplicate starts. Generations never move backwards when an interval is shortened.
+      const m = schema.monitor;
       const started = await Promise.all(
         runs.map(async ({ id, token, generation }) => {
           if (generation !== undefined && (!Number.isSafeInteger(generation) || generation <= 0)) throw new Error("Invalid run generation");
           const newer = generation === undefined
             // Legacy messages can finish until this monitor starts using generation-based claims.
-            ? and(eq(schema.monitor.lastRunGeneration, 0), or(isNull(schema.monitor.lastRunToken), sql`${schema.monitor.lastRunToken} < ${token.toISOString()}::timestamptz`))
-            : sql`${schema.monitor.lastRunGeneration} < ${generation} and ${schema.monitor.runGeneration} >= ${generation}`;
+            ? and(eq(m.lastRunGeneration, 0), or(isNull(m.lastRunToken), sql`${m.lastRunToken} < ${token.toISOString()}::timestamptz`))
+            // Coalescing (superseded runs are skipped, never checked or billed):
+            //  - a result was recorded after this run was claimed (checked_through_generation, see recordObservation);
+            //  - an earlier run started less than its timeout + RUN_IN_FLIGHT_MARGIN_SEC ago and has not recorded yet.
+            //    That lease (at most 45 s) is shorter than the 60 s minimum interval, so a steady schedule never skips,
+            //    and a run that died without a result blocks nothing once it has passed.
+            : sql`${m.lastRunGeneration} < ${generation} and ${m.runGeneration} >= ${generation}
+                and ${m.checkedThroughGeneration} < ${generation}
+                and not (${m.lastRunGeneration} > ${m.coverageGeneration} and ${m.runStartedAt} is not null
+                  and ${m.runStartedAt} > now() - make_interval(secs => (${m.timeoutMs} / 1000.0 + ${RUN_IN_FLIGHT_MARGIN_SEC}::double precision)::double precision))`;
           const won = await db
             .update(schema.monitor)
-            .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation } : {}) })
+            .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation, runStartedAt: sql`now()` } : {}) })
             .where(and(eq(schema.monitor.id, id), newer))
             .returning({ id: schema.monitor.id });
           return won.length ? id : null;
@@ -1128,7 +1139,8 @@ export function createRepo(db: Db): Repo {
     async claimRetries(limit) {
       const t = schema.alertDelivery;
       // rows from before delivery states existed count as pending when they failed and wait for a retry
-      const due = sql`(${t.status} = 'pending' or (${t.status} is null and ${t.ok} = false)) and ${t.nextAttemptAt} <= now()`;
+      // custom-domain notices (domain.*) have no incident: their own sender retries them (apps/api/src/domain-notice.ts)
+      const due = sql`(${t.status} = 'pending' or (${t.status} is null and ${t.ok} = false)) and ${t.nextAttemptAt} <= now() and ${t.kind} not in ('domain.withdrawn', 'domain.failing')`;
       const claimed = await db
         .update(t)
         .set({ status: "sending", claimedAt: sql`now()`, nextAttemptAt: null })

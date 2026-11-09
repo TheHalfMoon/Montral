@@ -38,8 +38,8 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 16 | Browser / multi-step synthetic checks | P3 | Not started; needs an isolated headless runtime |
 | 17 | SMS / voice alerts | P3 | Blocked: paid provider, needs owner approval |
 | 18 | Custom webhook responses (webhook.site parity) | P3 | In review (#47); evidence `docs/evidence/2026-11-10-webhook-responses.md` |
-| 19 | Owner email when a custom domain is withdrawn | P3 | Not started; shown in the editor and audit log |
-| 20 | Merge stale queued check runs after a slow-target backlog (one monitor can get up to 6 catch-up checks in 2 min) | P3 | Not started; measured in #40 |
+| 19 | Owner email when a custom domain is withdrawn | P3 | In review (#PRA): owners and admins emailed once per withdrawal and once per failing streak (second failed re-check), en/zh, through the alert delivery log with retries; idempotent by a unique dedupe key; never blocks the withdrawal; `docs/evidence/2026-11-10-custom-domain-notices.md` |
+| 20 | Merge stale queued check runs after a slow-target backlog (one monitor can get up to 6 catch-up checks in 2 min) | P3 | In review (#PRA): a queued run is skipped as superseded (not checked, not billed) when a result was recorded after it was claimed, or while an earlier run is in flight (lease = timeout + 15 s, under the 60 s minimum interval); load qualification now asserts the post-recovery bound; `docs/evidence/2026-11-09-load-backpressure.md` |
 | 21 | Dark-mode contrast scan, screen-reader testing, real Safari/iOS devices | P2 | Not started; WebKit coverage is Playwright's Linux build |
 | 22 | Grafana OnCall and other incident tools in the competitor matrix | P3 | Not started; needs primary-source verification |
 

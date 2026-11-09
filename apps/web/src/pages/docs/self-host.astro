@@ -252,6 +252,7 @@ status.example.com {
       <li>If the record has been <strong>missing or holds another value</strong> for 24 hours, over at least three checks, verification is withdrawn and the domain answers <code>404</code>.</li>
       <li>If the domain's <strong>DNS cannot be reached at all</strong> (timeouts, SERVFAIL, dead nameservers), the page stays served for 7 days before verification is withdrawn. A streak that switches between unreachable DNS and a missing record starts over.</li>
       <li>The editor shows the reason for a withdrawal. Restore the record and press <strong>Verify</strong> to serve the domain again.</li>
+      <li>The workspace's owners and admins get an email (in their language) when a domain fails its second re-check in a row, once per failing streak, and when it is withdrawn, once per withdrawal. Members get none. The emails need SMTP and appear in the alert log; a mail server that refuses one is retried twice, and the withdrawal itself never waits for mail.</li>
       <li>Several servers share the re-checks: each domain is claimed in the database, so it is looked up once per round. A withdrawal applies at once on the server that made it, and within 60 seconds on the others.</li>
     </ul>
     <h2 id="oncall">On-call schedules and escalation</h2>
@@ -533,6 +534,7 @@ status.example.com {
       <li>如果记录<strong>缺失或内容不符</strong>已持续 24 小时、且至少检查了三次，验证将被撤销，该域名返回 <code>404</code>。</li>
       <li>如果该域名的 <strong>DNS 完全无法访问</strong>（超时、SERVFAIL、名称服务器失效），页面会继续提供 7 天，之后撤销验证。失败类型在 DNS 无法访问与记录缺失之间切换时，重新开始计算。</li>
       <li>编辑器会显示撤销原因。恢复记录后点击<strong>验证</strong>即可重新在该域名上提供页面。</li>
+      <li>域名连续第二次复查失败时（每个失败周期只发一次），以及验证被撤销时（每次撤销只发一次），工作区的所有者和管理员会收到一封邮件（使用各自的语言），普通成员不会收到。这些邮件需要配置 SMTP，并会出现在告警记录中；邮件服务器拒收时会再重试两次，撤销本身从不等待邮件。</li>
       <li>多台服务器共同承担复查：每个域名在数据库中被认领，因此每轮只查询一次。撤销在执行它的服务器上立即生效，其他服务器在 60 秒内同步。</li>
     </ul>
     <h2 id="oncall-zh">值班表与升级</h2>

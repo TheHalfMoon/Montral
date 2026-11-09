@@ -175,7 +175,7 @@ export default function Alerting() {
               <div style={{ minWidth: 0, flex: 1 }}>
                 <b style={{ fontWeight: 500 }}>{d.channelName}</b>
                 <small>
-                  {d.kind === "test" ? t("Test alert") : d.kind === "incident.opened" ? t("Down alert") : d.kind === "incident.resolved" ? t("Recovery alert") : d.kind === "incident.reminder" ? t("Reminder") : d.kind === "incident.escalated" ? t("Escalation") : d.kind === "incident.muted" ? t("Down alert muted") : d.kind}
+                  {d.kind === "test" ? t("Test alert") : d.kind === "incident.opened" ? t("Down alert") : d.kind === "incident.resolved" ? t("Recovery alert") : d.kind === "incident.reminder" ? t("Reminder") : d.kind === "incident.escalated" ? t("Escalation") : d.kind === "incident.muted" ? t("Down alert muted") : d.kind === "domain.withdrawn" ? t("Custom domain withdrawn") : d.kind === "domain.failing" ? t("Custom domain failing") : d.kind}
                   {d.monitorName && d.kind !== "test" ? ` · ${d.monitorName}` : ""} · {ago(d.createdAt)}
                 </small>
                 {reason && d.kind !== "incident.muted" && <small className="mono" style={{ color: state === "failed" ? "var(--down)" : "var(--muted)", wordBreak: "break-word" }}>{reason.startsWith("skipped: email allowance") ? t("Skipped: email allowance used up for this period") : reason}</small>}

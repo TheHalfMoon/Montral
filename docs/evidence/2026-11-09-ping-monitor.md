@@ -45,7 +45,8 @@ could not be watched.
   Windows "General failure" → thrown with code `ENETUNREACH`, so a prober
   without the route (e.g. IPv6 in a v4-only container) is inconclusive.
   Missing binary (spawn ENOENT/EACCES) or a permission error from the binary
-  → failed check `Ping unavailable on this server`. Stored errors are only
+  → inconclusive check `Ping unavailable on this server` (no alert; logged
+  once per process). Stored errors are only
   these fixed strings or the netguard's own messages; command output is never
   stored or logged.
 - Workers: the check is inconclusive (`Ping checks need the self-hosted Node

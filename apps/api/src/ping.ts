@@ -16,7 +16,8 @@
  *
  * Docker: the shipped image (node:22-alpine, USER node) uses BusyBox ping, which needs unprivileged ICMP sockets
  * (`net.ipv4.ping_group_range` covering the process's group; Docker's default since 20.10). Without them the binary
- * reports a permission error and the check fails with PING_UNAVAILABLE rather than crashing.
+ * reports a permission error and the check is inconclusive with PING_UNAVAILABLE (logged once), rather than crashing or
+ * alerting on every ping monitor.
  */
 
 import type { CheckInput, CheckOutcome } from "./checker";
@@ -57,6 +58,13 @@ export function pingCommand(flavour: PingFlavour, ip: string, waitMs: number, fi
   }
 }
 
+/** The child's whole environment: PATH and a fixed locale (plus what Windows needs to start a system binary). */
+export function pingEnv(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): Record<string, string> {
+  const out: Record<string, string> = { PATH: env.PATH ?? env.Path ?? "", LC_ALL: "C", LANG: "C" };
+  if (platform === "win32") for (const k of ["SystemRoot", "windir"]) if (env[k]) out[k] = env[k]!;
+  return out;
+}
+
 export type PingRun = {
   /** Exit code; null when the process was killed or never started. */
   code: number | null;
@@ -86,7 +94,8 @@ export async function runPing(cmd: PingCommand, hardTimeoutMs: number, maxBytes 
     let child: import("node:child_process").ChildProcess;
     try {
       // LC_ALL=C keeps Unix ping output in English where the binary is localised; parsing still tolerates other locales
-      child = spawn(cmd.file, cmd.args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, LC_ALL: "C", LANG: "C" } });
+      // Only what ping needs: never the server's secrets (DATABASE_URL, BETTER_AUTH_SECRET, …)
+      child = spawn(cmd.file, cmd.args, { shell: false, windowsHide: true, stdio: ["ignore", "pipe", "pipe"], env: pingEnv() });
     } catch (e) {
       resolve({ code: null, output: "", timedOut: false, spawnError: String((e as { code?: unknown }).code ?? "ESPAWN") });
       return;
@@ -146,7 +155,13 @@ export function parsePingOutput(output: string, exitCode: number | null): PingPa
 let detected: { flavour: PingFlavour; file: string } | undefined;
 async function localPing(): Promise<{ flavour: PingFlavour; file: string }> {
   if (detected) return detected;
-  if (process.platform === "win32") return (detected = { flavour: "win32", file: "ping" });
+  if (process.platform === "win32") {
+    // the absolute System32 path: a bare "ping" would be searched in the working directory before PATH
+    const path = await import("node:path");
+    const fs = await import("node:fs");
+    const sys = path.join(process.env.SystemRoot ?? process.env.windir ?? "C:\\Windows", "System32", "PING.EXE");
+    return (detected = { flavour: "win32", file: fs.existsSync(sys) ? sys : "ping" });
+  }
   if (process.platform === "darwin") return (detected = { flavour: "darwin", file: "ping" });
   const fs = await import("node:fs");
   const path = await import("node:path");
@@ -163,6 +178,15 @@ async function localPing(): Promise<{ flavour: PingFlavour; file: string }> {
   return (detected = { flavour: "iputils", file: "ping" });
 }
 
+let unavailableLogged = false;
+function unavailable(): CheckOutcome {
+  if (!unavailableLogged) {
+    unavailableLogged = true;
+    console.error("ping: this server cannot send ICMP (binary missing or not permitted); ping monitors stay unchecked, see /docs/self-host");
+  }
+  return { ok: false, inconclusive: true, error: PING_UNAVAILABLE };
+}
+
 /** Why a ping target is malformed, or null. */
 export function pingTargetProblem(target: string): string | null {
   return pingHost(target) ? null : PING_TARGET_PROBLEM;
@@ -174,7 +198,7 @@ export type PingDeps = { runner?: PingRunner; flavour?: PingFlavour; file?: stri
 /**
  * One ping check. A reply is up, with the round-trip time from the output (the wall time of the run when the output
  * cannot be read). No reply and timeouts are thrown with fixed messages, so the caller can tell a target fault from a
- * prober fault as for TCP; a missing or forbidden binary is a failed check with PING_UNAVAILABLE.
+ * prober fault as for TCP; a missing or forbidden binary is an inconclusive check with PING_UNAVAILABLE.
  */
 export async function pingCheck(m: Pick<CheckInput, "target" | "timeoutMs">, started = Date.now(), deps: PingDeps = {}): Promise<CheckOutcome> {
   if (isWorkers()) return { ok: false, inconclusive: true, error: PING_WORKERS_UNSUPPORTED };
@@ -182,7 +206,10 @@ export async function pingCheck(m: Pick<CheckInput, "target" | "timeoutMs">, sta
   if (!host) return { ok: false, error: PING_TARGET_PROBLEM };
   const until = started + m.timeoutMs;
   // resolved and validated once; only this literal reaches the binary
-  const ip = await guardedAddress(host);
+  const checked = await guardedAddress(host);
+  // an IPv4-mapped IPv6 address (::ffff:192.0.2.1) is the IPv4 address it carries: ping it as IPv4, not over IPv6
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(checked);
+  const ip = mapped ? mapped[1] : checked;
   const net = await import("node:net");
   if (!net.isIP(ip) || ip.startsWith("-")) throw new Error(PING_NO_REPLY); // cannot happen: guardedAddress returns literals
   const local = deps.flavour ? { flavour: deps.flavour, file: deps.file ?? "ping" } : await localPing();
@@ -191,7 +218,9 @@ export async function pingCheck(m: Pick<CheckInput, "target" | "timeoutMs">, sta
   const spawnedAt = Date.now();
   const run = await (deps.runner ?? runPing)(cmd, waitMs + KILL_GRACE_MS);
   const wall = Date.now() - spawnedAt;
-  if (run.spawnError) return { ok: false, latencyMs: Date.now() - started, error: PING_UNAVAILABLE };
+  // This server cannot ping at all (no binary, no ICMP permission, a local firewall): the prober's fault, not the
+  // target's. Inconclusive, so a host without ICMP never pages anyone for every ping monitor; said once in the log.
+  if (run.spawnError) return unavailable();
   if (run.timedOut) throw Object.assign(new Error(PING_TIMED_OUT), { code: "ETIMEDOUT" });
   const parsed = parsePingOutput(run.output, run.code);
   if (parsed.replied) {
@@ -199,7 +228,7 @@ export async function pingCheck(m: Pick<CheckInput, "target" | "timeoutMs">, sta
     const rtt = parsed.rttMs != null && parsed.rttMs <= m.timeoutMs + KILL_GRACE_MS ? parsed.rttMs : wall;
     return { ok: true, latencyMs: Math.round(rtt) };
   }
-  if (parsed.denied) return { ok: false, latencyMs: Date.now() - started, error: PING_UNAVAILABLE };
+  if (parsed.denied) return unavailable();
   // no route from here (no IPv6, network down): a prober-side failure, judged like ENETUNREACH on a socket
   if (parsed.noRoute) throw Object.assign(new Error(PING_NO_REPLY), { code: "ENETUNREACH" });
   throw new Error(PING_NO_REPLY);

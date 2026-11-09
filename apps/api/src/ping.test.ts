@@ -4,7 +4,7 @@ import { runCheck, type CheckInput } from "./checker";
 import { configureNetGuard, pingHost, targetProblem, PING_TARGET_PROBLEM } from "./netguard";
 import {
   MAX_PING_OUTPUT_BYTES, PING_NO_REPLY, PING_TIMED_OUT, PING_UNAVAILABLE, PING_WORKERS_UNSUPPORTED,
-  parsePingOutput, pingCheck, pingCommand, pingTargetProblem, runPing, type PingCommand, type PingRun, type PingRunner,
+  parsePingOutput, pingCheck, pingCommand, pingEnv, pingTargetProblem, runPing, type PingCommand, type PingRun, type PingRunner,
 } from "./ping";
 import { resetSelfCheck } from "./selfcheck";
 
@@ -231,12 +231,43 @@ describe("ping checks", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("reports a missing or forbidden binary with a fixed message", async () => {
+  it("a missing or forbidden binary is the server's problem: inconclusive with a fixed message, never an alert", async () => {
     configureNetGuard({ ALLOW_PRIVATE_TARGETS: "true" });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const missing = fake({ code: null, output: "", timedOut: false, spawnError: "ENOENT" });
-    expect(await pingCheck(m("127.0.0.1"), Date.now(), { runner: missing.runner, flavour: "busybox" })).toMatchObject({ ok: false, error: PING_UNAVAILABLE });
+    expect(await pingCheck(m("127.0.0.1"), Date.now(), { runner: missing.runner, flavour: "busybox" })).toEqual({ ok: false, inconclusive: true, error: PING_UNAVAILABLE });
     const denied = fake({ code: 1, output: "ping: permission denied (are you root?)\n", timedOut: false });
-    expect(await pingCheck(m("127.0.0.1"), Date.now(), { runner: denied.runner, flavour: "busybox" })).toMatchObject({ ok: false, error: PING_UNAVAILABLE });
+    expect(await pingCheck(m("127.0.0.1"), Date.now(), { runner: denied.runner, flavour: "busybox" })).toEqual({ ok: false, inconclusive: true, error: PING_UNAVAILABLE });
+    const firewalled = fake({ code: 2, output: "ping: sendmsg: Operation not permitted\n", timedOut: false });
+    expect(await pingCheck(m("127.0.0.1"), Date.now(), { runner: firewalled.runner, flavour: "iputils" })).toMatchObject({ inconclusive: true, error: PING_UNAVAILABLE });
+    expect(log.mock.calls.length).toBeLessThanOrEqual(1); // said once per process, not per check
+    log.mockRestore();
+  });
+
+  it("gives the ping process PATH and a locale only, never the server's secrets", () => {
+    const env = { PATH: "/usr/bin", DATABASE_URL: "postgres://u:hunter2@db/montral", BETTER_AUTH_SECRET: "s3cret", SystemRoot: "C:\\Windows" };
+    expect(pingEnv(env, "linux")).toEqual({ PATH: "/usr/bin", LC_ALL: "C", LANG: "C" });
+    expect(pingEnv(env, "win32")).toEqual({ PATH: "/usr/bin", LC_ALL: "C", LANG: "C", SystemRoot: "C:\\Windows" });
+  });
+
+  it("pings an IPv4-mapped IPv6 target as the IPv4 address it carries", async () => {
+    configureNetGuard({ ALLOW_PRIVATE_TARGETS: "true" });
+    const { calls, runner } = fake(reply());
+    await pingCheck(m("::ffff:127.0.0.1"), Date.now(), { runner, flavour: "iputils" });
+    expect(calls[0].args.at(-1)).toBe("127.0.0.1");
+    expect(calls[0].args).not.toContain("-6");
+  });
+
+  it("refuses multicast, broadcast, metadata and option-like single tokens by default", async () => {
+    configureNetGuard({});
+    const { calls, runner } = fake(reply());
+    for (const target of ["224.0.0.1", "255.255.255.255", "ff02::1", "0.0.0.0", "169.254.169.254"]) {
+      await expect(pingCheck(m(target), Date.now(), { runner, flavour: "iputils" }), target).rejects.toThrow();
+    }
+    for (const target of ["-x", "-f", "-6"]) {
+      expect(await pingCheck(m(target), Date.now(), { runner, flavour: "iputils" }), target).toEqual({ ok: false, error: PING_TARGET_PROBLEM });
+    }
+    expect(calls).toHaveLength(0);
   });
 
   it("fails without a reply, with a fixed message and none of the command output", async () => {

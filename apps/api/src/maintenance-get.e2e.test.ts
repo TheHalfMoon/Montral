@@ -12,11 +12,16 @@ describe.skipIf(!url)("GET /maintenance/:id", () => {
     await db.migrate();
     const app = createApp(openDatabase);
     const session = () => {
-      let cookie = "";
+      // a cookie jar: a response that sets one cookie must not drop the session cookie
+      const jar = new Map<string, string>();
       return async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
+        const cookie = [...jar].map(([k, v]) => `${k}=${v}`).join("; ");
         const r = await app.fetch(new Request(`${origin}/api${path}`, { method, headers: { cookie, origin, "content-type": "application/json", ...headers }, body: body === undefined ? undefined : JSON.stringify(body) }), env as never);
-        const cookies = r.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
-        if (cookies) cookie = cookies;
+        for (const c of r.headers.getSetCookie()) {
+          const [pair] = c.split(";");
+          const at = pair.indexOf("=");
+          jar.set(pair.slice(0, at), pair.slice(at + 1));
+        }
         return { status: r.status, body: (await r.json().catch(() => null)) as any };
       };
     };

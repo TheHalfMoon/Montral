@@ -56,8 +56,10 @@ Each project runs 5 tests (25 in all), with no retries: a flaky engine counts as
      - A wrong password is refused and the page stays locked.
      - The correct password unlocks the page.
      - The access cookie is not readable from script.
-   - Any console error or uncaught exception fails the journey. The one exception is a fetch the journey aborts
-     itself by navigating away.
+   - Any console error, uncaught exception or unhandled promise rejection fails the journey. Rejections from fetches
+     aborted by navigation count too. The one exclusion is WebKit's own "Fetch API cannot load <same-origin /api
+     URL> due to access control checks." message, which WebKit logs for every request a navigation cancels, even
+     one the app handles.
 4. **CSP everywhere.** A `securitypolicyviolation` listener is installed before page scripts in every page of every
    test. It reports through console messages, the one channel every engine supports. Any violation fails the test.
 
@@ -106,13 +108,18 @@ The only failed responses accepted are the two designed anonymous ones. Each is 
 - **Slug and ntfy topic patterns were silently ignored.** Browsers compile `<input pattern>` with the `v` flag, where
   `[a-z0-9-]` is an invalid class, so these fields had no client-side validation. The hyphen is now escaped
   (`[a-z0-9\-]`, `[A-Za-z0-9_\-]`).
+- **Navigation away from a status page view left a load unhandled.** `api.monitors()` in the editor and
+  `api.statusPages()` in the list had no rejection handler, so a request aborted by navigation surfaced as
+  "Unhandled Promise Rejection: TypeError: Load failed" (mobile-webkit). The new `lib/mounted.ts` helper, with a unit
+  test, ties each load to its effect. Every rejection is handled, results after unmount are dropped, and a real load
+  failure is shown instead of an endless "Loading…".
 - **On phones, the monitor dialog's Create button sat under the tab bar.** The bottom-sheet modal (z-index 10) was
   below the fixed tab bar (20). The modal now uses z-index 35, still below the drawer (40). Found in the Pixel 7
   project.
 
 ## Result
 
-GitHub Actions run 42566781804 on `be75093`: 25/25 passed. All five projects passed the landing, sign-in, sign-up,
+An earlier GitHub Actions run, 42566781804 on `be75093` with a looser journey guard, passed 25/25. All five projects passed the landing, sign-in, sign-up,
 docs and signed-in journey tests, and all eight axe pages reported 0 serious/critical and 0 moderate/minor
 violations. The final PR head is reported in the PR.
 

@@ -1,0 +1,71 @@
+name: Montral load qualification
+# Load, capacity and backpressure qualification of the self-hosted Node server against a real PostgreSQL service and
+# a disposable database. Synthetic monitors, targets and webhooks only; nothing leaves the runner. Separate from the
+# main CI job because it needs about half an hour of wall time.
+on:
+  # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  load:
+    name: Throughput, backpressure, webhook and DB pool exhaustion (PostgreSQL 18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TEST_DATABASE_URL: postgres://montral:montral-local-test@127.0.0.1:5432/montral_ci
+      LOAD_SUMMARY_PATH: ${{ github.workspace }}/load-summary.json
+    services:
+      postgres:
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_DB: montral_ci
+          POSTGRES_USER: montral
+          POSTGRES_PASSWORD: montral-local-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U montral -d montral_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build Node API
+        run: pnpm --filter @montral/api build:node
+      - name: Runner specification
+        run: |
+          nproc
+          free -m
+          node --version
+      - name: Qualify load, backpressure and DB pool exhaustion
+        shell: bash
+        run: |
+          set -euo pipefail
+          load_db="${TEST_DATABASE_URL%/*}/montral_test_load_ci"
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_load_ci'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_load_ci WITH (FORCE)"' EXIT
+          TEST_DATABASE_URL="$load_db" node scripts/qualify-load.mjs
+      - name: Upload load summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: montral-load-summary
+          path: load-summary.json
+          if-no-files-found: warn
+          retention-days: 30

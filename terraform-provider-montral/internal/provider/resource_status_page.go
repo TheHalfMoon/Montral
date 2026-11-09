@@ -15,7 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/float64default"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/float64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64default"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
@@ -98,11 +98,13 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Validators: []validator.String{stringvalidator.LengthAtMost(2048), stringvalidator.RegexMatches(externalURLRE, "must be an http(s) URL")}},
 			"hide_branding": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Hide Montral's name and mark (where the plan allows it). Default false."},
-			"uptime_ok_pct": schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(99.9),
-				MarkdownDescription: "Uptime bars are green at or above this percentage (1-100). Default 99.9.",
+			"uptime_ok_pct": schema.Float64Attribute{Optional: true, Computed: true,
+				MarkdownDescription: "Uptime bars are green at or above this percentage (1-100). Montral's default is 99.9; when the argument is removed the current value is kept.",
+				PlanModifiers:       []planmodifier.Float64{float64planmodifier.UseStateForUnknown()},
 				Validators:          []validator.Float64{float64validator.Between(1, 100)}},
-			"uptime_warn_pct": schema.Float64Attribute{Optional: true, Computed: true, Default: float64default.StaticFloat64(98),
-				MarkdownDescription: "Uptime bars are amber at or above this percentage (1-100, below `uptime_ok_pct`), red below. Default 98.",
+			"uptime_warn_pct": schema.Float64Attribute{Optional: true, Computed: true,
+				MarkdownDescription: "Uptime bars are amber at or above this percentage (1-100, below `uptime_ok_pct`), red below. Montral's default is 98; when the argument is removed the current value is kept.",
+				PlanModifiers:       []planmodifier.Float64{float64planmodifier.UseStateForUnknown()},
 				Validators:          []validator.Float64{float64validator.Between(1, 100)}},
 			"mcp_enabled": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(true),
 				MarkdownDescription: "Let the public MCP tools serve this page. Default true."},
@@ -121,8 +123,9 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Validators:          []validator.List{listvalidator.SizeAtMost(200)},
 				NestedObject: schema.NestedAttributeObject{Attributes: map[string]schema.Attribute{
 					"monitor_id": schema.StringAttribute{Required: true, MarkdownDescription: "Monitor UUID.", Validators: []validator.String{uuidValidator()}},
-					"group_name": schema.StringAttribute{Optional: true, MarkdownDescription: "Group heading (1-60 characters, no surrounding spaces); consecutive components with the same group are shown together.",
-						Validators: []validator.String{stringvalidator.LengthBetween(1, 60), stringvalidator.RegexMatches(regexp.MustCompile(`^\S(.*\S)?$`), "must not have surrounding spaces")}},
+					"group_name": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("Services"),
+						MarkdownDescription: "Group heading (1-60 characters, no surrounding spaces); consecutive components with the same group are shown together. Default `Services`, as in Montral.",
+						Validators:          []validator.String{stringvalidator.LengthBetween(1, 60), stringvalidator.RegexMatches(regexp.MustCompile(`^\S(.*\S)?$`), "must not have surrounding spaces")}},
 				}},
 			},
 			"url": schema.StringAttribute{Computed: true, MarkdownDescription: "Public address of the page (`<endpoint>/status/<slug>`).",
@@ -178,15 +181,15 @@ func boolPtr(v types.Bool) *bool {
 }
 
 func (m *statusPageModel) write(ctx context.Context, diags *diag.Diagnostics) client.StatusPageWrite {
-	ok, warn, hours := m.UptimeOkPct.ValueFloat64(), m.UptimeWarnPct.ValueFloat64(), m.MaintenanceReminderHours.ValueInt64()
+	hours := m.MaintenanceReminderHours.ValueInt64()
 	return client.StatusPageWrite{
 		Title:                    m.Title.ValueString(),
 		Theme:                    m.Theme.ValueString(),
 		ShowLatency:              boolPtr(m.ShowLatency),
 		ExternalURL:              strPtr(m.ExternalURL),
 		HideBranding:             boolPtr(m.HideBranding),
-		UptimeOkPct:              &ok,
-		UptimeWarnPct:            &warn,
+		UptimeOkPct:              float64Ptr(m.UptimeOkPct),
+		UptimeWarnPct:            float64Ptr(m.UptimeWarnPct),
 		MCPEnabled:               boolPtr(m.MCPEnabled),
 		Visibility:               m.Visibility.ValueString(),
 		MaintenanceReminderHours: &hours,
@@ -203,8 +206,8 @@ func (m *statusPageModel) fromAPI(api *client.StatusPage, baseURL string) {
 	m.ShowLatency = types.BoolValue(api.ShowLatency)
 	m.ExternalURL = strValue(api.ExternalURL)
 	m.HideBranding = types.BoolValue(api.HideBranding)
-	m.UptimeOkPct = types.Float64Value(api.UptimeOkPct)
-	m.UptimeWarnPct = types.Float64Value(api.UptimeWarnPct)
+	m.UptimeOkPct = sameFloat(m.UptimeOkPct, api.UptimeOkPct)
+	m.UptimeWarnPct = sameFloat(m.UptimeWarnPct, api.UptimeWarnPct)
 	m.MCPEnabled = types.BoolValue(api.MCPEnabled)
 	m.Visibility = types.StringValue(api.Visibility)
 	m.HasPassword = types.BoolValue(api.HasPassword)
@@ -324,4 +327,22 @@ func (r *statusPageResource) Delete(ctx context.Context, req resource.DeleteRequ
 
 func (r *statusPageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	importWithProject(ctx, req, resp)
+}
+
+// float64Ptr is nil (the field is left out: server default on create, unchanged on update) for an unknown value.
+func float64Ptr(v types.Float64) *float64 {
+	if v.IsNull() || v.IsUnknown() {
+		return nil
+	}
+	f := v.ValueFloat64()
+	return &f
+}
+
+// sameFloat keeps the configured value when the API returns the same float64: a configured 99.9 is an exact decimal,
+// the API's is the nearest float64, and Terraform would otherwise report an inconsistent result.
+func sameFloat(prior types.Float64, api float64) types.Float64 {
+	if !prior.IsNull() && !prior.IsUnknown() && prior.ValueFloat64() == api {
+		return prior
+	}
+	return types.Float64Value(api)
 }

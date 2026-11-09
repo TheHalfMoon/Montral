@@ -74,8 +74,8 @@ output "status_page_url" {
 - `project_id` (String) Project UUID; defaults to the provider's project.
 - `show_latency` (Boolean) Show response times. Default true.
 - `theme` (String) `light` (default), `dark` or `auto`.
-- `uptime_ok_pct` (Number) Uptime bars are green at or above this percentage (1-100). Default 99.9.
-- `uptime_warn_pct` (Number) Uptime bars are amber at or above this percentage (1-100, below `uptime_ok_pct`), red below. Default 98.
+- `uptime_ok_pct` (Number) Uptime bars are green at or above this percentage (1-100). Montral's default is 99.9; when the argument is removed the current value is kept.
+- `uptime_warn_pct` (Number) Uptime bars are amber at or above this percentage (1-100, below `uptime_ok_pct`), red below. Montral's default is 98; when the argument is removed the current value is kept.
 - `visibility` (String) `public` (default), `members` (signed-in workspace members only) or `password` (members, or anyone with `password` or a share link).
 
 ### Read-Only
@@ -94,7 +94,7 @@ output "status_page_url" {
 
 ### Optional
 
-- `group_name` (String) Group heading (1-60 characters, no surrounding spaces); consecutive components with the same group are shown together.
+- `group_name` (String) Group heading (1-60 characters, no surrounding spaces); consecutive components with the same group are shown together. Default `Services`, as in Montral.
 
 ## Password and drift
 

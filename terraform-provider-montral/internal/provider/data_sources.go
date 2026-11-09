@@ -69,16 +69,19 @@ func (d *projectDataSource) Read(ctx context.Context, req datasource.ReadRequest
 		apiError(&resp.Diagnostics, "listing projects", err)
 		return
 	}
+	// the workspace, and the project the API resolves for this key and provider configuration
+	var me struct {
+		ProjectID    string `json:"projectId"`
+		Organization struct {
+			ID string `json:"id"`
+		} `json:"organization"`
+	}
+	if err := d.client.Get(ctx, "/me", "", &me); err != nil {
+		apiError(&resp.Diagnostics, "reading the current workspace", err)
+		return
+	}
 	wantID, wantName := m.ID.ValueString(), m.Name.ValueString()
 	if wantID == "" && wantName == "" {
-		// the project the API resolves for this key and provider configuration
-		var me struct {
-			ProjectID string `json:"projectId"`
-		}
-		if err := d.client.Get(ctx, "/me", "", &me); err != nil {
-			apiError(&resp.Diagnostics, "reading the current project", err)
-			return
-		}
 		wantID = me.ProjectID
 	}
 	var found []client.Project
@@ -98,7 +101,7 @@ func (d *projectDataSource) Read(ctx context.Context, req datasource.ReadRequest
 	}
 	p := found[0]
 	m.ID, m.Name = types.StringValue(p.ID), types.StringValue(p.Name)
-	m.OrganizationID, m.CreatedAt = types.StringValue(p.OrganizationID), types.StringValue(p.CreatedAt)
+	m.OrganizationID, m.CreatedAt = types.StringValue(firstNonEmpty(p.OrganizationID, me.Organization.ID)), types.StringValue(p.CreatedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 

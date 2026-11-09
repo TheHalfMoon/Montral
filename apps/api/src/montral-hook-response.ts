@@ -1,5 +1,5 @@
 /**
- * Configurable responses for Montral webhook inboxes (webhook.site parity).
+ * Configurable responses for Montral webhook inboxes (mock-endpoint parity).
  *
  * A manager may choose what the public receiver answers to a captured request:
  * a status code, a small text body with a content type from an allow-list,

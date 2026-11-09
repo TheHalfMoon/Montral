@@ -64,7 +64,7 @@ export const MONTRAL_TOOLS: Tool[] = [
   },
   {
     name: "set_webhook_response",
-    description: "Configure what an inbox's secret receiver answers (webhook.site-style custom responses), replacing any previous configuration. Status 200-599; a 3xx may carry an absolute http(s) location. Body is text up to 64 KiB (all variants together) served as text/plain, application/json, application/xml, text/xml or text/csv; HTML is not supported. Up to 20 custom headers; cookies, CORS, caching, security-policy, framing and hop-by-hop headers are refused. delayMs waits up to 10000 ms before answering. methods overrides the response for POST, PUT or PATCH. Refusals (invalid token, oversized, malformed, rate-limited) and replay never use it. Requires manager role.",
+    description: "Configure what an inbox's secret receiver answers (custom mock responses), replacing any previous configuration. Status 200-599; a 3xx may carry an absolute http(s) location. Body is text up to 64 KiB (all variants together) served as text/plain, application/json, application/xml, text/xml or text/csv; HTML is not supported. Up to 20 custom headers; cookies, CORS, caching, security-policy, framing and hop-by-hop headers are refused. delayMs waits up to 10000 ms before answering. methods overrides the response for POST, PUT or PATCH. Refusals (invalid token, oversized, malformed, rate-limited) and replay never use it. Requires manager role.",
     schema: z.object({
       id,
       ...responseVariantShape,

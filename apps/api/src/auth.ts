@@ -350,7 +350,11 @@ export function createAuth(database: Database, env: Bindings) {
             try {
               await recordRemoval(query, orgId, userId);
               await dropSsoLinksOfFormerMember(query, orgId, userId);
-              if (ctx.path === "/organization/remove-member") await query(`DELETE FROM session WHERE user_id = $1::text`, [userId]);
+              // in a workspace with single sign-on, a removed member is signed out everywhere (elsewhere the membership
+              // check of every request already shuts them out of the workspace, and their other sessions stay)
+              if (ctx.path === "/organization/remove-member") {
+                await query(`DELETE FROM session WHERE user_id = $1::text AND EXISTS (SELECT 1 FROM sso_connection WHERE organization_id = $2::text)`, [userId, orgId]);
+              }
             } catch {
               console.error("sso removal could not be recorded; private diagnostics suppressed");
             }

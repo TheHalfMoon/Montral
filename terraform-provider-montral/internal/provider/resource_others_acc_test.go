@@ -688,7 +688,8 @@ func pageUnlocks(slug, password string, want bool) func(*terraform.State) error 
 			return err
 		}
 		res.Body.Close()
-		if got := res.StatusCode == http.StatusOK; got != want {
+		// a successful unlock answers 2xx (204 and an access cookie); a wrong password 401
+		if got := res.StatusCode >= 200 && res.StatusCode < 300; got != want {
 			return fmt.Errorf("unlock %s with the password: HTTP %d, want success=%t", slug, res.StatusCode, want)
 		}
 		return nil

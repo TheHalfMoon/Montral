@@ -22,6 +22,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 8b | Slug and ntfy-topic `pattern` invalid under the `v` regex flag (validation silently skipped) | P2 | Done (#36) | journey spec |
 | 8c | Dashboard skip link did nothing; text contrast below WCAG AA | P2 | Done (#36) | 45 axe scans, 0 violations |
 | 8d | Qualification flakes: load phase-5 window rule, Chromium CDP start-up deadline | P1 | Done (#43); both seen on PRs that did not touch the app | run 42609831385, run 42616676193 |
+| 8e | `oauth-scope.e2e` flake: agent listed no inboxes after the session created one | P1 | In review (#53): product bug. Sign-up sessions had no active workspace (Better Auth runs `user.create.after` after the session is created), and the fallback `anyWorkspaceOf` was an unordered `LIMIT 1`, so a user's requests could switch workspace when membership rows moved on disk. Fixed by ordering the fallback and storing the personal workspace on the sign-up session. RED reproduced on real PostgreSQL in #53 (run 42695712956) | `docs/evidence/2026-11-10-oauth-scope-flake.md`, run 42682311112 attempt 1 |
 
 ## Capabilities
 

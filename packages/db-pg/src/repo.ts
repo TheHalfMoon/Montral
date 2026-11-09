@@ -168,7 +168,16 @@ export function createRepo(db: Db): Repo {
       return m?.role ?? null;
     },
     async anyWorkspaceOf(userId) {
-      const [m] = await db.select({ id: schema.member.organizationId }).from(schema.member).where(eq(schema.member.userId, userId)).limit(1);
+      // A session or grant without an active workspace lands here on every request, so the answer must not change
+      // between requests: without ORDER BY, PostgreSQL returns whichever membership row sits first on disk, and a row
+      // added later (a second workspace) can take a lower position once deleted rows are vacuumed. The oldest
+      // membership (the personal workspace, for a fresh sign-up) stays put as memberships are added.
+      const [m] = await db
+        .select({ id: schema.member.organizationId })
+        .from(schema.member)
+        .where(eq(schema.member.userId, userId))
+        .orderBy(asc(schema.member.createdAt), asc(schema.member.organizationId))
+        .limit(1);
       return m?.id ?? null;
     },
     async hasOAuthConsent(userId, clientId) {

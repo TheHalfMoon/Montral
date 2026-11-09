@@ -158,6 +158,29 @@ describe.skipIf(!url)("monitors and maintenance", () => {
     expect(await repo.beginRuns([{ id: m.id, token: a.token }])).toEqual([]); // Legacy replay after migration.
   });
 
+  it("coalesces a delayed queue backlog to the newest lease before starting any check", async () => {
+    const [m] = await seed(1);
+    const leases: { id: string; token: Date; generation: number }[] = [];
+    for (let i = 0; i < 6; i++) {
+      // Simulate six scheduled claims accumulating while a slow target occupies the queue.
+      await db.update(schema.monitor).set({ nextCheckAt: new Date(Date.now() - 1000) })
+        .where(eq(schema.monitor.id, m.id));
+      const row = (await repo.claimDue(1000)).find((x) => x.id === m.id)!;
+      leases.push({ id: m.id, token: row.nextCheckAt, generation: row.runGeneration! });
+    }
+    // Old messages can arrive before or after the latest. None may start or bill a check.
+    for (const old of leases.slice(0, -1)) expect(await repo.beginRuns([old])).toEqual([]);
+    const latest = leases.at(-1)!;
+    expect(await repo.beginRuns([latest])).toEqual([m.id]);
+    expect(await repo.beginRuns([latest])).toEqual([]);
+    for (const old of leases.slice(0, -1).reverse()) expect(await repo.beginRuns([old])).toEqual([]);
+    // The next genuinely new scheduled lease is still eligible.
+    await db.update(schema.monitor).set({ nextCheckAt: new Date(Date.now() - 1000) })
+      .where(eq(schema.monitor.id, m.id));
+    const next = (await repo.claimDue(1000)).find((x) => x.id === m.id)!;
+    expect(await repo.beginRuns([{ id: m.id, token: next.nextCheckAt, generation: next.runGeneration! }])).toEqual([m.id]);
+  });
+
   it("dedupes outages separately from latency incidents", async () => {
     const [m] = await seed(1);
     await repo.createIncident({ organizationId: orgId, monitorId: m.id, title: "slow", auto: true, severity: "minor" });

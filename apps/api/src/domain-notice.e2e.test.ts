@@ -76,6 +76,7 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
     txt.set(rec.name, [rec.value]);
     expect((await call(`/api/status-pages/${id}/domain/verify`, { method: "POST", cookie: owner.cookie })).status).toBe(200);
     const [row] = await q<{ checked: Date }>("SELECT custom_domain_checked_at AS checked FROM status_page WHERE id = $1", [id]);
+    mails.length = 0; // sign-up verification emails of the four accounts are not what these tests count
     return { id, org, domain, rec, owner, admin, adminZh, member, title: `Notice ${slug}`, t0: new Date(row.checked).getTime() };
   }
   const recheck = (id: string, at: number, query = q) => recheckCustomDomains(query, { now: new Date(at), resolver: stub, pageIds: [id] });

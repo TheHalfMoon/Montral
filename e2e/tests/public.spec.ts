@@ -14,6 +14,7 @@ test("landing page renders with its scripts, no console errors and no CSP violat
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await checkA11y(page, testInfo, "landing");
   expect(guard.errors, "console errors on the landing page").toEqual([]);
+  expect(guard.failedResponses, "unexpected failed requests on the landing page").toEqual([]);
 });
 
 test("sign-in page is accessible", async ({ page, guard }, testInfo) => {
@@ -22,6 +23,7 @@ test("sign-in page is accessible", async ({ page, guard }, testInfo) => {
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await checkA11y(page, testInfo, "sign-in");
   expect(guard.errors).toEqual([]);
+  expect(guard.failedResponses).toEqual([]);
 });
 
 test("sign-up page is accessible", async ({ page, guard }, testInfo) => {
@@ -30,6 +32,7 @@ test("sign-up page is accessible", async ({ page, guard }, testInfo) => {
   await expect(page.locator("main#main-content h1")).toBeVisible();
   await checkA11y(page, testInfo, "sign-up");
   expect(guard.errors).toEqual([]);
+  expect(guard.failedResponses).toEqual([]);
 });
 
 test("self-hosting docs render and are accessible", async ({ page, guard }, testInfo) => {
@@ -39,4 +42,5 @@ test("self-hosting docs render and are accessible", async ({ page, guard }, test
   await expect(page.locator("body")).toContainText(/docker/i);
   await checkA11y(page, testInfo, "docs-self-host");
   expect(guard.errors, "console errors on the docs page").toEqual([]);
+  expect(guard.failedResponses, "unexpected failed requests on the docs page").toEqual([]);
 });

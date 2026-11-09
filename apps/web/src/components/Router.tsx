@@ -50,6 +50,8 @@ function internal(a: HTMLAnchorElement, e: MouseEvent) {
   if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return false;
   if (a.target && a.target !== "_self") return false;
   if (a.hasAttribute("download") || a.origin !== location.origin) return false;
+  // an in-page fragment link (the "Skip to main content" link) is the browser's job: moving focus and scroll
+  if (a.hash && a.pathname === location.pathname && a.search === location.search) return false;
   const p = stripLocale(a.pathname);
   return p === NAV_PREFIX || p.startsWith(NAV_PREFIX + "/");
 }

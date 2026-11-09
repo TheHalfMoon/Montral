@@ -29,11 +29,12 @@
 })();
 </script>
 <style>
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
 :root{
   --bg:#fafaf7; --surface:#ffffff; --surface-2:#f4f4ee; --line:#e7e7df; --line-2:#d8d8cd;
-  --ink:#0e1411; --muted:#5a635d; --faint:#8b938d;
-  --accent:#0f9d58; --accent-weak:rgba(15,157,88,.10); --accent-line:rgba(15,157,88,.28);
-  --warn:#c98a0a; --warn-weak:rgba(201,138,10,.12); --down:#d93a3a;
+  --ink:#0e1411; --muted:#5a635d; --faint:#646c66;
+  --accent:#0b7a43; --accent-weak:rgba(15,157,88,.10); --accent-line:rgba(15,157,88,.28);
+  --warn:#8f6200; --warn-weak:rgba(201,138,10,.12); --down:#c42f2f;
   --dot:rgba(14,20,17,.13);
   --shadow:0 1px 0 rgba(255,255,255,.9) inset,0 36px 70px -34px rgba(24,36,29,.28),0 10px 28px -14px rgba(24,36,29,.14);
   --shadow-sm:0 1px 2px rgba(24,36,29,.06),0 10px 24px -14px rgba(24,36,29,.16);
@@ -43,7 +44,7 @@
 }
 :root[data-theme="dark"]{
   --bg:#0a0c0b; --surface:#111412; --surface-2:#171b19; --line:#222825; --line-2:#2f3733;
-  --ink:#eef1ee; --muted:#8c968f; --faint:#5b655e;
+  --ink:#eef1ee; --muted:#8c968f; --faint:#858e89;
   --accent:#3ddc84; --accent-weak:rgba(61,220,132,.12); --accent-line:rgba(61,220,132,.3);
   --warn:#f5b942; --warn-weak:rgba(245,185,66,.14); --down:#ff5c5c;
   --dot:rgba(238,241,238,.10);
@@ -698,9 +699,9 @@ html,body{overflow-x:clip}
     </div>
     <div class="f-bot"><span data-i18n="ft.legal">© 2026 Montral contributors · MITライセンス</span><span data-i18n="ft.built">オープンに開発中。</span>
   <div class="lang" id="lang-wrap">
-    <button type="button" class="lang-btn" id="lang" aria-label="Language" aria-haspopup="menu" aria-expanded="false">
+    <button type="button" class="lang-btn" id="lang" aria-haspopup="menu" aria-expanded="false">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.2 3 14.8 0 18M12 3c-3 3.2-3 14.8 0 18"/></svg>
-      <span id="lang-cur">English</span>
+      <span class="sr-only">Language: </span><span id="lang-cur">English</span>
       <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
     </button>
     <ul class="lang-menu" id="lang-menu" role="menu">

@@ -98,3 +98,15 @@
   document.addEventListener("click", close);
   document.addEventListener("keydown", function (e) { if (e.key === "Escape") close(); });
 })();
+// Keyboard users must be able to scroll code samples and wide tables that overflow (WCAG 2.1.1): exactly the
+// overflowing ones join the tab order, re-checked when the viewport changes.
+(function () {
+  var mark = function () {
+    document.querySelectorAll(".doc pre, .doc table").forEach(function (el) {
+      if (el.scrollWidth > el.clientWidth + 1) el.setAttribute("tabindex", "0");
+      else if (el.getAttribute("tabindex") === "0") el.removeAttribute("tabindex");
+    });
+  };
+  mark();
+  addEventListener("resize", mark);
+})();

@@ -1,13 +1,16 @@
-:root{--bg:#fafaf7;--surface:#fff;--surface-2:#f4f4ee;--line:#e7e7df;--line-2:#d9d9cf;--ink:#0e1411;--muted:#5a635d;--faint:#8b938d;--accent:#0f9d58;--warn:#c98a0a;--down:#d93a3a;--radius:14px;
+/* text tokens meet WCAG 2.1 AA (4.5:1) on --bg, --surface, --surface-2 and the 10% accent tint: e2e/ axe checks */
+:root{--bg:#fafaf7;--surface:#fff;--surface-2:#f4f4ee;--line:#e7e7df;--line-2:#d9d9cf;--ink:#0e1411;--muted:#5a635d;--faint:#646c66;--accent:#0b7a43;--warn:#8f6200;--down:#c42f2f;--radius:14px;
 --sans:"Geist",ui-sans-serif,system-ui,-apple-system,"Noto Sans SC","Noto Sans JP",sans-serif;--serif:"Instrument Serif","Noto Serif SC","Noto Serif JP",Georgia,serif;--mono:"Geist Mono",ui-monospace,Menlo,monospace}
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0a0c0b;--surface:#111413;--surface-2:#171b19;--line:#222826;--line-2:#2d3431;--ink:#f1f4f2;--muted:#a1aaa5;--faint:#6f7873;--accent:#3ddc84;--warn:#f5b942;--down:#ff5c5c}}
-:root[data-theme=dark]{--bg:#0a0c0b;--surface:#111413;--surface-2:#171b19;--line:#222826;--line-2:#2d3431;--ink:#f1f4f2;--muted:#a1aaa5;--faint:#6f7873;--accent:#3ddc84;--warn:#f5b942;--down:#ff5c5c}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0a0c0b;--surface:#111413;--surface-2:#171b19;--line:#222826;--line-2:#2d3431;--ink:#f1f4f2;--muted:#a1aaa5;--faint:#858e89;--accent:#3ddc84;--warn:#f5b942;--down:#ff5c5c}}
+:root[data-theme=dark]{--bg:#0a0c0b;--surface:#111413;--surface-2:#171b19;--line:#222826;--line-2:#2d3431;--ink:#f1f4f2;--muted:#a1aaa5;--faint:#858e89;--accent:#3ddc84;--warn:#f5b942;--down:#ff5c5c}
 *{box-sizing:border-box;margin:0}
 [hidden]{display:none!important}
 body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
 a{color:inherit;text-decoration:none}
 .skip-link{position:fixed;top:-100px;left:16px;z-index:1000;padding:10px 16px;background:var(--surface);color:var(--ink);border:2px solid var(--accent);border-radius:9px;font-weight:600}
 .skip-link:focus-visible{top:16px;outline:3px solid var(--accent);outline-offset:2px}
+.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+#main-content:focus{outline:none}
 h1,h2,h3{font-family:var(--serif);font-weight:400;letter-spacing:-.01em}
 .mono{font-family:var(--mono)}.muted{color:var(--muted)}.faint{color:var(--faint)}
 .btn{display:inline-flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:10px;border:1px solid var(--line-2);background:var(--surface);color:var(--ink);font:500 14.5px var(--sans);cursor:pointer}

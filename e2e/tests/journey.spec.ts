@@ -38,6 +38,8 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await expect(skip).toBeInViewport();
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(/#main-content$/);
+    // focus moves into the main landmark, so the next Tab continues from the page content, not the sidebar
+    await expect(page.locator("main#main-content")).toBeFocused();
     await expect(page.locator("main#main-content")).toBeInViewport();
   });
 

@@ -120,6 +120,7 @@ func (p *montralProvider) Resources(_ context.Context) []func() resource.Resourc
 		NewStatusPageResource,
 		NewMaintenanceWindowResource,
 		NewProjectAlertingResource,
+		NewEscalationPolicyResource,
 	}
 }
 

@@ -72,6 +72,7 @@ type monitorModel struct {
 	SlowThresholdMs      types.Int64  `tfsdk:"slow_threshold_ms"`
 	SlowAlertAfter       types.Int64  `tfsdk:"slow_alert_after"`
 	DependsOnMonitorID   types.String `tfsdk:"depends_on_monitor_id"`
+	EscalationPolicyID   types.String `tfsdk:"escalation_policy_id"`
 	Paused               types.Bool   `tfsdk:"paused"`
 	Status               types.String `tfsdk:"status"`
 	HeartbeatToken       types.String `tfsdk:"heartbeat_token"`
@@ -194,6 +195,9 @@ func (r *monitorResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 			"depends_on_monitor_id": schema.StringAttribute{Optional: true,
 				MarkdownDescription: "Parent monitor UUID in the same project; while it is down this monitor opens no incidents.",
 				Validators:          []validator.String{uuidValidator()}},
+			"escalation_policy_id": schema.StringAttribute{Optional: true,
+				MarkdownDescription: "Escalation policy (`montral_escalation_policy`, workspace-wide or this project's) that unacknowledged incidents follow instead of the project's escalation levels.",
+				Validators:          []validator.String{uuidValidator()}},
 			"paused": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false),
 				MarkdownDescription: "Pause checks and alerts. Default false."},
 			"status": schema.StringAttribute{Computed: true, MarkdownDescription: "Current state (`pending`, `up`, `down`, `paused`, ...). Informational; refreshed on every read."},
@@ -287,6 +291,7 @@ func (m *monitorModel) body(ctx context.Context, diags *diag.Diagnostics, withTy
 		"slowThresholdMs":      m.SlowThresholdMs.ValueInt64(),
 		"slowAlertAfter":       m.SlowAlertAfter.ValueInt64(),
 		"dependsOnMonitorId":   strPtr(m.DependsOnMonitorID),
+		"escalationPolicyId":   strPtr(m.EscalationPolicyID),
 	}
 	if withType {
 		b["type"] = m.Type.ValueString()
@@ -362,6 +367,7 @@ func (m *monitorModel) fromAPI(api *client.Monitor, prior *monitorModel, baseURL
 	m.SlowThresholdMs = types.Int64Value(api.SlowThresholdMs)
 	m.SlowAlertAfter = types.Int64Value(api.SlowAlertAfter)
 	m.DependsOnMonitorID = strValue(api.DependsOnMonitorID)
+	m.EscalationPolicyID = strValue(api.EscalationPolicyID)
 	m.Paused = types.BoolValue(api.Status == "paused")
 	m.Status = types.StringValue(api.Status)
 	m.HeartbeatToken = strValue(api.HeartbeatToken)

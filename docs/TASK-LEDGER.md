@@ -33,7 +33,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 12 | Load, backpressure and pool-exhaustion qualification | P1 | Done (#40); no application defect found |
 | 13 | On-call schedules (rotations, overrides) | P2 | Implemented in #48; independent review (1 high, 3 medium, 4 low) fixed on the same PR, awaiting re-review: schedules with layers, DST-correct rotations, restriction windows, overrides, escalation policies paging whoever is on call, iCal feed, REST + MCP + UI; `docs/evidence/2026-11-10-oncall.md` |
 | 14 | SSO (OIDC; SAML if justified) | P2 | Not started; GitHub sign-in only |
-| 15 | Terraform provider / config-as-code | P2 | Implemented, in review (#50): `terraform-provider-montral/` (5 resources, 2 data sources), acceptance tests in `montral-terraform.yml`; unpublished, build from source (`docs/evidence/2026-11-10-terraform-provider.md`) |
+| 15 | Terraform provider / config-as-code | P2 | Implemented, in review (#50): `terraform-provider-montral/` (6 resources incl. `montral_escalation_policy`, 2 data sources), acceptance tests in `montral-terraform.yml`; unpublished, build from source (`docs/evidence/2026-11-10-terraform-provider.md`) |
 | 16 | Browser / multi-step synthetic checks | P3 | Not started; needs an isolated headless runtime |
 | 17 | SMS / voice alerts | P3 | Blocked: paid provider, needs owner approval |
 | 18 | Custom webhook responses (webhook.site parity) | P3 | In review (#47); evidence `docs/evidence/2026-11-10-webhook-responses.md` |

@@ -40,6 +40,7 @@ type Monitor struct {
 	SlowAlertAfter       int64             `json:"slowAlertAfter"`
 	DependsOnMonitorID   *string           `json:"dependsOnMonitorId"`
 	MinRegionsFailing    int64             `json:"minRegionsFailing"`
+	EscalationPolicyID   *string           `json:"escalationPolicyId"`
 	// PATCH only
 	Paused *bool `json:"paused,omitempty"`
 

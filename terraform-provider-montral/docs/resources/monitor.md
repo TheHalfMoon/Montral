@@ -113,6 +113,7 @@ output "backup_ping_url" {
 - `dns_match_mode` (String) DNS monitors: `exact` (default) or `contains`.
 - `dns_record_type` (String) DNS monitors: record type (`A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`). Default `A`.
 - `domain_expiry_warn_days` (Number) domain and certificate monitors: fail this many days (1-365) before expiry. Default 30.
+- `escalation_policy_id` (String) Escalation policy (`montral_escalation_policy`, workspace-wide or this project's) that unacknowledged incidents follow instead of the project's escalation levels.
 - `expected_location` (String) For an expected 3xx: the Location (full http(s) URL or a path starting with `/`) the redirect must point to.
 - `expected_status` (Number) HTTP status that counts as healthy (100-599). An expected 3xx is checked without following the redirect. Default 200.
 - `failure_threshold` (Number) Consecutive failed checks before an incident opens and alerts escalate (1-10). Default 3.

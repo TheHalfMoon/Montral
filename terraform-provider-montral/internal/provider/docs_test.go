@@ -76,6 +76,16 @@ monitor is created again. Request ` + "`headers`" + ` and ` + "`request_body`" +
 admins. With a member's key they are kept from state and out-of-band changes to them are not detected.
 ` + "`status`" + ` is informational and never causes a diff.
 `,
+	"resource/montral_escalation_policy": `## Concurrency and drift
+
+Montral versions every policy. Updates and deletes send the ` + "`version`" + ` read at the last refresh, so a policy someone
+changed in the meantime is refused (HTTP 409 ` + "`version_conflict`" + `) instead of being overwritten. Run ` + "`terraform plan`" + `
+again to see their change, then apply. Every refresh reads the policy, so edits made in the dashboard show as drift, and a
+policy deleted outside Terraform is created again. Deleting a policy detaches it from its monitors, which fall back to the
+project's escalation levels.
+
+On-call schedules (` + "`schedule_ids`" + `) are referenced by id. A ` + "`montral_oncall_schedule`" + ` resource is not provided yet.
+`,
 	"resource/montral_project_alerting": `## Lifecycle
 
 A project always has alerting settings. Creating this resource overwrites them, and destroying it resets them to the defaults

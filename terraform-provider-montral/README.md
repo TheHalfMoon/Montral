@@ -1,6 +1,6 @@
 # Terraform provider for Montral
 
-Manage [Montral](../README.md) monitors, alert channels, status pages, maintenance windows and project escalation as code,
+Manage [Montral](../README.md) monitors, alert channels, status pages, maintenance windows, project escalation and escalation policies as code,
 with Terraform (1.0+) or OpenTofu. The provider talks to Montral's REST API (`/api/*`) with an API key.
 
 > **Unpublished.** This provider is not on the Terraform or OpenTofu registry. No release tags or GitHub releases are
@@ -13,6 +13,7 @@ with Terraform (1.0+) or OpenTofu. The provider talks to Montral's REST API (`/a
 | Resource | `montral_status_page` | components, groups, theme, visibility, write-only password, maintenance reminders |
 | Resource | `montral_maintenance_window` | one-off or daily/weekly series; every change replaces (the API has no edit) |
 | Resource | `montral_project_alerting` | alert repeats and up to three escalation levels per project |
+| Resource | `montral_escalation_policy` | steps notifying channels, people and on-call schedules; versioned edits; monitors use it via `escalation_policy_id` |
 | Data source | `montral_monitor` | by id, or by name within a project |
 | Data source | `montral_project` | by id, by name, or the current project |
 
@@ -179,6 +180,5 @@ and its own code is under the repository's MIT licence.
 
 ## Not yet covered
 
-- `montral_escalation_policy` / on-call schedules: the on-call API is not on `main` yet (pull request #48). Add the
-  resource once it merges.
+- `montral_oncall_schedule` (rotation layers, overrides): escalation policies reference schedules by id for now.
 - Status page custom domains, share links and subscribers; incidents; webhook inboxes; workspace settings.

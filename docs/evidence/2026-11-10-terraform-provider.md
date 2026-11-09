@@ -116,8 +116,7 @@ The provider is not uploaded to any registry, and no tags or releases were creat
 `dev_overrides` (README). Publication needs the owner's go-ahead.
 
 ## Known limitations and follow-ups
-- `montral_escalation_policy` (on-call schedules): the on-call API is in pull request #48 and not on `main`; add the
-  resource once it merges.
+- `montral_oncall_schedule` (layers, overrides) is not provided; escalation policies reference schedules by id.
 - A password changed in the dashboard cannot be detected (the API never returns it). `password_wo` needs Terraform or
   OpenTofu 1.11+. The deprecated `password` keeps working on older versions but stores the value in state. With a member's key, neither can
   channel credentials, monitor headers or request bodies.
@@ -147,3 +146,23 @@ The provider is not uploaded to any registry, and no tags or releases were creat
    `TestPostRetriedOnlyWhenNothingWasDone` covers 8 cases.
 4. **(low) Plain http endpoints.** `http://` is refused except for `localhost`, `127.0.0.1` and `::1`, unless the
    provider sets `insecure_http = true`. Unit test `TestPlainHTTPOnlyForLoopbackOrWhenAllowed`.
+
+## Rebase onto #47 and #48, and `montral_escalation_policy`
+The branch was rebased onto `main` after #47 (webhook responses) and #48 (on-call schedules and escalation policies,
+migration 0053) merged. The only textual conflict was the "Remaining" list in `docs/GAP-MATRIX.md`, resolved by keeping
+#47's and #48's list with the Terraform line updated. The repo interface, `db-pg` repo, maintenance routes and `api.astro`
+merged cleanly with both sides kept.
+
+Now that the escalation-policy API is on `main`:
+- `montral_escalation_policy` (`/api/escalation-policies`): name, optional project (unset means workspace-wide; changing it
+  replaces the policy), `repeat_count`, and 1-10 steps. Each step has `timeout_min` and sets of channel, user and schedule
+  ids. Create, read, update, delete and import are supported. Updates and deletes send the `version` read at refresh, so
+  a concurrent edit is refused (409 `version_conflict`) rather than overwritten. Plan-time validation mirrors the API's
+  zod rules plus "each step needs at least one channel, person or schedule".
+- `montral_monitor.escalation_policy_id`.
+- `TestAccEscalationPolicy_basic`: create with channel and person steps, linked from a monitor; in-place update (the
+  version goes up); import; drift after an edit through the API (non-empty plan, then converged); out-of-band delete
+  (created again, and the monitor re-linked); moving the policy into a project replaces it; import of the project
+  policy. `TestAccEscalationPolicy_validation` has 6 cases.
+- `montral_oncall_schedule` stays a follow-up: layers and overrides have their own versioned sub-resources and member
+  constraints.

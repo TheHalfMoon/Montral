@@ -26,7 +26,7 @@ func TestProviderSchemasAreValid(t *testing.T) {
 	for _, d := range resp.Diagnostics {
 		t.Errorf("schema diagnostic: %s: %s", d.Summary, d.Detail)
 	}
-	for _, name := range []string{"montral_monitor", "montral_alert_channel", "montral_status_page", "montral_maintenance_window", "montral_project_alerting"} {
+	for _, name := range []string{"montral_monitor", "montral_alert_channel", "montral_status_page", "montral_maintenance_window", "montral_project_alerting", "montral_escalation_policy"} {
 		if _, ok := resp.ResourceSchemas[name]; !ok {
 			t.Errorf("resource %s missing", name)
 		}

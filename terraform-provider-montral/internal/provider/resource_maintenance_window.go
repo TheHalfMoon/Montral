@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -195,17 +196,46 @@ func (m *maintenanceWindowModel) fromAPI(api *client.MaintenanceWindow) {
 	})
 }
 
-func (r *maintenanceWindowResource) find(ctx context.Context, id, project string) (*client.MaintenanceWindow, error) {
+// maintenanceListCap is how many windows GET /maintenance returns at most (active and upcoming first, ended last).
+const maintenanceListCap = 1000
+
+// lookup is the outcome of reading one window.
+type lookup int
+
+const (
+	found   lookup = iota
+	gone           // the API says the window does not exist
+	unknown        // it could not be told (an older server without GET /maintenance/:id, and a full list)
+)
+
+// find reads one window with GET /maintenance/:id. Servers from before that endpoint answer a plain-text 404 for it;
+// the provider then falls back to the project's list, which is capped, so absence from a full list proves nothing.
+func (r *maintenanceWindowResource) find(ctx context.Context, id, project string) (*client.MaintenanceWindow, lookup, error) {
+	var w client.MaintenanceWindow
+	err := r.client.Get(ctx, "/maintenance/"+id, project, &w)
+	switch {
+	case err == nil:
+		return &w, found, nil
+	case client.IsRouteMissing(err):
+		// fall through to the list
+	case client.IsNotFound(err):
+		return nil, gone, nil
+	default:
+		return nil, unknown, err
+	}
 	var list []client.MaintenanceWindow
 	if err := r.client.Get(ctx, "/maintenance", project, &list); err != nil {
-		return nil, err
+		return nil, unknown, err
 	}
 	for i := range list {
 		if list[i].ID == id {
-			return &list[i], nil
+			return &list[i], found, nil
 		}
 	}
-	return nil, nil
+	if len(list) >= maintenanceListCap {
+		return nil, unknown, nil
+	}
+	return nil, gone, nil
 }
 
 func (r *maintenanceWindowResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -243,13 +273,20 @@ func (r *maintenanceWindowResource) Read(ctx context.Context, req resource.ReadR
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	w, err := r.find(ctx, state.ID.ValueString(), state.ProjectID.ValueString())
+	w, outcome, err := r.find(ctx, state.ID.ValueString(), state.ProjectID.ValueString())
 	if err != nil {
 		apiError(&resp.Diagnostics, "reading maintenance window "+state.ID.ValueString(), err)
 		return
 	}
-	if w == nil {
+	switch outcome {
+	case gone:
 		resp.State.RemoveResource(ctx)
+		return
+	case unknown:
+		// never drop a window from state on an inconclusive answer: keep it and say why
+		resp.Diagnostics.AddWarning("Maintenance window not refreshed",
+			fmt.Sprintf("Window %s is not among the %d windows this Montral server lists, and the server has no GET /maintenance/:id to ask directly (upgrade it). The window is kept in state unchanged.", state.ID.ValueString(), maintenanceListCap))
+		resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 		return
 	}
 	state.fromAPI(w)

@@ -24,8 +24,9 @@ Terraform provider or YAML.
     is the escalation-policy API that exists on `main` today.
 - Data sources: `montral_monitor` (by id, or by name within a project) and `montral_project` (by id, by name, or the
   current project).
-- No API change was needed. Channels and maintenance windows have no single-object GET, so the provider reads them
-  through the project's list endpoint.
+- One API addition, made after review: `GET /api/maintenance/:id`, scoped to the workspace and to a limited key's
+  projects (`repo.getMaintenance`, documented in en and zh, e2e test `maintenance-get.e2e.test.ts`). Channels still have
+  no single-object GET; the provider reads them through the project's channel list, which is not capped.
 
 ## Design decisions
 - **Drift.** Every Read refreshes from the API. An out-of-band change makes the plan non-empty, and the next apply
@@ -79,6 +80,7 @@ Acceptance tests (`TF_ACC=1`, against the real Node server and PostgreSQL 18 in 
 - `TestAccStatusPage_basic`: create with grouped components; in-place update to password visibility; import ignoring
   the password; drift (title, theme and components changed through the API, then converged); slug change is a
   replace; out-of-band delete. `TestAccStatusPage_validation` (5 cases).
+- `TestAccMaintenanceWindow_beyondListCap`: an ended window behind 1101 upcoming ones stays in state.
 - `TestAccMaintenanceWindow_basic`: offset spelling without drift, replace on change, import, out-of-band delete,
   weekly series with destroy cancelling it. `TestAccMaintenanceWindow_validation` (4 cases).
 - `TestAccProjectAlerting_basic` (two escalation levels referencing channels, update, import),
@@ -116,8 +118,32 @@ The provider is not uploaded to any registry, and no tags or releases were creat
 ## Known limitations and follow-ups
 - `montral_escalation_policy` (on-call schedules): the on-call API is in pull request #48 and not on `main`; add the
   resource once it merges.
-- A password changed in the dashboard cannot be detected (the API never returns it). With a member's key, neither can
+- A password changed in the dashboard cannot be detected (the API never returns it). `password_wo` needs Terraform or
+  OpenTofu 1.11+. The deprecated `password` keeps working on older versions but stores the value in state. With a member's key, neither can
   channel credentials, monitor headers or request bodies.
-- Maintenance windows are read from the project's list (the latest 1000). Every change replaces the window.
+- Every change to a maintenance window replaces it (the API has no edit).
 - Not covered yet: status page custom domains, share links and subscribers; incidents; webhook inboxes; workspace
   settings; project creation.
+
+## Review fixes (independent review of 2a40f8f)
+1. **(medium) Maintenance windows silently removed from state.** Read used to search the capped `GET /maintenance`
+   list (1000 windows, ended ones sorted last, up to 367 rows per daily series), so an ended window could disappear
+   from state. Fixed with a new `GET /api/maintenance/:id` (org- and scope-checked; 404 for unknown, malformed,
+   foreign-workspace and out-of-scope ids), which Read now uses. Only that endpoint's JSON 404 removes a resource.
+   Against an older server without the route, the provider falls back to the list, and a window missing from a
+   *full* list is kept in state with a warning, never removed. Proven by the API e2e test (1101 upcoming windows
+   push an ended one out of the list, and GET by id still returns it) and by the acceptance test
+   `TestAccMaintenanceWindow_beyondListCap`: the same situation through the provider, ending in an empty plan,
+   a refresh and an import.
+2. **(low) Status page password in state.** New write-only `password_wo` (framework `WriteOnly`, Terraform 1.11+)
+   with the `password_wo_version` trigger. `password` is deprecated with a documented migration (replace it with
+   `password_wo` and `password_wo_version = 1`). `TestAccStatusPage_basic` checks that no attribute in state contains
+   the password and that the server unlocks with it. `TestAccStatusPage_passwordMigration` covers legacy, then
+   migrated (password gone from state), then a changed value without a version bump (empty plan), then the bump
+   (new password works, old one refused).
+3. **(low) POST retried on an ambiguous 503.** A POST is now retried on 429 (refused before any work), and on 503
+   only when the body is Montral's own rolled-back answer from `handleApiError`
+   (`{"error":"Temporarily unavailable, please retry"}`). Other methods still retry 503. Unit test
+   `TestPostRetriedOnlyWhenNothingWasDone` covers 8 cases.
+4. **(low) Plain http endpoints.** `http://` is refused except for `localhost`, `127.0.0.1` and `::1`, unless the
+   provider sets `insecure_http = true`. Unit test `TestPlainHTTPOnlyForLoopbackOrWhenAllowed`.

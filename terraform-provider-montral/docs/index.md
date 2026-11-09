@@ -37,4 +37,5 @@ provider "montral" {
 
 - `api_key` (String, Sensitive) Montral API key (`montral_...`), created under Settings → API keys. May also be set with the `MONTRAL_API_KEY` environment variable. The key's workspace (and project limit, if any) decides what the provider can reach.
 - `endpoint` (String) Base URL of the Montral deployment, such as `https://montral.example.com`. May also be set with the `MONTRAL_ENDPOINT` environment variable. TLS certificates are always verified.
+- `insecure_http` (Boolean) Allow a plain `http://` endpoint on a host other than `localhost`, `127.0.0.1` or `::1`. Off by default: over plain HTTP the API key and every secret the provider sends cross the network unencrypted. Use only on a trusted private network.
 - `project_id` (String) Default project UUID for resources that do not set their own `project_id`. May also be set with `MONTRAL_PROJECT_ID`. Without it, the key's first project (or the workspace's default project) is used.

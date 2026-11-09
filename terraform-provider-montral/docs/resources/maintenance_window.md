@@ -71,8 +71,11 @@ resource "montral_maintenance_window" "weekly" {
 ## Updates and drift
 
 The API creates, lists and deletes maintenance windows but does not edit them, so changing any argument replaces the
-window. The provider reads windows through the project's list (the most recent 1000). A window deleted outside Terraform is
-created again. Instants are compared as moments: `2026-12-01T03:00:00+01:00` and `2026-12-01T02:00:00Z` are the same value.
+window. The provider reads each window with `GET /maintenance/:id`, so ended windows and long series are refreshed
+like any other. A window deleted outside Terraform is created again. An older server without that endpoint makes the
+provider fall back to the project's list, which is capped at 1000 windows. A window missing from a full list is then kept
+in state with a warning instead of being dropped.
+Instants are compared as moments: `2026-12-01T03:00:00+01:00` and `2026-12-01T02:00:00Z` are the same value.
 Destroying a recurring window cancels its series: future occurrences are deleted, a running one ends now, and past
 ones stay as history.
 

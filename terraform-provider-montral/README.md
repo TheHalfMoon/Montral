@@ -100,8 +100,10 @@ projects, the provider can reach only those projects. Use a **workspace owner's 
 - channel credentials, monitor request headers and request bodies are returned only to owners and admins. With a
   member's key the provider keeps those values from state and cannot detect changes made to them outside Terraform.
 
-The API key is marked sensitive, read from `MONTRAL_API_KEY` when not set in the provider block, and never logged. TLS
-certificates are always verified (Go's default trust store, which honours `SSL_CERT_FILE` / `SSL_CERT_DIR` on Linux).
+The API key is marked sensitive, read from `MONTRAL_API_KEY` when not set in the provider block, and never logged.
+The endpoint must be `https://`, except on `localhost`, `127.0.0.1` or `::1`. A plain `http://` endpoint elsewhere is
+refused unless the provider block sets `insecure_http = true`, because the key and every secret would cross the network
+unencrypted. TLS certificates are always verified (Go's default trust store, which honours `SSL_CERT_FILE` / `SSL_CERT_DIR` on Linux).
 For a deployment behind a private CA, add the CA to the system trust store.
 
 Resources use the provider's `project_id` unless they set their own. Objects that the API lists per project (alert
@@ -109,6 +111,8 @@ channels, maintenance windows) import as `<project_id>/<id>` when they are outsi
 
 ## Behaviour
 
+- **Maintenance windows** are read one by one (`GET /maintenance/:id`), so ended windows and long series beyond the
+  list's 1000-window cap are never dropped from state.
 - **Drift.** Every read refreshes from the API, so a change made in the dashboard shows in `terraform plan` and the next
   `apply` converges. An object deleted outside Terraform (HTTP 404, or missing from its list) is removed from state and
   planned for creation.
@@ -119,15 +123,19 @@ channels, maintenance windows) import as `<project_id>/<id>` when they are outsi
   collisions) is reported from the API at apply time.
 - **Errors.** API errors name the call, the HTTP status and Montral's error code, for example
   `Montral API POST /monitors returned HTTP 400 [target_not_allowed]: ...`.
-- **Retries.** 429 and 503 are retried up to five times with exponential backoff and jitter, honouring `Retry-After`
-  (capped at 60 s). Other 4xx answers are never retried. Transport errors are retried for reads only.
+- **Retries.** 429 is retried up to five times with exponential backoff and jitter, honouring `Retry-After` (capped at
+  60 s). 503 is retried the same way for reads, updates and deletes. For a POST, which creates something, a 503 is
+  retried only when it is Montral's own rolled-back answer (`{"error":"Temporarily unavailable, please retry"}`, sent
+  after PostgreSQL rolled the transaction back). A 503 from a proxy could hide a request that was already processed.
+  Other 4xx answers are never retried. Transport errors are retried for reads only.
 - **Compatibility.** Unknown fields in API answers are ignored, so a newer server does not break an older provider.
 
 ### Write-only values and drift limits
 
 | Value | Returned by the API | Provider behaviour |
 |---|---|---|
-| `montral_status_page.password` | never (stored as a hash) | kept in state (sensitive); sent on create and when it changes; out-of-band changes undetectable; ignored on import |
+| `montral_status_page.password_wo` | never (stored as a hash) | write-only (Terraform/OpenTofu 1.11+): never in plan or state; sent on create and when `password_wo_version` changes; out-of-band changes undetectable |
+| `montral_status_page.password` (deprecated) | never | kept in state (sensitive) for Terraform < 1.11; migrate by replacing it with `password_wo` + `password_wo_version = 1` |
 | `montral_alert_channel.secret_config` | to owners/admins only | refreshed with an owner/admin key; kept from state otherwise |
 | `montral_monitor.headers`, `request_body` | to owners/admins only | refreshed with an owner/admin key; kept from state otherwise |
 | `montral_monitor.heartbeat_token`, `heartbeat_url` | yes | read-only, sensitive |

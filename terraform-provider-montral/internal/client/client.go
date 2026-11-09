@@ -45,6 +45,8 @@ type Options struct {
 	ProjectID  string
 	UserAgent  string
 	HTTPClient *http.Client
+	// AllowInsecureHTTP permits a plain http:// endpoint on a host other than localhost, 127.0.0.1 or ::1.
+	AllowInsecureHTTP bool
 }
 
 // New validates the endpoint and returns a client. TLS certificates are verified by Go's default transport.
@@ -52,7 +54,7 @@ func New(o Options) (*Client, error) {
 	if strings.TrimSpace(o.APIKey) == "" {
 		return nil, errors.New("an API key is required (set api_key or MONTRAL_API_KEY)")
 	}
-	base, err := ParseEndpoint(o.Endpoint)
+	base, err := ParseEndpoint(o.Endpoint, o.AllowInsecureHTTP)
 	if err != nil {
 		return nil, err
 	}
@@ -79,7 +81,9 @@ func New(o Options) (*Client, error) {
 }
 
 // ParseEndpoint accepts an absolute http(s) base URL such as https://montral.example.com (a trailing /api is dropped).
-func ParseEndpoint(raw string) (*url.URL, error) {
+// Plain http:// is refused, because the API key would cross the network in clear text, except for a loopback host
+// (localhost, 127.0.0.1, ::1) or when allowInsecureHTTP is set.
+func ParseEndpoint(raw string, allowInsecureHTTP bool) (*url.URL, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return nil, errors.New("an endpoint is required (set endpoint or MONTRAL_ENDPOINT)")
@@ -90,6 +94,9 @@ func ParseEndpoint(raw string) (*url.URL, error) {
 	}
 	if u.User != nil {
 		return nil, errors.New("endpoint must not contain credentials; use api_key")
+	}
+	if u.Scheme == "http" && !allowInsecureHTTP && !isLoopback(u.Hostname()) {
+		return nil, fmt.Errorf("endpoint %q uses plain http, which would send the API key unencrypted; use https, or set insecure_http = true to allow it", u.Scheme+"://"+u.Host)
 	}
 	u.RawQuery, u.Fragment = "", ""
 	u.Path = strings.TrimSuffix(strings.TrimRight(u.Path, "/"), "/api")
@@ -109,6 +116,9 @@ type APIError struct {
 	Status  int
 	Code    string
 	Message string
+	// FromAPI is true when the body was Montral's JSON error ({"error": ...}); a plain-text 404 instead means the route
+	// does not exist on this server (an older version).
+	FromAPI bool
 }
 
 func (e *APIError) Error() string {
@@ -121,6 +131,13 @@ func (e *APIError) Error() string {
 		msg = http.StatusText(e.Status)
 	}
 	return fmt.Sprintf("Montral API %s %s returned HTTP %d%s: %s", e.Method, e.Path, e.Status, code, msg)
+}
+
+// IsRouteMissing reports a 404 that did not come from a Montral route (no JSON error body): the endpoint does not
+// exist on this server version.
+func IsRouteMissing(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound && !apiErr.FromAPI
 }
 
 // IsNotFound reports whether err is a 404 from the API.
@@ -186,7 +203,7 @@ func (c *Client) Do(ctx context.Context, r Request, out any) error {
 		if readErr != nil {
 			return fmt.Errorf("Montral API %s %s: reading answer: %w", r.Method, r.Path, readErr)
 		}
-		if retryable(res.StatusCode) && attempt < c.MaxRetries {
+		if retryable(r.Method, res.StatusCode, data) && attempt < c.MaxRetries {
 			wait, ok := retryAfter(res.Header.Get("Retry-After"), time.Now())
 			if !ok {
 				wait = c.backoff(attempt)
@@ -229,8 +246,33 @@ func (c *Client) Delete(ctx context.Context, path, project string) error {
 	return c.Do(ctx, Request{Method: http.MethodDelete, Path: path, ProjectID: project}, nil)
 }
 
-func retryable(status int) bool {
-	return status == http.StatusTooManyRequests || status == http.StatusServiceUnavailable
+// isLoopback is true for localhost, 127.0.0.1 and ::1: plain http there never leaves the machine.
+func isLoopback(host string) bool {
+	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
+}
+
+// rolledBackMessage is the body of Montral's own 503 (handleApiError in apps/api/src/app.ts): PostgreSQL rolled the
+// whole transaction back (deadlock or serialization failure), so nothing was written.
+const rolledBackMessage = "Temporarily unavailable, please retry"
+
+// retryable decides whether an answer is retried. 429 means the request was refused before any work, for every method.
+// A 503 is retried for every method except POST: a POST creates something, and a 503 from a proxy or load balancer
+// says nothing about whether the server already did. POST is retried on 503 only when the answer is Montral's own
+// rolled-back error.
+func retryable(method string, status int, body []byte) bool {
+	switch status {
+	case http.StatusTooManyRequests:
+		return true
+	case http.StatusServiceUnavailable:
+		if method != http.MethodPost {
+			return true
+		}
+		var e struct {
+			Error string `json:"error"`
+		}
+		return json.Unmarshal(body, &e) == nil && e.Error == rolledBackMessage
+	}
+	return false
 }
 
 func (c *Client) backoff(attempt int) time.Duration {
@@ -288,6 +330,7 @@ func parseError(method, path string, status int, data []byte) error {
 		return e
 	}
 	e.Code = body.Code
+	e.FromAPI = len(body.Error) > 0
 	var text string
 	if json.Unmarshal(body.Error, &text) == nil {
 		e.Message = text

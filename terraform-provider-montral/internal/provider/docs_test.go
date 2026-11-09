@@ -34,18 +34,38 @@ Settings the API fills in itself (ntfy ` + "`priority = \"3\"`" + `) are left ou
 Montral refuses to delete a channel that monitors still alert. Terraform removes the monitor reference first when both
 are in the same configuration.
 `,
-	"resource/montral_status_page": `## Password and drift
+	"resource/montral_status_page": `## Password
 
-` + "`password`" + ` is write-only on Montral's side: it is stored as a PBKDF2 hash and never returned. Terraform sends it on create
-and when the configured value changes, and keeps it (sensitive) in state. A password changed in the dashboard is not
-detected. ` + "`has_password`" + ` shows whether a password is set. Removing ` + "`password`" + ` from the configuration keeps the stored hash.
-Every other attribute, including ` + "`components`" + `, is refreshed on every plan.
+Montral stores a page password as a PBKDF2 hash and never returns it. Set it with the write-only ` + "`password_wo`" + `
+(Terraform 1.11 or later, OpenTofu 1.11 or later). Its value is never written to the plan or the state. Terraform cannot
+compare a value it does not store, so the password is sent on create and whenever ` + "`password_wo_version`" + ` changes. To
+rotate the password, change both.
+
+` + "```terraform" + `
+resource "montral_status_page" "partners" {
+  slug                = "partners"
+  title               = "Partner status"
+  visibility          = "password"
+  password_wo         = var.partner_page_password
+  password_wo_version = 2 # bump to send a new password
+}
+` + "```" + `
+
+The older ` + "`password`" + ` argument still works on older Terraform versions, but it is deprecated because it keeps the
+password (sensitive) in state. To migrate, replace ` + "`password = ...`" + ` with ` + "`password_wo = ...`" + ` and
+` + "`password_wo_version = 1`" + `. The next apply sends the password once more and removes it from state.
+
+A password changed in the dashboard is not detected either way. ` + "`has_password`" + ` shows whether one is set. Removing the
+password arguments keeps the stored hash. Every other attribute, including ` + "`components`" + `, is refreshed on every plan.
 `,
 	"resource/montral_maintenance_window": `## Updates and drift
 
 The API creates, lists and deletes maintenance windows but does not edit them, so changing any argument replaces the
-window. The provider reads windows through the project's list (the most recent 1000). A window deleted outside Terraform is
-created again. Instants are compared as moments: ` + "`2026-12-01T03:00:00+01:00`" + ` and ` + "`2026-12-01T02:00:00Z`" + ` are the same value.
+window. The provider reads each window with ` + "`GET /maintenance/:id`" + `, so ended windows and long series are refreshed
+like any other. A window deleted outside Terraform is created again. An older server without that endpoint makes the
+provider fall back to the project's list, which is capped at 1000 windows. A window missing from a full list is then kept
+in state with a warning instead of being dropped.
+Instants are compared as moments: ` + "`2026-12-01T03:00:00+01:00`" + ` and ` + "`2026-12-01T02:00:00Z`" + ` are the same value.
 Destroying a recurring window cancels its series: future occurrences are deleted, a running one ends now, and past
 ones stay as history.
 `,

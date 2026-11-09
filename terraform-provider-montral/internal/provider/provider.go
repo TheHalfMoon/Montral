@@ -28,9 +28,10 @@ func New(version string) func() provider.Provider {
 }
 
 type providerModel struct {
-	Endpoint  types.String `tfsdk:"endpoint"`
-	APIKey    types.String `tfsdk:"api_key"`
-	ProjectID types.String `tfsdk:"project_id"`
+	Endpoint     types.String `tfsdk:"endpoint"`
+	APIKey       types.String `tfsdk:"api_key"`
+	ProjectID    types.String `tfsdk:"project_id"`
+	InsecureHTTP types.Bool   `tfsdk:"insecure_http"`
 }
 
 func (p *montralProvider) Metadata(_ context.Context, _ provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -56,6 +57,10 @@ func (p *montralProvider) Schema(_ context.Context, _ provider.SchemaRequest, re
 				Optional:            true,
 				MarkdownDescription: "Default project UUID for resources that do not set their own `project_id`. May also be set with `MONTRAL_PROJECT_ID`. Without it, the key's first project (or the workspace's default project) is used.",
 				Validators:          []validatorString{uuidValidator()},
+			},
+			"insecure_http": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Allow a plain `http://` endpoint on a host other than `localhost`, `127.0.0.1` or `::1`. Off by default: over plain HTTP the API key and every secret the provider sends cross the network unencrypted. Use only on a trusted private network.",
 			},
 		},
 	}
@@ -92,13 +97,14 @@ func (p *montralProvider) Configure(ctx context.Context, req provider.ConfigureR
 		return
 	}
 	c, err := client.New(client.Options{
-		Endpoint:  endpoint,
-		APIKey:    apiKey,
-		ProjectID: projectID,
-		UserAgent: "terraform-provider-montral/" + p.version,
+		Endpoint:          endpoint,
+		APIKey:            apiKey,
+		ProjectID:         projectID,
+		UserAgent:         "terraform-provider-montral/" + p.version,
+		AllowInsecureHTTP: cfg.InsecureHTTP.ValueBool(),
 	})
 	if err != nil {
-		resp.Diagnostics.AddError("Invalid Montral provider configuration", err.Error())
+		resp.Diagnostics.AddAttributeError(path.Root("endpoint"), "Invalid Montral provider configuration", err.Error())
 		return
 	}
 	// the key is never logged: only where requests go

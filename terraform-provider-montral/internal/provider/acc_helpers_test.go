@@ -157,7 +157,11 @@ func checkListedGone(t *testing.T, resourceType, path string) func(*terraform.St
 			case "montral_alert_channel":
 				found, err = listContains(c, path, rs.Primary.Attributes["project_id"], rs.Primary.ID, func(x client.Channel) string { return x.ID })
 			case "montral_maintenance_window":
-				found, err = listContains(c, path, rs.Primary.Attributes["project_id"], rs.Primary.ID, func(x client.MaintenanceWindow) string { return x.ID })
+				err = c.Get(context.Background(), "/maintenance/"+rs.Primary.ID, rs.Primary.Attributes["project_id"], nil)
+				found = err == nil
+				if client.IsNotFound(err) {
+					err = nil
+				}
 			}
 			if err != nil {
 				return err
@@ -182,7 +186,7 @@ func wrapRE(s string) *regexp.Regexp {
 
 // testAccClientURL is the endpoint as the provider normalises it.
 func testAccClientURL() string {
-	u, err := client.ParseEndpoint(os.Getenv("MONTRAL_ENDPOINT"))
+	u, err := client.ParseEndpoint(os.Getenv("MONTRAL_ENDPOINT"), true)
 	if err != nil {
 		return ""
 	}

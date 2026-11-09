@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/TheHalfMoon/Montral/terraform-provider-montral/internal/client"
@@ -56,6 +57,8 @@ type statusPageModel struct {
 	MCPEnabled               types.Bool    `tfsdk:"mcp_enabled"`
 	Visibility               types.String  `tfsdk:"visibility"`
 	Password                 types.String  `tfsdk:"password"`
+	PasswordWO               types.String  `tfsdk:"password_wo"`
+	PasswordWOVersion        types.Int64   `tfsdk:"password_wo_version"`
 	HasPassword              types.Bool    `tfsdk:"has_password"`
 	MaintenanceReminderHours types.Int64   `tfsdk:"maintenance_reminder_hours"`
 	Components               types.List    `tfsdk:"components"`
@@ -111,8 +114,16 @@ func (r *statusPageResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"visibility": schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("public"),
 				MarkdownDescription: "`public` (default), `members` (signed-in workspace members only) or `password` (members, or anyone with `password` or a share link).",
 				Validators:          []validator.String{stringvalidator.OneOf("public", "members", "password")}},
+			"password_wo": schema.StringAttribute{Optional: true, Sensitive: true, WriteOnly: true,
+				MarkdownDescription: "Page password (8-200 characters) for `visibility = \"password\"`, write-only: it is never stored in the plan or state (Terraform 1.11+ / OpenTofu 1.11+). It is sent on create and whenever `password_wo_version` changes. Changing it signs every outside visitor out.",
+				Validators: []validator.String{stringvalidator.LengthBetween(8, 200),
+					stringvalidator.AlsoRequires(path.MatchRoot("password_wo_version")), stringvalidator.ConflictsWith(path.MatchRoot("password"))}},
+			"password_wo_version": schema.Int64Attribute{Optional: true,
+				MarkdownDescription: "Any number that you change to send `password_wo` again: Terraform cannot compare a write-only value, so this is the trigger for rotating the password.",
+				Validators:          []validator.Int64{int64validator.AlsoRequires(path.MatchRoot("password_wo"))}},
 			"password": schema.StringAttribute{Optional: true, Sensitive: true,
-				MarkdownDescription: "Page password (8-200 characters) for `visibility = \"password\"`. Write-only on Montral's side: it is stored as a hash and never returned, so Terraform keeps the configured value in state, sends it only when it changes, and cannot detect a password changed outside Terraform. Changing it signs every outside visitor out. Removing it from the configuration leaves the stored hash in place.",
+				DeprecationMessage:  "password is kept (sensitive) in state; use password_wo with password_wo_version (Terraform 1.11+), which never stores it. Migrate by replacing password = X with password_wo = X and password_wo_version = 1.",
+				MarkdownDescription: "**Deprecated**: use `password_wo`. Page password (8-200 characters), kept (sensitive) in state and sent when it changes. Works on Terraform versions without write-only attributes.",
 				Validators:          []validator.String{stringvalidator.LengthBetween(8, 200)}},
 			"has_password": schema.BoolAttribute{Computed: true, MarkdownDescription: "Whether Montral holds a password for the page."},
 			"maintenance_reminder_hours": schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(24),
@@ -146,8 +157,8 @@ func (r *statusPageResource) ValidateConfig(ctx context.Context, req resource.Va
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if m.Visibility.ValueString() == "password" && m.Password.IsNull() {
-		resp.Diagnostics.AddAttributeError(path.Root("password"), "Invalid status page configuration", `a page with visibility = "password" needs a password`)
+	if m.Visibility.ValueString() == "password" && m.Password.IsNull() && m.PasswordWO.IsNull() {
+		resp.Diagnostics.AddAttributeError(path.Root("password_wo"), "Invalid status page configuration", `a page with visibility = "password" needs a password (password_wo)`)
 	}
 	ok, warn := 99.9, 98.0
 	if !m.UptimeOkPct.IsNull() && !m.UptimeOkPct.IsUnknown() {
@@ -212,7 +223,9 @@ func (m *statusPageModel) fromAPI(api *client.StatusPage, baseURL string) {
 	m.Visibility = types.StringValue(api.Visibility)
 	m.HasPassword = types.BoolValue(api.HasPassword)
 	m.MaintenanceReminderHours = types.Int64Value(api.MaintenanceReminderHours)
-	// the password itself is never returned: m.Password keeps what configuration/state holds
+	// the password itself is never returned: m.Password (deprecated) keeps what configuration/state holds, and the
+	// write-only password_wo never reaches state
+	m.PasswordWO = types.StringNull()
 	if len(api.Components) == 0 && m.Components.IsNull() {
 		// no components and none configured: stay null rather than an empty list
 	} else {
@@ -246,6 +259,9 @@ func (r *statusPageResource) Create(ctx context.Context, req resource.CreateRequ
 	body := plan.write(ctx, &resp.Diagnostics)
 	body.Slug = plan.Slug.ValueString()
 	body.Password = plan.Password.ValueString()
+	if wo := r.writeOnlyPassword(ctx, req.Config, &resp.Diagnostics); wo != "" {
+		body.Password = wo
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -298,6 +314,12 @@ func (r *statusPageResource) Update(ctx context.Context, req resource.UpdateRequ
 	if !plan.Password.IsNull() && !plan.Password.Equal(state.Password) {
 		body.Password = plan.Password.ValueString()
 	}
+	// the write-only password cannot be compared: its version is the trigger
+	if !plan.PasswordWOVersion.IsNull() && !plan.PasswordWOVersion.Equal(state.PasswordWOVersion) {
+		if wo := r.writeOnlyPassword(ctx, req.Config, &resp.Diagnostics); wo != "" {
+			body.Password = wo
+		}
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -345,4 +367,14 @@ func sameFloat(prior types.Float64, api float64) types.Float64 {
 		return prior
 	}
 	return types.Float64Value(api)
+}
+
+// writeOnlyPassword reads password_wo from the configuration: the only place a write-only value exists.
+func (r *statusPageResource) writeOnlyPassword(ctx context.Context, config tfsdk.Config, diags *diag.Diagnostics) string {
+	var wo types.String
+	diags.Append(config.GetAttribute(ctx, path.Root("password_wo"), &wo)...)
+	if wo.IsNull() || wo.IsUnknown() {
+		return ""
+	}
+	return wo.ValueString()
 }

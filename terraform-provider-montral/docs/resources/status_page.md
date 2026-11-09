@@ -41,7 +41,9 @@ resource "montral_status_page" "partners" {
   slug       = "example-partners"
   title      = "Partner status"
   visibility = "password"
-  password   = var.partner_page_password
+  # write-only (Terraform 1.11+): never stored in state; bump the version to send a new password
+  password_wo         = var.partner_page_password
+  password_wo_version = 1
   components = [{ monitor_id = montral_monitor.api.id }]
 }
 
@@ -70,7 +72,9 @@ output "status_page_url" {
 - `hide_branding` (Boolean) Hide Montral's name and mark (where the plan allows it). Default false.
 - `maintenance_reminder_hours` (Number) Hours (0-168) before maintenance starts that subscribers are reminded; 0 = never. Default 24.
 - `mcp_enabled` (Boolean) Let the public MCP tools serve this page. Default true.
-- `password` (String, Sensitive) Page password (8-200 characters) for `visibility = "password"`. Write-only on Montral's side: it is stored as a hash and never returned, so Terraform keeps the configured value in state, sends it only when it changes, and cannot detect a password changed outside Terraform. Changing it signs every outside visitor out. Removing it from the configuration leaves the stored hash in place.
+- `password` (String, Sensitive) **Deprecated**: use `password_wo`. Page password (8-200 characters), kept (sensitive) in state and sent when it changes. Works on Terraform versions without write-only attributes.
+- `password_wo` (String, Sensitive) Page password (8-200 characters) for `visibility = "password"`, write-only: it is never stored in the plan or state (Terraform 1.11+ / OpenTofu 1.11+). It is sent on create and whenever `password_wo_version` changes. Changing it signs every outside visitor out.
+- `password_wo_version` (Number) Any number that you change to send `password_wo` again: Terraform cannot compare a write-only value, so this is the trigger for rotating the password.
 - `project_id` (String) Project UUID; defaults to the provider's project.
 - `show_latency` (Boolean) Show response times. Default true.
 - `theme` (String) `light` (default), `dark` or `auto`.
@@ -96,12 +100,29 @@ output "status_page_url" {
 
 - `group_name` (String) Group heading (1-60 characters, no surrounding spaces); consecutive components with the same group are shown together. Default `Services`, as in Montral.
 
-## Password and drift
+## Password
 
-`password` is write-only on Montral's side: it is stored as a PBKDF2 hash and never returned. Terraform sends it on create
-and when the configured value changes, and keeps it (sensitive) in state. A password changed in the dashboard is not
-detected. `has_password` shows whether a password is set. Removing `password` from the configuration keeps the stored hash.
-Every other attribute, including `components`, is refreshed on every plan.
+Montral stores a page password as a PBKDF2 hash and never returns it. Set it with the write-only `password_wo`
+(Terraform 1.11 or later, OpenTofu 1.11 or later). Its value is never written to the plan or the state. Terraform cannot
+compare a value it does not store, so the password is sent on create and whenever `password_wo_version` changes. To
+rotate the password, change both.
+
+```terraform
+resource "montral_status_page" "partners" {
+  slug                = "partners"
+  title               = "Partner status"
+  visibility          = "password"
+  password_wo         = var.partner_page_password
+  password_wo_version = 2 # bump to send a new password
+}
+```
+
+The older `password` argument still works on older Terraform versions, but it is deprecated because it keeps the
+password (sensitive) in state. To migrate, replace `password = ...` with `password_wo = ...` and
+`password_wo_version = 1`. The next apply sends the password once more and removes it from state.
+
+A password changed in the dashboard is not detected either way. `has_password` shows whether one is set. Removing the
+password arguments keeps the stored hash. Every other attribute, including `components`, is refreshed on every plan.
 
 ## Import
 

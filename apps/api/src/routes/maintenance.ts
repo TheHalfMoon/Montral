@@ -43,6 +43,11 @@ export const maintenance = new Hono<AppEnv>()
     await audit(c, "maintenance.create", { type: "maintenance", id: created.id }, auditChanges(v, { frequency: v.recurrence?.frequency ?? null }));
     return c.json(created, 201);
   })
+  // one window by id, also an ended one far down the capped list (the Terraform provider reads windows this way)
+  .get("/:id", uuidParams, async (c) => {
+    const row = await c.get("repo").getMaintenance(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    return row ? c.json(row) : c.json({ error: "Not found" }, 404);
+  })
   // end, skip and cancel stay idempotent; an audit event is written only when a window actually changed, in its own project
   .post("/:id/end", uuidParams, requireManager, async (c) => {
     const [ended] = await c.get("repo").endMaintenance(c.get("orgId"), c.req.param("id"), c.get("projectScope"));

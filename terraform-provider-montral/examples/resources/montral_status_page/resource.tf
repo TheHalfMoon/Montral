@@ -27,7 +27,9 @@ resource "montral_status_page" "partners" {
   slug       = "example-partners"
   title      = "Partner status"
   visibility = "password"
-  password   = var.partner_page_password
+  # write-only (Terraform 1.11+): never stored in state; bump the version to send a new password
+  password_wo         = var.partner_page_password
+  password_wo_version = 1
   components = [{ monitor_id = montral_monitor.api.id }]
 }
 

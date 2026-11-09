@@ -1,13 +1,20 @@
 package provider
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
+
+	"github.com/TheHalfMoon/Montral/terraform-provider-montral/internal/client"
 )
 
 // ---- montral_alert_channel ----------------------------------------------------------------------------------------
@@ -183,7 +190,7 @@ func TestAccAlertChannel_validation(t *testing.T) {
 func statusPageConfig(slug, title, visibility, password string) string {
 	pw := ""
 	if password != "" {
-		pw = fmt.Sprintf("password = %q", password)
+		pw = fmt.Sprintf("password_wo = %q\n  password_wo_version = 1", password)
 	}
 	return fmt.Sprintf(`
 resource "montral_monitor" "api" {
@@ -249,7 +256,12 @@ func TestAccStatusPage_basic(t *testing.T) {
 					resource.TestCheckResourceAttrPtr("montral_status_page.test", "id", &id),
 					resource.TestCheckResourceAttr("montral_status_page.test", "visibility", "password"),
 					resource.TestCheckResourceAttr("montral_status_page.test", "has_password", "true"),
-					resource.TestCheckResourceAttr("montral_status_page.test", "password", "correct horse battery"),
+					// write-only: neither the password nor any trace of it is in state
+					resource.TestCheckNoResourceAttr("montral_status_page.test", "password_wo"),
+					resource.TestCheckNoResourceAttr("montral_status_page.test", "password"),
+					resource.TestCheckResourceAttr("montral_status_page.test", "password_wo_version", "1"),
+					stateHoldsNo("correct horse battery"),
+					pageUnlocks(slug, "correct horse battery", true),
 				),
 			},
 			{
@@ -257,7 +269,7 @@ func TestAccStatusPage_basic(t *testing.T) {
 				ResourceName:            "montral_status_page.test",
 				ImportState:             true,
 				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"password"},
+				ImportStateVerifyIgnore: []string{"password_wo_version"},
 			},
 			{
 				// out-of-band edit: plan shows it, apply converges
@@ -323,11 +335,12 @@ func TestAccStatusPage_basic(t *testing.T) {
 
 func TestAccStatusPage_validation(t *testing.T) {
 	cases := map[string]string{
-		`slug = "Bad Slug"` + "\n" + `title = "x"`:                                                                 `lowercase letters, digits or hyphens`,
-		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `visibility = "password"`:                               `needs a password`,
-		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `uptime_ok_pct = 95` + "\n" + `uptime_warn_pct = 96`:    `amber threshold`,
-		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `password = "short"` + "\n" + `visibility = "password"`: `string length must be between 8 and 200`,
-		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `theme = "neon"`:                                        `value must be one of`,
+		`slug = "Bad Slug"` + "\n" + `title = "x"`:                                                                                                       `lowercase letters, digits or hyphens`,
+		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `visibility = "password"`:                                                                     `needs a password (password_wo)`,
+		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `uptime_ok_pct = 95` + "\n" + `uptime_warn_pct = 96`:                                          `amber threshold`,
+		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `password_wo = "short"` + "\n" + `password_wo_version = 1` + "\n" + `visibility = "password"`: `string length must be between 8 and 200`,
+		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `password_wo = "long enough"` + "\n" + `visibility = "password"`:                              `password_wo_version`,
+		`slug = "ok-slug"` + "\n" + `title = "x"` + "\n" + `theme = "neon"`:                                                                              `value must be one of`,
 	}
 	steps := []resource.TestStep{}
 	for body, want := range cases {
@@ -641,6 +654,167 @@ resource "montral_project_alerting" "current" {
 					plancheck.ExpectResourceAction("montral_alert_channel.ops", plancheck.ResourceActionNoop),
 				}},
 			},
+		},
+	})
+}
+
+// stateHoldsNo fails when any attribute of any resource in state contains secret.
+func stateHoldsNo(secret string) func(*terraform.State) error {
+	return func(s *terraform.State) error {
+		for name, rs := range s.RootModule().Resources {
+			for k, v := range rs.Primary.Attributes {
+				if strings.Contains(v, secret) {
+					return fmt.Errorf("%s.%s holds the password in state", name, k)
+				}
+			}
+		}
+		return nil
+	}
+}
+
+// pageUnlocks checks the page password the server holds, through the public unlock endpoint.
+func pageUnlocks(slug, password string, want bool) func(*terraform.State) error {
+	return func(*terraform.State) error {
+		base := testAccClientURL()
+		body, _ := json.Marshal(map[string]string{"slug": slug, "password": password})
+		req, err := http.NewRequest(http.MethodPost, base+"/api/public/status/_/unlock", bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("origin", base)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		res.Body.Close()
+		if got := res.StatusCode == http.StatusOK; got != want {
+			return fmt.Errorf("unlock %s with the password: HTTP %d, want success=%t", slug, res.StatusCode, want)
+		}
+		return nil
+	}
+}
+
+// The deprecated state-stored password migrates to the write-only one; rotating needs a version bump.
+func TestAccStatusPage_passwordMigration(t *testing.T) {
+	slug := randName("tf-acc-pw")
+	page := func(arg string) string {
+		return fmt.Sprintf(`
+resource "montral_status_page" "test" {
+  slug       = %q
+  title      = "Password migration"
+  visibility = "password"
+  %s
+}
+`, slug, arg)
+	}
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: page(`password = "legacy password one"`),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("montral_status_page.test", "password", "legacy password one"),
+					pageUnlocks(slug, "legacy password one", true),
+				),
+			},
+			{
+				// migrate: the same password moves to the write-only argument and leaves state
+				Config: page("password_wo = \"legacy password one\"\n  password_wo_version = 1"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("montral_status_page.test", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckNoResourceAttr("montral_status_page.test", "password"),
+					resource.TestCheckNoResourceAttr("montral_status_page.test", "password_wo"),
+					stateHoldsNo("legacy password one"),
+					pageUnlocks(slug, "legacy password one", true),
+				),
+			},
+			{
+				// a new write-only value alone is invisible to Terraform: nothing to do
+				Config:   page("password_wo = \"second password two\"\n  password_wo_version = 1"),
+				PlanOnly: true,
+			},
+			{
+				// the version bump sends it
+				Config: page("password_wo = \"second password two\"\n  password_wo_version = 2"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{PreApply: []plancheck.PlanCheck{
+					plancheck.ExpectResourceAction("montral_status_page.test", plancheck.ResourceActionUpdate),
+				}},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					stateHoldsNo("second password two"),
+					pageUnlocks(slug, "second password two", true),
+					pageUnlocks(slug, "legacy password one", false),
+				),
+			},
+		},
+	})
+}
+
+// A window far down the capped list (ended, behind more than 1000 upcoming ones) stays in state and refreshes.
+func TestAccMaintenanceWindow_beyondListCap(t *testing.T) {
+	name := randName("tf-acc-maint-old")
+	now := time.Now().UTC()
+	start := now.Add(-48 * time.Hour).Truncate(time.Minute)
+	cfg := maintenanceConfig(name, start.Format(time.RFC3339), start.Add(time.Hour).Format(time.RFC3339), "")
+	var id string
+	var series []string
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { testAccPreCheck(t) },
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy: func(*terraform.State) error {
+			c := testAccClient(t)
+			for _, s := range series {
+				_ = c.Delete(context.Background(), "/maintenance/series/"+s, "")
+			}
+			if err := c.Get(context.Background(), "/maintenance/"+id, "", nil); !client.IsNotFound(err) {
+				return fmt.Errorf("window %s still readable after destroy: %v", id, err)
+			}
+			return nil
+		},
+		Steps: []resource.TestStep{
+			{Config: cfg, Check: captureID("montral_maintenance_window.test", &id)},
+			{
+				// three daily series of 367 upcoming occurrences: 1101 windows sort before the ended one
+				PreConfig: func() {
+					c := testAccClient(t)
+					first := now.Add(time.Hour).Truncate(time.Minute)
+					for i := 0; i < 3; i++ {
+						var made client.MaintenanceWindow
+						body := client.MaintenanceWindow{Name: fmt.Sprintf("%s-filler-%d", name, i), StartsAt: first.Format(time.RFC3339), EndsAt: first.Add(10 * time.Minute).Format(time.RFC3339), MonitorIDs: []string{},
+							Recurrence: &client.MaintenanceRecurrence{Frequency: "daily", TimeZone: "UTC", Until: first.Add(366 * 24 * time.Hour).Format(time.RFC3339)}}
+						if err := c.Post(context.Background(), "/maintenance", "", body, &made); err != nil {
+							t.Fatal(err)
+						}
+						series = append(series, *made.SeriesID)
+					}
+					var list []client.MaintenanceWindow
+					if err := c.Get(context.Background(), "/maintenance", "", &list); err != nil {
+						t.Fatal(err)
+					}
+					if len(list) != 1000 {
+						t.Fatalf("expected the list to be capped at 1000, got %d", len(list))
+					}
+					for _, w := range list {
+						if w.ID == id {
+							t.Fatal("the ended window is still in the capped list; the test would prove nothing")
+						}
+					}
+				},
+				// refresh must keep it: an empty plan, not a re-create
+				Config:   cfg,
+				PlanOnly: true,
+			},
+			{
+				Config: cfg,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttrPtr("montral_maintenance_window.test", "id", &id),
+					resource.TestCheckResourceAttr("montral_maintenance_window.test", "name", name),
+				),
+			},
+			{ResourceName: "montral_maintenance_window.test", ImportState: true, ImportStateVerify: true},
 		},
 	})
 }

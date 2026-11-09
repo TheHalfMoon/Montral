@@ -30,6 +30,8 @@ func newTestClient(t *testing.T, h http.HandlerFunc) (*Client, *[]time.Duration)
 
 func TestParseEndpoint(t *testing.T) {
 	for in, want := range map[string]string{
+		"http://localhost:8787":            "http://localhost:8787",
+		"http://[::1]:8787/":               "http://[::1]:8787",
 		"https://montral.example.com":      "https://montral.example.com",
 		"https://montral.example.com/":     "https://montral.example.com",
 		"https://montral.example.com/api":  "https://montral.example.com",
@@ -38,7 +40,7 @@ func TestParseEndpoint(t *testing.T) {
 		"https://example.com/montral/api":  "https://example.com/montral",
 		" https://example.com/x?y=1#frag ": "https://example.com/x",
 	} {
-		u, err := ParseEndpoint(in)
+		u, err := ParseEndpoint(in, false)
 		if err != nil {
 			t.Errorf("%q: %v", in, err)
 			continue
@@ -48,7 +50,7 @@ func TestParseEndpoint(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"", "montral.example.com", "ftp://example.com", "https://user:pass@example.com", "/api"} {
-		if _, err := ParseEndpoint(bad); err == nil {
+		if _, err := ParseEndpoint(bad, false); err == nil {
 			t.Errorf("%q: expected an error", bad)
 		}
 	}
@@ -301,5 +303,78 @@ func TestContextCancelStopsRetries(t *testing.T) {
 	c.sleep = func(ctx context.Context, d time.Duration) error { cancel(); return ctx.Err() }
 	if err := c.Get(ctx, "/monitors", "", nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestPlainHTTPOnlyForLoopbackOrWhenAllowed(t *testing.T) {
+	for _, remote := range []string{"http://montral.example.com", "http://10.0.0.5:8787", "http://127.0.0.2", "http://localhost.example.com"} {
+		_, err := ParseEndpoint(remote, false)
+		if err == nil || !strings.Contains(err.Error(), "insecure_http") {
+			t.Errorf("%s: want a refusal naming insecure_http, got %v", remote, err)
+		}
+		if _, err := ParseEndpoint(remote, true); err != nil {
+			t.Errorf("%s with insecure_http: %v", remote, err)
+		}
+		if _, err := New(Options{Endpoint: remote, APIKey: testKey}); err == nil {
+			t.Errorf("New(%s) accepted plain http", remote)
+		}
+		if _, err := New(Options{Endpoint: remote, APIKey: testKey, AllowInsecureHTTP: true}); err != nil {
+			t.Errorf("New(%s, AllowInsecureHTTP): %v", remote, err)
+		}
+	}
+	for _, local := range []string{"http://localhost", "http://LOCALHOST:1", "http://127.0.0.1:8787", "http://[::1]", "https://montral.example.com"} {
+		if _, err := ParseEndpoint(local, false); err != nil {
+			t.Errorf("%s: %v", local, err)
+		}
+	}
+}
+
+func TestPostRetriedOnlyWhenNothingWasDone(t *testing.T) {
+	cases := []struct {
+		name      string
+		method    string
+		status    int
+		body      string
+		wantCalls int32
+	}{
+		{"POST 429 is retried", http.MethodPost, 429, `{"error":"Too many attempts, try again later"}`, 2},
+		{"POST 503 from a proxy is not retried", http.MethodPost, 503, `<html>Service Unavailable</html>`, 1},
+		{"POST 503 with another JSON error is not retried", http.MethodPost, 503, `{"error":"maintenance"}`, 1},
+		{"POST 503 rolled back by Montral is retried", http.MethodPost, 503, `{"error":"Temporarily unavailable, please retry"}`, 2},
+		{"PATCH 503 from a proxy is retried", http.MethodPatch, 503, ``, 2},
+		{"PUT 503 is retried", http.MethodPut, 503, ``, 2},
+		{"DELETE 503 is retried", http.MethodDelete, 503, ``, 2},
+		{"GET 503 is retried", http.MethodGet, 503, ``, 2},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) == 1 {
+					w.WriteHeader(tc.status)
+					_, _ = w.Write([]byte(tc.body))
+					return
+				}
+				_, _ = w.Write([]byte(`{}`))
+			})
+			var body any
+			if tc.method != http.MethodGet && tc.method != http.MethodDelete {
+				body = map[string]string{"name": "x"}
+			}
+			_ = c.Do(context.Background(), Request{Method: tc.method, Path: "/monitors", Body: body}, nil)
+			if calls.Load() != tc.wantCalls {
+				t.Errorf("calls %d, want %d", calls.Load(), tc.wantCalls)
+			}
+		})
+	}
+}
+
+func TestRouteMissingVersusNotFound(t *testing.T) {
+	if !IsRouteMissing(parseError("GET", "/maintenance/x", 404, []byte("404 Not Found"))) {
+		t.Error("plain-text 404 should be a missing route")
+	}
+	jsonNotFound := parseError("GET", "/maintenance/x", 404, []byte(`{"error":"Not found"}`))
+	if IsRouteMissing(jsonNotFound) || !IsNotFound(jsonNotFound) {
+		t.Error("Montral's JSON 404 is a missing object, not a missing route")
 	}
 }

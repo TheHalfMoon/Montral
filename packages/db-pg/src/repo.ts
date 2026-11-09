@@ -1377,6 +1377,11 @@ export function createRepo(db: Db): Repo {
         .where(and(eq(schema.maintenanceWindow.organizationId, orgId), eq(schema.maintenanceWindow.projectId, projectId)))
         .orderBy(sql`case when ${schema.maintenanceWindow.endsAt} >= now() then 0 else 1 end`, sql`abs(extract(epoch from (${schema.maintenanceWindow.startsAt} - now())))`)
         .limit(1000),
+    async getMaintenance(orgId, id, scope) {
+      const w = schema.maintenanceWindow;
+      const [row] = await db.select().from(w).where(and(eq(w.id, id), eq(w.organizationId, orgId), inScope(scope, w.projectId)));
+      return row ?? null;
+    },
     async createMaintenance(orgId, projectId, w) {
       if (!w.recurrence) {
         const [row] = await db.insert(schema.maintenanceWindow).values({ ...w, organizationId: orgId, projectId }).returning();

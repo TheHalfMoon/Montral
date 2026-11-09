@@ -39,7 +39,7 @@ func TestProviderSchemasAreValid(t *testing.T) {
 	// secrets must be marked sensitive
 	sensitive := map[string][]string{
 		"montral_alert_channel": {"secret_config"},
-		"montral_status_page":   {"password"},
+		"montral_status_page":   {"password", "password_wo"},
 		"montral_monitor":       {"headers", "request_body", "heartbeat_token", "heartbeat_url"},
 	}
 	for res, attrs := range sensitive {
@@ -56,6 +56,11 @@ func TestProviderSchemasAreValid(t *testing.T) {
 			if !found {
 				t.Errorf("%s.%s missing", res, a)
 			}
+		}
+	}
+	for _, at := range resp.ResourceSchemas["montral_status_page"].Block.Attributes {
+		if at.Name == "password_wo" && !at.WriteOnly {
+			t.Error("montral_status_page.password_wo is not write-only")
 		}
 	}
 	for _, at := range resp.Provider.Block.Attributes {

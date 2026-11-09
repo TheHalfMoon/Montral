@@ -1,0 +1,99 @@
+name: Montral upgrade, rollback and disaster recovery
+# Upgrades a seeded installation of the previous release candidate (17f55c1) to this commit on a disposable
+# PostgreSQL 18 database, qualifies the documented rollback (restore the pre-upgrade backup, start the old build) and
+# what the old build does on the upgraded schema, then destroys the database under a running server and recovers it
+# from backups with the documented commands, measuring the recovery time. Synthetic data only; nothing leaves the runner.
+on:
+  # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+env:
+  # the previous released candidate: release-readiness report at c58c24a, task ledger, gap matrix (#42)
+  UPGRADE_OLD_REF: 17f55c12289d997d1fea0a3892a9d30dc738ea30
+jobs:
+  upgrade:
+    name: Upgrade from 17f55c1, rollback and disaster recovery (PostgreSQL 18)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      TEST_DATABASE_URL: postgres://montral:montral-local-test@127.0.0.1:5432/montral_test_upgrade_ci
+      UPGRADE_SUMMARY_PATH: ${{ github.workspace }}/upgrade-summary.json
+    services:
+      postgres:
+        # the image docker-compose.yml ships
+        image: postgres:18.6-alpine
+        env:
+          POSTGRES_DB: montral_test_upgrade_ci
+          POSTGRES_USER: montral
+          POSTGRES_PASSWORD: montral-local-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U montral -d montral_test_upgrade_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the previous release candidate is checked out next to this commit
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: pnpm
+      - name: Check out the previous release candidate
+        run: |
+          git worktree add --detach "$RUNNER_TEMP/montral-old" "$UPGRADE_OLD_REF"
+          git -C "$RUNNER_TEMP/montral-old" log --oneline -1
+      - name: Build the previous release candidate (Node API)
+        working-directory: ${{ runner.temp }}/montral-old
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @montral/api build:node
+      - name: Build this commit (Node API)
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm --filter @montral/api build:node
+      # Ubuntu runner images may ship an older pg_dump than the service's major version: install the matching client.
+      - name: Install PostgreSQL 18 backup client
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo install -d -m 0755 /usr/share/postgresql-common/pgdg
+          curl --fail --silent --show-error --location --retry 5 --retry-all-errors --retry-delay 5 \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+            | sudo tee /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc >/dev/null
+          . /etc/os-release
+          printf 'deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "$VERSION_CODENAME" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list >/dev/null
+          sudo apt-get -o Acquire::Retries=5 update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y postgresql-client-18
+          echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+      - name: Qualify upgrade, rollback and disaster recovery
+        env:
+          UPGRADE_OLD_DIR: ${{ runner.temp }}/montral-old
+          # the documented `docker compose exec -T postgres pg_dump/pg_restore` commands run in this container
+          MONTRAL_PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          pg_dump --version
+          docker exec "$MONTRAL_PG_CONTAINER" pg_dump --version
+          node scripts/qualify-upgrade.mjs
+      - name: Upload upgrade summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: montral-upgrade-summary
+          path: upgrade-summary.json
+          if-no-files-found: warn
+          retention-days: 30

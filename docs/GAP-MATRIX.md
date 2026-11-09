@@ -3,7 +3,7 @@
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list
 at the end. **Y** yes, **N** no, **P** partial, **$** paid tier/add-on only,
-**?** not verified. Montral's column reflects `main` at `9db0d3d` (2026-11-08), with the
+**?** not verified. Montral's column reflects `main` at `8fedf26` (2026-11-09), with the
 merging pull request in brackets, verified against the code, not marketing copy.
 
 ## Matrix
@@ -14,7 +14,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Keyword assertion | Y (contains/absent) | Y | Y | Y | Y | Y | N |
 | JSON body assertion | Y (#27; path + comparison) | Y | Y | P | Y | Y | N |
 | TCP | Y | Y | Y | Y | Y | Y | N |
-| Ping / ICMP | Y on Node/Docker (this branch; system `ping`); refused on Workers | Y | Y | ? | Y | Y | N |
+| Ping / ICMP | Y on Node/Docker (#38; system `ping`, runs in the image as `node`); refused on Workers | Y | Y | ? | Y | Y | N |
 | DNS | Y | Y | Y | Y | Y | Y | P |
 | TLS certificate expiry | Y on Node/Docker (#26); refused on Workers | P | Y | ? | Y | Y | N |
 | Domain expiry | Y | ? | Y | ? | Y | Y | N |
@@ -34,7 +34,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Members-only page | Y (#18) | N | $ (SSO) | $ | ? | P | n/a |
 | Password page | Y (#21) | N | $ | Y | $ | P | n/a |
 | Expiring share links | Y (#21; revocable) | N | ? | ? | ? | N | n/a |
-| Custom domain | Y on Node/Docker (#29; TXT-verified, DNS takeover); not on Workers | Y | Y | Y | $ | self-host | $ |
+| Custom domain | Y on Node/Docker (#29; TXT-verified, DNS takeover, periodic re-verification #33); not on Workers | Y | Y | Y | $ | self-host | $ |
 | Subscribers | Y (email) | N | Y | Y | Y | N | n/a |
 | Maintenance windows | Y (recurring) | Y | Y | Y | Y | Y | n/a |
 | Badges / embed | Y | Y | ? | ? | ? | Y | n/a |
@@ -50,7 +50,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | 2FA | Y | Y | ? | ? | Y | n/a | ? |
 | SSO (OIDC/SAML) | P (GitHub sign-in) | N | $ | ? | $ | Y | ? |
 | Roles | P (owner/admin/member) | N | Y | ? | Y | N | $ |
-| Audit log | N | N | $ | ? | ? | N | N |
+| Audit log | Y (#39; append-only, API/CSV/JSONL export, MCP, retention) | N | $ | ? | ? | N | N |
 | Mobile app | P (iOS push app) | N | Y | ? | Y | N | N |
 
 ## Reliability and security qualification (Montral)
@@ -67,7 +67,14 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Private status pages | `status-visibility.e2e.test.ts` (PR #18), `status-password-links.e2e.test.ts` and Chromium STATUS_PASSWORD_PASS (PR #21) |
 | Custom-domain isolation | `custom-domain*.test.ts`, real-server CUSTOM_DOMAIN_SMOKE_PASS (PR #29) |
 | TLS monitor, JSON assertions, channels | `certificate.test.ts`, `json-assertion*.test.ts`, `more-channels.test.ts` (PRs #26-#28) |
-| ICMP ping monitor | `ping.test.ts` (incl. a real ping of 127.0.0.1), `ping.e2e.test.ts`; see `docs/evidence/2026-11-09-ping-monitor.md` |
+| ICMP ping monitor | `ping.test.ts` (incl. a real ping of 127.0.0.1), `ping-resolve.test.ts`, `ping.e2e.test.ts` (#38) |
+| Custom-domain re-verification | `custom-domain-recheck.e2e.test.ts`: 24 h / 7 d boundaries, races, concurrent servers (#33) |
+| Billing checkout deadlock | `montral-billing-lock-order.e2e.test.ts`, RED on unfixed main (closed #34), fixed (#35) |
+| PostgreSQL 17 and 18, macOS ARM64 | CI matrix incl. the exact compose image, failover on both (#31); macOS 15 ARM64 full suite (#32) |
+| Docker image and compose | `qualify-docker.sh` DOCKER_COMPOSE_PASS: health, persistence, recreation, ping as `node`, PostgreSQL 17 refuses the 18 volume (#37) |
+| Load, backpressure, pool exhaustion | `qualify-load.mjs` LOAD_QUALIFICATION_PASS: 4,000 monitors, no lost or duplicated checks (#40) |
+| Manual check abuse | per-workspace and per-process bounds, `manual-check-limit.e2e.test.ts` (#41) |
+| Audit log integrity | `audit.e2e.test.ts`: tenant isolation, secret redaction, append-only trigger incl. temp-table bypass (#39) |
 
 ## Prioritised gaps
 
@@ -75,20 +82,19 @@ Ranked by user value, reliability and security, then cost.
 
 Done since the matrix was first written: TLS certificate expiry (#26), JSON body
 assertions (#27), Google Chat / Mattermost / Gotify / Pushover (#28), custom domains
-for status pages on the Node server (#29), ICMP ping monitors on the Node server
-(branch `engineering/montral-ping-monitor`, not merged yet).
+(#29) with periodic re-verification (#33), ICMP ping (#38), workspace audit log (#39).
 
-Remaining, in planned order:
+Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
-1. **Periodic re-verification of custom domains**: today a verified domain stays
-   verified until another page proves it or it is removed; a scheduled TXT
-   re-check would release domains whose record disappeared.
-2. **Terraform provider / config-as-code**: valued by GitOps teams; large.
-3. **On-call schedules**: large; escalation already exists.
-4. **SSO (OIDC/SAML), audit log**: enterprise tier; large.
-5. **SMS / voice**: requires a paid provider; out of scope without approval.
-6. **Browser / multi-step checks**: large; needs a headless browser runtime.
-7. **Custom webhook responses** (webhook.site parity): medium.
+1. **On-call schedules** (rotations, overrides): escalation policies already exist; large.
+2. **SSO (OIDC; SAML if justified)**: GitHub sign-in only today; large.
+3. **Terraform provider / config-as-code**: REST API and Uptime Kuma import exist; large.
+4. **Browser / multi-step checks**: needs an isolated headless runtime; large.
+5. **Custom webhook responses** (webhook.site parity): medium.
+6. **SMS / voice**: requires a paid provider; out of scope without owner approval.
+
+Grafana OnCall and other incident-response tools named in the brief are not yet in
+the table: their entries need the same primary-source verification before they are added.
 
 ## Sources
 

@@ -26,6 +26,8 @@ const tools: Tool[] = [
   { name: "create_status_page", en: "Create a public status page showing the given monitors.", zh: "创建公开状态页，展示指定的监控项。" },
   { name: "update_status_page", en: "Change a status page's title, theme, latency display or monitors.", zh: "修改状态页的标题、主题、延迟显示或监控项。" },
   { name: "list_maintenance", en: "Maintenance occurrences, series ids and recurrence settings.", zh: "维护窗口、系列 ID 和重复设置。" },
+  { name: "who_is_on_call", en: "Who is on call right now on each on-call schedule, with the current shift (read scope).", zh: "每个值班表当前的值班人及当前班次（需读取权限）。" },
+  { name: "list_oncall_shifts", en: "One schedule's shifts between two instants, overrides included; at most 90 days (read scope).", zh: "某个值班表在两个时间点之间的班次（含替班），最长 90 天（需读取权限）。" },
   { name: "list_audit_events", en: "The workspace audit log: who changed what and when, with filters and paging (owners and admins, read scope).", zh: "工作区审计日志：谁在何时做了哪些更改，支持筛选和分页（仅所有者和管理员，需读取权限）。" },
   { name: "create_maintenance", en: "Schedule one window or a bounded daily/weekly series in an IANA time zone.", zh: "创建一次性窗口或按指定时区每天、每周重复的有限系列。" },
   { name: "skip_maintenance", en: "Remove one occurrence without changing the rest of its series. Owner/admin only.", zh: "跳过单次，不影响系列其他窗口。仅限所有者或管理员。" },

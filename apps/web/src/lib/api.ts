@@ -22,6 +22,8 @@ export type Monitor = {
   dependsOnMonitorId?: string | null;
   /** several regions: how many must fail before it goes down; 0 = a majority of those that answered */
   minRegionsFailing?: number;
+  /** a workspace escalation policy used instead of the project's escalation levels; null = the project's */
+  escalationPolicyId?: string | null;
 };
 export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null; endsAt: string | null };
 export type HookInbox = { id: string; name: string; created_at: string };
@@ -207,8 +209,20 @@ export type AlertDelivery = {
 export type ProjectAlerting = {
   reminderIntervalMin: number | null;
   reminderEmail: boolean;
-  escalation: { channelIds: string[]; escalateAfterMin: number }[];
+  escalation: { channelIds: string[]; escalateAfterMin: number; userIds?: string[]; scheduleIds?: string[] }[];
 };
+
+export type OncallRestriction = { days: number[]; start: string; end: string };
+export type OncallLayer = {
+  id?: string; name: string; userIds: string[]; rotationType: "daily" | "weekly" | "custom"; shiftLengthHours: number | null;
+  handoffTime: string; handoffWeekday: number | null; startDate: string; restrictions: OncallRestriction[];
+};
+export type OncallShift = { userId: string; name: string | null; start: string; end: string; source: "layer" | "override"; layerId: string | null; overrideId: string | null };
+export type OncallSchedule = { id: string; projectId: string | null; name: string; timeZone: string; version: number; layers: OncallLayer[]; onCallNow?: OncallShift | null };
+export type OncallOverride = { id: string; scheduleId: string; userId: string; startsAt: string; endsAt: string; createdBy: string | null; createdAt: string };
+export type OncallMember = { userId: string; name: string; email?: string; role?: string };
+export type PolicyStep = { timeoutMin: number; channelIds: string[]; userIds: string[]; scheduleIds: string[] };
+export type EscalationPolicy = { id: string; projectId: string | null; name: string; steps: PolicyStep[]; repeatCount: number; version: number; monitors?: { id: string; name: string }[] };
 
 export type TimeCoverage = {
   from: string; to: string; totalMs: number;
@@ -310,6 +324,22 @@ export const api = {
   saveWriteUp: (id: string, b: { rootCause?: string | null; postmortem?: string | null; publishPostmortem?: boolean }) =>
     req<Incident>(`/incidents/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
   ack: (id: string) => req(`/incidents/${id}/ack`, { method: "POST" }),
+  oncallMembers: () => req<OncallMember[]>("/oncall/members"),
+  oncallSchedules: () => fetchJson<OncallSchedule[]>("/oncall/schedules", { cache: "no-store" }),
+  createOncallSchedule: (b: { name: string; timeZone: string; layers: OncallLayer[] }) => req<OncallSchedule>("/oncall/schedules", { method: "POST", body: JSON.stringify(b) }),
+  updateOncallSchedule: (id: string, b: { version: number; name?: string; timeZone?: string; layers?: OncallLayer[] }) => req<OncallSchedule>(`/oncall/schedules/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  deleteOncallSchedule: (id: string, version: number) => req<void>(`/oncall/schedules/${id}?version=${version}`, { method: "DELETE" }),
+  oncallShifts: (id: string, from: string, to: string) => fetchJson<{ timeZone: string; shifts: OncallShift[] }>(`/oncall/schedules/${id}/shifts?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { cache: "no-store" }),
+  oncallOverrides: (id: string, from: string, to: string) => fetchJson<OncallOverride[]>(`/oncall/schedules/${id}/overrides?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { cache: "no-store" }),
+  createOncallOverride: (id: string, b: { userId: string; startsAt: string; endsAt: string }) => req<OncallOverride>(`/oncall/schedules/${id}/overrides`, { method: "POST", body: JSON.stringify(b) }),
+  deleteOncallOverride: (id: string, overrideId: string) => req<void>(`/oncall/schedules/${id}/overrides/${overrideId}`, { method: "DELETE" }),
+  escalationPolicies: () => req<EscalationPolicy[]>("/escalation-policies"),
+  createEscalationPolicy: (b: { name: string; steps: PolicyStep[]; repeatCount: number }) => req<EscalationPolicy>("/escalation-policies", { method: "POST", body: JSON.stringify(b) }),
+  updateEscalationPolicy: (id: string, b: { version: number; name?: string; steps?: PolicyStep[]; repeatCount?: number }) => req<EscalationPolicy>(`/escalation-policies/${id}`, { method: "PATCH", body: JSON.stringify(b) }),
+  deleteEscalationPolicy: (id: string, version: number) => req<void>(`/escalation-policies/${id}?version=${version}`, { method: "DELETE" }),
+  oncallCalendar: () => fetchJson<{ active: boolean; createdAt: string | null; lastUsedAt: string | null }>("/oncall/calendar", { cache: "no-store" }),
+  createOncallCalendar: (replace = false) => req<{ url: string; createdAt: string; replaced: boolean; warning: string }>(`/oncall/calendar${replace ? "?replace=true" : ""}`, { method: "POST" }),
+  revokeOncallCalendar: () => req<void>("/oncall/calendar", { method: "DELETE" }),
 };
 
 /** A check interval in its shortest form: 30s, 5m, 2h, 1d (45m stays 45m; 90 s stays 90s). */

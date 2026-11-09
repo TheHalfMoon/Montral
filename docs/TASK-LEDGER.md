@@ -31,7 +31,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 10 | Workspace audit log (API, export, MCP, UI, append-only, retention) | P1 | Done (#39) |
 | 11 | Cross-browser (Chromium, Firefox, WebKit, mobile) + WCAG 2.1 AA gate | P1 | Done (#36) |
 | 12 | Load, backpressure and pool-exhaustion qualification | P1 | Done (#40); no application defect found |
-| 13 | On-call schedules (rotations, overrides) | P2 | Not started; escalation policies exist |
+| 13 | On-call schedules (rotations, overrides) | P2 | Implemented in #48; independent review (1 high, 3 medium, 4 low) fixed on the same PR, awaiting re-review: schedules with layers, DST-correct rotations, restriction windows, overrides, escalation policies paging whoever is on call, iCal feed, REST + MCP + UI; `docs/evidence/2026-11-10-oncall.md` |
 | 14 | SSO (OIDC; SAML if justified) | P2 | Not started; GitHub sign-in only |
 | 15 | Terraform provider / config-as-code | P2 | Not started; REST API and Uptime Kuma import exist |
 | 16 | Browser / multi-step synthetic checks | P3 | Not started; needs an isolated headless runtime |

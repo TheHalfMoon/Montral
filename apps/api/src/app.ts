@@ -13,6 +13,8 @@ import { channels } from "./routes/channels";
 import { push } from "./routes/push";
 import { incidents } from "./routes/incidents";
 import { maintenance } from "./routes/maintenance";
+import { escalationPolicies, oncall } from "./routes/oncall";
+import { icsFeed, personalShifts, tokenHash } from "./oncall";
 import { monthlyReconciliation } from "./routes/monthly-reconciliation";
 import { monitors } from "./routes/monitors";
 import { projects } from "./routes/projects";
@@ -175,6 +177,19 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
 
   // public
   app.route("/api/public/status", publicStatus);
+  // a person's on-call shifts as an iCalendar feed; the secret token in the path is the only credential (revocable)
+  app.get("/api/public/oncall/:file", async (c) => {
+    const m = /^([0-9a-f]{64})\.ics$/.exec(c.req.param("file"));
+    if (!m) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    const ip = clientIp(c);
+    if (!(await allow(repo, ip ? `oncall-ics:ip:${ip}` : "oncall-ics:unknown", ip ? 120 : 1200, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const owner = await repo.oncallCalendarByToken(await tokenHash(m[1]));
+    if (!owner) return c.json({ error: "Not found" }, 404);
+    return new Response(icsFeed(await personalShifts(repo, owner.organizationId, owner.userId)), {
+      headers: { "content-type": "text/calendar; charset=utf-8", "cache-control": "private, no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" },
+    });
+  });
   app.on(["GET", "POST"], "/api/heartbeat/:token", async (c) => {
     const repo = c.get("repo");
     const m = await repo.monitorByHeartbeatToken(c.req.param("token"));
@@ -237,6 +252,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   authed.route("/monthly-reconciliation", monthlyReconciliation);
   authed.route("/status-pages", statusPages);
   authed.route("/audit-events", auditEvents);
+  // on-call schedules and escalation policies belong to the workspace (optionally to one project), not to the active project
+  authed.route("/oncall", oncall);
+  authed.route("/escalation-policies", escalationPolicies);
   // what this credential may reach: a session sees every workspace of the user, a key or an agent only what it was given
   authed.get("/workspaces", async (c) => {
     const repo = c.get("repo");

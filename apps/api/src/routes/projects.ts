@@ -6,6 +6,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { REMINDER_INTERVALS } from "@montral/repo";
 import type { AppEnv } from "../env";
+import { targetsProblem } from "./oncall";
 
 const body = z.object({ name: z.string().trim().min(1).max(60) });
 
@@ -13,8 +14,16 @@ const alerting = z.object({
   /** minutes between repeats of an unacknowledged alert; null = no repeats */
   reminderIntervalMin: z.union([z.literal(null), ...REMINDER_INTERVALS.map((n) => z.literal(n))]),
   reminderEmail: z.boolean(),
-  /** ordered levels; each notifies its channels when the incident is still unacknowledged that many minutes after it started */
-  escalation: z.array(z.object({ channelIds: z.array(z.string().uuid()).min(1).max(5), escalateAfterMin: z.number().int().min(1).max(1440) })).max(3),
+  /**
+   * ordered levels; each notifies its channels, people and whoever is on call on its schedules when the incident is still
+   * unacknowledged that many minutes after it started. Levels with channel ids only (the original shape) stay valid.
+   */
+  escalation: z.array(z.object({
+    channelIds: z.array(z.string().uuid()).max(5).default([]),
+    userIds: z.array(z.string().min(1).max(200)).max(10).optional(),
+    scheduleIds: z.array(z.string().uuid()).max(3).optional(),
+    escalateAfterMin: z.number().int().min(1).max(1440),
+  })).max(3),
 });
 
 /** Creating, renaming and deleting projects is for sessions and unlimited keys, not project-limited ones. */
@@ -58,7 +67,12 @@ export const projects = new Hono<AppEnv>()
       // workspace-wide channels (no project) and this project's own are fine; another project's are not
       if (found.some((ch) => ch.projectId && ch.projectId !== id)) return c.json({ error: "An escalation level names a channel that belongs to another project" }, 400);
     }
-    const row = await repo.saveProjectAlerting(c.get("orgId"), id, v);
+    // people must be members; schedules workspace-wide or this project's; every level needs someone to notify
+    const badTargets = await targetsProblem(repo, c.get("orgId"), id, v.escalation);
+    if (badTargets) return c.json({ error: badTargets.replace("Each step", "Each escalation level").replace("A step", "An escalation level") }, 400);
+    // stored without empty optional lists, so a level saved with channels only keeps its original shape
+    const escalation = v.escalation.map((s) => ({ channelIds: [...new Set(s.channelIds)], escalateAfterMin: s.escalateAfterMin, ...(s.userIds?.length ? { userIds: [...new Set(s.userIds)] } : {}), ...(s.scheduleIds?.length ? { scheduleIds: [...new Set(s.scheduleIds)] } : {}) }));
+    const row = await repo.saveProjectAlerting(c.get("orgId"), id, { ...v, escalation });
     if (!row) return c.json({ error: "Not found" }, 404);
     await audit(c, "project.alerting.update", { type: "project", id, projectId: id }, auditChanges(v));
     return c.json(row);

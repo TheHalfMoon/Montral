@@ -137,6 +137,27 @@ export const TOOLS: Tool[] = [
   },
   { name: "list_maintenance", description: "Read maintenance windows in the selected project, including schedule and monitor associations. Use this authenticated list for planning; list_public_status_page_maintenance only shows windows for a published page slug. Records include recurrence metadata and seriesId. Use create_maintenance to schedule, skip_maintenance for one occurrence, end_maintenance for an active occurrence, or cancel_maintenance_series for the remaining series.", schema: z.object({}), readOnly: true, build: () => ({ method: "GET", path: "/api/maintenance" }) },
   {
+    name: "who_is_on_call",
+    description: "Read who is on call right now on every on-call schedule of the workspace (a project-limited credential sees its projects' and workspace-wide schedules). Returns each schedule's id, name and time zone with the current shift: person (user id and name), start, end and whether it comes from a rotation layer or an override; onCall is null when nobody is. Use list_oncall_shifts for upcoming shifts. Read-only.",
+    schema: z.object({}),
+    readOnly: true,
+    build: () => ({ method: "GET", path: "/api/oncall/now" }),
+  },
+  {
+    name: "list_oncall_shifts",
+    description: "Read one on-call schedule's shifts between two instants: who is on call from when to when, including overrides, with gaps where nobody is. Use the schedule id from who_is_on_call. The range defaults to the next 14 days and may span at most 90 days. Read-only.",
+    schema: z.object({
+      id: id.describe("On-call schedule UUID from who_is_on_call."),
+      from: z.string().datetime({ offset: true }).optional().describe("Start of the range, ISO 8601 with offset; defaults to now."),
+      to: z.string().datetime({ offset: true }).optional().describe("End of the range (exclusive), ISO 8601 with offset; defaults to 14 days after from; at most 90 days after from."),
+    }),
+    readOnly: true,
+    build: ({ id, from, to }) => {
+      const qs = new URLSearchParams(Object.entries({ from, to }).filter((e): e is [string, string] => typeof e[1] === "string")).toString();
+      return { method: "GET", path: `/api/oncall/schedules/${id}/shifts${qs ? "?" + qs : ""}` };
+    },
+  },
+  {
     name: "list_audit_events",
     description: "Read the workspace audit log, newest first: who (user, API key or system) created, changed or deleted monitors, status pages, channels, incidents, maintenance, members, API keys and webhook inboxes, when, and from which IP. Each event lists the changed field names; secret values are never stored. Workspace owners and admins only (others get 403), and not for credentials limited to specific projects. Pass the returned next as cursor for older events.",
     schema: z.object({

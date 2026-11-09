@@ -56,6 +56,8 @@ const fields = {
   dependsOnMonitorId: z.string().uuid().nullable().describe("Parent monitor UUID in the same project; suppresses new incidents and alerts while the parent is down. Null removes the dependency."),
   // several regions: how many must fail before the monitor goes down; 0 = a majority of the regions that answered
   minRegionsFailing: z.number().int().min(0).max(20).describe("Failed regions needed to mark a multi-region monitor down; zero uses a majority of regions that answered."),
+  // a workspace escalation policy (GET /escalation-policies) that replaces the project's escalation levels for this monitor
+  escalationPolicyId: z.string().uuid().nullable().describe("Escalation policy UUID from the escalation policies API (workspace-wide or this project's). Unacknowledged incidents follow its steps, notifying channels, people and whoever is on call, instead of the project's escalation levels. Null uses the project's levels."),
 };
 
 /** Create: omitted fields take defaults. */
@@ -90,6 +92,7 @@ const body = z.object({
   slowAlertAfter: fields.slowAlertAfter.default(0),
   dependsOnMonitorId: fields.dependsOnMonitorId.default(null),
   minRegionsFailing: fields.minRegionsFailing.default(0),
+  escalationPolicyId: fields.escalationPolicyId.default(null),
 });
 
 const IMPORT_MAX = 500;
@@ -119,6 +122,7 @@ function normaliseImport(raw: unknown): unknown {
   // a new monitor never carries over ids, so a bad channel or dependency reference cannot slip in
   delete o.channelIds;
   delete o.dependsOnMonitorId;
+  delete o.escalationPolicyId;
   // an export taken by a non-manager carries placeholders instead of header values: they are not real values
   if (o.headers && typeof o.headers === "object" && !Array.isArray(o.headers)) {
     o.headers = Object.fromEntries(Object.entries(o.headers as Record<string, unknown>).filter(([, v]) => v !== MASK));
@@ -234,6 +238,14 @@ async function dependencyProblem(c: Context<AppEnv>, projectId: string | null, s
     at = next;
   }
   return refuse("Dependencies are nested too deeply", "dependency_cycle");
+}
+
+/** HTTP 400 unless the policy belongs to the workspace and is workspace-wide or the monitor's project's own, or null. */
+async function policyProblem(c: Context<AppEnv>, projectId: string | null, policyId: string | null | undefined) {
+  if (!policyId) return null;
+  const policy = await c.get("repo").getEscalationPolicy(c.get("orgId"), policyId, null);
+  if (!policy || (policy.projectId && policy.projectId !== projectId)) return c.json({ error: "The escalation policy must be a workspace-wide one or one of this project's", code: "policy_not_found" }, 400);
+  return null;
 }
 
 /** HTTP 400 for a target that points at a private address (unless the deployment allows those), or null. */
@@ -356,6 +368,8 @@ export const monitors = new Hono<AppEnv>()
     if (badRegion) return badRegion;
     const badParent = await dependencyProblem(c, c.get("projectId"), null, v.dependsOnMonitorId);
     if (badParent) return badParent;
+    const badPolicy = await policyProblem(c, c.get("projectId"), v.escalationPolicyId);
+    if (badPolicy) return badPolicy;
     const refused = await overPlan(c, { add: 1, intervalSec: v.type === "heartbeat" ? undefined : v.intervalSec });
     if (refused) return refused;
     const channelIds = await withAutoChannels(repo, c.get("orgId"), c.get("projectId"), v.channelIds);
@@ -366,7 +380,7 @@ export const monitors = new Hono<AppEnv>()
   // JSON backup of this project's monitors; feed it back to POST /import (here or in another workspace)
   .get("/export", async (c) => {
     const rows = await c.get("repo").exportMonitors(c.get("orgId"), c.get("projectId"));
-    const monitors = (await shown(c, rows)).map((m) => Object.fromEntries(FIELD_KEYS.filter((k) => k !== "channelIds" && k !== "dependsOnMonitorId").map((k) => [k, (m as unknown as Record<string, unknown>)[k]]).concat([["source", m.importSource ?? "montral"], ["sourceId", m.importSourceId ?? m.id]])));
+    const monitors = (await shown(c, rows)).map((m) => Object.fromEntries(FIELD_KEYS.filter((k) => k !== "channelIds" && k !== "dependsOnMonitorId" && k !== "escalationPolicyId").map((k) => [k, (m as unknown as Record<string, unknown>)[k]]).concat([["source", m.importSource ?? "montral"], ["sourceId", m.importSourceId ?? m.id]])));
     c.header("content-disposition", 'attachment; filename="montral-monitors.json"');
     return c.json({ version: 1, exportedAt: new Date().toISOString(), monitors });
   })
@@ -439,6 +453,12 @@ export const monitors = new Hono<AppEnv>()
       if (!current) return c.json({ error: "Not found" }, 404);
       const badParent = await dependencyProblem(c, current.projectId, current.id, v.dependsOnMonitorId);
       if (badParent) return badParent;
+    }
+    if (v.escalationPolicyId) {
+      const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+      if (!current) return c.json({ error: "Not found" }, 404);
+      const badPolicy = await policyProblem(c, current.projectId, v.escalationPolicyId);
+      if (badPolicy) return badPolicy;
     }
     if (v.intervalSec !== undefined || v.paused === false) {
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));

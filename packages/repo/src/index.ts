@@ -34,11 +34,19 @@ export interface Project {
   reminderEmail: boolean;
   escalation: EscalationStep[];
 }
-/** One escalation level: these channels are alerted when the incident is still unacknowledged `escalateAfterMin` minutes after it started. */
+/**
+ * One escalation level of a project: these channels, people and on-call schedules are notified when the incident is still
+ * unacknowledged `escalateAfterMin` minutes after it started. Levels saved before people and schedules existed carry
+ * channel ids only; the missing lists read as empty.
+ */
 export interface EscalationStep {
   channelIds: string[];
   escalateAfterMin: number;
+  userIds?: string[];
+  scheduleIds?: string[];
 }
+/** Who one step notifies. */
+export type EscalationTargets = { channelIds: string[]; userIds?: string[]; scheduleIds?: string[] };
 export type ProjectAlerting = Pick<Project, "reminderIntervalMin" | "reminderEmail" | "escalation">;
 /** Repeats stop after this many, whatever the interval. */
 export const MAX_REMINDERS = 10;
@@ -105,6 +113,8 @@ export interface Monitor {
   dependsOnMonitorId: string | null;
   /** several regions: how many must fail before the monitor goes down; 0 = a majority of those that answered */
   minRegionsFailing: number;
+  /** a workspace escalation policy that replaces the project's escalation levels for this monitor; null = the project's */
+  escalationPolicyId?: string | null;
   createdAt: Date;
 }
 
@@ -113,7 +123,7 @@ export type MonitorInput = Pick<
   Monitor,
   | "name" | "type" | "target" | "method" | "requestBody" | "domainExpiryWarnDays" | "expectedStatus" | "intervalSec" | "timeoutMs" | "failureThreshold" | "recoveryThreshold" | "regions"
   | "dnsRecordType" | "dnsExpectedValue" | "dnsMatchMode" | "keyword" | "keywordMode" | "jsonPath" | "jsonExpected" | "jsonMatch" | "expectedLocation" | "headers" | "wsMessage" | "graceSec" | "channelIds" | "tags" | "slowThresholdMs" | "slowAlertAfter"
-  | "dependsOnMonitorId" | "minRegionsFailing"
+  | "dependsOnMonitorId" | "minRegionsFailing" | "escalationPolicyId"
 >;
 export type ImportMonitor = { source: string; sourceId: string; input: NewMonitor };
 export type ImportResult = { source: string; sourceId: string; status: "ready" | "created" | "duplicate"; monitorId: string | null; /** For a duplicate: what already holds this identity. */ existing?: { name: string; target: string } };
@@ -264,11 +274,13 @@ export interface AlertDelivery {
   acknowledgedAt: Date | null;
   /** how many times delivery was tried (failed incident alerts are retried a few times) */
   attempts: number;
+  /** a person notified directly (on call, or named in an escalation step) instead of a channel */
+  targetUserId?: string | null;
   createdAt: Date;
 }
 export type DeliveryStatus = "pending" | "sending" | "sent" | "failed" | "skipped";
-export type NewDelivery = Omit<AlertDelivery, "id" | "createdAt" | "attempts" | "projectId" | "channelId" | "incidentId" | "monitorName" | "error" | "status" | "statusMessage" | "claimedAt" | "acknowledgedAt" | "emailQuotaAttempted"> &
-  Partial<Pick<AlertDelivery, "projectId" | "channelId" | "incidentId" | "monitorName" | "error" | "status" | "statusMessage">>;
+export type NewDelivery = Omit<AlertDelivery, "id" | "createdAt" | "attempts" | "projectId" | "channelId" | "incidentId" | "monitorName" | "error" | "status" | "statusMessage" | "claimedAt" | "acknowledgedAt" | "emailQuotaAttempted" | "targetUserId"> &
+  Partial<Pick<AlertDelivery, "projectId" | "channelId" | "incidentId" | "monitorName" | "error" | "status" | "statusMessage" | "targetUserId">>;
 
 /** A repeat alert whose claim this worker won: the incident, its monitor and the project's settings. */
 export interface ReminderDue {
@@ -281,16 +293,108 @@ export interface ReminderDue {
 export interface EscalationDue {
   incident: Incident;
   monitor: Monitor;
-  step: EscalationStep;
-  /** which level this is, starting at 1 */
+  step: EscalationTargets;
+  /** which level this is, starting at 1 (it keeps counting when a policy repeats) */
   level: number;
+  /** the escalation policy that drives this incident; absent for the project's own levels */
+  policy?: { id: string; name: string; stepNumber: number; round: number } | null;
 }
 
 export interface DeliveryRetry {
   delivery: AlertDelivery;
   incident: Incident;
   monitor: Monitor;
+  /** for a person notified directly, a stand-in channel built from their account (email address or push devices) */
   channel: AlertChannel;
+}
+
+// ── on-call ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+export type OncallRotationType = "daily" | "weekly" | "custom";
+/** `days`: 0 = Sunday ... 6 = Saturday; `start`/`end` "HH:MM" in the schedule's zone; an end at or before the start crosses midnight. */
+export type OncallRestriction = { days: number[]; start: string; end: string };
+export interface OncallLayer {
+  id: string;
+  /** precedence: a higher position covers the lower ones wherever it has someone on call */
+  position: number;
+  name: string;
+  userIds: string[];
+  rotationType: OncallRotationType;
+  shiftLengthHours: number | null;
+  handoffTime: string;
+  handoffWeekday: number | null;
+  startDate: string;
+  restrictions: OncallRestriction[];
+}
+/** A layer as written by a client: an `id` keeps an existing layer (and its id), none creates one. Position is the list order. */
+export type OncallLayerInput = Omit<OncallLayer, "id" | "position"> & { id?: string };
+export interface OncallSchedule {
+  id: string;
+  organizationId: string;
+  /** null = workspace-wide */
+  projectId: string | null;
+  name: string;
+  timeZone: string;
+  /** bumped by every change to the schedule or its layers (optimistic concurrency) */
+  version: number;
+  layers: OncallLayer[];
+  createdAt: Date;
+  updatedAt: Date;
+}
+export type NewOncallSchedule = { projectId: string | null; name: string; timeZone: string; layers: OncallLayerInput[] };
+export type OncallSchedulePatch = { name?: string; timeZone?: string; layers?: OncallLayerInput[] };
+export interface OncallOverride {
+  id: string;
+  scheduleId: string;
+  userId: string;
+  startsAt: Date;
+  endsAt: Date;
+  createdBy: string | null;
+  createdAt: Date;
+}
+/** One step of an escalation policy: notify these, then wait `timeoutMin` minutes for an acknowledgement. */
+export interface PolicyStep {
+  timeoutMin: number;
+  channelIds: string[];
+  userIds: string[];
+  scheduleIds: string[];
+}
+export interface EscalationPolicy {
+  id: string;
+  organizationId: string;
+  projectId: string | null;
+  name: string;
+  steps: PolicyStep[];
+  /** how many more times the steps run after the last one (0 = once) */
+  repeatCount: number;
+  version: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+export type NewEscalationPolicy = { projectId: string | null; name: string; steps: PolicyStep[]; repeatCount: number };
+export type EscalationPolicyPatch = { name?: string; steps?: PolicyStep[]; repeatCount?: number };
+export interface WorkspaceMember {
+  userId: string;
+  name: string;
+  email: string;
+  role: string;
+  locale: string | null;
+}
+/** What a versioned write answers: the new row, "conflict" when the version was stale, null when there is no such row. */
+export type VersionedWrite<T> = T | "conflict" | null;
+/** What notifying one escalation step did, for the incident's timeline and the audit log. */
+export interface EscalationNotice {
+  organizationId: string;
+  projectId: string | null;
+  incidentId: string;
+  level: number;
+  /** a team-only line for the incident timeline: who was notified and why */
+  body: string;
+  /** people notified directly (on call or named), one audit event each */
+  userIds: string[];
+  channelCount: number;
+  policyId?: string | null;
+  scheduleIds?: string[];
 }
 
 export interface WorkspaceSettings {
@@ -651,7 +755,16 @@ export interface Repo {
   scheduleFollowUps(incident: Pick<Incident, "id" | "startedAt">, projectId: string | null): Promise<void>;
   /** Claim up to `limit` repeats that are due; each is returned to exactly one caller, and only the latest missed one is sent. Monitors for which `skip` answers true are left unclaimed (and uncounted). */
   claimReminders(limit: number, skip?: (monitor: Monitor) => Promise<boolean>): Promise<ReminderDue[]>;
+  /**
+   * Claim up to `limit` escalation steps that are due. Each step is handed to exactly one caller (a conditional UPDATE on
+   * the level that was read), however many servers run this at once. A monitor with an escalation policy follows the
+   * policy (step timeouts, repeats); otherwise the project's levels apply.
+   */
   claimEscalations(limit: number): Promise<EscalationDue[]>;
+  /** The incident's acknowledgement and resolution as stored right now; re-read just before a repeat or escalation is sent. Optional for test backends. */
+  incidentFollowUpState?(incidentId: string): Promise<{ acknowledgedAt: Date | null; resolvedAt: Date | null } | null>;
+  /** Writes the step's team-only timeline entry and one system audit event per person notified. Optional for test backends. */
+  recordEscalationNotice?(n: EscalationNotice): Promise<void>;
   getProjectAlerting(orgId: string, projectId: string): Promise<ProjectAlerting | null>;
   saveProjectAlerting(orgId: string, projectId: string, v: ProjectAlerting): Promise<ProjectAlerting | null>;
   /** Deliveries of the project (and workspace-wide ones), newest first. */
@@ -670,6 +783,45 @@ export interface Repo {
   deleteMaintenance(orgId: string, id: string, scope: Scope): Promise<MaintenanceChange[]>;
   endMaintenance(orgId: string, id: string, scope: Scope): Promise<MaintenanceChange[]>;
   cancelMaintenanceSeries(orgId: string, seriesId: string, scope: Scope): Promise<MaintenanceChange[]>;
+
+  // ── on-call ──────────────────────────────────────────────────────────────────
+  /** Current members of the workspace with their account address and language. */
+  listMembers(orgId: string): Promise<WorkspaceMember[]>;
+  /** Schedules with their layers; a project-limited key sees its projects' and the workspace-wide ones. */
+  listOncallSchedules(orgId: string, scope: Scope): Promise<OncallSchedule[]>;
+  getOncallSchedule(orgId: string, id: string, scope: Scope): Promise<OncallSchedule | null>;
+  /** Several schedules of the workspace by id (unknown ids are left out). */
+  oncallSchedulesByIds(orgId: string, ids: string[]): Promise<OncallSchedule[]>;
+  createOncallSchedule(orgId: string, s: NewOncallSchedule): Promise<OncallSchedule>;
+  /** Applies the patch only when the stored version is still `version`, then bumps it; layers are replaced in the same transaction. */
+  updateOncallSchedule(orgId: string, id: string, scope: Scope, version: number, patch: OncallSchedulePatch): Promise<VersionedWrite<OncallSchedule>>;
+  /** "in_use" (with the names of what uses it) when an escalation policy or a project's levels still name the schedule. */
+  deleteOncallSchedule(orgId: string, id: string, scope: Scope, version?: number): Promise<{ status: "deleted" | "conflict" | "in_use" | "not_found"; usedBy?: string[] }>;
+  /** Overrides of these schedules (of the workspace) that overlap [from, to). */
+  listOncallOverrides(orgId: string, scheduleIds: string[], from: Date, to: Date): Promise<OncallOverride[]>;
+  /**
+   * Adds an override unless the schedule already has `limits.perSchedule` overrides that have not ended, or the person
+   * already has `limits.perUser` on it (counted under a per-schedule lock, so concurrent requests cannot exceed them).
+   */
+  createOncallOverride(orgId: string, scheduleId: string, o: { userId: string; startsAt: Date; endsAt: Date; createdBy: string | null }, limits?: { perSchedule: number; perUser: number }): Promise<OncallOverride | "limit_schedule" | "limit_user" | null>;
+  getOncallOverride(orgId: string, scheduleId: string, id: string): Promise<OncallOverride | null>;
+  deleteOncallOverride(orgId: string, scheduleId: string, id: string): Promise<OncallOverride | null>;
+  listEscalationPolicies(orgId: string, scope: Scope): Promise<EscalationPolicy[]>;
+  getEscalationPolicy(orgId: string, id: string, scope: Scope): Promise<EscalationPolicy | null>;
+  createEscalationPolicy(orgId: string, p: NewEscalationPolicy): Promise<EscalationPolicy>;
+  updateEscalationPolicy(orgId: string, id: string, scope: Scope, version: number, patch: EscalationPolicyPatch): Promise<VersionedWrite<EscalationPolicy>>;
+  /** Monitors that used the policy fall back to their project's levels. */
+  deleteEscalationPolicy(orgId: string, id: string, scope: Scope, version?: number): Promise<{ status: "deleted" | "conflict" | "not_found"; monitors?: number }>;
+  /** Monitors of the workspace that use the policy. */
+  monitorsUsingPolicy(orgId: string, policyId: string): Promise<{ id: string; name: string }[]>;
+  /** Stores a new calendar feed token hash for the person, revoking their previous ones in this workspace. */
+  createOncallCalendarToken(orgId: string, userId: string, tokenHash: string): Promise<{ id: string; createdAt: Date }>;
+  /** Revokes the person's feed tokens in this workspace; returns how many were active. */
+  revokeOncallCalendarTokens(orgId: string, userId: string): Promise<number>;
+  /** The workspace and person of an active token whose owner is still a member; null otherwise. Marks the token used. */
+  oncallCalendarByToken(tokenHash: string): Promise<{ organizationId: string; userId: string } | null>;
+  /** Whether the person has an active feed token in this workspace, and since when. */
+  oncallCalendarStatus(orgId: string, userId: string): Promise<{ createdAt: Date; lastUsedAt: Date | null } | null>;
 
   // ── status pages ─────────────────────────────────────────────────────────────
   listStatusPages(orgId: string, projectId: string): Promise<StatusPage[]>;
@@ -801,4 +953,23 @@ export interface TimeCoverage {
   states: { up: number; down: number; degraded: number; paused: number; unknown: number };
   observedMaintenanceMs: number;
   policy: "bounded-observation-v1";
+}
+
+/**
+ * The stand-in channel for a person notified directly by an escalation step: their account's email address, or the push
+ * devices they registered. It goes through the same delivery rows, claims, retries and routing as a real channel; the
+ * delivery row keeps the person's id (`targetUserId`) instead of a channel id.
+ */
+export function personalChannel(organizationId: string, person: { userId: string; name: string; email: string }, type: "email" | "push"): AlertChannel {
+  return {
+    id: `personal:${type}:${person.userId}`,
+    organizationId,
+    projectId: null,
+    type,
+    name: person.name?.trim() || person.email,
+    config: type === "email" ? { to: person.email, personal: true, userId: person.userId } : { personal: true, userId: person.userId },
+    enabled: true,
+    autoEnable: false,
+    createdAt: new Date(0),
+  };
 }

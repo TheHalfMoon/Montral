@@ -7,6 +7,7 @@ import {
   DEFAULT_CHECK_RETENTION_DAYS,
   MAX_REMINDERS,
   ROLLUP_RETENTION_DAYS,
+  personalChannel,
   type AlertDelivery,
   type DeliveryRetry,
   type EscalationDue,
@@ -22,6 +23,7 @@ import type { Db } from "./client";
 import * as schema from "./schema";
 import { coverageTime, recordHeartbeatObservation, recordObservation, timeCoverage } from "./coverage";
 import { publicMonitorStatus } from "./public-monitor-status";
+import { oncallRepo } from "./oncall-repo";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -142,6 +144,7 @@ export function createRepo(db: Db): Repo {
   }
 
   const repo: Repo = {
+    ...oncallRepo(db),
     // ── workspaces, users, projects ────────────────────────────────────────────
     async isMember(userId, orgId) {
       const [ok] = await db
@@ -868,7 +871,8 @@ export function createRepo(db: Db): Repo {
     async acknowledgeIncident(orgId, id, userId) {
       const [inc] = await db
         .update(schema.incident)
-        .set({ acknowledgedAt: new Date(), assigneeId: userId, nextReminderAt: null, nextEscalationAt: null })
+        // the acknowledger takes the incident only when nobody owns it yet; acknowledging stops repeats and escalation
+        .set({ acknowledgedAt: new Date(), assigneeId: sql`coalesce(${schema.incident.assigneeId}, ${userId})`, nextReminderAt: null, nextEscalationAt: null })
         .where(and(eq(schema.incident.id, id), eq(schema.incident.organizationId, orgId)))
         .returning();
       // the alerts that went out before the acknowledgement are marked as seen
@@ -1125,11 +1129,24 @@ export function createRepo(db: Db): Repo {
       for (const delivery of claimed as AlertDelivery[]) {
         const [incident] = delivery.incidentId ? await db.select().from(schema.incident).where(eq(schema.incident.id, delivery.incidentId)) : [];
         const [monitor] = incident?.monitorId ? await db.select().from(schema.monitor).where(eq(schema.monitor.id, incident.monitorId)) : [];
-        const [channel] = delivery.channelId ? await db.select().from(schema.alertChannel).where(eq(schema.alertChannel.id, delivery.channelId)) : [];
+        let channel: typeof schema.alertChannel.$inferSelect | undefined;
+        let notMember = false;
+        if (delivery.targetUserId) {
+          // a person notified directly: rebuilt from their account, and only while they are still a member
+          const [person] = await db
+            .select({ userId: schema.user.id, name: schema.user.name, email: schema.user.email })
+            .from(schema.member)
+            .innerJoin(schema.user, eq(schema.user.id, schema.member.userId))
+            .where(and(eq(schema.member.organizationId, delivery.organizationId), eq(schema.member.userId, delivery.targetUserId)));
+          if (person && (delivery.channelType === "email" || delivery.channelType === "push")) channel = personalChannel(delivery.organizationId, person, delivery.channelType) as typeof channel;
+          else notMember = true;
+        } else if (delivery.channelId) {
+          [channel] = await db.select().from(schema.alertChannel).where(eq(schema.alertChannel.id, delivery.channelId));
+        }
         if (incident && monitor && channel?.enabled) out.push({ delivery, incident, monitor, channel });
         else {
           // nothing left to deliver: say why instead of leaving the row hanging
-          const why = !incident || !monitor ? "skipped: the incident or monitor was removed" : !channel ? "skipped: the channel was removed" : "skipped: channel disabled";
+          const why = !incident || !monitor ? "skipped: the incident or monitor was removed" : notMember ? "skipped: the person is no longer a member of the workspace" : !channel ? "skipped: the channel was removed" : "skipped: channel disabled";
           await db.update(t).set({ status: "skipped", ok: false, statusMessage: why, error: why }).where(and(eq(t.id, delivery.id), eq(t.status, "sending")));
         }
       }
@@ -1164,13 +1181,22 @@ export function createRepo(db: Db): Repo {
         .orderBy(asc(schema.alertDelivery.createdAt)) as unknown as Promise<AlertDelivery[]>,
 
     async scheduleFollowUps(inc, projectId) {
-      if (!projectId) return;
-      const [p] = await db.select().from(schema.project).where(eq(schema.project.id, projectId));
-      if (!p) return;
-      const first = p.escalation[0];
+      // a monitor with an escalation policy: its first step is due at once (the scheduler's next tick), the project's
+      // levels do not apply; reminders stay the project's
+      const [policy] = await db
+        .select({ steps: schema.escalationPolicy.steps })
+        .from(schema.incident)
+        .innerJoin(schema.monitor, eq(schema.monitor.id, schema.incident.monitorId))
+        .innerJoin(schema.escalationPolicy, and(eq(schema.escalationPolicy.id, schema.monitor.escalationPolicyId), eq(schema.escalationPolicy.organizationId, schema.monitor.organizationId)))
+        .where(eq(schema.incident.id, inc.id));
+      const [p] = projectId ? await db.select().from(schema.project).where(eq(schema.project.id, projectId)) : [];
+      if (!p && !policy) return;
+      const first = p?.escalation[0];
       const set: Partial<typeof schema.incident.$inferInsert> = {};
-      if (p.reminderIntervalMin) set.nextReminderAt = new Date(Date.now() + p.reminderIntervalMin * 60_000);
-      if (first) set.nextEscalationAt = new Date(inc.startedAt.getTime() + first.escalateAfterMin * 60_000);
+      if (p?.reminderIntervalMin) set.nextReminderAt = new Date(Date.now() + p.reminderIntervalMin * 60_000);
+      if (policy) {
+        if (policy.steps.length) set.nextEscalationAt = inc.startedAt;
+      } else if (first) set.nextEscalationAt = new Date(inc.startedAt.getTime() + first.escalateAfterMin * 60_000);
       if (Object.keys(set).length) await db.update(schema.incident).set(set).where(and(eq(schema.incident.id, inc.id), isNull(schema.incident.resolvedAt), isNull(schema.incident.acknowledgedAt)));
     },
     async claimReminders(limit, skip) {
@@ -1237,25 +1263,49 @@ export function createRepo(db: Db): Repo {
     async claimEscalations(limit) {
       const i = schema.incident;
       const candidates = await db
-        .select({ incident: i, monitor: schema.monitor, project: schema.project })
+        .select({ incident: i, monitor: schema.monitor, project: schema.project, policy: schema.escalationPolicy })
         .from(i)
         .innerJoin(schema.monitor, eq(schema.monitor.id, i.monitorId))
-        .innerJoin(schema.project, eq(schema.project.id, schema.monitor.projectId))
+        .leftJoin(schema.project, eq(schema.project.id, schema.monitor.projectId))
+        .leftJoin(schema.escalationPolicy, and(eq(schema.escalationPolicy.id, schema.monitor.escalationPolicyId), eq(schema.escalationPolicy.organizationId, schema.monitor.organizationId)))
         .where(and(lte(i.nextEscalationAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt)))
         .orderBy(asc(i.nextEscalationAt))
         .limit(limit);
       const out: EscalationDue[] = [];
       for (const c of candidates) {
-        const steps = c.project.escalation;
-        const step = steps[c.incident.escalationLevel];
-        const after = steps[c.incident.escalationLevel + 1];
+        const level = c.incident.escalationLevel;
+        let step: EscalationDue["step"] | undefined;
+        let next: Date | SQL | null = null;
+        let policy: EscalationDue["policy"] = null;
+        if (c.policy) {
+          // a policy: step `level % n` of round `level / n`; the next step waits this step's timeout for an
+          // acknowledgement; after the last step of the last round the clock stops
+          const steps = c.policy.steps;
+          const total = steps.length * (c.policy.repeatCount + 1);
+          const current = level < total ? steps[level % steps.length] : undefined;
+          if (current) {
+            step = { channelIds: current.channelIds ?? [], userIds: current.userIds ?? [], scheduleIds: current.scheduleIds ?? [] };
+            policy = { id: c.policy.id, name: c.policy.name, stepNumber: (level % steps.length) + 1, round: Math.floor(level / steps.length) + 1 };
+            if (level + 1 < total) next = sql`now() + make_interval(mins => ${Math.max(1, current.timeoutMin ?? 1)})`;
+          }
+        } else if (c.project) {
+          // the project's levels, counted from the start of the incident (rows saved before people and schedules existed
+          // carry channel ids only)
+          const steps = c.project.escalation;
+          const current = steps[level];
+          const after = steps[level + 1];
+          if (current) step = { channelIds: current.channelIds ?? [], userIds: current.userIds ?? [], scheduleIds: current.scheduleIds ?? [] };
+          next = after ? new Date(c.incident.startedAt.getTime() + after.escalateAfterMin * 60_000) : null;
+        }
+        // One conditional UPDATE decides who sends this step: it only matches the level that was read, so a second
+        // server (or a second call on this one) sees no row and sends nothing.
         const [won] = await db
           .update(i)
-          .set({ escalationLevel: sql`${i.escalationLevel} + 1`, nextEscalationAt: after ? new Date(c.incident.startedAt.getTime() + after.escalateAfterMin * 60_000) : null })
-          .where(and(eq(i.id, c.incident.id), eq(i.escalationLevel, c.incident.escalationLevel), lte(i.nextEscalationAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt)))
+          .set({ escalationLevel: sql`${i.escalationLevel} + 1`, nextEscalationAt: next })
+          .where(and(eq(i.id, c.incident.id), eq(i.escalationLevel, level), lte(i.nextEscalationAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt)))
           .returning();
         // the step list was shortened since: nothing to send, the clock is cleared above
-        if (won && step) out.push({ incident: won, monitor: c.monitor, step, level: won.escalationLevel });
+        if (won && step) out.push({ incident: won, monitor: c.monitor, step, level: won.escalationLevel, policy });
       }
       return out;
     },

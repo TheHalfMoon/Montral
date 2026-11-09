@@ -1,9 +1,10 @@
-import { MAX_REMINDERS, type AlertChannel, type AlertDelivery, type DeliveryRetry, type NewDelivery, type Repo, type SubscriberTarget } from "@montral/repo";
+import { MAX_REMINDERS, personalChannel, type AlertChannel, type AlertDelivery, type DeliveryRetry, type EscalationDue, type NewDelivery, type Repo, type SubscriberTarget, type WorkspaceMember } from "@montral/repo";
 import { sendPush } from "./apns";
 import { actionEmail, appUrl, sendEmail } from "./email";
 import { unmetered, type Entitlements } from "./entitlements";
 import { isLang, orgLang, tr, userLang, type Lang } from "./mail-i18n";
 import { guardedFetch, readCapped } from "./netguard";
+import { onCallAt } from "./oncall-engine";
 import { ttlCache } from "./ttlcache";
 
 type Event = {
@@ -378,6 +379,10 @@ async function execute(repo: Repo, d: Pick<AlertDelivery, "id" | "kind" | "attem
       }
       if ((await withinEmails(meter, channel.organizationId, [channel])).skipped) throw new Skipped(SKIPPED);
     }
+    // a repeat or an escalation is pointless once someone took the incident: checked again right before sending
+    if ((d.kind === "incident.escalated" || d.kind === "incident.reminder") && (await followUpStopped(repo, ev.incident.id))) {
+      throw new Skipped("skipped: the incident was acknowledged or resolved before this alert could be sent");
+    }
     await deliver(channel, ev, alertText(ev), lang, repo, pushed);
     await repo.finishDelivery(d.id, { status: "sent", error: null, message: null });
     return true;
@@ -461,34 +466,36 @@ async function fanOut(repo: Repo, orgId: string, event: Event, channels: AlertCh
   const ev = await withProject(repo, orgId, event);
   const fallback = channels.some((c) => c.type === "email") ? await orgLang(repo, orgId) : "en";
   const base = { organizationId: orgId, projectId: ev.monitor.projectId ?? null, kind: ev.kind, incidentId: ev.incident.id, monitorName: ev.monitor.name, ...extra };
+  // a person notified directly has no channel row: the delivery names them instead (see personalChannel)
+  const target = (c: AlertChannel) => (isPersonal(c) ? { channelId: null, targetUserId: personalUserId(c) } : { channelId: c.id });
   const live = channels.filter((c) => c.enabled);
   const off = channels.filter((c) => !c.enabled);
   // An audit-write failure for disabled channels must not mute enabled channels.
-  if (off.length) await repo.logDeliveries(off.map((c) => ({ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "skipped" as const, error: "skipped: channel disabled", statusMessage: "skipped: channel disabled" }))).catch(() => console.error("disabled alert channel audit unavailable"));
+  if (off.length) await repo.logDeliveries(off.map((c) => ({ ...base, ...target(c), channelName: c.name, channelType: c.type, ok: false, status: "skipped" as const, error: "skipped: channel disabled", statusMessage: "skipped: channel disabled" }))).catch(() => console.error("disabled alert channel audit unavailable"));
   // a phone is pushed once per event, however many push channels reach it
   const pushed: PushedDevices = new Map();
   // Persist the pending authorization before claiming: worker recovery must not bypass the policy.
   // A completed provider attempt replaces this marker; interrupted attempts retain it for safe reevaluation.
-  const rows = await repo.queueDeliveries(live.map((c) => ({ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, ...(entitlements.allowAlertChannel ? { error: ROUTING_UNAVAILABLE } : {}) })));
+  const rows = await repo.queueDeliveries(live.map((c) => ({ ...base, ...target(c), channelName: c.name, channelType: c.type, ok: false, ...(entitlements.allowAlertChannel ? { error: ROUTING_UNAVAILABLE } : {}) })));
   // Wait for every channel even if a database claim or locale lookup fails.
   // The interrupted delivery remains pending/sending for the existing sweep; an
   // immediate retry here could duplicate an already-accepted provider message.
   const outcomes = await Promise.allSettled(
     live.map(async (c) => {
       const lang = await languageFor(repo, c, fallback);
-      const row = rows.find((r) => r.channelId === c.id);
+      const row = rows.find((r) => (isPersonal(c) ? r.targetUserId === personalUserId(c) && r.channelType === c.type : r.channelId === c.id));
       if (!row) {
         // no row to claim: send anyway, only the history is missing
         try {
           if (entitlements.allowAlertChannel) await authorizeChannel(c, ev, entitlements, new Date());
         } catch (e) {
           if (e instanceof Skipped) {
-            await repo.logDeliveries([{ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "skipped", error: e.message, statusMessage: e.message }]).catch(() => {});
+            await repo.logDeliveries([{ ...base, ...target(c), channelName: c.name, channelType: c.type, ok: false, status: "skipped", error: e.message, statusMessage: e.message }]).catch(() => {});
             return;
           }
           // No row means no durable retry, so a policy failure here loses this alert: say so loudly and try to leave a trace.
           console.error("ALERT NOT SENT: routing policy unavailable and retry could not be queued");
-          await repo.logDeliveries([{ ...base, channelId: c.id, channelName: c.name, channelType: c.type, ok: false, status: "failed", error: ROUTING_UNAVAILABLE, statusMessage: `failed: ${ROUTING_UNAVAILABLE} (could not be queued for retry)` }]).catch(() => {});
+          await repo.logDeliveries([{ ...base, ...target(c), channelName: c.name, channelType: c.type, ok: false, status: "failed", error: ROUTING_UNAVAILABLE, statusMessage: `failed: ${ROUTING_UNAVAILABLE} (could not be queued for retry)` }]).catch(() => {});
           return;
         }
         await deliver(c, ev, alertText(ev), lang, repo, pushed).catch(() => console.error("alert delivery failed"));
@@ -554,21 +561,118 @@ export async function sendReminders(repo: Repo, entitlements: Entitlements = unm
   return due.length;
 }
 
-/** Tell the next escalation level about an incident that is still unacknowledged. Claimed once, like a reminder. */
+/** True when the incident was acknowledged or resolved since it was read (a repo without the lookup never stops). */
+async function followUpStopped(repo: Repo, incidentId: string): Promise<boolean> {
+  if (!repo.incidentFollowUpState) return false;
+  const state = await repo.incidentFollowUpState(incidentId).catch(() => null);
+  return !!state && (!!state.acknowledgedAt || !!state.resolvedAt);
+}
+
+/** A stand-in channel for a person (see personalChannel); real channels have uuid ids, so the prefix cannot be forged. */
+const isPersonal = (c: Pick<AlertChannel, "id">) => c.id.startsWith("personal:");
+const personalUserId = (c: AlertChannel) => String((c.config as { userId?: unknown }).userId ?? "");
+
+/** Who one escalation step reaches in person, and why; `notes` explains whoever could not be reached. */
+export type StepPeople = { people: { member: WorkspaceMember; why: string[] }[]; notes: string[] };
+
+/**
+ * The people an escalation step notifies at `at`: the members it names, plus whoever is on call on its schedules (computed
+ * by the on-call engine, overrides included, people who left the workspace skipped). Nothing is sent here.
+ */
+export async function stepPeople(repo: Repo, orgId: string, step: EscalationDue["step"], at: Date): Promise<StepPeople> {
+  const userIds = step.userIds ?? [];
+  const scheduleIds = step.scheduleIds ?? [];
+  if (!userIds.length && !scheduleIds.length) return { people: [], notes: [] };
+  const members = await repo.listMembers(orgId);
+  const byId = new Map(members.map((m) => [m.userId, m]));
+  const why = new Map<string, string[]>();
+  const add = (userId: string, reason: string) => why.set(userId, [...(why.get(userId) ?? []), reason]);
+  const notes: string[] = [];
+  for (const id of userIds) {
+    if (byId.has(id)) add(id, "named in the step");
+    else notes.push("a person named in the step is no longer a member of the workspace");
+  }
+  if (scheduleIds.length) {
+    const schedules = await repo.oncallSchedulesByIds(orgId, scheduleIds);
+    if (schedules.length < new Set(scheduleIds).size) notes.push("a schedule named in the step no longer exists");
+    // only the instant of paging is evaluated: the overrides covering it, and one millisecond of each rotation
+    const overrides = await repo.listOncallOverrides(orgId, schedules.map((s) => s.id), at, new Date(at.getTime() + 1));
+    for (const s of schedules) {
+      let onCall: string | null = null;
+      try {
+        onCall = onCallAt({ timeZone: s.timeZone, layers: s.layers, overrides: overrides.filter((o) => o.scheduleId === s.id), memberIds: byId.keys() }, at);
+      } catch {
+        console.error("on-call schedule could not be evaluated");
+      }
+      if (onCall && byId.has(onCall)) add(onCall, `on call for ${s.name}`);
+      else notes.push(`${s.name} had nobody on call`);
+    }
+  }
+  return { people: [...why].map(([id, reasons]) => ({ member: byId.get(id)!, why: reasons })), notes };
+}
+
+/**
+ * Tell the next escalation step about an incident that is still unacknowledged. The repo hands each step to exactly one
+ * caller, however many servers run this. Channels, the people the step names and whoever is on call on its schedules are
+ * notified through the usual delivery rows (so failures are retried like any alert); the step is written to the incident's
+ * timeline (team only) and the audit log.
+ */
 export async function sendEscalations(repo: Repo, entitlements: Entitlements = unmetered, limit = 10) {
   const due = await repo.claimEscalations(limit);
-  for (const { incident, monitor, step, level } of due) {
+  for (const { incident, monitor, step, level, policy } of due) {
+    const orgId = incident.organizationId;
     const ev = eventOf("incident.escalated", incident, monitor, level);
     if (await repo.underMaintenance(monitor)) {
-      await repo.logDeliveries([suppressed(incident.organizationId, ev, "suppressed: maintenance")]);
+      await repo.logDeliveries([suppressed(orgId, ev, "suppressed: maintenance")]);
       continue;
     }
-    const channels = await repo.channelsByIds(incident.organizationId, step.channelIds);
-    if (!channels.length) {
-      await repo.logDeliveries([suppressed(incident.organizationId, ev, `skipped: escalation level ${level} has no channel left`)]);
+    let channels = step.channelIds.length ? await repo.channelsByIds(orgId, step.channelIds) : [];
+    // A policy's first step goes out right after the incident opened: a channel that already got (or is getting) the
+    // "down" alert for this incident is not paged a second time for the same thing.
+    if (policy && policy.stepNumber === 1 && policy.round === 1 && channels.length) {
+      const opened = new Set((await repo.incidentDeliveries(orgId, incident.id).catch(() => []))
+        .filter((d) => d.kind === "incident.opened" && d.channelId && d.status !== "failed" && d.status !== "skipped")
+        .map((d) => d.channelId));
+      const twice = channels.filter((c) => opened.has(c.id));
+      if (twice.length) {
+        await repo.logDeliveries(twice.map((c) => ({ ...suppressed(orgId, ev, "skipped: this channel already got the down alert for this incident"), channelId: c.id, channelName: c.name, channelType: c.type }))).catch(() => {});
+        channels = channels.filter((c) => !opened.has(c.id));
+      }
+    }
+    let reached: StepPeople = { people: [], notes: [] };
+    try {
+      reached = await stepPeople(repo, orgId, step, new Date());
+    } catch {
+      console.error("escalation people could not be resolved");
+      reached = { people: [], notes: ["the on-call schedules could not be read"] };
+    }
+    // every person gets an email to their account address, and a push to the phones they registered
+    const personal: AlertChannel[] = [];
+    for (const { member } of reached.people) {
+      personal.push(personalChannel(orgId, member, "email"));
+      const phones = await repo.listPushDevices(member.userId).catch(() => []);
+      if (phones.length) personal.push(personalChannel(orgId, member, "push"));
+    }
+    // Someone may have acknowledged (or resolved) the incident while this step was being prepared: then nothing is paged.
+    if (await followUpStopped(repo, incident.id)) {
+      await repo.logDeliveries([suppressed(orgId, ev, "skipped: the incident was acknowledged or resolved before this escalation could be sent")]).catch(() => {});
       continue;
     }
-    await fanOut(repo, incident.organizationId, ev, channels, entitlements);
+    const where = policy ? ` (policy ${policy.name}, step ${policy.stepNumber}${policy.round > 1 ? `, repeat ${policy.round - 1}` : ""})` : "";
+    const who = reached.people.map((p) => `${p.member.name || p.member.email} (${p.why.join(", ")})`);
+    const body = [
+      `Escalation level ${level}${where}: ${who.length || channels.length ? "notified" : "nobody could be notified"}${who.length ? ` ${who.join("; ")}` : ""}${channels.length ? `${who.length ? "; channels" : " channels"} ${channels.map((c) => c.name).join(", ")}` : ""}.`,
+      ...reached.notes.map((n) => `${n[0].toUpperCase()}${n.slice(1)}.`),
+    ].join(" ");
+    await repo.recordEscalationNotice?.({
+      organizationId: orgId, projectId: incident.projectId ?? monitor.projectId ?? null, incidentId: incident.id, level, body,
+      userIds: reached.people.map((p) => p.member.userId), channelCount: channels.length, policyId: policy?.id ?? null, scheduleIds: step.scheduleIds ?? [],
+    }).catch(() => console.error("escalation notice could not be recorded"));
+    if (!channels.length && !personal.length) {
+      await repo.logDeliveries([suppressed(orgId, ev, `skipped: escalation level ${level} has no channel or person left`)]);
+      continue;
+    }
+    await fanOut(repo, orgId, ev, [...channels, ...personal], entitlements);
   }
   return due.length;
 }
@@ -579,12 +683,14 @@ export async function sweepDeliveries(repo: Repo) {
 }
 
 /** Send one alert to one channel; throws when the provider rejects it. */
-export async function deliver(c: { type: string; name?: string; config: unknown; organizationId?: string }, ev: Event, text: string, lang: Lang = "en", repo?: Repo, pushed?: PushedDevices) {
+export async function deliver(c: { id?: string; type: string; name?: string; config: unknown; organizationId?: string }, ev: Event, text: string, lang: Lang = "en", repo?: Repo, pushed?: PushedDevices) {
   const L = (k: string, v?: Record<string, string>) => tr(lang, k, v);
   // a repeat or an escalation reads like the down alert
   const opened = ev.kind !== "incident.resolved";
   const cfg = c.config as Record<string, string | undefined>;
   const need = (v: unknown, what: string) => { if (!v) throw new Skipped(`skipped: the channel has no ${what}`); };
+  // a person notified directly by an escalation step (never a configured channel: those have uuid ids)
+  const personal = !!c.id && isPersonal({ id: c.id }) && (c.config as { personal?: unknown }).personal === true;
   switch (c.type) {
     case "slack":
       need(cfg.url, "webhook URL");
@@ -683,8 +789,8 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
     case "push": {
       // devices belong to people: every member of the workspace who registered one is reached, each in their own language
       if (!repo || !c.organizationId) throw new Error("Push channel has no workspace to look devices up in");
-      const devices = await repo.pushDevicesForOrganization(c.organizationId);
-      if (!devices.length) throw new Skipped("skipped: no phone has registered for push alerts");
+      const devices = personal ? await repo.listPushDevices(String(cfg.userId ?? "")) : await repo.pushDevicesForOrganization(c.organizationId);
+      if (!devices.length) throw new Skipped(personal ? "skipped: this person has no phone registered for push alerts" : "skipped: no phone has registered for push alerts");
       // devices another push channel is already handling are claimed by it; they are taken over only if that push fails
       const mine = pushed ? devices.filter((d) => !pushed.has(d.id)) : devices;
       const theirs = pushed ? devices.filter((d) => pushed.has(d.id)).map((d) => ({ d, done: pushed.get(d.id)! })) : [];
@@ -735,7 +841,7 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
         const intro = ev.kind === "incident.reminder"
           ? L("Nobody has acknowledged this incident yet. This is reminder {n} of {max}.", { n: String(ev.count ?? 1), max: String(MAX_REMINDERS) })
           : ev.kind === "incident.escalated"
-            ? L("Nobody acknowledged this incident in time, so it was escalated to this channel.")
+            ? L(personal ? "Nobody acknowledged this incident in time, so it was escalated to you." : "Nobody acknowledged this incident in time, so it was escalated to this channel.")
             : L(opened ? (ev.slow ? "The monitor responded slower than its threshold on several checks in a row, so an incident was opened." : "The monitor failed its consecutive checks, so an incident was opened.") : "Checks are passing again and the incident is resolved.");
         const mail = actionEmail({
           title: L(heading, { name: ev.monitor.name }),
@@ -744,7 +850,7 @@ export async function deliver(c: { type: string; name?: string; config: unknown;
           rows,
           cta: L("View incident"),
           url: `${appUrl()}/app/incidents/${ev.incident.id}`,
-          footer: L("You get this because {name} is an alert channel in your workspace.", { name: c.name ?? L("this email") }),
+          footer: personal ? L("You get this because an escalation step of your workspace notifies you directly, for example while you are on call.") : L("You get this because {name} is an alert channel in your workspace.", { name: c.name ?? L("this email") }),
           footerUrl: { text: L("Manage alerting"), url: `${appUrl()}/app/alerting` },
           lang,
         });

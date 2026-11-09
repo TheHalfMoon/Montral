@@ -242,8 +242,8 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     expect(results.filter((r) => r.ms < DELAY - 100)).toHaveLength(5);
     expect(Math.max(...results.map((r) => r.ms))).toBeLessThan(10_000 + DELAY);
     const stored = await q<{ n: number; s: number }>(
-      "SELECT COUNT(*)::int AS n, COUNT(*) FILTER (WHERE response_status=201)::int AS s FROM montral_hook_event WHERE inbox_id = ANY($1::uuid[])",
-      [noisyInboxes.map((i) => i.id)]);
+      "SELECT COUNT(*)::int AS n, COUNT(*) FILTER (WHERE response_status=201)::int AS s FROM montral_hook_event WHERE inbox_id::text = ANY(string_to_array($1::text, ','))",
+      [noisyInboxes.map((i) => i.id).join(",")]);
     expect(stored[0]).toEqual({ n: 25, s: 25 });
     expect(hookDelaySlots.active({ org: noisy.orgId })).toBe(0);
     expect(hookDelaySlots.active({ org: quiet.orgId })).toBe(0);

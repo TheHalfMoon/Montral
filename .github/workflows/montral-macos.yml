@@ -1,0 +1,121 @@
+name: Montral macOS PostgreSQL 18 qualification
+# Real macOS ARM64 runner and an isolated disposable PostgreSQL 18 cluster.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+permissions:
+  contents: read
+jobs:
+  macos-postgres18:
+    name: macOS ARM64 suite, browser and restore
+    runs-on: macos-15
+    timeout-minutes: 75
+    env:
+      TEST_DATABASE_URL: postgres://montral@127.0.0.1:55439/montral_ci
+      PGHOST: 127.0.0.1
+      PGPORT: "55439"
+      PGUSER: montral
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+          cache: pnpm
+      - name: Start isolated disposable PostgreSQL 18 cluster
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew list --versions postgresql@18 | grep -q postgresql || brew install postgresql@18
+          pg_bin="$(brew --prefix postgresql@18)/bin"
+          test -x "$pg_bin/initdb"
+          test -x "$pg_bin/pg_dump"
+          echo "$pg_bin" >> "$GITHUB_PATH"
+          "$pg_bin/initdb" -D "$RUNNER_TEMP/montral-ci-pg18" -U montral --auth-host=trust --auth-local=trust
+          "$pg_bin/pg_ctl" -D "$RUNNER_TEMP/montral-ci-pg18" -l "$RUNNER_TEMP/montral-ci-pg18.log" -o "-h 127.0.0.1 -p 55439" start
+          "$pg_bin/createdb" -h 127.0.0.1 -p 55439 -U montral montral_ci
+          "$pg_bin/psql" -h 127.0.0.1 -p 55439 -U montral -d montral_ci -X -Atqc 'SHOW server_version'
+          "$pg_bin/pg_dump" --version
+      - name: Verify source integrity
+        run: python3 scripts/verify_sources.py
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm -r typecheck
+      - name: API PostgreSQL E2E, unit and probe tests
+        run: pnpm --filter @montral/api test && pnpm --filter @montral/probe test
+      - name: Build Node API, edge probe and self-hosted web
+        run: |
+          pnpm --filter @montral/api build:node
+          pnpm --filter @montral/probe build:edge
+          DEPLOY_TARGET=node pnpm --filter @montral/web build
+      - name: Verify landing and web Content Security Policy hashes
+        run: |
+          node scripts/landing-csp.mjs --check
+          node scripts/verify-csp-hashes.mjs apps/web/dist/client
+      - name: Web tests on built production routes
+        run: pnpm --filter @montral/web test
+      - name: Smoke running Node server with PostgreSQL 18
+        run: node scripts/smoke-node.mjs
+      - name: Qualify full-table backup and restore, with negative control
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_restore_mac'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_restore_mac WITH (FORCE)"' EXIT
+          restore_db="postgres://montral@127.0.0.1:55439/montral_test_restore_mac"
+          TEST_DATABASE_URL="$restore_db" node scripts/smoke-node.mjs
+          psql "$restore_db" -X -v ON_ERROR_STOP=1 -c "
+            INSERT INTO organization (id,name,slug,created_at)
+              SELECT 'restore-mac-' || i, 'Synthetic Mac restore ' || i, 'restore-mac-' || i, now()
+              FROM generate_series(1,8) i;
+            INSERT INTO project (organization_id,name)
+              SELECT id, 'Synthetic Mac project' FROM organization;
+            INSERT INTO monitor (organization_id,project_id,name,type,target)
+              SELECT p.organization_id,p.id,'Synthetic heartbeat','heartbeat','synthetic-only' FROM project p;
+          "
+          TEST_DATABASE_URL="$restore_db" node scripts/qualify-backup.mjs
+          TEST_DATABASE_URL="$restore_db" node scripts/qualify-backup-negative.mjs
+      - name: Qualify Chromium browser journeys
+        shell: bash
+        run: |
+          set -euo pipefail
+          browser="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          if [[ ! -x "$browser" ]]; then
+            browser="/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+          fi
+          if [[ ! -x "$browser" ]]; then
+            echo "::error::Chrome unavailable on this macOS runner"
+            exit 1
+          fi
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_browser_mac'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_browser_mac WITH (FORCE)"' EXIT
+          MONTRAL_CHROMIUM="$browser" TEST_DATABASE_URL="postgres://montral@127.0.0.1:55439/montral_test_browser_mac" node scripts/qualify-browser.mjs
+      - name: Qualify SIGKILL, database outage and two-worker recovery
+        shell: bash
+        run: |
+          set -euo pipefail
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_crash_mac'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_crash_mac WITH (FORCE)"' EXIT
+          TEST_DATABASE_URL="postgres://montral@127.0.0.1:55439/montral_test_crash_mac" node scripts/qualify-crash-recovery.mjs
+      - name: Qualify local SMTP delivery and error-log privacy
+        run: |
+          node scripts/qualify-smtp.mjs
+          node scripts/qualify-smtp-error-log.mjs
+      - name: No source brand leaks in active code (BSD grep)
+        run: bash scripts/verify-active-branding.sh
+      - name: Stop disposable PostgreSQL cluster
+        if: always()
+        shell: bash
+        run: |
+          pg_bin="$(brew --prefix postgresql@18 2>/dev/null)/bin"
+          if [[ -x "$pg_bin/pg_ctl" && -f "$RUNNER_TEMP/montral-ci-pg18/postmaster.pid" ]]; then
+            "$pg_bin/pg_ctl" -D "$RUNNER_TEMP/montral-ci-pg18" -m immediate stop || true
+          fi

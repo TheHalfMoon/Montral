@@ -20,6 +20,21 @@ describe("Montral MCP webhook tools", () => {
     expect(events.schema.safeParse({ id: inbox, before: "nope" }).success).toBe(false);
     expect(events.schema.safeParse({ id: "../x" }).success).toBe(false);
   });
+  it("reads, sets and resets the receiver response through the REST routes", () => {
+    const get = tool("get_webhook_response");
+    expect(get.readOnly).toBe(true);
+    expect(get.build(get.schema.parse({ id: inbox }))).toEqual({ method: "GET", path: `/api/hooks/inboxes/${inbox}/response` });
+    const set = tool("set_webhook_response");
+    expect(set.readOnly).toBeFalsy();
+    const config = { status: 201, contentType: "application/json", body: "{}", headers: [{ name: "X-Mock", value: "1" }], delayMs: 100, methods: { PUT: { status: 409 } } };
+    expect(set.build(set.schema.parse({ id: inbox, ...config }))).toEqual({ method: "PUT", path: `/api/hooks/inboxes/${inbox}/response`, body: config });
+    expect(set.schema.safeParse({ id: inbox, status: 101 }).success).toBe(false);
+    expect(set.schema.safeParse({ id: inbox, contentType: "text/html" }).success).toBe(false);
+    expect(set.schema.safeParse({ id: inbox, delayMs: 20_000 }).success).toBe(false);
+    expect(set.schema.safeParse({ id: inbox, methods: { GET: { status: 200 } } }).success).toBe(false);
+    const reset = tool("reset_webhook_response");
+    expect(reset.build(reset.schema.parse({ id: inbox }))).toEqual({ method: "DELETE", path: `/api/hooks/inboxes/${inbox}/response` });
+  });
   it("marks inbox and event deletion as destructive and never exposes replay to agents", () => {
     expect(tool("delete_webhook_inbox").destructive).toBe(true);
     const del = tool("delete_webhook_event");

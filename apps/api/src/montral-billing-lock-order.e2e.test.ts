@@ -137,10 +137,15 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
         UNION ALL SELECT 'montral_hook_inbox_scope' WHERE to_regclass('montral_hook_inbox_scope') IS NOT NULL
         UNION ALL SELECT 'montral_hook_event_recent' WHERE to_regclass('montral_hook_event_recent') IS NOT NULL
         UNION ALL SELECT 'montral_hook_event_expiry' WHERE to_regclass('montral_hook_event_expiry') IS NOT NULL
+        UNION ALL SELECT 'montral_hook_inbox.response' FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name='montral_hook_inbox' AND column_name='response'
+        UNION ALL SELECT 'montral_hook_event.response_status' FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name='montral_hook_event' AND column_name='response_status'
         `)).map(x => x.item).sort(); // sorted here: SQL ORDER BY follows the cluster's collation ('.' vs '_' differs on macOS)
       const complete = [
         "montral_billing_intent.consumed_at", "montral_billing_intent_pending",
         "montral_hook_event_expiry", "montral_hook_event_recent", "montral_hook_inbox_scope",
+        "montral_hook_inbox.response", "montral_hook_event.response_status",
         "montral_subscription.ends_at",
       ].sort();
       expect(await shape()).toEqual(complete);
@@ -148,6 +153,9 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
       // Simulate a pre-upgrade schema that needs DDL on BOTH billing tables.
       await fresh.query("ALTER TABLE montral_subscription DROP COLUMN ends_at");
       await fresh.query("DROP INDEX montral_billing_intent_pending");
+      // ...and on both webhook tables (configurable responses): the upgrade adds them back, inbox before event.
+      await fresh.query("ALTER TABLE montral_hook_event DROP COLUMN response_status");
+      await fresh.query("ALTER TABLE montral_hook_inbox DROP COLUMN response");
       const org = "lock-order-upgrade-" + randomUUID();
       await fresh.query("INSERT INTO organization(id,name,slug,created_at) VALUES($1,'Synthetic lock order',$1,NOW())", [org]);
       // The upgrade must wait for montral_subscription BEFORE it locks

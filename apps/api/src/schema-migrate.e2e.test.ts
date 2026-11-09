@@ -29,11 +29,11 @@ describe.skipIf(!connection)("multi-replica Montral migrations on PostgreSQL", (
       const funcs = await dbs[0].query<{ proname: string }>(`
         SELECT proname FROM pg_proc
         WHERE proname IN ('montral_create_hook_inbox',
-          'montral_capture_hook_event', 'montral_reserve_billing_intent',
+          'montral_capture_hook_event', 'montral_capture_hook_event_v2', 'montral_reserve_billing_intent',
           'montral_apply_billing_event', 'montral_spend_usage')
         ORDER BY proname
       `);
-      expect(funcs.map(f => f.proname)).toHaveLength(5);
+      expect(funcs.map(f => f.proname)).toHaveLength(6);
       const tables = await dbs[0].query<{ name: string | null }>(`
         SELECT to_regclass('montral_hook_inbox')::text AS name
         UNION ALL SELECT to_regclass('montral_hook_event')::text

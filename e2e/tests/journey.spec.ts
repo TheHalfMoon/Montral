@@ -100,6 +100,24 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await expect(event).toBeVisible();
     await event.locator("summary").click();
     await expect(page.locator(".code2").filter({ hasText: "xbrowser-e2e" }).first()).toBeVisible();
+
+    // Configurable receiver response: edit, preview, save, then the sender gets it (still a synthetic POST).
+    await page.getByLabel(/^Status code/).fill("201");
+    await page.getByLabel(/^Content type/).selectOption("application/json");
+    await page.getByLabel(/^Response body/).fill('{"mocked":true}');
+    await page.getByRole("button", { name: "+ Response header" }).click();
+    await page.getByLabel("Response header name 1", { exact: true }).fill("X-Mock-Id");
+    await page.getByLabel("Response header value 1", { exact: true }).fill("xbrowser");
+    await expect(page.getByRole("region", { name: "Preview" })).toContainText("HTTP/1.1 201");
+    await expect(page.getByRole("region", { name: "Preview" })).toContainText("X-Mock-Id: xbrowser");
+    await page.getByRole("button", { name: "Save response" }).click();
+    await expect(page.getByText("Response saved. New requests get it right away.")).toBeVisible();
+    const answered = await request.post(receiver, { data: { synthetic: "xbrowser-response" } });
+    expect(answered.status()).toBe(201);
+    expect(answered.headers()["x-mock-id"]).toBe("xbrowser");
+    expect(answered.headers()["cache-control"]).toBe("private, no-store");
+    expect(await answered.text()).toBe('{"mocked":true}');
+    await checkA11y(page, testInfo, "webhook-inbox");
   });
 
   await test.step("audit log lists the journey's changes and is accessible", async () => {

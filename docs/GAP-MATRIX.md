@@ -42,7 +42,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Webhook inspection | Y | N | N | N | N | N | Y |
 | Webhook search / paging | Y (#13) | N | N | N | N | N | Y |
 | Webhook replay / forward | Y (#17, SSRF-guarded) | N | N | N | N | N | Y |
-| Custom webhook responses | N | N | N | N | N | N | $ |
+| Custom webhook responses | Y (status, headers, text body, delay, per method; in review) | N | N | N | N | N | $ |
 | REST API | Y | P | Y | Y | Y | P | Y |
 | MCP server | Y (OAuth) | N | Y | Y | Y | N | ? |
 | Terraform / config-as-code | N | N | Y | Y | ? | Y (YAML) | N |
@@ -75,6 +75,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Load, backpressure, pool exhaustion | `qualify-load.mjs` LOAD_QUALIFICATION_PASS: 4,000 monitors, no lost or duplicated checks (#40) |
 | Manual check abuse | per-workspace and per-process bounds, `manual-check-limit.e2e.test.ts` (#41) |
 | Audit log integrity | `audit.e2e.test.ts`: tenant isolation, secret redaction, append-only trigger incl. temp-table bypass (#39) |
+| Custom webhook responses | `montral-hook-response*.test.ts`: header injection, deny-list, text-only types, delay and concurrency bounds, manager-only, replay unaffected, no-op migration lock-free (in review) |
 
 ## Prioritised gaps
 
@@ -90,7 +91,7 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 2. **SSO (OIDC; SAML if justified)**: GitHub sign-in only today; large.
 3. **Terraform provider / config-as-code**: REST API and Uptime Kuma import exist; large.
 4. **Browser / multi-step checks**: needs an isolated headless runtime; large.
-5. **Custom webhook responses** (webhook.site parity): medium.
+5. **Custom webhook responses** (webhook.site parity): implemented, in review (`docs/evidence/2026-11-10-webhook-responses.md`).
 6. **SMS / voice**: requires a paid provider; out of scope without owner approval.
 
 Grafana OnCall and other incident-response tools named in the brief are not yet in

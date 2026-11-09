@@ -109,6 +109,8 @@ jobs:
         run: |
           node scripts/qualify-smtp.mjs
           node scripts/qualify-smtp-error-log.mjs
+      - name: No source brand leaks in active code (BSD grep)
+        run: bash scripts/verify-active-branding.sh
       - name: Stop disposable PostgreSQL cluster
         if: always()
         shell: bash

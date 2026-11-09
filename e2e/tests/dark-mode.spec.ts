@@ -8,6 +8,9 @@ test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL, colorScheme: "dark" });
 
 async function activateDarkTheme(page: import("@playwright/test").Page) {
   await page.locator("html").evaluate((root) => { root.dataset.theme = "dark"; });
+  // Landing transitions its background for 250 ms. Axe must inspect the settled dark palette,
+  // not a light background partway through the transition (particularly in WebKit).
+  await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === "rgb(10, 12, 11)");
   const result = await page.locator("html").evaluate((root) => ({
     theme: root.dataset.theme,
     preference: matchMedia("(prefers-color-scheme: dark)").matches,

@@ -2,6 +2,7 @@ import { openDatabase } from "@montral/db-pg";
 import { randomBytes } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { createApp } from "./app";
+import { montralEdition } from "./montral-edition";
 
 // The workspace a signed-in user acts in must not change from one request to the next. Before the fix a fresh
 // sign-up's session had no active workspace (Better Auth creates the session before the hook that creates the
@@ -14,7 +15,7 @@ const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-te
 const JSON_HEADERS = { "content-type": "application/json" };
 
 describe.skipIf(!url)("the active workspace of a session (PostgreSQL)", () => {
-  const app = createApp(openDatabase);
+  const app = createApp(openDatabase, { edition: montralEdition });
   const req = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
 
   it("is the personal workspace from sign-up on, and stays the oldest one even when membership rows move on disk", async () => {
@@ -48,14 +49,17 @@ describe.skipIf(!url)("the active workspace of a session (PostgreSQL)", () => {
       orgs.push(other.id);
 
       // A session without an active workspace (every sign-up session before the fix, still alive in production) with
-      // its memberships inverted on disk: an UPDATE writes a new version of the personal workspace's row behind the
-      // second one's, which is what vacuum + reuse of space freed by deleted rows did in the shared CI database.
+      // its memberships inverted on disk. Rewriting the personal workspace's row (same values, new heap position and
+      // new index entry) puts it behind the second one's, which is what reuse of space freed by deleted rows did in
+      // the shared CI database. (A plain UPDATE is not enough: it is HOT, and the index keeps the old position.)
       await db.query("update session set active_organization_id = null where user_id = $1", [userId]);
-      const physicallyFirst = () => db.query<{ organization_id: string }>("select organization_id from member where user_id = $1 order by ctid limit 1", [userId]);
-      for (let i = 0; i < 5 && (await physicallyFirst())[0].organization_id !== other.id; i++) {
-        await db.query("update member set role = role where user_id = $1 and organization_id = $2", [userId, home.id]);
+      // exactly the lookup anyWorkspaceOf made before the fix
+      const unordered = () => db.query<{ organization_id: string }>("select organization_id from member where user_id = $1 limit 1", [userId]);
+      for (let i = 0; i < 5 && (await unordered())[0].organization_id !== other.id; i++) {
+        await db.query("with moved as (delete from member where user_id = $1 and organization_id = $2 returning *) insert into member select * from moved", [userId, home.id]);
       }
-      expect((await physicallyFirst())[0].organization_id).toBe(other.id);
+      // precondition: the unordered lookup now answers the second workspace
+      expect((await unordered())[0].organization_id).toBe(other.id);
 
       expect(await db.repo.anyWorkspaceOf(userId)).toBe(home.id);
       for (let i = 0; i < 3; i++) expect((await as("GET", "/workspaces")).body.current.workspace).toBe(home.id);

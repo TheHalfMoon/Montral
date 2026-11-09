@@ -5,7 +5,7 @@ import { checkA11y, expect, synthetic, test } from "../support/fixtures";
 
 test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
 
-test("signed-in journey: monitors, status pages, password page, webhook inbox", async ({ page, context, request, baseURL, guard }, testInfo) => {
+test("signed-in journey: monitors, status pages, password page, webhook inbox", async ({ page, context, request, baseURL, guard, browserName }, testInfo) => {
   test.setTimeout(180_000);
   const who = synthetic(testInfo);
   const monitorName = `Synthetic heartbeat ${who.id}`;
@@ -129,9 +129,12 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     expect(await page.evaluate(() => document.cookie.includes("montral_sa_")), "status access cookie must be HttpOnly").toBe(false);
   });
 
-  // Crashes (React render errors, invalid pattern attributes, uncaught exceptions) fail the journey in every engine.
-  // Excluded: a fetch the journey itself aborts by navigating away (WebKit "Load failed", Firefox "NetworkError when
-  // attempting to fetch resource", Chromium "Failed to fetch"), and the designed 401 of the locked page / wrong password.
-  const aborted = /Load failed|NetworkError when attempting to fetch resource|Failed to fetch/;
-  expect(guard.errors.filter((e) => !aborted.test(e)), "console errors or uncaught exceptions during the journey").toEqual([]);
+  // Crashes (React render errors, invalid pattern attributes) and unhandled promise rejections (including a fetch the
+  // app leaves uncaught when navigation aborts it) fail the journey in every engine. The one exclusion: WebKit logs
+  // "Fetch API cannot load <url> due to access control checks." for every request a navigation cancels, even one the
+  // app handles. For a same-origin /api request (no CORS is involved) that message can only mean cancellation.
+  const host = new URL(baseURL!).host.replace(/\./g, "\\.");
+  const webkitCancelled = new RegExp(String.raw`: uncaught Fetch API cannot load http:\s?/+` + host + String.raw`/api/\S* due to access control checks\.$`);
+  const cancelledByNavigation = (e: string) => browserName === "webkit" && webkitCancelled.test(e);
+  expect(guard.errors.filter((e) => !cancelledByNavigation(e)), "console errors or uncaught exceptions during the journey").toEqual([]);
 });

@@ -2,19 +2,24 @@ import { adoptProject, backToAll, navigate } from "../lib/nav";
 import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
 import { api, type DomainCheckError, type Monitor, type StatusPage, type Subscriber, type ShareLink } from "../lib/api";
+import { mounted } from "../lib/mounted";
 
 export default function StatusPages() {
   const [pages, setPages] = useState<StatusPage[] | null>(null);
   const [open, setOpen] = useState(false);
-  const load = () => api.statusPages().then(setPages);
-  useEffect(() => { load(); }, []);
+  const [loadErr, setLoadErr] = useState("");
+  useEffect(() => {
+    const life = mounted();
+    void life.settle(api.statusPages(), setPages, (e) => setLoadErr((e as Error).message || t("Could not load status pages.")));
+    return life.cancel;
+  }, []);
   return (
     <>
       <div className="ph">
         <div><h1>{t("Status pages")}</h1><p className="muted">{t("Public pages your customers can check before they email you.")}</p></div>
         <button className="btn primary" onClick={() => setOpen(true)}>{t("+ New status page")}</button>
       </div>
-      {pages === null && <p className="muted">{t("Loading…")}</p>}
+      {pages === null && (loadErr ? <p role="alert" className="err">{loadErr}</p> : <p className="muted">{t("Loading…")}</p>)}
       {pages?.length === 0 ? (
         <div className="empty"><h3 style={{ fontSize: 28 }}>{t("No status pages")}</h3><p className="muted" style={{ margin: "6px 0 20px" }}>{t("Publish one in a minute.")}</p>
           <button className="btn primary" onClick={() => setOpen(true)}>{t("+ Create a status page")}</button></div>
@@ -89,14 +94,18 @@ export function StatusPageEditor({ id }: { id: string }) {
   // as the page loaded
   const [newPassword, setNewPassword] = useState("");
   useEffect(() => {
-    api.statusPage(id).then((p) => {
+    // leaving the editor mid-load aborts these requests; their rejections are handled, not left uncaught
+    const life = mounted();
+    const fail = (e: unknown) => setErr((e as Error).message || t("Could not load this status page."));
+    void life.settle(api.statusPage(id), (p) => {
       adoptProject(p.projectId);
       setPage(p);
       setComps((p.components ?? (p.monitorIds ?? []).map((monitorId) => ({ monitorId, groupName: null }))).map((c) => ({ monitorId: c.monitorId, groupName: c.groupName || DEFAULT_GROUP })));
-      api.monitors().then(setMonitors);
-    });
+      void life.settle(api.monitors(), setMonitors, fail);
+    }, fail);
+    return life.cancel;
   }, [id]);
-  if (!page) return <p className="muted">{t("Loading…")}</p>;
+  if (!page) return err ? <p role="alert" className="err">{err}</p> : <p className="muted">{t("Loading…")}</p>;
   const byId = new Map(monitors.map((m) => [m.id, m]));
   const shown = comps.filter((c) => byId.has(c.monitorId));
   const free = monitors.filter((m) => !comps.some((c) => c.monitorId === m.id));

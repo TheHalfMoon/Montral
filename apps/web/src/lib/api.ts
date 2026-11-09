@@ -71,7 +71,7 @@ export type SsoSettings = {
   instanceProvider: boolean;
   connection: null | {
     id: string; issuer: string; clientId: string; hasClientSecret: boolean; defaultRole: "member" | "admin"; requireSso: boolean; enabled: boolean;
-    domains: { domain: string; verified: boolean; verifiedAt: string | null; txtName: string; txtValue: string }[];
+    domains: { domain: string; verified: boolean; verifiedAt: string | null; txtName: string; txtValue: string; checkError?: string | null; failingSince?: string | null }[];
   };
 };
 export type SsoInput = { issuer: string; clientId: string; clientSecret?: string; domains: string[]; defaultRole: "member" | "admin"; requireSso: boolean; enabled: boolean };

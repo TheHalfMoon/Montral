@@ -8,7 +8,7 @@ import { clientIpFromHeaders } from "./ratelimit";
 import { authorizationUrl, discover, emailDomain, exchangeCode, randomToken, sha256b64url, SsoError, verifyIdToken, type VerifiedIdentity } from "./sso-oidc";
 import { SecretUnreadable } from "./sso-secret";
 import {
-  connectionById, connectionForStart, consumeFlow, createFlow, ensureMember, linkIdentity, markSsoSession, provisionUser,
+  connectionById, connectionForStart, consumeFlow, createFlow, linkIdentity, markSsoSession, provisionUser,
   userByEmail, userByIdentity, userById, type SsoConnection,
 } from "./sso-store";
 
@@ -35,6 +35,9 @@ export const ssoCallbackUrl = (env: Pick<Bindings, "BETTER_AUTH_URL">) => `${new
 
 /** What the current request's sign-in is (shared with the session hook in auth.ts; the auth object lives per request). */
 export type SsoSignIn = { connectionId: string | null; orgId: string | null };
+
+/** The discovery document names another token endpoint than the one the client secret was entered for. */
+class TokenEndpointMoved extends Error {}
 
 /** Relative path inside the web app; anything else becomes /app. */
 export function safeReturnTo(raw: unknown): string {
@@ -141,12 +144,14 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             const discovery = await discover(conn.issuer);
             // RFC 9207: a provider that names itself in the response must be the one this sign-in went to
             if (iss !== undefined && iss !== discovery.issuer) throw new SsoError("invalid_id_token", "issuer mix-up");
+            // the client secret only goes to the token endpoint it was entered for; a moved endpoint needs the owner
+            if (conn.orgId && discovery.tokenEndpoint !== conn.tokenEndpoint) throw new TokenEndpointMoved();
             const idToken = await exchangeCode(discovery, { clientId: conn.clientId, clientSecret: await conn.secret(), code, redirectUri: ssoCallbackUrl(env), codeVerifier: flow.code_verifier });
             identity = await verifyIdToken(idToken, { discovery, clientId: conn.clientId, nonce: flow.nonce });
           } catch (e) {
-            const why = e instanceof SsoError ? e.code : e instanceof SecretUnreadable ? "secret_unreadable" : "unknown";
+            const why = e instanceof SsoError ? e.code : e instanceof SecretUnreadable ? "secret_unreadable" : e instanceof TokenEndpointMoved ? "token_endpoint_moved" : "unknown";
             console.error(`SSO sign-in refused (${why}); private diagnostics suppressed`);
-            return fail(e instanceof SecretUnreadable ? "connection_misconfigured" : e instanceof SsoError && e.code === "invalid_id_token" ? "invalid_id_token" : "idp_error");
+            return fail(e instanceof SecretUnreadable || e instanceof TokenEndpointMoved ? "connection_misconfigured" : e instanceof SsoError && e.code === "invalid_id_token" ? "invalid_id_token" : "idp_error");
           }
 
           // only an address the provider itself verified, in a domain this connection may use, ever names an account
@@ -200,8 +205,9 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             }
             how = "provisioned";
           }
-          // membership comes with provisioning or an explicit link only: someone removed from the workspace stays removed
-          if (conn.orgId && how === "linked") await ensureMember(q, conn.orgId, userId, conn.defaultRole);
+          // Membership comes only with first-time provisioning (a person new to Montral). Linking never adds anyone to the
+          // workspace (an invitation does), and a removed member's links are deleted with the membership, so SSO never
+          // brings back someone who was removed.
 
           signIn.connectionId = conn.id;
           signIn.orgId = conn.orgId;

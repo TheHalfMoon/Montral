@@ -77,7 +77,7 @@ export default function SsoSettings() {
       </div>
       <label className="fld">{t("Issuer URL")}<input className="in mono" type="url" required value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="https://idp.example.com/realms/acme" autoComplete="off" /></label>
       <label className="fld">{t("Client ID")}<input className="in mono" required value={clientId} onChange={(e) => setClientId(e.target.value)} autoComplete="off" /></label>
-      <label className="fld">{t("Client secret")}<input className="in mono" type="password" required={!c} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" placeholder={c ? t("Stored. Leave empty to keep it.") : ""} /></label>
+      <label className="fld">{t("Client secret")}<input className="in mono" type="password" required={!c || issuer.trim() !== c.issuer || clientId.trim() !== c.clientId} value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" placeholder={c && issuer.trim() === c.issuer && clientId.trim() === c.clientId ? t("Stored. Leave empty to keep it.") : ""} /></label>
       <label className="fld">{t("Email domains")}<textarea className="in mono" rows={2} value={domains} onChange={(e) => setDomains(e.target.value)} aria-describedby={ids.domains} placeholder="example.com" /></label>
       <p className="faint" id={ids.domains} style={{ fontSize: 13, marginTop: -6 }}>{t("One per line. Each domain must be verified with a DNS TXT record before anyone from it can sign in.")}</p>
       <label className="fld">{t("Role for new people")}
@@ -89,7 +89,7 @@ export default function SsoSettings() {
       <label style={{ display: "flex", gap: 8, alignItems: "center" }}><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />{t("Enabled")}</label>
       <label style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
         <input type="checkbox" checked={requireSso} onChange={(e) => setRequireSso(e.target.checked)} aria-describedby={ids.require} style={{ marginTop: 3 }} />
-        <span>{t("Require single sign-on for this workspace")}<small className="muted" id={ids.require} style={{ display: "block" }}>{t("Members can then reach this workspace only through this provider. You, the owner, keep password sign-in as the break-glass account: protect it with two-step verification.")}</small></span>
+        <span>{t("Require single sign-on for this workspace")}<small className="muted" id={ids.require} style={{ display: "block" }}>{t("Members can then reach this workspace only through this provider: their other sessions are signed out, and API keys and agent authorizations they made without SSO stop working here. You, the owner, keep password sign-in as the break-glass account: protect it with two-step verification.")}</small></span>
       </label>
       {c && c.domains.length > 0 && (
         <table className="audit-tbl sso-domains">
@@ -100,7 +100,7 @@ export default function SsoSettings() {
               <tr key={d.domain}>
                 <td className="mono">{d.domain}</td>
                 <td className="mono" style={{ overflowWrap: "anywhere", fontSize: 12.5 }}>{d.verified ? "—" : <>{d.txtName}<br />{d.txtValue}</>}</td>
-                <td>{d.verified ? t("Verified") : <button type="button" className="btn" disabled={busy} onClick={() => verify(d.domain)}>{t("Verify")}<span className="sr-only"> {d.domain}</span></button>}</td>
+                <td>{d.checkError && <small className="err" style={{ display: "block" }}>{t(d.verified ? "TXT record not found at the last check" : "Verification withdrawn: the TXT record is gone")}</small>}{d.verified ? t("Verified") : <button type="button" className="btn" disabled={busy} onClick={() => verify(d.domain)}>{t("Verify")}<span className="sr-only"> {d.domain}</span></button>}</td>
               </tr>
             ))}
           </tbody>

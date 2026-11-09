@@ -745,7 +745,7 @@ export const zh: Record<string, string> = {
   "One per line. Each domain must be verified with a DNS TXT record before anyone from it can sign in.": "每行一个。每个域名都必须先通过 DNS TXT 记录验证，该域名下的用户才能登录。",
   "Role for new people": "新成员的角色",
   "Require single sign-on for this workspace": "要求此工作区使用单点登录",
-  "Members can then reach this workspace only through this provider. You, the owner, keep password sign-in as the break-glass account: protect it with two-step verification.": "开启后，成员只能通过此身份提供商访问该工作区。你作为所有者保留密码登录，作为应急账号：请为它开启两步验证。",
+  "Members can then reach this workspace only through this provider: their other sessions are signed out, and API keys and agent authorizations they made without SSO stop working here. You, the owner, keep password sign-in as the break-glass account: protect it with two-step verification.": "开启后，成员只能通过此身份提供商访问该工作区：他们的其他会话会被退出，未通过 SSO 创建的 API 密钥和智能体授权在此工作区失效。你作为所有者保留密码登录，作为应急账号：请为它开启两步验证。",
   "This server also has an instance-wide provider configured by its operator.": "此服务器还配置了由运维者设置的全实例身份提供商。",
   "Test connection": "测试连接",
   "The single sign-on attempt expired or was started in another browser. Try again.": "单点登录尝试已过期，或是在另一个浏览器中发起的。请重试。",
@@ -768,4 +768,6 @@ export const zh: Record<string, string> = {
   "Single sign-on linked.": "单点登录已关联。",
   "Link your company's identity provider to this account, then sign in with SSO. The provider must confirm this account's email address.": "将公司的身份提供商关联到此账号，之后即可通过 SSO 登录。身份提供商必须确认此账号的邮箱地址。",
   "Link single sign-on": "关联单点登录",
+  "TXT record not found at the last check": "上次检查时未找到 TXT 记录",
+  "Verification withdrawn: the TXT record is gone": "验证已撤销：TXT 记录已不存在",
 };

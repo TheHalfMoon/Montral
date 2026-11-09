@@ -24,6 +24,8 @@ export type SsoConnection = {
   requireSso: boolean;
   /** email domains it may sign in: verified ones for a workspace; OIDC_ALLOWED_DOMAINS (null: any) for the instance */
   domains: string[] | null;
+  /** the token endpoint the client secret was entered for (workspace connections); null: not pinned */
+  tokenEndpoint: string | null;
 };
 
 const list = (v: string | undefined) => [...new Set(String(v ?? "").split(/[\s,]+/).map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean))];
@@ -35,10 +37,10 @@ export function instanceConnection(env: Pick<Bindings, "OIDC_ISSUER" | "OIDC_CLI
   const secret = String(env.OIDC_CLIENT_SECRET ?? "");
   if (!issuer || !clientId || !secret) return null;
   const domains = list(env.OIDC_ALLOWED_DOMAINS);
-  return { id: INSTANCE_CONNECTION, orgId: null, issuer, clientId, secret: async () => secret, defaultRole: "member", enabled: true, requireSso: false, domains: domains.length ? domains : null };
+  return { id: INSTANCE_CONNECTION, orgId: null, issuer, clientId, secret: async () => secret, defaultRole: "member", enabled: true, requireSso: false, domains: domains.length ? domains : null, tokenEndpoint: null };
 }
 
-type Row = { id: string; organization_id: string; issuer: string; client_id: string; client_secret_enc: string; default_role: Role; require_sso: boolean; enabled: boolean; domains: string[] | null };
+type Row = { id: string; organization_id: string; issuer: string; client_id: string; client_secret_enc: string; token_endpoint: string | null; default_role: Role; require_sso: boolean; enabled: boolean; domains: string[] | null };
 
 const toConnection = (r: Row, serverSecret: string): SsoConnection => ({
   id: r.id,
@@ -50,9 +52,10 @@ const toConnection = (r: Row, serverSecret: string): SsoConnection => ({
   enabled: r.enabled,
   requireSso: r.require_sso,
   domains: r.domains ?? [],
+  tokenEndpoint: r.token_endpoint,
 });
 
-const SELECT = `SELECT c.id::text AS id, c.organization_id, c.issuer, c.client_id, c.client_secret_enc, c.default_role, c.require_sso, c.enabled,
+const SELECT = `SELECT c.id::text AS id, c.organization_id, c.issuer, c.client_id, c.client_secret_enc, c.token_endpoint, c.default_role, c.require_sso, c.enabled,
        coalesce((SELECT array_agg(d.domain ORDER BY d.domain) FROM sso_domain d WHERE d.connection_id = c.id AND d.verified_at IS NOT NULL), '{}') AS domains
   FROM sso_connection c`;
 
@@ -166,15 +169,6 @@ export async function linkIdentity(q: Query, p: { userId: string; connectionId: 
   );
 }
 
-/** Adds the user to the workspace with `role` unless they are already a member. */
-export async function ensureMember(q: Query, orgId: string, userId: string, role: Role) {
-  await q(
-    `INSERT INTO member (id, organization_id, user_id, role, created_at)
-     SELECT $1::text, $2::text, $3::text, $4::text, now() WHERE NOT EXISTS (SELECT 1 FROM member WHERE organization_id = $2::text AND user_id = $3::text)`,
-    [crypto.randomUUID(), orgId, userId, role],
-  );
-}
-
 export async function markSsoSession(q: Query, sessionId: string, connectionId: string) {
   await q(`INSERT INTO sso_session (session_id, connection_id) VALUES ($1::text, $2::text) ON CONFLICT (session_id) DO NOTHING`, [sessionId, connectionId]);
 }
@@ -210,5 +204,82 @@ export async function ssoRequirementOf(q: Query, orgId: string): Promise<string 
 
 export async function sessionVia(q: Query, sessionId: string, connectionId: string): Promise<boolean> {
   const rows = await q(`SELECT 1 AS one FROM sso_session WHERE session_id = $1::text AND connection_id = $2::text`, [sessionId, connectionId]);
+  return rows.length > 0;
+}
+
+// ── credentials made from SSO sessions ─────────────────────────────────────────────────────────────────────────────
+
+/** The connection that created this session, if it was an SSO sign-in. */
+export async function sessionConnection(q: Query, sessionId: string): Promise<string | null> {
+  const [row] = await q<{ connection_id: string }>(`SELECT connection_id FROM sso_session WHERE session_id = $1::text`, [sessionId]);
+  return row?.connection_id ?? null;
+}
+
+export type CredentialKind = "api_key" | "oauth";
+export const oauthCredentialId = (userId: string, clientId: string) => `${userId}|${clientId}`;
+
+export async function recordSsoCredential(q: Query, kind: CredentialKind, credentialId: string, connectionId: string) {
+  await q(`INSERT INTO sso_credential (kind, credential_id, connection_id) VALUES ($1::text, $2::text, $3::text) ON CONFLICT DO NOTHING`, [kind, credentialId, connectionId]);
+}
+
+export async function credentialVia(q: Query, kind: CredentialKind, credentialId: string, connectionId: string): Promise<boolean> {
+  const rows = await q(`SELECT 1 AS one FROM sso_credential WHERE kind = $1::text AND credential_id = $2::text AND connection_id = $3::text`, [kind, credentialId, connectionId]);
+  return rows.length > 0;
+}
+
+/**
+ * Someone left or was removed from a workspace: their links to that workspace's SSO connection go too, so a later SSO
+ * sign-in finds an unlinked identity of an existing account (refused) instead of signing them back in.
+ */
+export async function dropSsoLinksOfFormerMember(q: Query, orgId: string, userId: string) {
+  await q(
+    `DELETE FROM account a USING sso_connection c
+      WHERE c.organization_id = $1::text AND a.provider_id = 'sso:' || c.id::text AND a.user_id = $2::text
+        AND NOT EXISTS (SELECT 1 FROM member m WHERE m.organization_id = $1::text AND m.user_id = $2::text)`,
+    [orgId, userId],
+  );
+}
+
+/**
+ * When "require SSO" is switched on: sessions of members other than an owner that this connection did not create are
+ * deleted (they are also refused per request; deleting them signs those browsers out). Returns how many.
+ */
+export async function revokeNonSsoSessions(q: Query, orgId: string, connectionId: string): Promise<number> {
+  const rows = await q(
+    `DELETE FROM session s USING member m
+      WHERE m.organization_id = $1::text AND m.user_id = s.user_id
+        AND NOT ('owner' = ANY (string_to_array(replace(m.role, ' ', ''), ',')))
+        AND NOT EXISTS (SELECT 1 FROM sso_session x WHERE x.session_id = s.id AND x.connection_id = $2::text)
+      RETURNING s.id`,
+    [orgId, connectionId],
+  );
+  return rows.length;
+}
+
+/**
+ * Whether this user, with this session, may act on `orgId` given its "require SSO" setting: always for owners and for
+ * workspaces without the requirement; otherwise only with a session the workspace's own connection created.
+ */
+export async function ssoAllows(q: Query, orgId: string, userId: string, sessionId: string): Promise<boolean> {
+  const required = await ssoRequirementOf(q, orgId);
+  if (!required) return true;
+  const [m] = await q<{ role: string }>(`SELECT role FROM member WHERE organization_id = $1::text AND user_id = $2::text`, [orgId, userId]);
+  if (!m || isOwnerRole(m.role)) return true; // non-members are refused by the membership checks themselves
+  return sessionVia(q, sessionId, required);
+}
+
+/**
+ * Accounts whose other sign-in methods may only be added explicitly (from Account settings while signed in): users
+ * with an SSO identity (provisioned or linked), and members other than an owner of an enabled require-SSO workspace.
+ * For them a social provider reporting the same verified email never links by itself.
+ */
+export async function ssoProtected(q: Query, userId: string): Promise<boolean> {
+  const rows = await q(
+    `SELECT 1 AS one WHERE EXISTS (SELECT 1 FROM account WHERE user_id = $1::text AND provider_id LIKE 'sso:%')
+        OR EXISTS (SELECT 1 FROM member m JOIN sso_connection c ON c.organization_id = m.organization_id
+                    WHERE m.user_id = $1::text AND c.enabled AND c.require_sso
+                      AND NOT ('owner' = ANY (string_to_array(replace(m.role, ' ', ''), ','))))`,
+    [userId],
+  );
   return rows.length > 0;
 }

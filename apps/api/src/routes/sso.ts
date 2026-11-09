@@ -1,7 +1,8 @@
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { audit, auditChanges, type Query } from "../audit";
-import { appHosts, newDomainToken, statusPageDomain, verifyDomainToken, type TxtResolver } from "../custom-domain";
+import { appHosts, newDomainToken, statusPageDomain, verifyDomainToken } from "../custom-domain";
+import { dohTxt } from "../sso-domains";
 import type { AppEnv } from "../env";
 import { limitedJsonBody } from "../json-body-budget";
 import { isWorkers } from "../netguard";
@@ -9,7 +10,7 @@ import { allow } from "../ratelimit";
 import { ssoCallbackUrl } from "../sso-auth";
 import { discover, normalizeIssuer, SsoError } from "../sso-oidc";
 import { encryptSecret } from "../sso-secret";
-import { forgetSsoRequirement, instanceConnection, isOwnerRole, providerIdOf } from "../sso-store";
+import { forgetSsoRequirement, instanceConnection, isOwnerRole, providerIdOf, revokeNonSsoSessions } from "../sso-store";
 
 /**
  * Single sign-on settings of the active workspace: one OpenID Connect connection, its email domains (each verified
@@ -29,27 +30,17 @@ const body = z.object({
 }).strict();
 
 type ConnectionRow = { id: string; issuer: string; client_id: string; default_role: string; require_sso: boolean; enabled: boolean; created_at: Date | string; updated_at: Date | string };
-type DomainRow = { id: string; domain: string; token: string; verified_at: Date | string | null };
+type DomainRow = { id: string; domain: string; token: string; verified_at: Date | string | null; check_error?: string | null; failing_since?: Date | string | null };
 
 const q = (c: Context<AppEnv>): Query => { const database = c.get("database"); return (sql, params) => database.query(sql, params); };
 const iso = (v: Date | string | null) => (v === null ? null : new Date(v).toISOString());
-
-/** DNS over HTTPS for Workers, which have no resolver API; Node uses the system resolver (custom-domain.ts). */
-const dohTxt: TxtResolver = async (name) => {
-  const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=TXT`, { headers: { accept: "application/dns-json" }, signal: AbortSignal.timeout(5000) });
-  if (!res.ok) throw Object.assign(new Error("lookup failed"), { code: "ESERVFAIL" });
-  const json = (await res.json()) as { Status?: number; Answer?: { type?: number; data?: string }[] };
-  if (json.Status === 3) throw Object.assign(new Error("not found"), { code: "ENOTFOUND" });
-  if (json.Status !== 0) throw Object.assign(new Error("lookup failed"), { code: "ESERVFAIL" });
-  return (json.Answer ?? []).filter((a) => a.type === 16 && typeof a.data === "string").map((a) => [...a.data!.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1].replace(/\\(.)/g, "$1")));
-};
 
 async function view(c: Context<AppEnv>) {
   const [row] = await q(c)<ConnectionRow>(
     `SELECT id::text AS id, issuer, client_id, default_role, require_sso, enabled, created_at, updated_at FROM sso_connection WHERE organization_id = $1::text`,
     [c.get("orgId")],
   );
-  const domains = row ? await q(c)<DomainRow>(`SELECT id::text AS id, domain, token, verified_at FROM sso_domain WHERE connection_id = $1::uuid ORDER BY domain`, [row.id]) : [];
+  const domains = row ? await q(c)<DomainRow>(`SELECT id::text AS id, domain, token, verified_at, check_error, failing_since FROM sso_domain WHERE connection_id = $1::uuid ORDER BY domain`, [row.id]) : [];
   return {
     callbackUrl: ssoCallbackUrl(c.env),
     instanceProvider: !!instanceConnection(c.env),
@@ -64,7 +55,11 @@ async function view(c: Context<AppEnv>) {
       enabled: row.enabled,
       createdAt: iso(row.created_at),
       updatedAt: iso(row.updated_at),
-      domains: domains.map((d) => ({ domain: d.domain, verified: d.verified_at !== null, verifiedAt: iso(d.verified_at), txtName: `_montral-challenge.${d.domain}`, txtValue: d.token })),
+      domains: domains.map((d) => ({
+        domain: d.domain, verified: d.verified_at !== null, verifiedAt: iso(d.verified_at), txtName: `_montral-challenge.${d.domain}`, txtValue: d.token,
+        // the periodic re-check: why the last one failed and since when (a withdrawal shows here too)
+        checkError: d.check_error ?? null, failingSince: iso(d.failing_since ?? null),
+      })),
     } : null,
   };
 }
@@ -101,14 +96,21 @@ export const ssoAdmin = new Hono<AppEnv>()
       if (!domains.includes(d.domain)) domains.push(d.domain);
     }
     const orgId = c.get("orgId");
-    const [current] = await q(c)<{ id: string; issuer: string }>(`SELECT id::text AS id, issuer FROM sso_connection WHERE organization_id = $1::text`, [orgId]);
+    const [current] = await q(c)<{ id: string; issuer: string; client_id: string; require_sso: boolean; enabled: boolean }>(
+      `SELECT id::text AS id, issuer, client_id, require_sso, enabled FROM sso_connection WHERE organization_id = $1::text`, [orgId]);
     const secret = input.clientSecret?.trim() ?? "";
     if (!current && !secret) return c.json({ error: "Enter the client secret" }, 400);
-    // the provider must answer as an OpenID Connect issuer before it is saved (and whenever it changes)
-    if (!current || current.issuer !== issuer) {
+    // the stored secret was entered for one provider and client: it never follows a change of either to somewhere else
+    if (current && !secret && (current.issuer !== issuer || current.client_id !== input.clientId)) {
+      return c.json({ error: "Enter the client secret again when you change the issuer or the client ID", code: "secret_required" }, 400);
+    }
+    // the provider must answer as an OpenID Connect issuer before it is saved; whenever a secret is entered, the token
+    // endpoint discovery names now is pinned with it (a sign-in refuses to send the secret anywhere else)
+    let tokenEndpoint: string | null = null;
+    if (secret) {
       if (!(await allow(c.get("repo"), `sso:discover:${orgId}`, 30, 600))) return c.json({ error: "Too many attempts, try again later" }, 429);
       try {
-        await discover(issuer, { fresh: true });
+        tokenEndpoint = (await discover(issuer, { fresh: true })).tokenEndpoint;
       } catch (e) {
         return ssoErrorResponse(c, e);
       }
@@ -117,18 +119,19 @@ export const ssoAdmin = new Hono<AppEnv>()
     const enc = secret ? await encryptSecret(c.env.BETTER_AUTH_SECRET, id, secret) : null;
     if (current) {
       await q(c)(
-        `UPDATE sso_connection SET issuer = $2::text, client_id = $3::text, client_secret_enc = coalesce($4::text, client_secret_enc), default_role = $5::text,
+        `UPDATE sso_connection SET issuer = $2::text, client_id = $3::text, client_secret_enc = coalesce($4::text, client_secret_enc),
+                token_endpoint = CASE WHEN $4::text IS NULL THEN token_endpoint ELSE $8::text END, default_role = $5::text,
                 require_sso = $6::boolean, enabled = $7::boolean, updated_at = now() WHERE id = $1::uuid`,
-        [id, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled],
+        [id, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled, tokenEndpoint],
       );
       // links are keyed on issuer and subject, so links of another issuer can never match again: remove them
       if (current.issuer !== issuer) await q(c)(`DELETE FROM account WHERE provider_id = $1::text`, [providerIdOf(id)]);
     } else {
       try {
         await q(c)(
-          `INSERT INTO sso_connection (id, organization_id, issuer, client_id, client_secret_enc, default_role, require_sso, enabled, created_by)
-           VALUES ($1::uuid, $2::text, $3::text, $4::text, $5::text, $6::text, $7::boolean, $8::boolean, $9::text)`,
-          [id, orgId, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled, c.get("userId")],
+          `INSERT INTO sso_connection (id, organization_id, issuer, client_id, client_secret_enc, token_endpoint, default_role, require_sso, enabled, created_by)
+           VALUES ($1::uuid, $2::text, $3::text, $4::text, $5::text, $10::text, $6::text, $7::boolean, $8::boolean, $9::text)`,
+          [id, orgId, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled, c.get("userId"), tokenEndpoint],
         );
       } catch (e) {
         if ((e as { code?: string }).code === "23505") return c.json({ error: "This workspace already has a single sign-on connection" }, 409);
@@ -149,6 +152,8 @@ export const ssoAdmin = new Hono<AppEnv>()
       }
     }
     forgetSsoRequirement(orgId);
+    // switched on now: members' sessions this connection did not create are signed out (they are refused per request too)
+    if (input.requireSso && input.enabled && !(current?.require_sso && current.enabled)) await revokeNonSsoSessions(q(c), orgId, id);
     await audit(c, current ? "sso.connection_update" : "sso.connection_create", { type: "sso_connection", id, projectId: null }, auditChanges({ ...input, clientSecret: secret ? "set" : undefined }, { enabled: input.enabled, requireSso: input.requireSso, defaultRole: input.defaultRole }));
     return c.json(await view(c), current ? 200 : 201);
   })
@@ -192,7 +197,7 @@ export const ssoAdmin = new Hono<AppEnv>()
       return c.json({ error: why, reason: outcome.reason }, 400);
     }
     try {
-      await q(c)(`UPDATE sso_domain SET verified_at = now() WHERE id = $1::uuid`, [row.id]);
+      await q(c)(`UPDATE sso_domain SET verified_at = now(), checked_at = now(), failing_since = NULL, failures = 0, check_error = NULL WHERE id = $1::uuid`, [row.id]);
     } catch (e) {
       if ((e as { code?: string }).code === "23505") return c.json({ error: "Another workspace on this instance already verified this domain" }, 409);
       throw e;

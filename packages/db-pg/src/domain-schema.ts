@@ -517,6 +517,8 @@ export const ssoConnection = pgTable(
     issuer: text("issuer").notNull(),
     clientId: text("client_id").notNull(),
     clientSecretEnc: text("client_secret_enc").notNull(),
+    /** the token endpoint discovery named when the secret was entered: the secret is only ever sent there */
+    tokenEndpoint: text("token_endpoint"),
     /** role given to people provisioned on their first SSO sign-in; never owner */
     defaultRole: text("default_role").notNull().default("member"),
     /** members other than the owner may only use this workspace through this connection */
@@ -547,6 +549,11 @@ export const ssoDomain = pgTable(
     /** published in DNS, so not a secret: only unguessable */
     token: text("token").notNull(),
     verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /** periodic re-verification (same policy as status page custom domains); a withdrawal clears verified_at */
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    failingSince: timestamp("failing_since", { withTimezone: true }),
+    failures: integer("failures").notNull().default(0),
+    checkError: text("check_error"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
@@ -584,6 +591,22 @@ export const ssoSession = pgTable("sso_session", {
   connectionId: text("connection_id").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Credentials (API keys, OAuth agent grants) created from an SSO session, and through which connection: in a
+ * require-SSO workspace a member's credential only works when its row names that workspace's connection.
+ */
+export const ssoCredential = pgTable(
+  "sso_credential",
+  {
+    /** "api_key" (credential_id = key id) or "oauth" (credential_id = "<user id>|<client id>") */
+    kind: text("kind").notNull(),
+    credentialId: text("credential_id").notNull(),
+    connectionId: text("connection_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.credentialId, t.connectionId] }), check("sso_credential_kind_chk", sql`${t.kind} in ('api_key', 'oauth')`)],
+);
 
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */
 export const rateLimit = pgTable("rate_limit", {

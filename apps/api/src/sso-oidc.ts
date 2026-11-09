@@ -1,5 +1,5 @@
 import { createLocalJWKSet, decodeProtectedHeader, jwtVerify, type JSONWebKeySet, type JWK, type JWTPayload } from "jose";
-import { BlockedTarget, guardedFetch, readCapped } from "./netguard";
+import { BlockedTarget, guardedFetch, privateTargetFetch, readCapped } from "./netguard";
 
 /**
  * The OpenID Connect relying party: discovery, the authorization request (code flow with PKCE S256, state and nonce),
@@ -9,7 +9,8 @@ import { BlockedTarget, guardedFetch, readCapped } from "./netguard";
  * Every request to the identity provider (discovery, JWKS, token endpoint) is a server-side fetch to an address an
  * owner typed in, so it goes through the SSRF guard: public addresses only, connections pinned to the validated
  * addresses, no redirects, a deadline and a byte cap on the response. SSO_ALLOW_PRIVATE_IDP=true allows an identity
- * provider on a private network (and plain http) for self-hosters; ALLOW_PRIVATE_TARGETS (monitors) does not.
+ * provider on a private network (and plain http) for self-hosters, never link-local or metadata addresses, multicast or
+ * 0.0.0.0/8 (netguard addressAlwaysForbidden); ALLOW_PRIVATE_TARGETS (monitors) does not open anything here.
  *
  * Runtime-neutral: works on Node and Workers.
  */
@@ -106,7 +107,9 @@ async function idpJson(url: string, what: string, init: { method?: string; heade
   const req: RequestInit = { method: init.method ?? "GET", headers: { accept: "application/json", ...init.headers }, body: init.body, signal };
   let res: Response;
   try {
-    res = options.allowPrivate ? await fetch(url, { ...req, redirect: "manual" }) : (await guardedFetch(url, req, { follow: false, publicOnly: true })).res;
+    // with the private opt-in, private networks are reachable but link-local/metadata, multicast and 0.0.0.0/8 stay
+    // refused, the connection stays pinned and redirects are still not followed
+    res = options.allowPrivate ? await privateTargetFetch(url, req) : (await guardedFetch(url, req, { follow: false, publicOnly: true })).res;
   } catch (e) {
     if (e instanceof BlockedTarget) throw new SsoError("blocked_target", `${what}: private or internal addresses are refused. Set SSO_ALLOW_PRIVATE_IDP=true for an identity provider on your own network.`);
     if (signal.aborted) throw new SsoError("timeout", `${what} did not answer in time`);

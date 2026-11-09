@@ -22,6 +22,7 @@ import { createLocalCheckQueue, claimsForUnstarted } from "./local-check-queue";
 import { scrubUntrustedForwarding } from "./node-proxy-peer";
 import { createNodeTickGate } from "./node-tick-gate";
 import { appHosts, lookupCustomDomain, recheckCustomDomains } from "./custom-domain";
+import { recheckSsoDomains } from "./sso-domains";
 import { routeCustomDomain, STATUS_DOMAIN_HEADER } from "./custom-domain-node";
 import { auditRetentionDays } from "./audit";
 
@@ -197,6 +198,10 @@ const domainRecheck = setInterval(() => {
   recheckCustomDomains((sql, params) => database.query(sql, params), { shouldContinue: () => !stopping })
     .then((r) => { if (r.withdrawn) console.error(`custom domains: verification withdrawn for ${r.withdrawn} domain(s) whose TXT record is gone`); })
     .catch(() => { if (!stopping) console.error("custom domain re-check failed; private diagnostic suppressed"); })
+    // verified single sign-on email domains follow the same policy (sso-domains.ts)
+    .then(() => (stopping ? null : recheckSsoDomains((sql, params) => database.query(sql, params), { shouldContinue: () => !stopping })))
+    .then((r) => { if (r?.withdrawn) console.error(`sso domains: verification withdrawn for ${r.withdrawn} domain(s) whose TXT record is gone`); })
+    .catch(() => { if (!stopping) console.error("sso domain re-check failed; private diagnostic suppressed"); })
     .finally(() => { domainRecheckRunning = false; });
 }, 5 * 60_000);
 domainRecheck.unref();

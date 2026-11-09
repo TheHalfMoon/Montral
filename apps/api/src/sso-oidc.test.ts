@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { SyntheticIdp } from "../test/synthetic-idp";
 import { safeReturnTo } from "./sso-auth";
+import { addressAlwaysForbidden } from "./netguard";
 import { authorizationUrl, configureSso, discover, exchangeCode, idpUrl, normalizeIssuer, publicSigningKeys, randomToken, setSsoOptionsForTests, sha256b64url, SsoError, verifyIdToken, type Discovery } from "./sso-oidc";
 import { decryptSecret, encryptSecret, SecretUnreadable } from "./sso-secret";
 import { instanceConnection } from "./sso-store";
@@ -77,6 +78,19 @@ describe("discovery", () => {
     expect(idp.requests.length).toBe(before);
     // ALLOW_PRIVATE_TARGETS (monitors) does not open SSO: only SSO_ALLOW_PRIVATE_IDP does
     configureSso({ SSO_ALLOW_PRIVATE_IDP: "true" });
+    expect((await discover(idp.issuer, { fresh: true })).issuer).toBe(idp.issuer);
+  });
+
+  it("with SSO_ALLOW_PRIVATE_IDP still refuses link-local, metadata, multicast and 0.0.0.0/8, before any request", async () => {
+    configureSso({ SSO_ALLOW_PRIVATE_IDP: "true" });
+    for (const issuer of [
+      "http://169.254.169.254/latest", "http://[fe80::1]/x", "http://0.0.0.0/x", "http://0.1.2.3/x", "http://224.0.0.1/x", "http://239.255.255.250/x",
+      "http://255.255.255.255/x", "http://100.100.100.200/x", "http://[fd00:ec2::254]/x", "http://[::ffff:169.254.169.254]/x", "http://[ff02::1]/x",
+      "http://[::]/x", "http://2852039166/x", "http://[64:ff9b::a9fe:a9fe]/x", "http://[2002:a9fe:a9fe::1]/x",
+    ]) {
+      expect(await code(discover(issuer, { fresh: true })), issuer).toBe("blocked_target");
+    }
+    // private and loopback addresses are what the opt-in is for; size, time and redirect limits still apply (below)
     expect((await discover(idp.issuer, { fresh: true })).issuer).toBe(idp.issuer);
   });
 
@@ -209,6 +223,14 @@ describe("id_token validation", () => {
     expect(await refused("not-a-jwt")).toContain("malformed");
   });
 
+  it("never treats other claims as a verified email (strict email_verified, no Entra xms_edov shortcut)", async () => {
+    optIn();
+    const { email_verified: _drop, ...noClaim } = user;
+    for (const extra of [{ xms_edov: true }, { verified_primary_email: [user.email] }, { email_verified: "True" }]) {
+      expect((await verify(await idp.mint(noClaim, nonce, { claims: extra }))).emailVerified, JSON.stringify(extra)).toBe(false);
+    }
+  });
+
   it("refuses a missing or different nonce", async () => {
     optIn();
     expect(await refused(await idp.mint(user, null))).toContain("nonce");
@@ -250,6 +272,14 @@ describe("id_token validation", () => {
       "garbage",
     ] });
     expect(set.keys.map((k) => k.kid)).toEqual(["ok", "ec"]);
+  });
+});
+
+describe("addresses refused even with private targets allowed", () => {
+  it("covers link-local, metadata, multicast, unspecified and embedded forms, and nothing private", () => {
+    for (const ip of ["169.254.169.254", "169.254.0.1", "0.0.0.0", "0.255.1.1", "224.0.0.251", "255.255.255.255", "100.100.100.200", "fe80::1", "FE80::abcd", "ff02::1",
+      "::", "fd00:ec2::254", "::ffff:169.254.169.254", "::ffff:a9fe:a9fe", "64:ff9b::a9fe:a9fe", "2002:a9fe:a9fe::", "not-an-ip:"]) expect(addressAlwaysForbidden(ip), ip).toBe(true);
+    for (const ip of ["127.0.0.1", "10.0.0.8", "192.168.1.1", "172.16.0.1", "100.64.0.1", "::1", "fd12:3456::1", "fc00::1", "8.8.8.8", "2606:4700::1111", "fd00:ec2::253"]) expect(addressAlwaysForbidden(ip), ip).toBe(false);
   });
 });
 

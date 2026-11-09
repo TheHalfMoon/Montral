@@ -28,6 +28,19 @@ import { oncallRepo } from "./oncall-repo";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Run coalescing: an earlier run counts as in flight for its timeout plus this long (timeouts are at most 30 s). */
 export const RUN_IN_FLIGHT_MARGIN_SEC = 15;
+/**
+ * Run coalescing for beginRuns: a generation-based run is superseded (skipped, never checked or billed) when
+ *  - a result was recorded after this run was claimed (checked_through_generation, stamped by recordObservation), or
+ *  - an earlier run started less than its timeout + RUN_IN_FLIGHT_MARGIN_SEC ago and has not recorded yet.
+ * That lease (at most 45 s) is shorter than the 60 s minimum interval, so a steady schedule never skips, and a run that
+ * died without a result blocks nothing once it has passed. A run claimed after the latest result always starts.
+ */
+const coalesced = (generation: number): SQL => {
+  const m = schema.monitor;
+  return sql`${m.checkedThroughGeneration} < ${generation}
+    and not (${m.lastRunGeneration} > ${m.coverageGeneration} and ${m.runStartedAt} is not null
+      and ${m.runStartedAt} > now() - make_interval(secs => (${m.timeoutMs} / 1000.0 + ${RUN_IN_FLIGHT_MARGIN_SEC}::double precision)::double precision))`;
+};
 
 /** `col in (scope)` for a limited API key, nothing otherwise; spread into `and(...)`. */
 const inScope = (scope: Scope, col: Parameters<typeof inArray>[0]): SQL | undefined => (scope ? inArray(col, scope) : undefined);
@@ -655,26 +668,17 @@ export function createRepo(db: Db): Repo {
     },
     async beginRuns(runs) {
       // The row lock serializes duplicate starts. Generations never move backwards when an interval is shortened.
-      const m = schema.monitor;
       const started = await Promise.all(
         runs.map(async ({ id, token, generation }) => {
           if (generation !== undefined && (!Number.isSafeInteger(generation) || generation <= 0)) throw new Error("Invalid run generation");
           const newer = generation === undefined
             // Legacy messages can finish until this monitor starts using generation-based claims.
-            ? and(eq(m.lastRunGeneration, 0), or(isNull(m.lastRunToken), sql`${m.lastRunToken} < ${token.toISOString()}::timestamptz`))
-            // Coalescing (superseded runs are skipped, never checked or billed):
-            //  - a result was recorded after this run was claimed (checked_through_generation, see recordObservation);
-            //  - an earlier run started less than its timeout + RUN_IN_FLIGHT_MARGIN_SEC ago and has not recorded yet.
-            //    That lease (at most 45 s) is shorter than the 60 s minimum interval, so a steady schedule never skips,
-            //    and a run that died without a result blocks nothing once it has passed.
-            : sql`${m.lastRunGeneration} < ${generation} and ${m.runGeneration} >= ${generation}
-                and ${m.checkedThroughGeneration} < ${generation}
-                and not (${m.lastRunGeneration} > ${m.coverageGeneration} and ${m.runStartedAt} is not null
-                  and ${m.runStartedAt} > now() - make_interval(secs => (${m.timeoutMs} / 1000.0 + ${RUN_IN_FLIGHT_MARGIN_SEC}::double precision)::double precision))`;
+            ? and(eq(schema.monitor.lastRunGeneration, 0), or(isNull(schema.monitor.lastRunToken), sql`${schema.monitor.lastRunToken} < ${token.toISOString()}::timestamptz`))
+            : sql`${schema.monitor.lastRunGeneration} < ${generation} and ${schema.monitor.runGeneration} >= ${generation}`;
           const won = await db
             .update(schema.monitor)
             .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation, runStartedAt: sql`now()` } : {}) })
-            .where(and(eq(schema.monitor.id, id), newer))
+            .where(and(eq(schema.monitor.id, id), newer, generation === undefined ? undefined : coalesced(generation)))
             .returning({ id: schema.monitor.id });
           return won.length ? id : null;
         }),

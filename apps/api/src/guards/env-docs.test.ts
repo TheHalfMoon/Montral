@@ -20,6 +20,8 @@ const minus = (a: Iterable<string>, ...rest: Iterable<string>[]) => {
 // SITE_ORIGIN is read only when the web app is built (the hosted build sets it for canonical links)
 // MONTRAL_STATUS_DOMAINS is set by server.ts itself for the web build's SSR (custom-domain routing is active)
 const INTERNAL = ["API_ORIGIN", "DEPLOY_TARGET", "DEV", "MONTRAL_STATUS_DOMAINS", "PROD", "SITE_ORIGIN", "VITEST", "WEB_DIST"];
+/** Set by the operating system, never by an operator (the ping monitor passes them to the child process). */
+const SYSTEM = ["PATH", "Path", "SystemRoot", "windir"];
 /** Cloudflare bindings, not environment variables. */
 const BINDINGS_ONLY = ["CHECK_QUEUE", "EMAIL", "HYPERDRIVE"];
 /** Read from the environment but wired through compose itself (`ports`, the DATABASE_URL built from the Postgres password). */
@@ -58,7 +60,7 @@ const composeInputs = () => sorted(new Set([...read("docker-compose.yml").matchA
 
 describe("environment variables", () => {
   const code = codeVars();
-  const readByCode = minus(code, INTERNAL, BINDINGS_ONLY);
+  const readByCode = minus(code, INTERNAL, BINDINGS_ONLY, SYSTEM);
 
   it("finds the variables it is supposed to compare", () => {
     expect(code).toEqual(expect.arrayContaining(["BETTER_AUTH_SECRET", "PLAUSIBLE_DOMAIN", "PRODUCT_URL", "DB_POOL_MAX", "TRUST_PROXY"]));

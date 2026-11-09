@@ -14,7 +14,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Keyword assertion | Y (contains/absent) | Y | Y | Y | Y | Y | N |
 | JSON body assertion | Y (#27; path + comparison) | Y | Y | P | Y | Y | N |
 | TCP | Y | Y | Y | Y | Y | Y | N |
-| Ping / ICMP | N | Y | Y | ? | Y | Y | N |
+| Ping / ICMP | Y on Node/Docker (this branch; system `ping`); refused on Workers | Y | Y | ? | Y | Y | N |
 | DNS | Y | Y | Y | Y | Y | Y | P |
 | TLS certificate expiry | Y on Node/Docker (#26); refused on Workers | P | Y | ? | Y | Y | N |
 | Domain expiry | Y | ? | Y | ? | Y | Y | N |
@@ -67,6 +67,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Private status pages | `status-visibility.e2e.test.ts` (PR #18), `status-password-links.e2e.test.ts` and Chromium STATUS_PASSWORD_PASS (PR #21) |
 | Custom-domain isolation | `custom-domain*.test.ts`, real-server CUSTOM_DOMAIN_SMOKE_PASS (PR #29) |
 | TLS monitor, JSON assertions, channels | `certificate.test.ts`, `json-assertion*.test.ts`, `more-channels.test.ts` (PRs #26-#28) |
+| ICMP ping monitor | `ping.test.ts` (incl. a real ping of 127.0.0.1), `ping.e2e.test.ts`; see `docs/evidence/2026-11-09-ping-monitor.md` |
 
 ## Prioritised gaps
 
@@ -74,21 +75,20 @@ Ranked by user value, reliability and security, then cost.
 
 Done since the matrix was first written: TLS certificate expiry (#26), JSON body
 assertions (#27), Google Chat / Mattermost / Gotify / Pushover (#28), custom domains
-for status pages on the Node server (#29).
+for status pages on the Node server (#29), ICMP ping monitors on the Node server
+(branch `engineering/montral-ping-monitor`, not merged yet).
 
 Remaining, in planned order:
 
-1. **Ping / ICMP**: needs raw sockets or the system `ping`; not possible on
-   Workers. Evaluate for Node only.
-2. **Periodic re-verification of custom domains**: today a verified domain stays
+1. **Periodic re-verification of custom domains**: today a verified domain stays
    verified until another page proves it or it is removed; a scheduled TXT
    re-check would release domains whose record disappeared.
-3. **Terraform provider / config-as-code**: valued by GitOps teams; large.
-4. **On-call schedules**: large; escalation already exists.
-5. **SSO (OIDC/SAML), audit log**: enterprise tier; large.
-6. **SMS / voice**: requires a paid provider; out of scope without approval.
-7. **Browser / multi-step checks**: large; needs a headless browser runtime.
-8. **Custom webhook responses** (webhook.site parity): medium.
+2. **Terraform provider / config-as-code**: valued by GitOps teams; large.
+3. **On-call schedules**: large; escalation already exists.
+4. **SSO (OIDC/SAML), audit log**: enterprise tier; large.
+5. **SMS / voice**: requires a paid provider; out of scope without approval.
+6. **Browser / multi-step checks**: large; needs a headless browser runtime.
+7. **Custom webhook responses** (webhook.site parity): medium.
 
 ## Sources
 

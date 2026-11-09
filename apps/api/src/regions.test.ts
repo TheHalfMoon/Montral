@@ -13,6 +13,8 @@ describe("effectiveRegions", () => {
     // expiry checks run from this deployment only, like domain
     expect(effectiveRegions({ type: "domain", regions: ["eu-central"] })).toEqual(["auto"]);
     expect(effectiveRegions({ type: "certificate", regions: ["eu-central"] })).toEqual(["auto"]);
+    // ping runs the deployment's own ping binary: never on a remote probe
+    expect(effectiveRegions({ type: "ping", regions: ["eu-central"] })).toEqual(["auto"]);
   });
 });
 

@@ -8,6 +8,7 @@ import { ALL_PROJECTS, cookieValue, isManager, listedProjects, requireManager, u
 import { creditCost } from "../entitlements";
 import { isWorkers, targetProblem } from "../netguard";
 import { WORKERS_UNSUPPORTED } from "../certificate";
+import { PING_WORKERS_UNSUPPORTED } from "../ping";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
 import { checkOne, nextAfter } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
@@ -18,8 +19,8 @@ import { JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, MAX_JSON_PATH_LENGTH, jsonP
 
 const fields = {
   name: z.string().min(1).max(120).describe("Display name shown in the dashboard, alerts and status-page components."),
-  type: z.enum(["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate"]).describe("Check protocol; immutable after creation. HTTP checks a URL, WebSocket checks the handshake (and optionally a reply), certificate checks the TLS certificate a host presents (self-hosted Node runtime only), heartbeat waits for incoming pings, and other types check a service."),
-  target: z.string().max(2048).describe("HTTP: absolute http(s) URL. WebSocket: ws:// or wss:// URL. TCP: host:port. DNS: hostname. Domain: explicit registered domain, without scheme or path; not a subdomain. Certificate: host or host:port (default port 443). Database/Redis: connection URL for that protocol. Heartbeat: leave empty. Public targets only by default."),
+  type: z.enum(["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping"]).describe("Check protocol; immutable after creation. HTTP checks a URL, WebSocket checks the handshake (and optionally a reply), certificate checks the TLS certificate a host presents and ping sends one ICMP echo request (both self-hosted Node runtime only), heartbeat waits for incoming pings, and other types check a service."),
+  target: z.string().max(2048).describe("HTTP: absolute http(s) URL. WebSocket: ws:// or wss:// URL. TCP: host:port. DNS: hostname. Domain: explicit registered domain, without scheme or path; not a subdomain. Certificate: host or host:port (default port 443). Ping: hostname or IP address, without scheme, port or path. Database/Redis: connection URL for that protocol. Heartbeat: leave empty. Public targets only by default."),
   domainExpiryWarnDays: z.number().int().min(1).max(365).describe("Domain and certificate monitors: fail when the registration or certificate expiration is this many days away or closer; unknown domain dates also fail explicitly."),
   method: z.enum(HTTP_METHODS).describe("HTTP request method; ignored for other monitor types."),
   requestBody: z.string().max(MAX_REQUEST_BODY_BYTES).nullable().describe("HTTP request body, up to 16384 UTF-8 bytes; unavailable with GET or HEAD. Set Content-Type using headers. Null clears it. Masked values preserve stored secrets on update; owners and admins can read bodies."),
@@ -146,7 +147,7 @@ export function jsonAssertionProblem(v: { type: string; method?: string | null; 
   return null;
 }
 
-const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : v.type === "certificate" && isWorkers() ? `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : requestBodyProblem(v) ?? jsonAssertionProblem(v);
+const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : v.type === "certificate" && isWorkers() ? `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : v.type === "ping" && isWorkers() ? `${PING_WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : requestBodyProblem(v) ?? jsonAssertionProblem(v);
 
 /** Types whose expiry is checked rather than their availability: an interval of 1 hour to 1 day is enough and is enforced. */
 const EXPIRY_TYPES: readonly string[] = ["domain", "certificate"];

@@ -254,5 +254,10 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
     "tag": "0050_status_page_domain_recheck",
     "when": 1794195384833,
     "sql": "ALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_checked_at\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_failing_since\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_failures\" integer DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_check_error\" text;"
+  },
+  {
+    "tag": "0051_monitor_ping",
+    "when": 1794203249515,
+    "sql": "ALTER TYPE \"public\".\"monitor_type\" ADD VALUE 'ping';"
   }
 ];

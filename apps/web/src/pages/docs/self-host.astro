@@ -55,6 +55,11 @@ docker compose up -d --build</code></pre>
       <li><strong>Several containers</strong>: checks are leased with <code>FOR UPDATE SKIP LOCKED</code>, so more containers can share one database without duplicating checks.</li>
       <li><strong>Logs</strong>: <code>docker compose logs -f montral</code>. A health endpoint is at <code>/health</code>.</li>
     </ul>
+    <h3 id="ping">Ping (ICMP) monitors</h3>
+    <p>Ping monitors run the system <code>ping</code> binary of the server, so they work only on the self-hosted Node server (Docker or <code>node server.mjs</code>); a Cloudflare Workers deployment refuses to create them. The image is based on <code>node:22-alpine</code> and runs as the unprivileged <code>node</code> user, so it uses BusyBox <code>ping</code> with unprivileged ICMP sockets. Linux allows those for the groups listed in <code>net.ipv4.ping_group_range</code>; Docker 20.10 and later set it to <code>0 2147483647</code> in every container, so nothing needs to be configured. On an older engine, another runtime, or when the host's default is restricted, add this to the <code>montral</code> service in <code>docker-compose.yml</code>:</p>
+    <pre><code is:raw>    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"</code></pre>
+    <p>The setting is per network namespace and does not affect the host. It cannot be used with <code>network_mode: host</code>; set it on the host instead. When <code>ping</code> is missing or may not send ICMP, checks fail with “Ping unavailable on this server” instead of reporting the target down for another reason. Each check resolves the hostname once, refuses private and internal addresses unless <code>ALLOW_PRIVATE_TARGETS</code> is set (as for TCP monitors), and pings the validated IP address, preferring IPv4. IPv6 targets need IPv6 connectivity in the container (Docker networks are IPv4-only unless IPv6 is enabled); without it the check is reported as inconclusive. Outside Docker, the Linux <code>ping</code> from iputils normally has the <code>cap_net_raw</code> capability or relies on the same sysctl; macOS and Windows <code>ping</code> work without extra setup.</p>
 
     <h2 id="cloudflare">Cloudflare Workers</h2>
     <p>Two Workers: <code>montral-api</code> (the API under <code>/api/*</code>, the minute cron and the queue consumer) and <code>montral-web</code> (the site, which reaches the API through a service binding).</p>
@@ -304,6 +309,11 @@ docker compose up -d --build</code></pre>
       <li><strong>多个容器</strong>：检测通过 <code>FOR UPDATE SKIP LOCKED</code> 加租约，多个容器共用一个数据库也不会重复检测。</li>
       <li><strong>日志</strong>：<code>docker compose logs -f montral</code>。健康检查接口为 <code>/health</code>。</li>
     </ul>
+    <h3 id="ping-zh">Ping（ICMP）监控</h3>
+    <p>Ping 监控调用服务器上的系统 <code>ping</code> 程序，因此只能在自托管 Node 服务器（Docker 或 <code>node server.mjs</code>）上运行；部署在 Cloudflare Workers 上时会拒绝创建。镜像基于 <code>node:22-alpine</code>，以非特权用户 <code>node</code> 运行，使用 BusyBox <code>ping</code> 和非特权 ICMP 套接字。Linux 只允许 <code>net.ipv4.ping_group_range</code> 中列出的用户组使用这类套接字；Docker 20.10 及更高版本在每个容器中都将其设为 <code>0 2147483647</code>，因此无需额外配置。如果使用较旧的引擎、其他容器运行时，或主机默认值受限，请在 <code>docker-compose.yml</code> 的 <code>montral</code> 服务中加入：</p>
+    <pre><code is:raw>    sysctls:
+      net.ipv4.ping_group_range: "0 2147483647"</code></pre>
+    <p>该设置作用于容器自己的网络命名空间，不影响主机；不能与 <code>network_mode: host</code> 同时使用，此时请在主机上设置。若 <code>ping</code> 不存在或不被允许发送 ICMP，检测会以“Ping unavailable on this server”失败，而不会误报为目标的其他故障。每次检测只解析一次主机名，除非设置了 <code>ALLOW_PRIVATE_TARGETS</code>，否则拒绝私有和内网地址（与 TCP 监控相同），然后 ping 经过验证的 IP 地址，优先使用 IPv4。IPv6 目标需要容器具备 IPv6 连接（Docker 网络默认只有 IPv4，除非启用 IPv6）；否则检测结果记为无结论。在 Docker 之外，Linux 上 iputils 的 <code>ping</code> 通常具有 <code>cap_net_raw</code> 能力或依赖同一 sysctl；macOS 与 Windows 的 <code>ping</code> 无需额外设置。</p>
 
     <h2 id="cloudflare-zh">Cloudflare Workers</h2>
     <p>两个 Worker：<code>montral-api</code>（<code>/api/*</code> 下的 API、每分钟的 cron 和队列消费者）和 <code>montral-web</code>（站点本身，通过 service binding 访问 API）。</p>

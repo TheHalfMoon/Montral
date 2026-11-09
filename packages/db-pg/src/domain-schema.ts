@@ -20,7 +20,7 @@ import {
 import type { DomainExpiry } from "@montral/repo";
 import { organization, user } from "./auth-schema";
 
-export const monitorType = pgEnum("monitor_type", ["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate"]);
+export const monitorType = pgEnum("monitor_type", ["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping"]);
 export const monitorStatus = pgEnum("monitor_status", ["pending", "up", "degraded", "down", "paused"]);
 export const incidentStatus = pgEnum("incident_status", ["investigating", "identified", "monitoring", "resolved"]);
 export const incidentUpdateVisibility = pgEnum("incident_update_visibility", ["public", "internal"]);
@@ -59,7 +59,7 @@ export const monitor = pgTable(
     importSourceId: text("import_source_id"),
     name: text("name").notNull(),
     type: monitorType("type").notNull().default("http"),
-    /** URL for http, ws(s):// URL for websocket, host:port for tcp / postgres / mysql / redis, hostname for dns, host or host:port for certificate. */
+    /** URL for http, ws(s):// URL for websocket, host:port for tcp / postgres / mysql / redis, hostname for dns, host or host:port for certificate, hostname or IP address for ping. */
     target: text("target").notNull(),
     method: text("method").notNull().default("GET"),
     requestBody: text("request_body"),

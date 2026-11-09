@@ -174,6 +174,27 @@ export async function guardHosts(host: string): Promise<string[]> {
   return [...g.addresses.filter((a) => !a.includes(":")), ...g.addresses.filter((a) => a.includes(":"))];
 }
 
+/** True for a plain IPv4 (dotted quad) or IPv6 literal without brackets or zone id. */
+export function ipLiteral(s: string): boolean {
+  if (v4Bytes(s)) return true;
+  return s.includes(":") && !s.includes("%") && v6Bytes(s) !== null;
+}
+
+/**
+ * One validated IP literal for `host` (IPv4 preferred), for tools that must be handed an address rather than a name
+ * (the system `ping`). The name is resolved once and every address it resolves to is checked as for any other target, so
+ * the address returned is the one that was validated. With ALLOW_PRIVATE_TARGETS nothing is refused, but a name is
+ * still resolved here so the caller never passes a name on. Node only.
+ */
+export async function guardedAddress(host: string): Promise<string> {
+  const [first] = await guardHosts(host);
+  const h = normaliseHost(first);
+  if (ipLiteral(h)) return h;
+  const addrs = await resolveAll(h);
+  if (!addrs.length) throw Object.assign(new Error(`getaddrinfo ENOTFOUND ${h}`), { code: "ENOTFOUND" });
+  return addrs.find((a) => !a.includes(":")) ?? addrs[0];
+}
+
 /** Forget what `host` resolved to, so the next lookup asks the resolver again. */
 export function forgetResolved(host: string) {
   resolved.delete(normaliseHost(host));
@@ -261,14 +282,37 @@ export function strictHostPort(target: string, defaultPort: number): { hostname:
   return hp && /^[^\s/?#@\\]+$/.test(hp.hostname) ? hp : null;
 }
 
+export const PING_TARGET_PROBLEM = "Target must be a hostname or IP address, without scheme, port or path";
+
+/**
+ * A ping target: a hostname (letters, digits and hyphens in dot-separated labels) or an IP literal (IPv6 optionally in
+ * brackets, no zone id), and nothing else. Returns the host without brackets or a trailing dot, or null.
+ */
+export function pingHost(target: string): string | null {
+  const t = target.trim();
+  if (!t || t.length > 255) return null;
+  const bare = /^\[[^\]]+\]$/.test(t) ? t.slice(1, -1) : t;
+  if (ipLiteral(bare)) return bare.toLowerCase();
+  const name = t.replace(/\.$/, "");
+  if (name.length > 253) return null;
+  const label = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/i;
+  const labels = name.split(".");
+  // numeric names are IPv4 spellings (2130706433, 127.1, 0x7f.1): only the dotted quad form is accepted, above
+  if (labels.every((l) => /^(?:\d+|0x[0-9a-f]*)$/i.test(l))) return null;
+  return labels.every((l) => label.test(l)) ? name.toLowerCase() : null;
+}
+
 /** Why a monitor target is refused, or null. Used when a monitor is created or its target changes. */
 export async function targetProblem(type: string, target: string): Promise<string | null> {
   if (type === "domain") { try { domainName(target); return null; } catch (e) { return (e as Error).message; } }
   // a certificate check has no scheme or path to report on later: a malformed target is refused up front
   if (type === "certificate" && !strictHostPort(target, 443)) return "Target must be host or host:port";
+  if (type === "ping" && !pingHost(target)) return PING_TARGET_PROBLEM;
   if (allowPrivate || type === "heartbeat" || type === "dns") return null;
   let host: string | undefined;
-  if (type === "http" || type === "websocket") {
+  if (type === "ping") {
+    host = pingHost(target)!;
+  } else if (type === "http" || type === "websocket") {
     let u: URL;
     try {
       u = new URL(target);

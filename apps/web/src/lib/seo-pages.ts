@@ -48,8 +48,8 @@ export const MONTRAL = {
   ),
   selfHost: l("Yes, the same code as the hosted service, no feature limits", "支持，与托管服务是同一份代码，没有功能限制"),
   types: l(
-    "HTTP and HTTPS (expected status, keyword must or must not appear, custom headers), TCP, DNS, heartbeat, PostgreSQL, MySQL / MariaDB and Redis reachability, domain registration expiry, and TLS certificate expiry and validity (Node runtime only, not on Cloudflare Workers)",
-    "HTTP / HTTPS（预期状态码、关键字必须出现或不得出现、自定义请求头）、TCP、DNS、心跳、PostgreSQL、MySQL / MariaDB 与 Redis 连通性、域名注册到期，以及 TLS 证书到期与有效性（仅 Node 运行时，Cloudflare Workers 上不可用）",
+    "HTTP and HTTPS (expected status, keyword must or must not appear, custom headers), TCP, DNS, heartbeat, PostgreSQL, MySQL / MariaDB and Redis reachability, domain registration expiry, TLS certificate expiry and validity, and ICMP ping (certificate and ping checks need the Node runtime, not Cloudflare Workers)",
+    "HTTP / HTTPS（预期状态码、关键字必须出现或不得出现、自定义请求头）、TCP、DNS、心跳、PostgreSQL、MySQL / MariaDB 与 Redis 连通性、域名注册到期、TLS 证书到期与有效性，以及 ICMP ping（证书与 ping 检测需要 Node 运行时，Cloudflare Workers 上不可用）",
   ),
   regions: l(
     "HTTP, TCP and WebSocket monitors can be checked from several regions; a run fails when most answering regions fail. Self-hosters run their own probes",
@@ -72,8 +72,7 @@ export const MONTRAL = {
 
 /** What Montral cannot do today. Every item was checked: there is no code path for it. */
 export const MONTRAL_GAPS: L[] = [
-  l("TLS certificate checks need the Node runtime (the Docker image); a Cloudflare Workers deployment cannot run them.", "TLS 证书检测需要 Node 运行时（Docker 镜像）；部署在 Cloudflare Workers 上时无法运行。"),
-  l("No ICMP ping monitor; use a TCP or HTTP check instead.", "没有 ICMP ping 监控；可改用 TCP 或 HTTP 检测。"),
+  l("TLS certificate and ICMP ping checks need the Node runtime (the Docker image); a Cloudflare Workers deployment cannot run them. Ping in Docker needs unprivileged ICMP, which Docker allows by default.", "TLS 证书与 ICMP ping 检测需要 Node 运行时（Docker 镜像）；部署在 Cloudflare Workers 上时无法运行。Docker 中的 ping 需要允许非特权 ICMP，Docker 默认允许。"),
   l("No browser-based or multi-step transaction checks, and no real user monitoring.", "没有基于浏览器或多步骤的事务检测，也没有真实用户监控。"),
   l("No SMS or phone-call alerts and no on-call rotation schedules. Escalation works by channel and by minutes unacknowledged.", "没有短信或电话告警，也没有值班排班表。升级按告警渠道和未确认的分钟数进行。"),
   l("Database monitors check that the server answers; they send no credentials and run no queries.", "数据库监控只检查服务端是否应答，不发送凭据，也不执行查询。"),
@@ -84,8 +83,8 @@ const importStep = l(
   "在 Montral 的监控页用导入按钮上传 JSON 文件，或发送到 POST /api/monitors/import。每个文件最多 500 个监控项。无法导入的条目会连同原因一并列出，其余照常创建。",
 );
 const fieldsStep = l(
-  "The importer reads name (or friendly_name), target (or url, hostname, host), interval in seconds, and type (http, https, keyword, tcp, port, dns, heartbeat, postgres, mysql, redis, domain, certificate). Intervals below 60 seconds are raised to 60.",
-  "导入时会识别 name（或 friendly_name）、target（或 url、hostname、host）、以秒为单位的 interval，以及 type（http、https、keyword、tcp、port、dns、heartbeat、postgres、mysql、redis、domain、certificate）。小于 60 秒的间隔会提升到 60 秒。",
+  "The importer reads name (or friendly_name), target (or url, hostname, host), interval in seconds, and type (http, https, keyword, tcp, port, dns, heartbeat, postgres, mysql, redis, domain, certificate, ping). Intervals below 60 seconds are raised to 60.",
+  "导入时会识别 name（或 friendly_name）、target（或 url、hostname、host）、以秒为单位的 interval，以及 type（http、https、keyword、tcp、port、dns、heartbeat、postgres、mysql、redis、domain、certificate、ping）。小于 60 秒的间隔会提升到 60 秒。",
 );
 const channelsStep = l(
   "Alert channels, status pages and incident history are not imported. Add your channels under Alerting, then create a status page and pick the monitors for it.",
@@ -113,8 +112,8 @@ const faqImport = (name: string): Faq => ({
 const faqGaps = (name: string): Faq => ({
   q: l(`What does ${name} do that Montral does not?`, `${name} 有哪些 Montral 没有的功能？`),
   a: l(
-    "Montral has no ICMP ping monitor, no browser or multi-step checks, and no SMS, phone-call or on-call schedule features. Its TLS certificate checks run only on the Node runtime, not on Cloudflare Workers. If you rely on one of those, check whether the other tool covers it before you switch.",
-    "Montral 没有 ICMP ping 监控、浏览器或多步骤检测，也没有短信、电话告警或值班排班功能；其 TLS 证书检测只能在 Node 运行时中运行，Cloudflare Workers 上不可用。如果你依赖其中之一，切换前请先确认。",
+    "Montral has no browser or multi-step checks, and no SMS, phone-call or on-call schedule features. Its TLS certificate and ICMP ping checks run only on the Node runtime, not on Cloudflare Workers. If you rely on one of those, check whether the other tool covers it before you switch.",
+    "Montral 没有浏览器或多步骤检测，也没有短信、电话告警或值班排班功能；其 TLS 证书与 ICMP ping 检测只能在 Node 运行时中运行，Cloudflare Workers 上不可用。如果你依赖其中之一，切换前请先确认。",
   ),
 });
 const faqPricing = (name: string): Faq => ({
@@ -367,12 +366,12 @@ export const TOOLS: Tool[] = [
       { topic: l("Teams and automation", "团队与自动化"), montral: l(`${MONTRAL.team.en}; ${MONTRAL.automation.en}`, `${MONTRAL.team.zh}；${MONTRAL.automation.zh}`), them: l("Check its docs for user management and API coverage", "用户管理与 API 覆盖范围请查看其文档") },
     ],
     theyHave: [
-      l("More monitor types, among them ICMP ping, which Montral lacks.", "更多监控类型，例如 Montral 没有的 ICMP ping。"),
+      l("More monitor types, among them some that Montral lacks.", "更多监控类型，其中包括 Montral 没有的类型。"),
       l("A large community and a long history as a self-hosted tool.", "庞大的社区和作为自托管工具的长期积累。"),
     ],
     bestThem: [
       l("You want a single self-hosted instance with the broadest set of monitor types and notification options.", "你想要一个自托管实例，监控类型和通知方式越全越好。"),
-      l("You need ICMP ping monitoring.", "你需要 ICMP ping 监控。"),
+      l("You rely on a monitor type Montral does not offer.", "你依赖 Montral 不提供的某种监控类型。"),
     ],
     bestUs: [
       l("You want the same monitor checked from several places, using probes you run in the regions you care about.", "你想让同一个监控项从多个地点检测，探针由你部署在关心的区域。"),
@@ -384,7 +383,7 @@ export const TOOLS: Tool[] = [
       l("Write your Kuma monitors as a JSON list with a name, a url or hostname, the interval in seconds and the type. Montral does not read Kuma's backup file directly.", "把 Kuma 的监控项整理成 JSON 列表，每项包含名称、url 或 hostname、以秒为单位的间隔和类型。Montral 不能直接读取 Kuma 的备份文件。"),
       fieldsStep,
       importStep,
-      l("Ping and other types Montral does not have are skipped with a reason; replace ping with a TCP or HTTP check where that makes sense. Certificate expiry settings are not carried over: add a certificate monitor for each host that needs the warning.", "Montral 不支持的 ping 等类型会连同原因被跳过；合适时可用 TCP 或 HTTP 检测代替 ping。证书到期设置不会被迁移：请为需要预警的每个主机添加 certificate 监控项。"),
+      l("Ping monitors are imported as Montral ping monitors (self-hosted Node server only); types Montral does not have are skipped with a reason. Certificate expiry settings are not carried over: add a certificate monitor for each host that needs the warning.", "ping 监控会导入为 Montral 的 ping 监控（仅自托管 Node 服务器）；Montral 不支持的类型会连同原因被跳过。证书到期设置不会被迁移：请为需要预警的每个主机添加 certificate 监控项。"),
       l("Monitors that point at private addresses are refused unless you set ALLOW_PRIVATE_TARGETS=true on your instance. Read the self-host docs before turning that on.", "指向内网地址的监控项会被拒绝，除非你在自己的实例上设置 ALLOW_PRIVATE_TARGETS=true。开启前请先阅读自托管文档。"),
       channelsStep,
     ],
@@ -392,8 +391,8 @@ export const TOOLS: Tool[] = [
       {
         q: l("Is Montral a drop-in replacement for Uptime Kuma?", "Montral 能直接替换 Uptime Kuma 吗？"),
         a: l(
-          "For HTTP, TCP, DNS, heartbeat, database reachability and certificate expiry checks, largely yes; certificate checks need the Node runtime, which a Docker install uses. It has no ping monitor, and Kuma's backup file cannot be imported directly, so plan for a small conversion step.",
-          "对于 HTTP、TCP、DNS、心跳、数据库连通性和证书到期检测，基本可以；证书检测需要 Node 运行时，Docker 部署即是如此。它没有 ping 监控，也不能直接导入 Kuma 的备份文件，需要做一步简单的格式转换。",
+          "For HTTP, TCP, DNS, heartbeat, ping, database reachability and certificate expiry checks, largely yes; certificate and ping checks need the Node runtime, which a Docker install uses. Kuma's backup file cannot be imported directly, so plan for a small conversion step.",
+          "对于 HTTP、TCP、DNS、心跳、ping、数据库连通性和证书到期检测，基本可以；证书与 ping 检测需要 Node 运行时，Docker 部署即是如此。它不能直接导入 Kuma 的备份文件，需要做一步简单的格式转换。",
         ),
       },
       faqImport("Uptime Kuma"),
@@ -760,7 +759,7 @@ export const SEGMENTS: Segment[] = [
     limits: [
       l("No on-call rotation schedules or phone-call paging; escalation is by channel and minutes unacknowledged.", "没有值班排班表和电话告警；升级按渠道和未确认的分钟数进行。"),
       l("Database monitors check reachability only.", "数据库监控只检查连通性。"),
-      l("No ICMP ping monitors; TLS certificate monitors need the Node runtime and do not run on Cloudflare Workers.", "没有 ICMP ping 监控；TLS 证书监控需要 Node 运行时，不能在 Cloudflare Workers 上运行。"),
+      l("ICMP ping and TLS certificate monitors need the Node runtime and do not run on Cloudflare Workers.", "ICMP ping 与 TLS 证书监控需要 Node 运行时，不能在 Cloudflare Workers 上运行。"),
       l("Multi-region covers HTTP, TCP and WebSocket monitors only.", "多区域检测仅适用于 HTTP、TCP 和 WebSocket 监控。"),
     ],
     faq: [

@@ -57,7 +57,9 @@ export const test = base.extend<{ guard: PageGuard }>({
       // What the page showed when the test failed, in the CI log itself. Bearer-token receiver URLs are redacted.
       const snapshot = await page.locator("body").ariaSnapshot({ timeout: 5000 }).catch((e: Error) => `unavailable: ${e.message}`);
       console.log(`FAILED PAGE ${testInfo.project.name} ${here()}:\n` +
-        snapshot.replace(/\/api\/hooks\/receive\/\S+/g, "/api/hooks/receive/[redacted]").slice(0, 6000));
+        snapshot.replace(/\/api\/hooks\/receive\/\S+/g, "/api/hooks/receive/[redacted]").slice(0, 6000) +
+        `\nconsole errors:\n  ${guard.errors.slice(-15).join("\n  ").slice(0, 4000)}` +
+        `\nfailed responses:\n  ${guard.failedResponses.slice(-15).join("\n  ")}`);
     }
     if (guard.errors.length) {
       testInfo.annotations.push({ type: "console-errors", description: guard.errors.slice(0, 20).join("\n") });

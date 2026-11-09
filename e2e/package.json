@@ -1,0 +1,17 @@
+{
+  "name": "@montral/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Cross-browser (Chromium, Firefox, WebKit) journeys and WCAG 2.1 AA checks against the built self-hosted Node server",
+  "scripts": {
+    "test": "playwright test",
+    "list": "playwright test --list",
+    "typecheck": "tsc -p ."
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.0"
+  }
+}

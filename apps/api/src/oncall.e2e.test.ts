@@ -430,8 +430,9 @@ describe.skipIf(!url)("on-call schedules and escalation (PostgreSQL)", () => {
       ? async (limit: number) => { const due = await target.claimEscalations(limit); for (const d of due) if (d.incident.id === first.id) await target.acknowledgeIncident(orgId, first.id, owner.id); return due; }
       : (target as any)[key] });
     await sendEscalations(ackAfterClaim, unmetered, 100);
-    expect(await deliveries(first.id)).toEqual([]);
-    expect((await db.query<{ status_message: string }>(`select status_message from alert_delivery where incident_id = $1`, [first.id])).map((r) => r.status_message)).toContain("skipped: the incident was acknowledged or resolved before this escalation could be sent");
+    // nobody was queued: the only row is the record of the skipped step
+    expect((await deliveries(first.id)).map((r) => [r.target_user_id, r.channel_type, r.status])).toEqual([[null, "none", "skipped"]]);
+    expect((await db.query<{ status_message: string }>(`select status_message from alert_delivery where incident_id = $1`, [first.id])).map((r) => r.status_message)).toEqual(["skipped: the incident was acknowledged or resolved before this escalation could be sent"]);
     expect((await call(owner.cookie, "GET", `/incidents/${first.id}`)).body.updates.some((u: any) => u.body.startsWith("Escalation level"))).toBe(false);
     // 2. acknowledged after the rows were queued, before the provider is called: the row ends skipped, no mail
     await call(owner.cookie, "POST", `/incidents/${first.id}/updates`, { status: "resolved", body: "ok" });

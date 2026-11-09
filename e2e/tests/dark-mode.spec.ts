@@ -31,7 +31,7 @@ for (const [label, path] of [
     expect(response?.status()).toBe(200);
     await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
     await activateDarkTheme(page);
-    await checkA11y(page, testInfo, `dark-${label.replace(/\\s+/g, "-")}`);
+    await checkA11y(page, testInfo, `dark-${label.replace(/\s+/g, "-")}`);
     expect(guard.errors).toEqual([]);
     expect(guard.failedResponses).toEqual([]);
   });
@@ -45,7 +45,7 @@ test("dark theme: signed-in dashboard is accessible", async ({ page, guard }, te
   await form.getByLabel("Work email").fill(who.email);
   await form.locator("input[autocomplete=new-password]").fill("correct horse battery staple");
   await form.getByRole("button", { name: "Create account" }).click();
-  await expect(page).toHaveURL(/\\/app$/, { timeout: 30_000 });
+  await expect(page).toHaveURL(/\/app$/, { timeout: 30_000 });
   await expect(page.locator("main#main-content")).toBeVisible();
   await activateDarkTheme(page);
   await checkA11y(page, testInfo, "dark-dashboard");

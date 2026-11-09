@@ -115,7 +115,12 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
   beforeAll(async () => {
     await migrateMontralSchema(database!, montralEdition);
     for (const level of ["error", "warn", "log", "info"] as const) {
-      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { logged.push(args.map((a) => (a instanceof Error ? `${a.message} ${a.stack}` : typeof a === "string" ? a : JSON.stringify(a))).join(" ")); });
+      const original = console[level].bind(console);
+      // captured for the "never logged" check, and still printed so a CI failure shows its (redacted) cause
+      vi.spyOn(console, level).mockImplementation((...args: unknown[]) => {
+        logged.push(args.map((a) => (a instanceof Error ? `${a.message} ${a.stack}` : typeof a === "string" ? a : JSON.stringify(a))).join(" "));
+        original(...args);
+      });
     }
     setTxtResolver(async (name) => (txt.has(name) ? [[txt.get(name)!]] : Promise.reject(Object.assign(new Error("not found"), { code: "ENOTFOUND" }))));
     idpA = await SyntheticIdp.start("tenant-a");

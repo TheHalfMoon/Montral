@@ -135,7 +135,7 @@ export const ssoAdmin = new Hono<AppEnv>()
         throw e;
       }
     }
-    await q(c)(`DELETE FROM sso_domain WHERE connection_id = $1::uuid AND NOT (domain = ANY ($2::text[]))`, [id, domains]);
+    await q(c)(`DELETE FROM sso_domain WHERE connection_id = $1::uuid AND domain NOT IN (SELECT jsonb_array_elements_text($2::jsonb))`, [id, JSON.stringify(domains)]);
     for (const d of domains) {
       await q(c)(`INSERT INTO sso_domain (connection_id, domain, token) VALUES ($1::uuid, $2::text, $3::text) ON CONFLICT (connection_id, domain) DO NOTHING`, [id, d, newDomainToken()]);
     }

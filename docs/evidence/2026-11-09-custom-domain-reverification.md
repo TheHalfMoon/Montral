@@ -52,7 +52,8 @@ and 18 in CI, with an explicit clock and per-test page scoping. It covers:
 - The healthy interval, and that a match keeps the domain.
 - A brief disappearance: the page stays served, is re-checked sooner, and the
   streak clears.
-- Withdrawal at 24 h, but not at 23 h 59 min. The page is no longer routed and
+- No withdrawal at 23 h 59 min even after 3 checks; withdrawn at the next due
+  check past 24 h. The page is no longer routed and
   the reason appears in the API.
 - Verifying again after a withdrawal restores the domain.
 - 24 h alone is not enough: a scheduler outage still needs 3 failed checks.

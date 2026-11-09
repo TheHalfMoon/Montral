@@ -99,9 +99,10 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
     const t1 = p.t0 + 7 * H;
     await recheck(p.id, t1); // 1
     await recheck(p.id, t1 + 12 * H); // 2
-    expect(await recheck(p.id, t1 + 24 * H - 60_000)).toMatchObject({ withdrawn: 0 }); // 3, but under 24 h
+    expect(await recheck(p.id, t1 + 24 * H - 60_000)).toMatchObject({ failed: 1, withdrawn: 0 }); // 3 checks, but 23:59
     expect((await state(p.id)).verified).not.toBeNull();
-    expect(await recheck(p.id, t1 + 24 * H)).toMatchObject({ failed: 1, withdrawn: 1 }); // 4, at 24 h
+    // the next check is due one failing interval later, past 24 h: withdrawn
+    expect(await recheck(p.id, t1 + 24 * H - 60_000 + DOMAIN_RECHECK.failingMs)).toMatchObject({ failed: 1, withdrawn: 1 });
     expect(await routed(p.domain)).toBeNull();
     const shown = (await (await call(`/api/status-pages/${p.id}`, { cookie: p.cookie })).json()) as Record<string, unknown>;
     expect(shown).toMatchObject({ customDomain: p.domain, customDomainVerifiedAt: null, customDomainCheckError: "missing" });
@@ -137,10 +138,10 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
     const servfail = failing("ESERVFAIL");
     await recheck(p.id, t1, servfail);
     await recheck(p.id, t1 + 2 * 24 * H, servfail);
-    expect(await recheck(p.id, t1 + 7 * 24 * H - 60_000, servfail)).toMatchObject({ withdrawn: 0 });
+    expect(await recheck(p.id, t1 + 7 * 24 * H - 60_000, servfail)).toMatchObject({ failed: 1, withdrawn: 0 });
     expect(await state(p.id)).toMatchObject({ error: "lookup_failed", failures: 3 });
     expect(await routed(p.domain)).toBe(p.id);
-    expect(await recheck(p.id, t1 + 7 * 24 * H, servfail)).toMatchObject({ withdrawn: 1 });
+    expect(await recheck(p.id, t1 + 7 * 24 * H - 60_000 + DOMAIN_RECHECK.failingMs, servfail)).toMatchObject({ failed: 1, withdrawn: 1 });
     expect((await state(p.id)).error).toBe("lookup_failed");
 
     const r = await verifiedPage();

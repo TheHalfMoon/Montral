@@ -361,6 +361,19 @@ describe("certificate monitors", () => {
   });
 });
 
+describe("ping monitors", () => {
+  afterEach(() => configureNetGuard({}));
+
+  it("are availability checks: a refused private target fails and opens an ordinary down incident", async () => {
+    const { repo, incidents, states } = fakeRepo();
+    // no binary runs: the guard refuses loopback before anything is spawned
+    await checkOne(repo, hb({ type: "ping", target: "127.0.0.1", timeoutMs: 2000, regions: [], failureThreshold: 1 }));
+    expect(incidents.map((i) => i.title)).toEqual(["API is down"]);
+    expect(states.at(-1)).toMatchObject({ status: "down" });
+    expect(states.some((s) => s.consecutiveFailures === 1)).toBe(true);
+  });
+});
+
 describe("checkOne noise rules", () => {
   afterEach(() => vi.restoreAllMocks());
 

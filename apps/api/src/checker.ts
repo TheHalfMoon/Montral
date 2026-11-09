@@ -1,4 +1,4 @@
-import { checkUserAgent, dialEach, guardedFetch, hostPort, readCapped, targetIsPrivate } from "./netguard";
+import { checkUserAgent, dialEach, guardedFetch, hostPort, pingHost, readCapped, targetIsPrivate } from "./netguard";
 import { networkLevelError, proberOnline, proberSideError } from "./selfcheck";
 import { dnsCheck } from "./dns";
 import { requestBodyProblem } from "./http-request";
@@ -6,10 +6,11 @@ import type { DomainExpiry, Repo } from "@montral/repo";
 import { domainCheck } from "./domain-expiry";
 import { websocketCheck } from "./websocket";
 import { certificateCheck } from "./certificate";
+import { pingCheck } from "./ping";
 import { clip, jsonAssertionError } from "./json-assertion";
 
 export type CheckInput = {
-  type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate";
+  type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping";
   target: string;
   /** domain and certificate: fail when the expiry date is this many days away or closer (default 30). */
   domainExpiryWarnDays?: number;
@@ -62,6 +63,7 @@ export async function runCheck(m: CheckInput, repo?: Repo): Promise<CheckOutcome
       case "redis": return await redisCheck(m, started);
       case "websocket": return await websocketCheck(m, started);
       case "certificate": return await certificateCheck(m, started);
+      case "ping": return await pingCheck(m, started);
       default: return { ok: true };
     }
   } catch (e) {
@@ -75,6 +77,7 @@ function dialedHost(m: CheckInput): string | null {
   try {
     if (m.type === "http" || m.type === "websocket") return new URL(m.target).hostname;
     if (m.type === "dns" || m.type === "heartbeat") return null;
+    if (m.type === "ping") return pingHost(m.target);
     return hostPort(m.target, 1)?.hostname ?? null;
   } catch {
     return null;

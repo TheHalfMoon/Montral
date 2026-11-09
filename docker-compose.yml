@@ -8,6 +8,10 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
     ports: ["${PORT:-8080}:8080"]
+    # Ping monitors use BusyBox ping with unprivileged ICMP sockets. Docker 20.10+ already allows them in every container;
+    # on an older engine or another runtime, uncomment (not compatible with network_mode: host).
+    # sysctls:
+    #   net.ipv4.ping_group_range: "0 2147483647"
     environment:
       DATABASE_URL: postgres://montral:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@postgres:5432/montral
       BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env (openssl rand -hex 32)}

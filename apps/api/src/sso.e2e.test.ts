@@ -880,6 +880,147 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await scim("/Users", { token })).status).toBe(401);
   });
 
+  it("SCIM transitions are atomic: an injected failure at any step leaves no partial state; concurrent changes serialize", async () => {
+    const scim = async (path: string, init: { method?: string; body?: unknown; token: string }) => {
+      const r = await app.fetch(new Request(`${origin}/api/scim/v2${path}`, { method: init.method ?? "GET", headers: { authorization: `Bearer ${init.token}`, ...(init.body !== undefined ? { "content-type": "application/scim+json" } : {}) }, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), env as never);
+      const text = await r.text();
+      return { status: r.status, body: text ? JSON.parse(text) : null };
+    };
+    const USER = "urn:ietf:params:scim:schemas:core:2.0:User";
+    const patch = (ops: unknown[]) => ({ schemas: ["urn:ietf:params:scim:api:messages:2.0:PatchOp"], Operations: ops });
+    const member = async (userId: string) => (await q(`select 1 from member where organization_id = $1 and user_id = $2`, [ownerB.orgId, userId])).length === 1;
+    const record = async (id: string) => (await q<{ active: boolean; display_name: string | null }>(`select active, display_name from scim_user where id = $1`, [id]))[0];
+    const token = (await call("/api/sso/scim/token", { method: "POST", jar: ownerB.jar })).body.token as string;
+    const erin = `erin-atomic-${rand}@${domainB}`;
+    const created = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: erin } });
+    expect(created.status).toBe(201);
+    const id = created.body.id as string;
+    const erinJar = new Jar();
+    expect(failure((await sso(idpB, erinJar, { email: erin }, { sub: "atomic-erin", email: erin, email_verified: true })).location)).toBeNull();
+    const erinId = (await userIdOf(erin))!;
+    const key = await call("/api/auth/api-key/create", { method: "POST", jar: erinJar, body: { name: "erin-key", metadata: { organizationId: ownerB.orgId } } });
+    expect(key.status).toBe(200);
+    const sessions = async () => (await q(`select 1 from session where user_id = $1`, [erinId])).length;
+    const before = await sessions();
+    expect(before).toBeGreaterThan(0);
+
+    // a failure of the record write after the membership was ended rolls everything back
+    await q(`create or replace function scim_atomic_fail() returns trigger language plpgsql as $f$ begin
+      if TG_OP = 'DELETE' then if OLD.display_name = 'fail-delete' then raise exception 'injected delete failure'; end if; return OLD; end if;
+      if NEW.display_name in ('fail-deactivate', 'fail-reactivate') then raise exception 'injected update failure'; end if; return NEW; end $f$`);
+    await q(`create trigger scim_atomic_fail before update or delete on scim_user for each row execute function scim_atomic_fail()`);
+    try {
+      const failedOff = await scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "displayName", value: "fail-deactivate" }, { op: "replace", path: "active", value: false }]) });
+      expect(failedOff.status).toBe(500);
+      expect(await member(erinId)).toBe(true);
+      expect(await sessions()).toBe(before);
+      expect(await q(`select 1 from apikey where id = $1`, [key.body.id])).toHaveLength(1);
+      expect(await q(`select 1 from sso_removal where organization_id = $1 and user_id = $2`, [ownerB.orgId, erinId])).toHaveLength(0);
+      expect(await record(id)).toMatchObject({ active: true, display_name: null });
+
+      // a real deactivation, then a failing reactivation: the block stays and no membership comes back
+      expect((await scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "active", value: false }]) })).status).toBe(200);
+      expect(await member(erinId)).toBe(false);
+      const failedOn = await scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "displayName", value: "fail-reactivate" }, { op: "replace", path: "active", value: true }]) });
+      expect(failedOn.status).toBe(500);
+      expect(await member(erinId)).toBe(false);
+      expect(await q(`select 1 from sso_removal where organization_id = $1 and email = $2`, [ownerB.orgId, erin])).not.toHaveLength(0);
+      expect((await record(id)).active).toBe(false);
+
+      // a failing delete keeps both the record and the (reactivated) membership
+      expect((await scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "active", value: true }]) })).status).toBe(200);
+      expect(await member(erinId)).toBe(true);
+      await q(`update scim_user set display_name = 'fail-delete' where id = $1`, [id]).catch(() => undefined); // the trigger lets this one through
+      expect((await scim(`/Users/${id}`, { method: "DELETE", token })).status).toBe(500);
+      expect(await member(erinId)).toBe(true);
+      expect(await record(id)).toBeTruthy();
+    } finally {
+      await q(`drop trigger if exists scim_atomic_fail on scim_user`);
+      await q(`drop function if exists scim_atomic_fail()`);
+    }
+
+    // an audit write that fails rolls the change back too (no unaudited deprovisioning)
+    await q(`create or replace function scim_audit_fail() returns trigger language plpgsql as $f$ begin
+      if NEW.action = 'scim.user_create' and NEW.organization_id = '${ownerB.orgId}' then raise exception 'injected audit failure'; end if; return NEW; end $f$`);
+    await q(`create trigger scim_audit_fail before insert on audit_event for each row execute function scim_audit_fail()`);
+    try {
+      const frank = await signUp("frank-atomic", `frank-atomic-${rand}@${domainB}`);
+      await q(`insert into member (id, organization_id, user_id, role, created_at) values ($1, $2, $3, 'member', now())`, [crypto.randomUUID(), ownerB.orgId, frank.id]);
+      const inactive = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: frank.email, active: false } });
+      expect(inactive.status).toBe(500);
+      expect(await member(frank.id)).toBe(true);
+      expect(await q(`select 1 from scim_user where organization_id = $1 and user_name = $2`, [ownerB.orgId, frank.email.toLowerCase()])).toHaveLength(0);
+    } finally {
+      await q(`drop trigger if exists scim_audit_fail on audit_event`);
+      await q(`drop function if exists scim_audit_fail()`);
+    }
+
+    // deterministic serialization: while a transaction holds the record, a PATCH waits; a first SSO sign-in that passed
+    // the quick check waits too and then sees the deactivation that was committed meanwhile
+    const pending = <T,>(p: Promise<T>) => { let done = false; void p.then(() => { done = true; }, () => { done = true; }); return () => done; };
+    {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const holder = database!.transaction!(async (tx) => {
+        await tx.query(`select 1 from scim_user where id = $1 for update`, [id]);
+        await gate;
+      });
+      try {
+      await new Promise((r) => setTimeout(r, 100));
+      const waiting = scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "displayName", value: "after-lock" }]) });
+      const finished = pending(waiting);
+      await new Promise((r) => setTimeout(r, 400));
+      expect(finished()).toBe(false);
+      release();
+      await holder;
+      expect((await waiting).status).toBe(200);
+      expect((await record(id)).display_name).toBe("after-lock");
+      } finally {
+        release();
+        await holder.catch(() => undefined);
+      }
+    }
+    {
+      const gina = `gina-atomic-${rand}@${domainB}`;
+      const g = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: gina } });
+      expect(g.status).toBe(201);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      // the provider deactivates gina in a transaction that is still open while her first SSO sign-in arrives
+      const deactivation = database!.transaction!(async (tx) => {
+        await tx.query(`select 1 from scim_user where id = $1 for update`, [g.body.id]);
+        await tx.query(`update scim_user set active = false where id = $1`, [g.body.id]);
+        await gate;
+      });
+      try {
+      await new Promise((r) => setTimeout(r, 100));
+      const signIn = sso(idpB, new Jar(), { email: gina }, { sub: "atomic-gina", email: gina, email_verified: true });
+      const finished = pending(signIn);
+      await new Promise((r) => setTimeout(r, 400));
+      expect(finished()).toBe(false); // waiting on the record, not provisioning
+      release();
+      await deactivation;
+      expect(failure((await signIn).location)).toBe("access_removed");
+      const ginaId = await userIdOf(gina);
+      expect(ginaId === null || !(await member(ginaId))).toBe(true);
+      } finally {
+        release();
+        await deactivation.catch(() => undefined);
+      }
+    }
+
+    // concurrent deactivations and reactivations of one person serialize: the final record and membership agree
+    await q(`update scim_user set display_name = null where id = $1`, [id]);
+    const flips = await Promise.all(Array.from({ length: 12 }, (_, i) => scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "active", value: i % 2 === 0 }]) })));
+    expect(flips.every((r) => r.status === 200)).toBe(true);
+    const final = await record(id);
+    expect(await member(erinId)).toBe(final.active);
+    expect((await q(`select count(*)::int as n from member where organization_id = $1 and user_id = $2`, [ownerB.orgId, erinId]))[0]).toMatchObject({ n: final.active ? 1 : 0 });
+
+    expect((await scim(`/Users/${id}`, { method: "DELETE", token })).status).toBe(204);
+    expect((await call("/api/sso/scim/token", { method: "DELETE", jar: ownerB.jar })).status).toBe(204);
+  });
+
   it("signs out the connection's sessions and voids its API keys when the issuer or client changes", async () => {
     const email = `bea2-${rand}@${domainB}`;
     const jar = new Jar();

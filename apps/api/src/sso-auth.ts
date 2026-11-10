@@ -206,11 +206,32 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             // the operator's provider follows DISABLE_SIGNUP; a workspace's own provider provisions into that workspace only
             if (!conn.orgId && ["true", "1"].includes(String(env.DISABLE_SIGNUP ?? "").trim().toLowerCase()) && !(await database.repo.hasPendingInvitation(identity.email))) return fail("signup_closed");
             const name = identity.name ?? identity.email.split("@")[0];
+            // For a workspace connection the SCIM gate is checked again inside the provisioning transaction, holding the
+            // person's SCIM record (FOR SHARE): a deactivation committed after the check above is seen here, and one that
+            // starts now waits and then finds (and ends) the new membership. FOR NO KEY UPDATE also queues a second sign-in.
+            const email = identity.email;
+            const provision = async (tq: typeof q): Promise<string | null | "inactive" | "not_assigned"> => {
+              if (conn.orgId) {
+                const gate = await scimGate(tq, conn.orgId, email, { lock: true });
+                if (gate !== "allowed") return gate;
+              }
+              const id = await provisionUser(tq, { email, name, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject, orgId: conn.orgId, role: conn.defaultRole });
+              if (id && conn.orgId) await linkScimUser(tq, conn.orgId, email, id);
+              return id;
+            };
+            let provisioned: string | null | "inactive" | "not_assigned" = null;
             try {
-              userId = await provisionUser(q, { email: identity.email, name, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject, orgId: conn.orgId, role: conn.defaultRole });
+              provisioned = conn.orgId && database.transaction
+                ? await database.transaction((scoped) => provision((sql, params) => scoped.query(sql, params)))
+                : await provision(q);
             } catch {
-              userId = null;
+              provisioned = null;
             }
+            if (provisioned === "inactive" || provisioned === "not_assigned") {
+              await refusal(conn, provisioned === "inactive" ? "scim_inactive" : "scim_not_assigned", ctx.headers);
+              return fail(provisioned === "inactive" ? "access_removed" : "not_provisioned");
+            }
+            userId = provisioned;
             // a concurrent sign-in of the same person created it first: theirs is the account (or the address was taken)
             userId ??= await userByIdentity(q, conn.id, identity.issuer, identity.subject);
             if (!userId) return fail("link_required");

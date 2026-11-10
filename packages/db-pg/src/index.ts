@@ -46,6 +46,11 @@ export const openDatabase: OpenDatabase = (connectionString, opts) => {
       }
     },
     query: async <T>(text: string, params: unknown[] = []) => (await db.$client.unsafe(text, params as never[])) as unknown as T[],
+    transaction: async <T>(work: (scoped: Database) => Promise<T>): Promise<T> =>
+      (await db.$client.begin(async (tx) => work({
+        ...database,
+        query: async <R>(text: string, params: unknown[] = []) => (await tx.unsafe(text, params as never[])) as unknown as R[],
+      }))) as T,
     close: (timeoutSec = 1) => db.$client.end({ timeout: timeoutSec }),
   };
   return database;

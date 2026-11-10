@@ -1003,6 +1003,11 @@ export interface Database {
    * ours (the hosted edition's subscriptions and usage) so they need neither a second connection nor changes to `Repo`.
    */
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
+  /**
+   * Run `work` in one PostgreSQL transaction: every query of the scoped database commits together or not at all.
+   * Optional for test/in-memory backends.
+   */
+  transaction?<T>(work: (scoped: Database) => Promise<T>): Promise<T>;
   close(timeoutSec?: number): Promise<void>;
 }
 export type OpenDatabase = (connectionString: string, opts?: { max?: number }) => Database;

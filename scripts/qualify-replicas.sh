@@ -3,7 +3,9 @@
 # shipped image, on a disposable project with synthetic secrets:
 #   - requests are spread over the replicas and a session made on one works on every other one;
 #   - webhook captures sent concurrently through the balancer are stored exactly once each;
-#   - a rolling restart (each replica in turn, SIGTERM) loses no request;
+#   - the client's address reaches the app through the balancer (rate limits and the audit log are per client);
+#   - a rolling restart (each replica in turn, SIGTERM) loses no request, reads or webhook writes, and stores no
+#     webhook twice;
 #   - scheduled checks run once per interval in total, not once per replica (no duplicates, no starvation),
 #     including while replicas restart;
 #   - a failing monitor opens exactly one incident although every replica's scheduler sees it.
@@ -18,10 +20,12 @@ jar="$work/cookies"
 compose=(docker compose -p "$project" -f docker-compose.yml -f docker-compose.replicas.yml --env-file "$work/.env")
 replicas=2
 load_pid=""
+post_pid=""
 
 cleanup() {
   status=$?
   [[ -n "$load_pid" ]] && kill "$load_pid" 2>/dev/null || true
+  [[ -n "$post_pid" ]] && kill "$post_pid" 2>/dev/null || true
   if [[ $status -ne 0 ]]; then
     echo "--- montral logs (tail) ---"; "${compose[@]}" logs --no-color --tail 60 montral || true
     echo "--- lb logs (tail) ---"; "${compose[@]}" logs --no-color --tail 40 lb || true
@@ -80,6 +84,10 @@ done
 served="$(sort -u "$upstreams" | wc -l)"
 [[ "$(wc -l < "$upstreams")" -eq 40 ]] || { echo "not every authenticated request succeeded" >&2; exit 1; }
 (( served >= replicas )) || { echo "requests reached ${served} replica(s), expected ${replicas}" >&2; exit 1; }
+# the balancer is the trusted proxy: the app sees the client's address (here the Docker host's gateway), not none
+api POST /api/monitors '{"name":"Replica audit probe","type":"heartbeat"}' >/dev/null
+attributed="$(psql "select count(*) from audit_event where action = 'monitor.create' and ip is not null and ip <> ''")"
+(( attributed >= 1 )) || { echo "the client address did not reach the app through the balancer (audit ip empty)" >&2; exit 1; }
 
 echo "== concurrent webhook captures through the balancer are stored exactly once"
 inbox="$(api POST /api/hooks/inboxes '{"name":"Replica inbox"}')"
@@ -101,19 +109,31 @@ started_epoch="$(psql "select extract(epoch from now())::bigint")"
 
 echo "== rolling restart under load: one replica at a time, no request lost"
 codes="$work/codes"
-( while :; do curl -s -o /dev/null -w '%{http_code}\n' -H "origin: $base" -b "$jar" "$base/api/monitors" >> "$codes"; sleep 0.1; done ) &
+posts="$work/posts"
+restart_inbox="$(api POST /api/hooks/inboxes '{"name":"Restart inbox"}')"
+restart_inbox_id="$(json "['id']" <<<"$restart_inbox")"
+restart_path="$(json "['path']" <<<"$restart_inbox")"
+( set +e; while :; do curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -H "origin: $base" -b "$jar" "$base/api/monitors" >> "$codes"; sleep 0.1; done ) &
 load_pid=$!
+( set +e; n=0; while :; do n=$((n + 1)); curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -X POST -H 'content-type: application/json' --data "{\"restart\":${n}}" "$base$restart_path" >> "$posts"; sleep 0.15; done ) &
+post_pid=$!
 sleep 5
 for id in $(app_ids); do
   docker restart -t 20 "$id" >/dev/null
   wait_replicas
   sleep 5
 done
-kill "$load_pid"; wait "$load_pid" 2>/dev/null || true; load_pid=""
+kill "$load_pid" "$post_pid" 2>/dev/null || true; wait "$load_pid" "$post_pid" 2>/dev/null || true; load_pid=""; post_pid=""
 total="$(wc -l < "$codes")"
 bad="$(grep -vc '^200$' "$codes" || true)"
 (( total >= 100 )) || { echo "only ${total} requests during the rolling restart" >&2; exit 1; }
 (( bad == 0 )) || { echo "${bad} of ${total} requests failed during the rolling restart: $(sort "$codes" | uniq -c | tr '\n' ' ')" >&2; exit 1; }
+post_total="$(wc -l < "$posts")"
+post_bad="$(grep -vc '^202$' "$posts" || true)"
+(( post_total >= 60 )) || { echo "only ${post_total} webhook posts during the rolling restart" >&2; exit 1; }
+(( post_bad == 0 )) || { echo "${post_bad} of ${post_total} webhook posts failed during the rolling restart: $(sort "$posts" | uniq -c | tr '\n' ' ')" >&2; exit 1; }
+stored="$(psql "select count(*), count(distinct body) from montral_hook_event where inbox_id = '${restart_inbox_id}'")"
+[[ "$stored" == "${post_total}|${post_total}" ]] || { echo "webhooks during the restart (rows|distinct) ${stored}, expected ${post_total}|${post_total}" >&2; exit 1; }
 
 echo "== scheduled checks: once per interval in total, across ${replicas} schedulers"
 window=330
@@ -139,4 +159,4 @@ incidents="$(psql "select count(*), count(*) filter (where resolved_at is null) 
 failing_runs="$(psql "select count(*) from check_result where monitor_id = '${failing_id}' and not ok")"
 (( failing_runs >= 3 && failing_runs <= 7 )) || { echo "failing monitor ran ${failing_runs} times" >&2; exit 1; }
 
-echo "REPLICAS_PASS: ${replicas} replicas behind nginx served ${served} distinct upstreams with one session; 60/60 concurrent webhook captures stored once; rolling restart lost 0 of ${total} requests; ${window} s of scheduling: ${min_n}-${max_n} runs per 60 s monitor, minimum gap ${min_gap} s, all healthy; failing monitor: 1 incident from ${failing_runs} failed runs"
+echo "REPLICAS_PASS: ${replicas} replicas behind nginx served ${served} distinct upstreams with one session; 60/60 concurrent webhook captures stored once; rolling restart lost 0 of ${total} reads and 0 of ${post_total} webhook posts (each stored once); client address attributed; ${window} s of scheduling: ${min_n}-${max_n} runs per 60 s monitor, minimum gap ${min_gap} s, all healthy; failing monitor: 1 incident from ${failing_runs} failed runs"

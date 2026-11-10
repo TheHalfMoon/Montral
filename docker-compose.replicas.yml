@@ -1,8 +1,8 @@
-# Several app replicas behind one load balancer, sharing one PostgreSQL. Use with the base file:
+# Several app replicas behind one load balancer, sharing one PostgreSQL. Needs Docker Compose v2.24 or later (`!reset`).
 #   docker compose -f docker-compose.yml -f docker-compose.replicas.yml up -d --build
-# The replicas need no coordination of their own: checks, escalations, deliveries and maintenance are claimed in
-# PostgreSQL, sessions live in PostgreSQL, and every replica serves the same web app. Scale with REPLICAS (default 2).
-# Qualified in CI by scripts/qualify-replicas.sh (rolling restarts, no duplicate checks, single incidents).
+# The replicas need no coordination of their own: scheduled checks, escalations and alert deliveries are claimed in
+# PostgreSQL and sessions live there. Scale with REPLICAS (default 2).
+# Qualified in CI by scripts/qualify-replicas.sh (see /docs/self-host#replicas for exactly what it proves).
 services:
   montral:
     # only the load balancer publishes a port; the replicas are reached through it
@@ -10,8 +10,10 @@ services:
     deploy:
       replicas: ${REPLICAS:-2}
     environment:
-      # exactly one reverse proxy (the load balancer below) is in front: its X-Forwarded-For feeds the rate limits
+      # the load balancer is the one proxy in front, at a fixed address: only its X-Forwarded-For is believed, so
+      # rate limits and the audit log see each client's address (the Node server trusts exact peer addresses only)
       TRUST_PROXY: "true"
+      TRUST_PROXY_PEER_IPS: ${LB_IP:-172.30.250.10}
   lb:
     image: nginx:1.28.0-alpine
     restart: unless-stopped
@@ -20,3 +22,13 @@ services:
     ports: ["${PORT:-8080}:8080"]
     volumes:
       - ./docker/lb-nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      default:
+        ipv4_address: ${LB_IP:-172.30.250.10}
+
+networks:
+  default:
+    # a fixed subnet so the load balancer has a fixed address; change LB_SUBNET and LB_IP if it collides with yours
+    ipam:
+      config:
+        - subnet: ${LB_SUBNET:-172.30.250.0/24}

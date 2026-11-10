@@ -412,8 +412,9 @@ async function save(query: Query, env: Bindings, row: Row, f: Fields): Promise<R
  * person); "not_assigned" (SCIM is on, so only people the provider created may be provisioned, and this one was not).
  */
 export async function scimGate(query: Query, orgId: string, email: string, o: { lock?: boolean } = {}): Promise<"allowed" | "inactive" | "not_assigned"> {
-  // with `lock` (inside a transaction) the record is held until commit, so a concurrent SCIM change waits for it
-  const [u] = await query<{ active: boolean }>(`SELECT active FROM scim_user WHERE organization_id = $1::text AND user_name = $2::text${o.lock ? " FOR SHARE" : ""}`, [orgId, email.toLowerCase()]);
+  // with `lock` (inside a transaction) the record is held until commit: a concurrent SCIM change, and a second first
+  // sign-in of the same person, wait for it (a shared lock would let two sign-ins deadlock on the new account)
+  const [u] = await query<{ active: boolean }>(`SELECT active FROM scim_user WHERE organization_id = $1::text AND user_name = $2::text${o.lock ? " FOR NO KEY UPDATE" : ""}`, [orgId, email.toLowerCase()]);
   if (u) return u.active ? "allowed" : "inactive";
   const [t] = await query(`SELECT 1 AS one FROM scim_token WHERE organization_id = $1::text AND revoked_at IS NULL`, [orgId]);
   return t ? "not_assigned" : "allowed";

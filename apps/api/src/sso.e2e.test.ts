@@ -965,6 +965,7 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
         await tx.query(`select 1 from scim_user where id = $1 for update`, [id]);
         await gate;
       });
+      try {
       await new Promise((r) => setTimeout(r, 100));
       const waiting = scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "displayName", value: "after-lock" }]) });
       const finished = pending(waiting);
@@ -974,6 +975,10 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
       await holder;
       expect((await waiting).status).toBe(200);
       expect((await record(id)).display_name).toBe("after-lock");
+      } finally {
+        release();
+        await holder.catch(() => undefined);
+      }
     }
     {
       const gina = `gina-atomic-${rand}@${domainB}`;
@@ -987,6 +992,7 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
         await tx.query(`update scim_user set active = false where id = $1`, [g.body.id]);
         await gate;
       });
+      try {
       await new Promise((r) => setTimeout(r, 100));
       const signIn = sso(idpB, new Jar(), { email: gina }, { sub: "atomic-gina", email: gina, email_verified: true });
       const finished = pending(signIn);
@@ -997,6 +1003,10 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
       expect(failure((await signIn).location)).toBe("access_removed");
       const ginaId = await userIdOf(gina);
       expect(ginaId === null || !(await member(ginaId))).toBe(true);
+      } finally {
+        release();
+        await deactivation.catch(() => undefined);
+      }
     }
 
     // concurrent deactivations and reactivations of one person serialize: the final record and membership agree

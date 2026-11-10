@@ -31,6 +31,7 @@ import { createServer as createTcp } from "node:net";
 import { createReadStream, createWriteStream, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
 import postgres from "../packages/db-pg/node_modules/postgres/src/index.js";
 
@@ -112,20 +113,31 @@ const migrationsApplied = async (sql) => (await sql`SELECT count(*)::int AS n FR
 // ── tools: host pg_dump/pg_restore (version-matched) and the documented commands inside the PostgreSQL container ──
 async function hostTool(name, args) { return run(name, args, { env: pgEnv, timeout: 300_000, maxBuffer: 64 * 1024 * 1024 }); }
 /** `docker exec -i <container> <cmd...>` with optional stdin file / stdout file: what `docker compose exec -T postgres ...` runs. */
-function inContainer(args, { stdinFile, stdoutFile } = {}) {
-  return new Promise((resolvePromise, reject) => {
-    const proc = spawn("docker", ["exec", "-i", PG_CONTAINER, ...args], { stdio: [stdinFile ? "pipe" : "ignore", stdoutFile ? "pipe" : "inherit", "pipe"] });
-    let err = "";
-    proc.stderr.on("data", (c) => { err = (err + c).slice(-4000); });
-    if (stdinFile) createReadStream(stdinFile).pipe(proc.stdin);
-    const out = stdoutFile ? createWriteStream(stdoutFile) : null;
-    if (out) proc.stdout.pipe(out);
-    proc.on("error", reject);
-    proc.on("close", (code) => {
-      const done = () => (code === 0 ? resolvePromise() : reject(new Error(`docker exec ${args[0]} exited ${code}: ${err}`)));
-      if (out) out.close(done); else done();
+async function inContainer(args, { stdinFile, stdoutFile } = {}) {
+  const proc = spawn("docker", ["exec", "-i", PG_CONTAINER, ...args], {
+    stdio: [stdinFile ? "pipe" : "ignore", stdoutFile ? "pipe" : "inherit", "pipe"],
+  });
+  let err = "";
+  proc.stderr.on("data", (chunk) => { err = (err + chunk).slice(-4000); });
+  const exited = new Promise((resolveExit, rejectExit) => {
+    proc.once("error", rejectExit);
+    proc.once("close", (code) => {
+      if (code === 0) resolveExit();
+      else rejectExit(new Error(`docker exec ${args[0]} exited ${code}: ${err}`));
     });
   });
+  // A child exit does not imply that the destination file has flushed its buffered bytes.
+  // pipeline waits for writable 'finish' and propagates both read and write failures.
+  const transfers = [];
+  if (stdinFile) transfers.push(pipeline(createReadStream(stdinFile), proc.stdin));
+  if (stdoutFile) transfers.push(pipeline(proc.stdout, createWriteStream(stdoutFile, { flags: "wx" })));
+  try {
+    await Promise.all([exited, ...transfers]);
+  } catch (error) {
+    proc.kill();
+    await Promise.allSettled([exited, ...transfers]);
+    throw error;
+  }
 }
 
 // ── synthetic target: monitors, the alert webhook and nothing else ───────────

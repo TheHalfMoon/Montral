@@ -21,7 +21,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Heartbeat / cron | Y | Y | Y | ? | Y | Y | N |
 | WebSocket | Y | Y | ? | ? | ? | Y | N |
 | Database (Postgres/MySQL/Redis) | Y | Y | N | N | N | N | N |
-| Browser / multi-step | Y on Node/Docker with the browser-runner (#52): declarative journeys (goto, click, fill, press, waitFor, assertText/Url/Status) and a page script step (#66) in isolated headless Chromium in a separate hardened browser-runner service (no app secrets, no database network, signed channel); secrets encrypted, egress policy; no user scripts; refused on Workers | N | $ | N | N | P | N |
+| Browser / multi-step | Y on Node/Docker with the browser-runner (#52): declarative journeys (goto, click, fill, press, waitFor, assertText/Url/Status) and a page script step (#66) in isolated headless Chromium in a separate hardened browser-runner service (no app secrets, no database network, signed channel); secrets encrypted, egress policy; refused on Workers | N | $ | N | N | P | N |
 | Multi-region | Y (edge probes) | N | ? | Y | Y | P | n/a |
 | Alert channels | 14, 4 added in #28 (email, Slack, Telegram, Lark, Discord, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
 | SMS / voice | N | via providers | Y | ? | Y | via providers | N |
@@ -90,7 +90,7 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
 1. ~~**SSO (OIDC; SAML if justified)**~~: OIDC done in #49; SAML deferred (XML-signature risk, no safe library on both runtimes; bridge through Keycloak/Authentik).
 2. **Terraform provider / config-as-code**: implemented in `terraform-provider-montral/` (#50; unpublished, build from source).
-3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). Still missing against Better Stack / Checkly-style products: scripted checks with user code, multiple browsers, regions other than `auto`.
+3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). A page script step was added in #66 (owners and admins, in the page of the isolated runner, never with secrets). Still missing against Checkly-style products: full Playwright test scripts running outside the page.
 4. **Custom webhook responses** (webhook.site parity): implemented in #47 (`docs/evidence/2026-11-10-webhook-responses.md`).
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
 

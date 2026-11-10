@@ -14,14 +14,16 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision (`375e867`) on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from the previous candidate, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
+| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision (`375e867`) on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from `17f55c1`, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed PITR, no third-party penetration test. |
 
 ## 2. Work merged in this round (since `17f55c1`)
 
 Each pull request passed independent review with every finding fixed and every CI check green on its exact head before
 merging (reviews are agent reviews run in the engineering sessions; most are not posted on GitHub). Security-critical PRs
-(#49, #52) went through repeated rounds until a reviewer cleared them. The previously open gaps — fixes of #47 and #48
+(#49, #52) went through repeated rounds until a reviewer cleared them. **Process gap:** on 2026-11-10 two review comments
+posted on GitHub by the parallel assistant (#63, #67) were not read before those PRs merged; both are fixed by follow-up
+PRs (#71, #70) and every merged PR's GitHub comments were then checked. The previously open gaps — fixes of #47 and #48
 not re-reviewed, the security review requested on #53 — were closed on 2026-11-10 by independent security re-reviews
 of the current code (ledger row 33); their findings were fixed in #64, whose fix was reviewed again.
 
@@ -40,11 +42,11 @@ of the current code (ledger row 33); their findings were fixed in #64, whose fix
 | #58 | `678c363` | Fail-closed Docker backup/restore transfer in the upgrade/DR harness: await exit and the full stream, never overwrite, remove partial files; truncated-dump negative control | 1 agent review in the session, not posted to GitHub (no correctness defect; 2 low fixed); recorded in `docs/evidence/2026-11-10-upgrade-rollback-dr.md` |
 | #61 | `9d96ba6` | Regression test: 60/hour on-call override limit counts rejected attempts (by the parallel assistant) | 1 (this programme; the test fails without the limiter) |
 | #62 | `fa275ec` | Physical Mac: native Safari 26.6.2 public landing 8/8 (WebDriver, not Playwright); stdlib harness (by the parallel assistant) | 1 (this programme); exact-head CI 13/13 |
-| #63 | `b465ed3` | Credit refunds to the month they were spent in; OIDC userinfo fallback (same `sub`, literal `email_verified`); coverage comment | 1 (no medium+; 6 low fixed) |
+| #63 | `b465ed3` | Credit refunds to the month they were spent in; OIDC userinfo fallback (same `sub`, literal `email_verified`); coverage comment | 1 (no medium+; 6 low fixed). **A review comment posted on GitHub before the merge (refund booked at a second timestamp) was missed; fixed afterwards in #71** |
 | #64 | `f3165c4` | Security re-review follow-ups for #47, #48, #53: DB released before webhook delays on Workers; project-scoped on-call names; calendar-feed lockout; audit detail; keys pinned to a workspace revoked with the membership | 3 re-reviews (1 medium) + 1 review of the fix (1 medium, lows) — all fixed |
 | #65 | `25c8c65` | Two replicas behind nginx: overlay, CI qualification (sessions, client attribution, webhooks once, rolling restart, no duplicate checks, single incident) | 1 (1 high, 4 medium fixed) |
 | #66 | `3c1c67a` | Scripted browser-check step (`evaluate`, page context, returns `true`; owners/admins only; never with secrets) | 1 (1 medium, lows fixed) |
-| #67 | `375e867` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes (no medium+; lows fixed or recorded) |
+| #67 | `375e867` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes. **A blocking review posted on GitHub before the merge (transitions not atomic) was missed; fixed afterwards in #70, closing issue #68** |
 
 The previous round (#12–#43) is summarised in the git history and the earlier version of this report.
 
@@ -89,7 +91,7 @@ GitHub Actions on `375e867` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All 
 | Failover on PostgreSQL 17 and 18.6 ([run 42910056872](https://github.com/TheHalfMoon/Montral/actions/runs/42910056872)) | Pass: FAILOVER_PASS on both |
 | Source integrity ([run 42910056760](https://github.com/TheHalfMoon/Montral/actions/runs/42910056760)) | Pass |
 
-Physical hardware outside CI: native Safari 26.6.2 on an Apple Silicon Mac (macOS 26.6.2), public landing 8/8 at
+Physical hardware outside CI (not at the candidate revision): native Safari 26.6.2 on an Apple Silicon Mac (macOS 26.6.2), public landing 8/8 at
 `dc02d02` (#62, `docs/evidence/2026-11-10-physical-macos-native-safari-landing.md`).
 
 ## 5. Reliability and recovery
@@ -97,12 +99,13 @@ Physical hardware outside CI: native Safari 26.6.2 on an Apple Silicon Mac (macO
 Demonstrated on real processes and real PostgreSQL: graceful SIGTERM; SIGKILL mid-retry with no duplicates; database
 outage recovery; network partition; primary promotion with no committed row lost; sustained load with 0 lost or
 duplicated checks; bounded backpressure and pool exhaustion; coalescing of stale queued checks (at most 2 results per
-monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the previous candidate; a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
+monitor per minute after recovery, down from 6 per 2 minutes); upgrade from `17f55c1` (the previous release-candidate baseline); a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
 restoring the pre-upgrade backup; disaster recovery into a new database (RTO 2.1 s — a floor on a tiny dataset, not a
 capacity figure); a newer schema refused at startup with a clear message; two app replicas behind nginx on one
 PostgreSQL (#65): one session across replicas, the client's address attributed, concurrent webhooks stored once, a
-rolling restart under continuous reads and webhook posts with no failed request, scheduled checks run once per
-interval in total (no run claimed twice), a failing monitor opening exactly one incident.
+rolling restart under continuous reads and webhook posts with no failed request, no scheduled run executed by both
+replicas (5–6 runs per 60-second monitor in 330 s, at least 30 s apart; the check rejects more than 8 or gaps under
+15 s), a failing monitor opening exactly one incident.
 
 **Not demonstrated:** replicas on different hosts; a rolling upgrade with old and new versions side by side; hosted or
 cross-region failover; managed PITR; capacity beyond one 4-vCPU node; real network latency in the load test.
@@ -137,7 +140,7 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 | Docker / Docker Compose | Qualified on every PR, including the optional browser-runner stack and two replicas behind nginx |
 | Browsers | Chromium, Firefox, WebKit (Playwright's Linux build), Pixel 7 and iPhone 14 emulation, light and dark themes |
 | Native Safari on physical Apple hardware | **Public landing qualified** (#62): Safari 26.6.2 on macOS 26.6.2 (Apple Silicon), real WebDriver session, 8/8 (four languages, light/dark, 390 px). **Not qualified:** the signed-in app with a database, VoiceOver, physical iOS Safari — the Mac has ~3.8 GiB free and incompatible Node/pnpm, so no app build was attempted there (ledger row 36) |
-| Windows | **Not supported as a native server platform.** Docker Desktop (WSL 2) runs the same Linux image but was not tested: Docker/WSL was unavailable on the development machine |
+| Windows | **Not supported as a native server platform.** Docker Desktop (WSL 2) runs the same Linux image but was not tested: Docker Desktop is installed on the development machine but was not running and was not started (owner decision) |
 
 ## 8. Known limitations for a self-hosted release
 

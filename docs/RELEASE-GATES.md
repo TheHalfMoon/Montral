@@ -22,9 +22,9 @@ Every CI gate below passed on GitHub Actions at `375e867` (`main` after #67). Ru
 | G9 | Network partition and primary promotion (PostgreSQL 17 and 18.6-alpine) | PASS | 42910056872: FAILOVER_PASS on both |
 | G10 | Terraform provider acceptance (unpublished) | PASS | 42910056828: 22 TestAcc passed, 0 skipped, 0 failed |
 | G11 | Vendored source integrity | PASS | 42910056760 |
-| G12 | Review of every merged change, all findings fixed or recorded | PASS | `docs/FINAL-REPORT.md` §2 (agent reviews in the engineering sessions, mostly not posted to GitHub). The former gaps (#47/#48 fixes not re-reviewed, #53 security review) were closed by re-reviews on 2026-11-10 (ledger 33); accepted lows in ledger 26–40 |
+| G12 | Review of every merged change, all findings fixed or recorded | PASS, with a recorded process gap | `docs/FINAL-REPORT.md` §2 (agent reviews in the engineering sessions, mostly not posted to GitHub). The former gaps (#47/#48 fixes not re-reviewed, #53 security review) were closed by re-reviews on 2026-11-10 (ledger 33); accepted lows in ledger 26–40. Two GitHub review comments (#63, #67) were missed before merge and fixed by #71 and #70; the agent re-reviews are session records, not GitHub reviews |
 | G13 | No open critical, high or medium security finding | PASS (self-assessed) | `docs/FINAL-REPORT.md` §6; no third-party penetration test |
-| G14 | Several replicas behind a load balancer (one host) | PASS | 42910056761: REPLICAS_PASS (one session, client attribution, webhooks once, rolling restart 0 failures, checks once per interval, one incident) |
+| G14 | Several replicas behind a load balancer (one host) | PASS | 42910056761: REPLICAS_PASS (one session, client attribution, webhooks once, rolling restart 0 failures, no run executed by both replicas, one incident) |
 | G15 | Native Safari on physical Apple hardware — public landing | PASS (scoped) | #62: Safari 26.6.2 / macOS 26.6.2, real WebDriver session, 8/8 at `dc02d02`; the signed-in app is not covered (see below) |
 
 **Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari for

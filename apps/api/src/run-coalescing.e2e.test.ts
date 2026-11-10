@@ -4,7 +4,8 @@ import type { Database } from "@montral/repo";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "./app";
 import { unmetered } from "./entitlements";
-import { checkOne, processCheckMessage, type CheckMessage } from "./scheduler";
+import { BROWSER_BUSY } from "./browser-check";
+import { checkOne, deferBrowserCheck, processCheckMessage, type CheckMessage } from "./scheduler";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
@@ -201,5 +202,44 @@ describe.skipIf(!url)("stale run coalescing (PostgreSQL)", () => {
     // the next interval: run 3 is claimed after run 1 started, so run 1's lease does not hold it back
     await run(await claim(id, 3));
     expect(requests).toBe(1);
+  });
+
+  // Browser capacity deferrals (scheduler.ts deferBrowserCheck) record no observation and re-queue the monitor a minute
+  // or two later; that re-queued run is a new claim and must start. Runs that beginRuns skips never reach a check, so
+  // they never count as deferrals.
+  const begin = (msg: CheckMessage) => db.repo.beginRuns([{ id: msg.ids[0], token: new Date(msg.at![0]), generation: msg.generations![0] }]);
+  const deferredRuns = async (id: string) => (await db.query<{ n: number }>("SELECT count(*)::int AS n FROM browser_check_run WHERE monitor_id = $1 AND kind = 'deferred'", [id]))[0].n;
+  async function defer(id: string) {
+    const [m] = await db.repo.monitorsByIds([id]);
+    await deferBrowserCheck(db.repo, m, BROWSER_BUSY);
+    const [{ due }] = await db.query<{ due: Date }>("SELECT next_check_at AS due FROM monitor WHERE id = $1", [id]);
+    expect(new Date(due).getTime()).toBeLessThan(Date.now() + 3 * 60_000); // re-queued soon
+    // keep a real scheduler tick of another test file from claiming it: only this test's claims run it
+    await db.query("UPDATE monitor SET next_check_at = now() + interval '1 day' WHERE id = $1", [id]);
+  }
+
+  it("a browser deferral's re-queued run is a new claim: it starts, never coalesced away", async () => {
+    const id = await monitor();
+    expect(await begin(await claim(id, 1))).toEqual([id]);
+    await defer(id);
+    expect(await begin(await claim(id, 2))).toEqual([id]);
+    expect(await deferredRuns(id)).toBe(1);
+  });
+
+  it("in a backlog, a run skipped before it started adds no deferral, and the deferral's re-queued run still starts", async () => {
+    const id = await monitor();
+    const a = await claim(id, 1);
+    const b = await claim(id, 2);
+    expect(await begin(a)).toEqual([id]);
+    await defer(id);
+    const [{ since }] = await db.query<{ since: Date }>("SELECT deferred_since AS since FROM monitor WHERE id = $1", [id]);
+    // b was claimed before a started: a's lease holds it back (coalesced), and nothing is checked or deferred for it
+    await run(b);
+    expect(requests).toBe(0);
+    expect(credits).toBe(0);
+    expect(await deferredRuns(id)).toBe(1);
+    expect(await db.query("SELECT deferred_since AS since FROM monitor WHERE id = $1", [id])).toEqual([{ since }]);
+    // the deferral's re-queue is claimed after a started: it starts
+    expect(await begin(await claim(id, 3))).toEqual([id]);
   });
 });

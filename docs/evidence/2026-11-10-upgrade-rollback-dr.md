@@ -154,5 +154,7 @@ source stream (`ECONNRESET`), spawn failure, restore from a missing file, restor
 (`EPIPE`), and a complete 3 MiB restore. Negative control: against #58's original implementation 5 of these tests fail
 (partial or invalid backup files left behind).
 
-In the real qualification every backup is checked with `pg_restore --list` before use, and a truncated copy (half of a
-real `pg_dump -Fc` archive) must be refused by the documented `pg_restore --exit-on-error` restore.
+In the real qualification each documented backup is opened with `pg_restore --list` (this checks the custom-format
+header and table of contents only). Completeness is proven by restoring: the rollback restore of the pre-upgrade backup
+and the disaster-recovery restore are compared table by table with exact SHA-256 fingerprints, and a truncated copy
+(half of a real `pg_dump -Fc` archive) must be refused by the documented `pg_restore --exit-on-error` restore.

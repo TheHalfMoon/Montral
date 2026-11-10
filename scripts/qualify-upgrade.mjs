@@ -452,7 +452,8 @@ try {
   // the documented backup command (`docker compose exec -T postgres pg_dump -U montral -Fc montral > montral-pre-upgrade.dump`)
   await timed("preUpgradeBackup", () => inContainer(["pg_dump", "-U", PG_USER, "-Fc", DBS.upgrade], { stdoutFile: preDump }));
   summary.preUpgradeDumpBytes = statSync(preDump).size;
-  // a backup is only a backup once it reads back as a complete custom-format archive (no silent truncation)
+  // the archive must at least open as custom format with its table of contents (this reads the TOC only; truncated
+  // data is caught by the rollback restore below, compared table by table with exact SHA-256 fingerprints)
   await hostTool("pg_restore", ["--list", preDump]).then(({ stdout }) => check(stdout.includes("TABLE DATA") && stdout.includes("organization"), "backup: the pre-upgrade dump is a readable custom-format archive"));
 
   log("A: HEAD on the same database");

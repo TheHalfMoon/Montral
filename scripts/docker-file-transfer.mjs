@@ -29,16 +29,22 @@ export async function dockerFileTransfer(
   });
   const transfers = [];
   let created = false;
+  let failed = false;
   if (stdinFile) transfers.push(pipeline(createReadStream(stdinFile), proc.stdin));
   if (stdoutFile) {
     const destination = openDestination(stdoutFile);
     // only a file this call opened (not one that already existed) may be removed on failure
-    destination.once("open", () => { created = true; });
+    destination.once("open", () => {
+      created = true;
+      // the transfer already failed (bounded wait ran out before the file opened): remove it as soon as it exists
+      if (failed) rm(stdoutFile, { force: true }).catch(() => {});
+    });
     transfers.push(pipeline(proc.stdout, destination));
   }
   try {
     await Promise.all([exited, ...transfers]);
   } catch (error) {
+    failed = true;
     proc.kill?.();
     // a process that ignores the kill must not hang the qualification: wait a bounded time, then fail anyway
     await Promise.race([Promise.allSettled([exited, ...transfers]), new Promise((r) => setTimeout(r, 10_000).unref())]);

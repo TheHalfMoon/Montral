@@ -90,7 +90,11 @@ time on the same port.
 
 ## Results
 **Cited run:** [42736834472](https://github.com/TheHalfMoon/Montral/actions/runs/42736834472) on commit `d952071`,
-with every check passing. Times agree within about 10 % with the earlier green run 42725960774 (`77bb603`). Runner: GitHub-hosted `ubuntu-latest`, PostgreSQL 18.6 (Alpine) service,
+with every check passing. Times agree within about 10 % with the earlier green run 42725960774 (`77bb603`).
+After rebasing on main (OIDC SSO, #49, migration 0054), run
+[42756838579](https://github.com/TheHalfMoon/Montral/actions/runs/42756838579) on `ff6ae90` passed with the same
+checks while upgrading through two migrations (53 -> 55). HEAD start including both migrations took 0.64 s and the
+RTO was 2.0 s (2,047 ms). The snapshot restore was exact over 59 tables and 187 rows. Runner: GitHub-hosted `ubuntu-latest`, PostgreSQL 18.6 (Alpine) service,
 Node 24.22.1.
 
 | Measurement | Result |
@@ -132,5 +136,5 @@ Node 24.22.1.
 - Within this qualification, "documented compose command" means `docker exec -i` into the PostgreSQL service
   container, which is what `docker compose exec -T` runs. The compose stack itself is qualified in
   `montral-docker.yml`.
-- The migration in this run is 0053 (on-call). When newer migrations land (for example 0054 in #54), this workflow
-  upgrades through them on every pull request.
+- The migrations upgraded through are 0053 (on-call) and 0054 (OIDC SSO). Newer ones (for example #54's) are
+  upgraded through on every pull request and push to main once they land.

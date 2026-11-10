@@ -208,7 +208,10 @@ describe("worker supervision", () => {
     expect(JSON.stringify(extra)).not.toMatch(/pageText|secret page|<b>page/);
     expect(knownReportError("Step 3 (click): element not found")).toBe(true);
     expect(knownReportError("Step 5 (assertStatus): unexpected HTTP status (500, expected 200)")).toBe(true);
-    expect(knownReportError("Step 1 (evaluate): failed")).toBe(false);
+    expect(knownReportError("Step 2 (evaluate): script did not return true")).toBe(true);
+    expect(knownReportError("Step 2 (evaluate): script threw an error")).toBe(true);
+    expect(knownReportError("Step 2 (evaluate): TypeError: secret is abc")).toBe(false);
+    expect(knownReportError("Step 1 (addInitScript): failed")).toBe(false);
     expect(knownReportError("Step 1 (goto): timed out; cookie=abc")).toBe(false);
   });
 

@@ -275,6 +275,18 @@ async function runStep(page: import("playwright-core").Page, step: BrowserStep, 
       if (got !== step.code) throw new StepFailed("status", ` (${got}, expected ${step.code})`);
       return;
     }
+    case "evaluate": {
+      // Evaluated by the DevTools protocol in the page's main world (not subject to the page's CSP), as the body of an
+      // async function. Only `true` passes; what the script returns or throws is never stored (it may hold page data).
+      let result: unknown;
+      try {
+        result = await withTimeout(page.evaluate(`(async () => {\n"use strict";\n${step.script}\n})()`), budget);
+      } catch (e) {
+        throw new StepFailed((e as Error)?.name === "TimeoutError" ? "timeout" : "scriptError");
+      }
+      if (result !== true) throw new StepFailed("scriptFalse");
+      return;
+    }
   }
 }
 

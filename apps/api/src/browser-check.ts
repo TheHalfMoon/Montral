@@ -503,7 +503,7 @@ let disabledLogged = false;
 
 // ---- reports: validated before use -----------------------------------------------------------------------------------
 
-const ACTIONS = ["goto", "click", "fill", "press", "waitFor", "assertText", "assertUrl", "assertStatus"] as const;
+const ACTIONS = ["goto", "click", "fill", "press", "waitFor", "assertText", "assertUrl", "assertStatus", "evaluate"] as const;
 /** Run-level messages a report may carry (everything else must be a step error built from STEP_FAILURES). */
 const RUN_LEVEL_ERRORS = new Set<string>([BROWSER_INVALID, BROWSER_FAILED, "launch"]);
 const STEP_ERROR = new RegExp(`^Step \\d{1,2} \\((?:${ACTIONS.join("|")})\\): (?:${Object.values(STEP_FAILURES).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})(?: \\(\\d{3}, expected \\d{3}\\))?$`);

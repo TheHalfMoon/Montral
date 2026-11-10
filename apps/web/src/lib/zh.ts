@@ -806,7 +806,6 @@ export const zh: Record<string, string> = {
   "SCIM provisioning": "SCIM 预配",
   "Lets your identity provider add, deactivate and remove people. Once it is on, single sign-on admits only people the provider assigned; deactivating someone ends their membership, signs them out and revokes their API keys for this workspace.": "允许你的身份提供商添加、停用和移除人员。开启后，单点登录只接纳提供商已分配的人员；停用某人会结束其成员身份、使其退出登录，并吊销其针对此工作区的 API 密钥。",
   "Base URL": "基础 URL",
-  "People": "人员",
   "{active} active, {inactive} deactivated": "{active} 人活跃，{inactive} 人已停用",
   "Copy this token into your identity provider now. It is shown only once.": "请立即将此令牌复制到你的身份提供商中。它只显示一次。",
   "SCIM token": "SCIM 令牌",

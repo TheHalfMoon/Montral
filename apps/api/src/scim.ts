@@ -149,15 +149,29 @@ async function reactivate(query: Query, env: Bindings, orgId: string, row: Row) 
   }
 }
 
-async function audit(c: Context<AppEnv>, action: string, row: Row, values: Record<string, string | boolean>) {
-  try {
-    await recordAuditEvent(q(c), {
-      orgId: row.organization_id, projectId: null, actor: { type: "system", id: null, label: "SCIM provisioning" }, action,
-      targetType: "scim_user", targetId: row.id, changes: auditChanges({}, values), ip: null,
-    });
-  } catch {
-    console.error("audit event could not be recorded; private diagnostics suppressed");
-  }
+/** Written in the change's own transaction: a change that cannot be audited does not happen. */
+async function audit(query: Query, action: string, row: Row, values: Record<string, string | boolean>) {
+  await recordAuditEvent(query, {
+    orgId: row.organization_id, projectId: null, actor: { type: "system", id: null, label: "SCIM provisioning" }, action,
+    targetType: "scim_user", targetId: row.id, changes: auditChanges({}, values), ip: null,
+  });
+}
+
+/**
+ * Every SCIM change (record, membership, removal block, sessions, keys, audit) in one PostgreSQL transaction: it all
+ * commits or none of it does. Backends without transactions (tests) run the same steps on the plain connection.
+ */
+function inTransaction<T>(c: Context<AppEnv>, work: (query: Query) => Promise<T>): Promise<T> {
+  const database = c.get("database");
+  return database.transaction ? database.transaction((scoped) => work((sql, params) => scoped.query(sql, params))) : work(q(c));
+}
+
+/** The record, locked until the transaction ends: concurrent changes of one person are applied one after the other. */
+async function lockRecord(query: Query, orgId: string, id: string): Promise<Row> {
+  if (!UUID.test(id)) throw new ScimError(404, "User not found");
+  const [row] = await query<Row>(`SELECT * FROM scim_user WHERE id = $1::uuid AND organization_id = $2::text FOR UPDATE`, [id, orgId]);
+  if (!row) throw new ScimError(404, "User not found");
+  return row;
 }
 
 function fieldsOf(body: Record<string, unknown>): Fields {
@@ -323,58 +337,66 @@ export const scimApi = new Hono<AppEnv>()
     if (!conn) throw new ScimError(400, "Set up single sign-on for this workspace before provisioning users", "invalidValue");
     const domain = userName.slice(userName.lastIndexOf("@") + 1);
     if (!conn.domains?.includes(domain)) throw new ScimError(400, "The address is not in one of the workspace's verified single sign-on domains", "invalidValue");
-    const [row] = await q(c)<Row>(
+    const created = await inTransaction(c, async (query) => {
+    const [row] = await query<Row>(
       `INSERT INTO scim_user (organization_id, user_name, external_id, display_name, given_name, family_name, active)
        VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::boolean)
        ON CONFLICT (organization_id, user_name) DO NOTHING RETURNING *`,
       [orgId, userName, f.externalId ?? null, f.displayName ?? null, f.givenName ?? null, f.familyName ?? null, f.active ?? true],
     );
     if (!row) throw new ScimError(409, "A user with this userName already exists", "uniqueness");
-    try {
-      // created inactive: a current member with the address is deprovisioned (the owner is refused)
-      if (!row.active) await deprovision(q(c), orgId, row);
-      else await clearRemoval(q(c), orgId, row.user_name);
-    } catch (e) {
-      await q(c)(`DELETE FROM scim_user WHERE id = $1::uuid`, [row.id]);
-      throw e;
-    }
-    await audit(c, "scim.user_create", row, { status: row.active ? "active" : "inactive" });
-    return json(c, resource(c.env, await load(q(c), orgId, row.id)), 201);
+    // created inactive: a current member with the address is deprovisioned (the owner is refused: nothing is kept)
+    if (!row.active) await deprovision(query, orgId, row);
+    else await clearRemoval(query, orgId, row.user_name);
+    await audit(query, "scim.user_create", row, { status: row.active ? "active" : "inactive" });
+    return load(query, orgId, row.id);
+    });
+    return json(c, resource(c.env, created), 201);
   })
   .put("/Users/:id", async (c) => {
-    const row = await load(q(c), c.get("orgId"), c.req.param("id"));
+    await load(q(c), c.get("orgId"), c.req.param("id")); // 404 before the body is read
     const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a SCIM User", "invalidSyntax");
-    if (body.userName !== undefined && userNameOf(body.userName) !== row.user_name) throw new ScimError(400, "userName cannot be changed; delete the user and create the new address", "mutability");
-    // a replace: attributes left out are cleared; `active` has no default (RFC 7643), so leaving it out keeps it
     const f = fieldsOf(body);
-    return json(c, resource(c.env, await save(c, row, { externalId: f.externalId ?? null, displayName: f.displayName ?? null, givenName: f.givenName ?? null, familyName: f.familyName ?? null, active: f.active ?? row.active })));
+    const saved = await inTransaction(c, async (query) => {
+      const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
+      if (body.userName !== undefined && userNameOf(body.userName) !== row.user_name) throw new ScimError(400, "userName cannot be changed; delete the user and create the new address", "mutability");
+      // a replace: attributes left out are cleared; `active` has no default (RFC 7643), so leaving it out keeps it
+      return save(query, c.env, row, { externalId: f.externalId ?? null, displayName: f.displayName ?? null, givenName: f.givenName ?? null, familyName: f.familyName ?? null, active: f.active ?? row.active });
+    });
+    return json(c, resource(c.env, saved));
   })
   .patch("/Users/:id", async (c) => {
-    const row = await load(q(c), c.get("orgId"), c.req.param("id"));
+    await load(q(c), c.get("orgId"), c.req.param("id"));
     const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a PatchOp", "invalidSyntax");
-    return json(c, resource(c.env, await save(c, row, patchFields(body, row))));
+    const saved = await inTransaction(c, async (query) => {
+      const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
+      return save(query, c.env, row, patchFields(body, row));
+    });
+    return json(c, resource(c.env, saved));
   })
   .delete("/Users/:id", async (c) => {
-    const row = await load(q(c), c.get("orgId"), c.req.param("id"));
-    // ends the membership first (refused for the owner, then nothing is deleted)
-    // ends the membership whatever the record's state (the owner is refused, then nothing is deleted)
-    await deprovision(q(c), row.organization_id, row);
-    await q(c)(`DELETE FROM scim_user WHERE id = $1::uuid`, [row.id]);
-    await audit(c, "scim.user_delete", row, { status: "deleted" });
+    await inTransaction(c, async (query) => {
+      const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
+      // ends the membership whatever the record's state (the owner is refused, then nothing is deleted)
+      await deprovision(query, row.organization_id, row);
+      await query(`DELETE FROM scim_user WHERE id = $1::uuid`, [row.id]);
+      await audit(query, "scim.user_delete", row, { status: "deleted" });
+    });
     return c.body(null, 204);
   })
   .all("*", (c) => json(c, { schemas: [SCIM_ERROR], status: "404", detail: "Not supported" }, 404));
 
-async function save(c: Context<AppEnv>, row: Row, f: Fields): Promise<Row> {
+/** One transition of a locked record, inside the caller's transaction. */
+async function save(query: Query, env: Bindings, row: Row, f: Fields): Promise<Row> {
   // only a change of `active` touches the membership (routine attribute updates never re-add anyone); deactivating the
-  // owner is refused before anything is written, and so is reactivating an address outside the verified domains
-  if (f.active === false && row.active) await deprovision(q(c), row.organization_id, row);
-  if (f.active === true && !row.active) await reactivate(q(c), c.env, row.organization_id, (await load(q(c), row.organization_id, row.id)));
-  const { row: saved, activeChanged } = await update(q(c), row, f);
-  if (activeChanged) await audit(c, saved.active ? "scim.user_reactivate" : "scim.user_deactivate", saved, { status: saved.active ? "active" : "inactive" });
-  return (await q(c)<Row>(`SELECT * FROM scim_user WHERE id = $1::uuid`, [row.id]))[0];
+  // owner and reactivating an address outside the verified domains are refused, and then nothing is written
+  if (f.active === false && row.active) await deprovision(query, row.organization_id, row);
+  if (f.active === true && !row.active) await reactivate(query, env, row.organization_id, row);
+  const { row: saved, activeChanged } = await update(query, row, f);
+  if (activeChanged) await audit(query, saved.active ? "scim.user_reactivate" : "scim.user_deactivate", saved, { status: saved.active ? "active" : "inactive" });
+  return (await query<Row>(`SELECT * FROM scim_user WHERE id = $1::uuid`, [row.id]))[0];
 }
 
 /**

@@ -113,9 +113,10 @@ posts="$work/posts"
 restart_inbox="$(api POST /api/hooks/inboxes '{"name":"Restart inbox"}')"
 restart_inbox_id="$(json "['id']" <<<"$restart_inbox")"
 restart_path="$(json "['path']" <<<"$restart_inbox")"
+# about 100 posts a minute: under the inbox receive limit (120 per minute), so every post must be accepted
 ( set +e; while :; do curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -H "origin: $base" -b "$jar" "$base/api/monitors" >> "$codes"; sleep 0.1; done ) &
 load_pid=$!
-( set +e; n=0; while :; do n=$((n + 1)); curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -X POST -H 'content-type: application/json' --data "{\"restart\":${n}}" "$base$restart_path" >> "$posts"; sleep 0.15; done ) &
+( set +e; n=0; while :; do n=$((n + 1)); curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -X POST -H 'content-type: application/json' --data "{\"restart\":${n}}" "$base$restart_path" >> "$posts"; sleep 0.6; done ) &
 post_pid=$!
 sleep 5
 for id in $(app_ids); do
@@ -130,7 +131,7 @@ bad="$(grep -vc '^200$' "$codes" || true)"
 (( bad == 0 )) || { echo "${bad} of ${total} requests failed during the rolling restart: $(sort "$codes" | uniq -c | tr '\n' ' ')" >&2; exit 1; }
 post_total="$(wc -l < "$posts")"
 post_bad="$(grep -vc '^202$' "$posts" || true)"
-(( post_total >= 60 )) || { echo "only ${post_total} webhook posts during the rolling restart" >&2; exit 1; }
+(( post_total >= 40 )) || { echo "only ${post_total} webhook posts during the rolling restart" >&2; exit 1; }
 (( post_bad == 0 )) || { echo "${post_bad} of ${post_total} webhook posts failed during the rolling restart: $(sort "$posts" | uniq -c | tr '\n' ' ')" >&2; exit 1; }
 stored="$(psql "select count(*), count(distinct body) from montral_hook_event where inbox_id = '${restart_inbox_id}'")"
 [[ "$stored" == "${post_total}|${post_total}" ]] || { echo "webhooks during the restart (rows|distinct) ${stored}, expected ${post_total}|${post_total}" >&2; exit 1; }

@@ -5,6 +5,7 @@ import { HTTPException } from "hono/http-exception";
 import type { AppEnv, RequestIdentity } from "./env";
 import { currentSession } from "./auth";
 import { verifyOAuthToken } from "./oauth";
+import { credentialVia, isOwnerRole, sessionVia, ssoRequirementOf } from "./sso-store";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -42,6 +43,7 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   let fromKey = false;
   let scope: Scope = null;
   let granted: AppEnv["Variables"]["workspaceGrant"] = null;
+  let grantSession: string | undefined;
   if (!session) {
     // API-key access (Authorization: Bearer montral_… or x-api-key)
     const raw = c.req.header("x-api-key") ?? c.req.header("authorization")?.replace(/^Bearer\s+/i, "");
@@ -58,6 +60,7 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
         throw new HTTPException(403, { message: `This token lacks the ${write ? "mcp:write" : "mcp:read"} scope` });
       }
       identity = { kind: "oauth", clientId: grant.clientId! };
+      grantSession = grant.sessionId;
       userId = grant.userId;
       fromKey = true;
       // an agent may be given several workspaces (or all of them): it says which one it works in per request
@@ -100,6 +103,16 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
     orgId = (await repo.anyWorkspaceOf(userId)) ?? undefined;
     if (!orgId) throw new HTTPException(403, { message: "No workspace" });
   }
+  // "Require SSO": a member other than an owner (the break-glass account) reaches the workspace only with what its own
+  // SSO connection produced: a session it created, an API key made from such a session, or an agent token whose
+  // authorizing session (its `sid`) is such a session and is still alive.
+  // Covers sessions and credentials from before the switch and from any other way of signing in.
+  c.set("ssoProof", identity.kind === "session"
+    ? { kind: "session", id: String((session?.session as { id?: unknown } | undefined)?.id ?? "") || null }
+    : identity.kind === "api-key" ? { kind: "api-key", id: identity.credentialId } : { kind: "oauth", id: grantSession ?? null });
+  if (!(await ssoAllowsPrincipal(c, orgId, userId))) {
+    throw new HTTPException(403, { message: "This workspace requires single sign-on. Sign out and use Sign in with SSO; API keys and agent authorizations must be created after signing in with SSO." });
+  }
   const projectId = await cachedProject(repo, orgId, wanted);
   if (scope && !scope.includes(projectId)) throw new HTTPException(403, { message: "API key has no access to this project" });
   c.set("projectId", projectId);
@@ -115,6 +128,26 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   }));
   await next();
 });
+
+/**
+ * Whether this request's credential (c.get("ssoProof"), set by requireOrg) may act on `orgId` under its "require SSO":
+ * always for owners, non-members (the membership checks refuse those) and workspaces without the requirement;
+ * otherwise a session the workspace's connection created, an API key made from such a session, or an agent token
+ * whose authorizing session (`sid`) is a live session of that connection. Used by requireOrg for the active workspace
+ * and by routes that read or write other workspaces of the user (the workspace list, push channel provisioning).
+ */
+export async function ssoAllowsPrincipal(c: Context<AppEnv>, orgId: string, userId: string): Promise<boolean> {
+  const database = c.get("database");
+  const q = <T,>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
+  const required = await ssoRequirementOf(q, orgId);
+  if (!required) return true;
+  const role = await c.get("repo").memberRole(userId, orgId);
+  if (!role || isOwnerRole(role)) return true;
+  const proof = c.get("ssoProof");
+  if (!proof?.id) return false;
+  if (proof.kind === "api-key") return credentialVia(q, "api_key", proof.id, required);
+  return sessionVia(q, proof.id, required);
+}
 
 /** True for workspace owners and admins (by session, API key or agent alike). */
 export async function isManager(c: Context<AppEnv>): Promise<boolean> {

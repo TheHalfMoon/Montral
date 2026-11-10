@@ -80,6 +80,13 @@ services:
       PLAUSIBLE_SRC: ${PLAUSIBLE_SRC:-}
       GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
       GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
+      # optional instance-wide single sign-on (OpenID Connect); workspaces can also add their own under Settings
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      OIDC_ALLOWED_DOMAINS: ${OIDC_ALLOWED_DOMAINS:-}
+      # identity provider on a private network or plain http (refused by default)
+      SSO_ALLOW_PRIVATE_IDP: ${SSO_ALLOW_PRIVATE_IDP:-}
 
   postgres:
     image: postgres:18.6-alpine

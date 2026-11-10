@@ -1,12 +1,12 @@
 import type { OpenDatabase } from "@montral/repo";
 import { isLang } from "./mail-i18n";
-import { Hono, type ErrorHandler } from "hono";
+import { Hono, type Context, type ErrorHandler } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { createAuth, currentSession, NATIVE_CALLBACK, signupDisabled, slugify, turnstile } from "./auth";
 import { connectionString, type AppEnv } from "./env";
 import { mountMcp } from "./mcp-route";
-import { rejectInAllProjects, requireOrg } from "./middleware";
+import { rejectInAllProjects, requireOrg, ssoAllowsPrincipal } from "./middleware";
 import { alertLog, settings } from "./routes/alert-log";
 import { auditEvents } from "./routes/audit";
 import { channels } from "./routes/channels";
@@ -22,6 +22,9 @@ import { publicStatus, statusPages } from "./routes/status";
 import { configureEmail, emailEnabled } from "./email";
 import { apnsConfigured, configureApns } from "./apns";
 import { configureNetGuard } from "./netguard";
+import { configureSso } from "./sso-oidc";
+import { instanceConnection, ssoAllows, ssoSatisfiesAll } from "./sso-store";
+import { ssoAdmin } from "./routes/sso";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
 import { AuthBodyTimeoutError, limitedAuthBody } from "./auth-body-budget";
@@ -41,6 +44,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   app.use("*", async (c, next) => {
     configureEmail(c.env);
     configureNetGuard(c.env);
+    configureSso(c.env);
     configureProbes(c.env);
     configureApns(c.env);
     const database = openDatabase(connectionString(c.env), { max: 1 });
@@ -84,20 +88,30 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
 
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/api/health", (c) => c.json({ ok: true }));
-  const authInfo = (env: AppEnv["Bindings"]) => ({
-    github: !!(env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET),
-    signup: !signupDisabled(env),
-    turnstileSiteKey: turnstile(env)?.siteKey ?? null,
-    legal: env.LEGAL_LINKS === "true",
+  // "Sign in with SSO" is offered when the operator configured OIDC_* or some workspace has an enabled connection
+  const ssoOffered = async (c: Context<AppEnv>) => {
+    if (instanceConnection(c.env)) return true;
+    try {
+      return (await c.get("database").query(`SELECT 1 AS one FROM sso_connection WHERE enabled LIMIT 1`)).length > 0;
+    } catch {
+      return false;
+    }
+  };
+  const authInfo = async (c: Context<AppEnv>) => ({
+    github: !!(c.env.GITHUB_CLIENT_ID && c.env.GITHUB_CLIENT_SECRET),
+    signup: !signupDisabled(c.env),
+    turnstileSiteKey: turnstile(c.env)?.siteKey ?? null,
+    legal: c.env.LEGAL_LINKS === "true",
+    sso: await ssoOffered(c),
   });
-  app.get("/api/auth-providers", (c) => c.json(authInfo(c.env)));
+  app.get("/api/auth-providers", async (c) => c.json(await authInfo(c)));
   // what this deployment can do, for clients that must adapt before anyone has signed in (the mobile app). Clients
   // read capabilities, never the edition name, so a hosted build only changes the values here.
-  app.get("/api/config", (c) =>
+  app.get("/api/config", async (c) =>
     c.json({
       apiVersion: 1,
       edition: edition.id ?? "community",
-      auth: { emailPassword: true, ...authInfo(c.env), emailDelivery: emailEnabled(), nativeHandoff: true },
+      auth: { emailPassword: true, ...(await authInfo(c)), emailDelivery: emailEnabled(), nativeHandoff: true },
       features: { multiRegion: availableRegions().length > 2, statusPages: true, webhooks: edition.id === "montral" },
       push: { apns: apnsConfigured() },
     }),
@@ -116,6 +130,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     "/api/auth/one-time-token/verify": { limit: 30, windowSec: 600 },
     "/api/auth/unlink-account": { limit: 20, windowSec: 600 },
     "/api/auth/send-verification-email": { limit: 5, windowSec: 3600, perEmail: 3 },
+    "/api/auth/sso/start": { limit: 30, windowSec: 600 },
   };
   app.post("/api/auth/*", async (c, next) => {
     const rule = AUTH_LIMITS[c.req.path.replace(/\/+$/, "")];
@@ -173,6 +188,14 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     for (const cookie of res.headers.getSetCookie()) headers.append("set-cookie", cookie);
     return new Response(null, { status: 302, headers });
   });
+  // the SSO redirect URI makes outbound requests to the identity provider: counted per client address like sign-in
+  app.get("/api/auth/sso/callback", async (c, next) => {
+    const ip = clientIp(c);
+    if (!(await allow(c.get("repo"), ip ? `auth:ip:${ip}:/api/auth/sso/callback` : "auth:unknown:/api/auth/sso/callback", ip ? 30 : 450, 600))) {
+      return c.json({ error: "Too many attempts, try again later" }, 429);
+    }
+    await next();
+  });
   app.on(["GET", "POST"], "/api/auth/*", (c) => c.get("auth").handler(c.req.raw));
 
   // public
@@ -228,7 +251,11 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const session = await currentSession(c.get("auth"), c.req.raw.headers);
     if (!session) return c.json({ error: "Unauthorized" }, 401);
     const repo = c.get("repo");
-    const spaces = await repo.workspacesOf(session.user.id);
+    const db = c.get("database");
+    // workspaces that require single sign-on are only offered to a session their connection created
+    const all = await repo.workspacesOf(session.user.id);
+    const allowed = await Promise.all(all.map((w) => ssoAllows((sql, params) => db.query(sql, params), w.id, session.user.id, session.session.id)));
+    const spaces = all.filter((_, i) => allowed[i]);
     const active = (session.session as { activeOrganizationId?: string | null }).activeOrganizationId;
     return c.json({
       active: active && spaces.some((w) => w.id === active) ? active : (spaces[0]?.id ?? null),
@@ -255,12 +282,16 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // on-call schedules and escalation policies belong to the workspace (optionally to one project), not to the active project
   authed.route("/oncall", oncall);
   authed.route("/escalation-policies", escalationPolicies);
+  authed.route("/sso", ssoAdmin);
   // what this credential may reach: a session sees every workspace of the user, a key or an agent only what it was given
   authed.get("/workspaces", async (c) => {
     const repo = c.get("repo");
     const granted = c.get("workspaceGrant");
     let spaces = await repo.workspacesOf(c.get("userId"));
     if (granted instanceof Map) spaces = spaces.filter((w) => granted.has(w.id));
+    // a workspace that requires single sign-on is not listed (names, projects) to a credential it would refuse
+    const allowed = await Promise.all(spaces.map((w) => ssoAllowsPrincipal(c, w.id, c.get("userId"))));
+    spaces = spaces.filter((_, i) => allowed[i]);
     const workspaces = await Promise.all(
       spaces.map(async (w) => ({
         id: w.id,
@@ -293,6 +324,13 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // interactive sessions only: an API key or agent token (even a project-limited one) never gets the whole account
   authed.get("/me/export", async (c) => {
     if (c.get("workspaceGrant") !== null) return c.json({ error: "Account export needs a signed-in session, not an API key or agent authorization" }, 403);
+    // the export holds the contents of workspaces the user owns or administers: every require-SSO one among them must
+    // accept this session
+    const proof = c.get("ssoProof");
+    const db = c.get("database");
+    if (!(await ssoSatisfiesAll((sql, params) => db.query(sql, params), c.get("userId"), proof?.id ?? ""))) {
+      return c.json({ error: "A workspace of yours requires single sign-on: sign in with SSO to export your account" }, 403);
+    }
     c.header("content-disposition", 'attachment; filename="montral-account-export.json"');
     return c.json({ exportedAt: new Date().toISOString(), ...(await c.get("repo").exportAccount(c.get("userId"))) });
   });

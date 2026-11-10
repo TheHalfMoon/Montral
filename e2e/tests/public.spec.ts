@@ -26,6 +26,21 @@ test("sign-in page is accessible", async ({ page, guard }, testInfo) => {
   expect(guard.failedResponses).toEqual([]);
 });
 
+test("sign-in single sign-on entry is accessible", async ({ page, guard }, testInfo) => {
+  await page.goto("/login");
+  await page.getByRole("button", { name: "Sign in with SSO" }).click();
+  await expect(page.getByLabel("Work email or workspace ID")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Continue with SSO" })).toBeVisible();
+  await checkA11y(page, testInfo, "sign-in-sso");
+  // back from the identity provider with a refusal: explained, and the panel is open
+  await page.goto("/login?sso_error=link_required");
+  await expect(page.getByRole("alert")).toContainText("An account with this email already exists");
+  await expect(page).toHaveURL(/\/login$/);
+  await checkA11y(page, testInfo, "sign-in-sso-error");
+  expect(guard.errors).toEqual([]);
+  expect(guard.failedResponses).toEqual([]);
+});
+
 test("sign-up page is accessible", async ({ page, guard }, testInfo) => {
   await page.goto("/signup");
   await expect(page.locator("form.auth-fields input[autocomplete=name]")).toBeVisible();

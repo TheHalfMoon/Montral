@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { api } from "../lib/api";
 import { authClient } from "../lib/auth-client";
+import SsoSettings from "./SsoSettings";
 
 export default function Settings() {
   const [name, setName] = useState("");
@@ -90,6 +91,7 @@ export default function Settings() {
           </label>
           {reportErr && <p className="err">{reportErr}</p>}
         </div>
+        <SsoSettings />
         <div className="card sect">
           <h3>{t("Runtime")}</h3>
           <div className="kv">

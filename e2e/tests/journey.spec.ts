@@ -149,6 +149,14 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await checkA11y(page, testInfo, "audit-log");
   });
 
+  await test.step("settings with the single sign-on card are accessible to the owner", async () => {
+    await page.goto("/app/settings");
+    await expect(page.getByRole("heading", { level: 3, name: "Single sign-on (OpenID Connect)" })).toBeVisible();
+    await expect(page.getByLabel("Issuer URL")).toBeVisible();
+    await expect(page.getByText("/api/auth/sso/callback")).toBeVisible();
+    await checkA11y(page, testInfo, "settings-sso");
+  });
+
   // From here on the visitor is an outsider: no session cookie.
   await context.clearCookies();
 

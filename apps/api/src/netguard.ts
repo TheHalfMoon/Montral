@@ -96,6 +96,52 @@ function v6Blocked(b: number[]): boolean {
   return b[0] === 0xff; // multicast
 }
 
+/**
+ * Addresses refused even where private networks are allowed: "this network" (0.0.0.0/8), link-local (169.254.0.0/16,
+ * fe80::/10) with the cloud metadata endpoints in it, other metadata addresses (100.100.100.200, fd00:ec2::254),
+ * multicast and reserved (224.0.0.0 and up, ff00::/8) and the unspecified address, including IPv4 embedded in IPv6
+ * (mapped, compatible, NAT64, 6to4). An unparseable literal is refused too.
+ */
+export function addressAlwaysForbidden(ip: string): boolean {
+  const v4Forbidden = ([a, b, c, d]: number[]) => a === 0 || (a === 169 && b === 254) || a >= 224 || (a === 100 && b === 100 && c === 100 && d === 200);
+  const s = ip.trim().toLowerCase().replace(/^\[|\]$/g, "");
+  const v4 = v4Bytes(s);
+  if (v4) return v4Forbidden(v4);
+  const b = v6Bytes(s);
+  if (!b) return true;
+  const zeros = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 16)) return true; // ::
+  if (zeros(0, 10) && b[10] === 0xff && b[11] === 0xff) return v4Forbidden(b.slice(12)); // ::ffff:a.b.c.d
+  if (zeros(0, 12) && !(b[12] === 0 && b[13] === 0 && b[14] === 0 && b[15] === 1)) return v4Forbidden(b.slice(12)); // IPv4-compatible
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zeros(4, 12)) return v4Forbidden(b.slice(12)); // NAT64
+  if (b[0] === 0x20 && b[1] === 0x02) return v4Forbidden(b.slice(2, 6)); // 6to4
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true; // fe80::/10
+  if (b[0] === 0xff) return true; // multicast
+  // AWS instance metadata over IPv6
+  return b[0] === 0xfd && b[1] === 0x00 && b[2] === 0x0e && b[3] === 0xc2 && zeros(4, 14) && b[14] === 0x02 && b[15] === 0x54;
+}
+
+/**
+ * A request to a target the operator allowed on a private network (e.g. SSO_ALLOW_PRIVATE_IDP): private, loopback and
+ * internal names are fine, but every address the host resolves to is still checked against addressAlwaysForbidden, the
+ * connection is pinned to those addresses (no DNS rebinding in between), and redirects are never followed. On Workers
+ * the platform refuses private ranges itself, so only the literal check applies there.
+ */
+export async function privateTargetFetch(url: string, init: RequestInit): Promise<Response> {
+  const u = new URL(url);
+  if (u.protocol !== "http:" && u.protocol !== "https:") throw new Error(`Unsupported protocol ${u.protocol}`);
+  const h = normaliseHost(u.hostname);
+  if (!h) throw new BlockedTarget();
+  if (isLiteral(h)) {
+    if (addressAlwaysForbidden(h)) throw new BlockedTarget();
+    return isWorkers() ? fetch(url, { ...init, redirect: "manual" }) : pinnedFetch(url, { ...init, redirect: "manual" }, [h]);
+  }
+  if (isWorkers()) return fetch(url, { ...init, redirect: "manual" });
+  const addrs = await resolveAll(h);
+  if (!addrs.length || addrs.some(addressAlwaysForbidden)) throw new BlockedTarget();
+  return pinnedFetch(url, { ...init, redirect: "manual" }, addrs);
+}
+
 /** True for an IP literal (v4 or v6, no brackets) that is not a public address. Anything else is false. */
 export function addressBlocked(ip: string): boolean {
   const v4 = v4Bytes(ip);

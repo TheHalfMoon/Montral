@@ -65,6 +65,16 @@ export type Incident = {
 };
 
 export type Channel = { id: string; type: "slack" | "webhook" | "email" | "telegram" | "pagerduty" | "lark" | "push" | "discord" | "teams" | "ntfy" | "googlechat" | "mattermost" | "gotify" | "pushover"; name: string; config: { url?: string; secret?: string; to?: string; chatId?: string; botToken?: string; routingKey?: string; topic?: string; token?: string; priority?: string; userKey?: string; device?: string }; enabled: boolean; autoEnable?: boolean; projectId?: string | null };
+/** The workspace's single sign-on connection; the client secret is write-only and never part of it. */
+export type SsoSettings = {
+  callbackUrl: string;
+  instanceProvider: boolean;
+  connection: null | {
+    id: string; issuer: string; clientId: string; hasClientSecret: boolean; defaultRole: "member" | "admin"; requireSso: boolean; enabled: boolean;
+    domains: { domain: string; verified: boolean; verifiedAt: string | null; txtName: string; txtValue: string; checkError?: string | null; failingSince?: string | null }[];
+  };
+};
+export type SsoInput = { issuer: string; clientId: string; clientSecret?: string; domains: string[]; defaultRole: "member" | "admin"; requireSso: boolean; enabled: boolean };
 export type WorkspaceSettings = { alertLogRetentionDays: number; checkRetentionDays: number; monthlyReport: boolean };
 /** Staged owner-only internal operations: no recipient email or provider evidence is returned. */
 export type MonthlyReconciliationSummary = { pending: number; unresolved: number; confirmed: number };
@@ -299,6 +309,11 @@ export const api = {
   reconciliationSummary: (month: string) => req<MonthlyReconciliationSummary>(`/monthly-reconciliation/summary?month=${encodeURIComponent(month)}`),
   reconciliationPending: (month: string) => req<{ items: MonthlyReviewCandidate[] }>(`/monthly-reconciliation/pending?month=${encodeURIComponent(month)}`),
   reconcileMonthlyReport: (input: MonthlyReviewInput) => req<{ applied: boolean }>("/monthly-reconciliation/review", { method: "POST", body: JSON.stringify(input) }),
+  sso: () => fetchJson<SsoSettings>("/sso"),
+  saveSso: (b: SsoInput) => fetchJson<SsoSettings & { warning?: string }>("/sso", { method: "PUT", body: JSON.stringify(b) }),
+  deleteSso: () => fetchJson<void>("/sso", { method: "DELETE" }),
+  testSso: (issuer: string) => fetchJson<{ ok: true; issuer: string; authorizationEndpoint: string; tokenEndpoint: string; jwksUri: string; algorithms: string[] }>("/sso/test", { method: "POST", body: JSON.stringify({ issuer }) }),
+  verifySsoDomain: (domain: string) => fetchJson<{ verified: boolean }>(`/sso/domains/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
   settings: () => req<WorkspaceSettings>("/settings"),
   updateSettings: (b: Partial<WorkspaceSettings>) =>
     req<WorkspaceSettings>("/settings", { method: "PATCH", body: JSON.stringify(b) }),

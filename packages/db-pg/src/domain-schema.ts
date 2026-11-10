@@ -18,7 +18,7 @@ import {
   uuid,
 } from "drizzle-orm/pg-core";
 import type { DomainExpiry } from "@montral/repo";
-import { organization, user } from "./auth-schema";
+import { organization, session, user } from "./auth-schema";
 
 export const monitorType = pgEnum("monitor_type", ["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping"]);
 export const monitorStatus = pgEnum("monitor_status", ["pending", "up", "degraded", "down", "paused"]);
@@ -502,6 +502,129 @@ export const auditEvent = pgTable(
     check("audit_event_action_chk", sql`${t.action} ~ '^[a-z_]+(\\.[a-z_]+)+$' and length(${t.action}) <= 64`),
     check("audit_event_changes_chk", sql`${t.changes} is null or (jsonb_typeof(${t.changes}) = 'object' and octet_length(${t.changes}::text) <= 4096)`),
   ],
+);
+
+/**
+ * Single sign-on (OpenID Connect) for one workspace, configured by its owner (apps/api/src/sso-*.ts). The client secret
+ * is stored AES-256-GCM encrypted with a key derived from BETTER_AUTH_SECRET and bound to the row id; the API never
+ * returns it. At most one connection per workspace.
+ */
+export const ssoConnection = pgTable(
+  "sso_connection",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    issuer: text("issuer").notNull(),
+    clientId: text("client_id").notNull(),
+    clientSecretEnc: text("client_secret_enc").notNull(),
+    /** the token endpoint discovery named when the secret was entered: the secret is only ever sent there */
+    tokenEndpoint: text("token_endpoint"),
+    /** role given to people provisioned on their first SSO sign-in; never owner */
+    defaultRole: text("default_role").notNull().default("member"),
+    /** members other than the owner may only use this workspace through this connection */
+    requireSso: boolean("require_sso").notNull().default(false),
+    enabled: boolean("enabled").notNull().default(true),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sso_connection_org_uidx").on(t.organizationId),
+    check("sso_connection_role_chk", sql`${t.defaultRole} in ('member', 'admin')`),
+    check("sso_connection_issuer_chk", sql`length(${t.issuer}) between 8 and 500`),
+    check("sso_connection_client_chk", sql`length(${t.clientId}) between 1 and 255`),
+  ],
+);
+
+/**
+ * Email domains a connection may sign in and provision. A domain counts only once its TXT record was verified, and a
+ * verified domain belongs to one connection on the whole instance.
+ */
+export const ssoDomain = pgTable(
+  "sso_domain",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    connectionId: uuid("connection_id").notNull().references(() => ssoConnection.id, { onDelete: "cascade" }),
+    domain: text("domain").notNull(),
+    /** published in DNS, so not a secret: only unguessable */
+    token: text("token").notNull(),
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /** periodic re-verification (same policy as status page custom domains); a withdrawal clears verified_at */
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    failingSince: timestamp("failing_since", { withTimezone: true }),
+    failures: integer("failures").notNull().default(0),
+    checkError: text("check_error"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("sso_domain_connection_domain_uidx").on(t.connectionId, t.domain),
+    uniqueIndex("sso_domain_verified_uidx").on(t.domain).where(sql`${t.verifiedAt} is not null`),
+  ],
+);
+
+/**
+ * One pending SSO sign-in: single use (deleted when the callback consumes it), short-lived, and bound to the browser
+ * that started it (`binding_hash` is the SHA-256 of a cookie only that browser holds). Only the state's hash is kept.
+ */
+export const ssoFlow = pgTable(
+  "sso_flow",
+  {
+    stateHash: text("state_hash").primaryKey(),
+    bindingHash: text("binding_hash").notNull(),
+    /** a sso_connection id, or "instance" for the operator's OIDC_* provider */
+    connectionId: text("connection_id").notNull(),
+    organizationId: text("organization_id"),
+    nonce: text("nonce").notNull(),
+    codeVerifier: text("code_verifier").notNull(),
+    intent: text("intent").notNull(),
+    linkUserId: text("link_user_id"),
+    returnTo: text("return_to").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sso_flow_expires_idx").on(t.expiresAt), check("sso_flow_intent_chk", sql`${t.intent} in ('signin', 'link')`)],
+);
+
+/** Sessions created by an SSO sign-in, and through which connection: what "require SSO" checks per request. */
+export const ssoSession = pgTable("sso_session", {
+  sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
+  connectionId: text("connection_id").notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * API keys created from an SSO session, and through which connection: in a require-SSO workspace a member's key only
+ * works when its row names that workspace's connection.
+ */
+export const ssoCredential = pgTable(
+  "sso_credential",
+  {
+    /** "api_key" (credential_id = key id); agent tokens need no row, they carry the session that authorized them */
+    kind: text("kind").notNull(),
+    credentialId: text("credential_id").notNull(),
+    connectionId: text("connection_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.kind, t.credentialId, t.connectionId] }), check("sso_credential_kind_chk", sql`${t.kind} in ('api_key')`)],
+);
+
+/**
+ * People removed from (or who left) a workspace, by address and by SSO identity: single sign-on does not provision them
+ * into it again, even with a new account, until the address is invited again (which deletes the rows).
+ */
+export const ssoRemoval = pgTable(
+  "sso_removal",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    /** the removed user (no foreign key: the record outlives a deleted account) */
+    userId: text("user_id").notNull(),
+    email: text("email").notNull(),
+    /** "<issuer>|<subject>" of an SSO identity the person had at the workspace's connection; null for the address row */
+    accountId: text("account_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("sso_removal_org_email_idx").on(t.organizationId, t.email), index("sso_removal_org_account_idx").on(t.organizationId, t.accountId)],
 );
 
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */

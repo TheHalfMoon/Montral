@@ -8,6 +8,21 @@ import { actionEmail, appUrl, sendEmail } from "./email";
 import { userLang, tr } from "./mail-i18n";
 import type { Bindings } from "./env";
 import { AUDITED_AUTH_PATHS, auditAuthCall, MEMBERSHIP_ENDING_PATHS, noteKeyBeforeDelete, noteMembershipBefore, type KeyNote, type MemberNote } from "./audit-auth";
+import { ssoPlugin, type SsoSignIn } from "./sso-auth";
+import { clearRemoval, dropSsoLinksOfFormerMember, recordRemoval, recordSsoCredential, sessionConnection, ssoAllows, ssoProtected, ssoRequiredFor, ssoSatisfiesAll } from "./sso-store";
+
+/** Better Auth endpoints that act on a workspace without passing requireOrg: held to the workspace's "require SSO". */
+const SSO_GUARDED_PATHS = new Set(["/api-key/create", "/api-key/update"]);
+/**
+ * The OAuth provider's endpoints that issue authorization codes or create or change consent. /oauth2/authorize issues a
+ * code by itself when a consent is already on file, so it is guarded like the consent screens.
+ */
+const SSO_OAUTH_PATHS = new Set(["/oauth2/authorize", "/oauth2/continue", "/oauth2/consent", "/oauth2/update-consent"]);
+const plain = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Error) && !(v instanceof Response) ? (v as Record<string, unknown>) : null);
+const text = (v: unknown) => (typeof v === "string" && v ? v : null);
+
+/** Message (and code) of a sign-in refused because a workspace of the user requires single sign-on. */
+export const SSO_REQUIRED_MESSAGE = "Your workspace requires single sign-on. Use “Sign in with SSO”.";
 
 export function slugify(s: string) {
   return (s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace") + "-" + Math.random().toString(36).slice(2, 6);
@@ -142,7 +157,11 @@ export function createAuth(database: Database, env: Bindings) {
   let keyNote: KeyNote | null = null;
   // the acting user's membership, confirmed before a call that may end it (audit log)
   let memberNote: MemberNote | null = null;
+  // the SSO removal recorded before a removal or leave runs (deleted again if the call fails)
+  let removalNote: { orgId: string; userId: string; ids: string[] } | null = null;
   const query = <T>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
+  // set by the SSO callback around the session it creates (sso-auth.ts), read by the session hook below
+  const ssoSignIn: SsoSignIn = { connectionId: null, orgId: null };
   return betterAuth({
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
@@ -240,6 +259,69 @@ export function createAuth(database: Database, env: Bindings) {
           const q = ctx.path === "/oauth2/authorize" ? (ctx.query as Record<string, unknown> | undefined)?.code_challenge : new URLSearchParams(String((ctx.body as { oauth_query?: unknown } | undefined)?.oauth_query ?? "")).get("code_challenge");
           picked = grantCookie(ctx.headers?.get("cookie"), typeof q === "string" ? q : "");
         }
+        // "Require SSO" for what Better Auth runs itself (members, invitations, roles, the active workspace, agent
+        // consent, API keys): a member other than an owner may only act on such a workspace with a session its own
+        // SSO connection created. The workspaces concerned: the one named in the request, else the active one; for an
+        // agent's consent, every workspace the grant would cover.
+        // The OAuth endpoints do not trust the picker cookie (montral_grant, written by the browser) to say which
+        // workspaces a grant covers: the session must satisfy every require-SSO workspace of the user.
+        if (SSO_OAUTH_PATHS.has(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          if (session && !(await ssoSatisfiesAll(query, session.user.id, session.session.id))) {
+            throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
+          }
+        }
+        if (ctx.path.startsWith("/organization/") || SSO_GUARDED_PATHS.has(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          if (session) {
+            const body = plain(ctx.body) ?? {};
+            const queryArgs = plain(ctx.query) ?? {};
+            const active = text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId);
+            let targets: (string | null)[];
+            if (ctx.path.startsWith("/api-key/")) {
+              targets = [text(plain(body.metadata)?.organizationId) ?? active];
+            } else {
+              // a workspace may be named by id or by slug (set-active, get-full-organization, ...): both are checked
+              const slug = text(body.organizationSlug) ?? text(queryArgs.organizationSlug);
+              const bySlug = slug ? ((await query<{ id: string }>(`SELECT id FROM organization WHERE slug = $1::text`, [slug]))[0]?.id ?? null) : null;
+              const byId = text(body.organizationId) ?? text(queryArgs.organizationId);
+              targets = byId || bySlug ? [byId, bySlug] : [active];
+            }
+            for (const orgId of new Set(targets)) {
+              if (orgId && !(await ssoAllows(query, orgId, session.user.id, session.session.id))) {
+                throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
+              }
+            }
+          }
+        }
+        // LAST step for a removal or leave, after every guard above has passed (a call they refuse records nothing):
+        // the removal is recorded BEFORE the membership ends, so the block can never be missing; when it cannot be
+        // written, the removal itself is refused (fail closed). If the call then fails, the after-hook deletes the rows
+        // again, and a block whose person is still a member never counts (sso-store.ts removedFrom).
+        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          if (session) {
+            const body = plain(ctx.body) ?? {};
+            const orgId = text(body.organizationId) ?? text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId);
+            let userId: string | null = null;
+            if (orgId && ctx.path === "/organization/leave") userId = session.user.id;
+            if (orgId && ctx.path === "/organization/remove-member" && text(body.memberIdOrEmail)) {
+              const [m] = await query<{ user_id: string }>(
+                `SELECT m.user_id FROM member m JOIN "user" u ON u.id = m.user_id WHERE m.organization_id = $1::text AND (m.id = $2::text OR lower(u.email) = lower($2::text)) LIMIT 1`,
+                [orgId, body.memberIdOrEmail],
+              );
+              userId = m?.user_id ?? null;
+            }
+            if (orgId && userId) {
+              try {
+                removalNote = { orgId, userId, ids: await recordRemoval(query, orgId, userId) };
+              } catch {
+                console.error("sso removal could not be recorded; private diagnostics suppressed");
+                throw new APIError("INTERNAL_SERVER_ERROR", { message: "The removal could not be recorded. Nothing was changed; try again." });
+              }
+            }
+          }
+        }
         if (ctx.path === "/oauth2/authorize" || ctx.path === "/oauth2/token") {
           await repo.ensureOAuthResource(mcpResource(env), "Montral MCP", MCP_RESOURCE_SCOPES);
           // clients repeat the original scope (including offline_access) on refresh, and the library rejects any scope
@@ -275,12 +357,71 @@ export function createAuth(database: Database, env: Bindings) {
       }),
       // workspace audit log for the member, invitation, workspace and API-key endpoints (audit-auth.ts); never fails the call
       after: createAuthMiddleware(async (ctx) => {
+        const returned = plain(ctx.context.returned);
+        // an API key made from an SSO session keeps working in a require-SSO workspace of that connection (agent tokens
+        // need no record: they carry the session that authorized them)
+        if (ctx.path === "/api-key/create" && returned && text(returned.id)) {
+          try {
+            const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
+            const connection = session ? await sessionConnection(query, session.session.id) : null;
+            if (connection) await recordSsoCredential(query, "api_key", returned.id as string, connection);
+          } catch {
+            console.error("sso credential could not be recorded; private diagnostics suppressed");
+          }
+        }
+        // Someone left or was removed. The removal was remembered before the call (address and SSO identities), so
+        // provisioning cannot bring them back even after they delete their account; their SSO links to the workspace
+        // go; and someone removed from a workspace with SSO is signed out everywhere. Accepting a new invitation to the
+        // address lifts the block. If the call failed, the rows recorded for it are deleted again.
+        // the call failed (or the person is somehow still a member): the block recorded for it goes again
+        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path) && removalNote && (!returned || (await repo.isMember(removalNote.userId, removalNote.orgId).catch(() => false)))) {
+          await query(`DELETE FROM sso_removal WHERE id = ANY (string_to_array($1::text, ',')::uuid[])`, [removalNote.ids.join(",")])
+            .catch(() => console.error("sso removal could not be withdrawn; private diagnostics suppressed"));
+        }
+        // the workspace switcher's list leaves out require-SSO workspaces this session does not qualify for (like
+        // GET /api/workspaces)
+        if (ctx.path === "/organization/list" && Array.isArray(ctx.context.returned)) {
+          const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
+          if (session) {
+            const all = ctx.context.returned as { id?: unknown }[];
+            const keep = await Promise.all(all.map((o) => (typeof o?.id === "string" ? ssoAllows(query, o.id, session.user.id, session.session.id) : Promise.resolve(true))));
+            if (keep.includes(false)) return ctx.json(all.filter((_, i) => keep[i]));
+          }
+        }
+        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path) && returned) {
+          const gone = ctx.path === "/organization/remove-member" ? plain(returned.member) : returned;
+          const orgId = text(gone?.organizationId);
+          const userId = text(gone?.userId) ?? (ctx.path === "/organization/leave" ? (memberNote?.userId ?? null) : null);
+          if (orgId && userId) {
+            try {
+              // normally recorded before the call; a removal the before-hook could not attribute is recorded now
+              if (!(removalNote && removalNote.orgId === orgId && removalNote.userId === userId)) await recordRemoval(query, orgId, userId);
+              await dropSsoLinksOfFormerMember(query, orgId, userId);
+              // in a workspace with single sign-on, a removed member is signed out everywhere (elsewhere the membership
+              // check of every request already shuts them out of the workspace, and their other sessions stay)
+              if (ctx.path === "/organization/remove-member") {
+                await query(`DELETE FROM session WHERE user_id = $1::text AND EXISTS (SELECT 1 FROM sso_connection WHERE organization_id = $2::text)`, [userId, orgId]);
+              }
+            } catch {
+              console.error("sso removal could not be recorded; private diagnostics suppressed");
+            }
+          }
+        }
+        // only an ACCEPTED invitation lifts a removal block; a pending, cancelled or expired one does not
+        if (ctx.path === "/organization/accept-invitation" && returned) {
+          const inv = plain(returned.invitation);
+          if (text(inv?.organizationId) && text(inv?.email)) {
+            await clearRemoval(query, inv!.organizationId as string, inv!.email as string).catch(() => console.error("sso removal could not be cleared; private diagnostics suppressed"));
+          }
+        }
         if (!AUDITED_AUTH_PATHS.has(ctx.path)) return;
         const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
         await auditAuthCall(query, env, { path: ctx.path, body: ctx.body, returned: ctx.context.returned, headers: ctx.headers, session: session as never }, keyNote, memberNote);
       }),
     },
     plugins: [
+      // single sign-on with OpenID Connect: per-workspace connections and the operator's OIDC_* provider (sso-*.ts)
+      ssoPlugin(database, env, ssoSignIn),
       // Native handoff: the app signs in with GitHub inside ASWebAuthenticationSession, whose cookies the app cannot
       // read. A short-lived single-use token is appended to the montral://auth redirect and exchanged for the
       // cookie session at POST /api/auth/one-time-token/verify. Only the handoff below mints tokens: the plugin's
@@ -419,6 +560,14 @@ export function createAuth(database: Database, env: Bindings) {
           // only the proven owner holds the account afterwards. A signed-in user linking GitHub to their own account
           // is not this case and keeps what they have.
           before: async (account, ctx) => {
+            // A social sign-in never links itself to an account protected by SSO (an SSO identity, or membership of a
+            // require-SSO workspace) because the emails match: its holder connects it from Account while signed in.
+            if (account.providerId !== "credential" && !account.providerId.startsWith("sso:")) {
+              const session = ctx ? await getSessionFromCtx(ctx).catch(() => null) : null;
+              if (session?.user.id !== account.userId && (await ssoProtected(query, account.userId))) {
+                throw new APIError("FORBIDDEN", { message: "Sign in to this account first, then connect it from Account settings", code: "LINK_REQUIRES_SESSION" });
+              }
+            }
             if (account.providerId !== "github") return;
             const rows = await database.query<{ email_verified: boolean }>(`select email_verified from "user" where id = $1`, [account.userId]);
             if (!rows[0] || rows[0].email_verified) return;
@@ -430,9 +579,18 @@ export function createAuth(database: Database, env: Bindings) {
       },
       session: {
         create: {
-          // keep the workspace of their previous session, else the one they joined most recently (an accepted invitation wins over the personal one)
+          // Every way a session comes to exist (password, GitHub, 2FA, email verification, SSO) passes here. A member
+          // (not the owner, who is the break-glass account) of a workspace that requires single sign-on only gets one
+          // from that workspace's own SSO connection.
+          // Then: keep the workspace of their previous session, else the one they joined most recently (an accepted
+          // invitation wins over the personal one); an SSO sign-in lands in the workspace of its connection.
           before: async (session) => {
-            const orgId = await repo.preferredWorkspace(session.userId);
+            const required = await ssoRequiredFor(query, session.userId);
+            if (required.length && !required.some((r) => r.connectionId === ssoSignIn.connectionId)) {
+              throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
+            }
+            const viaSso = ssoSignIn.orgId && (await repo.isMember(session.userId, ssoSignIn.orgId)) ? ssoSignIn.orgId : null;
+            const orgId = viaSso ?? (await repo.preferredWorkspace(session.userId));
             return { data: { ...session, activeOrganizationId: orgId } };
           },
         },

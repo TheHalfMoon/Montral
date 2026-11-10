@@ -11,6 +11,7 @@ import { runMontralMaintenance } from "./montral-maintenance";
 import { connectionString, type Bindings } from "./env";
 import { cloudflareEdgeCache, useEdgeCache } from "./sharedcache";
 import { processCheckMessage, runDueChecks, type CheckMessage } from "./scheduler";
+import { dohTxt, recheckSsoDomains } from "./sso-domains";
 import { auditRetentionDays } from "./audit";
 
 // the one place that picks the storage backend
@@ -39,6 +40,14 @@ export function createWorker(edition: Edition = montralEdition) {
           } catch (e) {
             schedulerError = e;
             console.error("monitor scheduler failed; private diagnostic suppressed");
+          }
+          // Verified SSO email domains keep proving their TXT record (sso-domains.ts), every five minutes, over DNS over HTTPS.
+          if (Math.floor(Date.now() / 60_000) % 5 === 0) {
+            try {
+              await recheckSsoDomains((sql, params) => database.query(sql, params), { resolver: dohTxt, policy: { budgetMs: 20_000 } });
+            } catch {
+              console.error("sso domain re-check failed; private diagnostic suppressed");
+            }
           }
           // A monitor scheduler exception must never suppress data retention.
           // Cron triggers this each five minutes, including idle inboxes.

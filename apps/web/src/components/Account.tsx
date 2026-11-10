@@ -6,6 +6,7 @@ import { api } from "../lib/api";
 import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
+import { SSO_ERRORS, startSso } from "../lib/sso";
 
 type Me = { name?: string; email?: string; locale?: string | null; emailVerified?: boolean; twoFactorEnabled?: boolean | null };
 
@@ -209,6 +210,40 @@ function ConnectedAccounts({ accounts, load }: { accounts: Linked[] | null; load
   );
 }
 
+/**
+ * Single sign-on for an existing account: linking needs this signed-in session, so an identity provider can never take
+ * over an account merely because it reports the same email address.
+ */
+function SsoLink({ accounts }: { accounts: Linked[] | null }) {
+  const [offered, setOffered] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    fetch("/api/auth-providers").then((r) => r.json()).then((d: { sso?: boolean }) => setOffered(!!d.sso)).catch(() => {});
+    const q = new URLSearchParams(location.search);
+    const failed = q.get("sso_error");
+    if (failed) setErr(t(SSO_ERRORS[failed] ?? "Something went wrong"));
+    if (q.get("sso") === "linked") toast(t("Single sign-on linked."));
+    if (failed || q.has("sso")) history.replaceState(null, "", location.pathname);
+  }, []);
+  const linked = (accounts ?? []).filter((a) => a.providerId.startsWith("sso:")).length;
+  if (!offered && !linked && !err) return null;
+  async function link() {
+    setErr(""); setBusy(true);
+    const problem = await startSso({ intent: "link", returnTo: "/app/account" }).catch(() => t("Something went wrong"));
+    if (problem) { setErr(problem); setBusy(false); }
+  }
+  return (
+    <div className="card sect">
+      <h3>{t("Single sign-on")}</h3>
+      <p className="muted" style={{ marginBottom: 12 }}>{t("Link your company's identity provider to this account, then sign in with SSO. The provider must confirm this account's email address.")}</p>
+      <p style={{ marginBottom: 12 }}>{linked ? t("Linked") : t("Not linked")}</p>
+      {offered && <button className="btn" disabled={busy} onClick={link}>{busy ? t("Redirecting…") : t("Link single sign-on")}</button>}
+      {err && <p className="err" role="alert" style={{ marginTop: 10 }}>{err}</p>}
+    </div>
+  );
+}
+
 /** Personal settings: who you are and which language emails (and the app) use. API keys live on their own page. */
 export default function Account() {
   const [me, setMe] = useState<Me | null>(null);
@@ -250,6 +285,7 @@ export default function Account() {
           </div>
         )}
         {me && <ConnectedAccounts accounts={accounts} load={loadAccounts} />}
+        {me && <SsoLink accounts={accounts} />}
         {me && <Security me={me} reload={load} hasPassword={!accounts || accounts.length === 0 || accounts.some((a) => a.providerId === "credential")} />}
       </div>
     </>

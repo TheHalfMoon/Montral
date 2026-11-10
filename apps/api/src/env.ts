@@ -14,6 +14,17 @@ export type Bindings = {
   WEB_ORIGIN: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  /**
+   * Instance-wide single sign-on (OpenID Connect) for self-hosters: the provider's issuer URL, and the client id and
+   * secret registered there with the redirect URI <BETTER_AUTH_URL origin>/api/auth/sso/callback. All three, or none.
+   */
+  OIDC_ISSUER?: string;
+  OIDC_CLIENT_ID?: string;
+  OIDC_CLIENT_SECRET?: string;
+  /** Comma-separated email domains the instance-wide provider may sign in. Unset: any address the provider verified. */
+  OIDC_ALLOWED_DOMAINS?: string;
+  /** "true" lets single sign-on reach an identity provider on a private network or over plain http (default: refused). */
+  SSO_ALLOW_PRIVATE_IDP?: string;
   /** All billing is fail-closed and restricted to provider TEST MODE in the private preview. */
   MONTRAL_METERING_ENABLED?: string;
   /** Self-hosted development only: let webhook replay reach private addresses (never link-local or metadata). */
@@ -125,6 +136,11 @@ export type Variables = {
    * (null = no limit); "all" = any workspace the user belongs to. null for a signed-in session.
    */
   workspaceGrant: null | "all" | Map<string, string[] | null>;
+  /**
+   * What proves how this request's credential came to be, for "require SSO" (middleware.ts ssoAllowsPrincipal): the
+   * session id, the API key id, or the session that authorized an agent token (null when the token has none).
+   */
+  ssoProof?: { kind: "session" | "api-key" | "oauth"; id: string | null };
   /** A streamed response still reading from the request's database: it is closed once this settles, not before. */
   databaseHeldUntil?: Promise<void>;
 };

@@ -48,7 +48,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Terraform / config-as-code | Y, unpublished: build from source (`terraform-provider-montral/`) | N | Y | Y | ? | Y (YAML) | N |
 | Self-hosting | Y (Docker/Node + Postgres; also Workers) | Y (MIT) | N | Y (AGPL) | N | Y (Apache) | P |
 | 2FA | Y | Y | ? | ? | Y | n/a | ? |
-| SSO (OIDC/SAML) | P (GitHub sign-in) | N | $ | ? | $ | Y | ? |
+| SSO (OIDC/SAML) | P (#49: OIDC per workspace + instance-wide, JIT, require-SSO; no SAML) | N | $ | ? | $ | Y | ? |
 | Roles | P (owner/admin/member) | N | Y | ? | Y | N | $ |
 | Audit log | Y (#39; append-only, API/CSV/JSONL export, MCP, retention) | N | $ | ? | ? | N | N |
 | Mobile app | P (iOS push app) | N | Y | ? | Y | N | N |
@@ -88,7 +88,7 @@ schedules with escalation policies (#48, awaiting review).
 
 Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
-1. **SSO (OIDC; SAML if justified)**: GitHub sign-in only today; large.
+1. ~~**SSO (OIDC; SAML if justified)**~~: OIDC done in #49; SAML deferred (XML-signature risk, no safe library on both runtimes; bridge through Keycloak/Authentik).
 2. **Terraform provider / config-as-code**: implemented in `terraform-provider-montral/` (#50, in review; unpublished, build from source).
 3. **Browser / multi-step checks**: needs an isolated headless runtime; large.
 4. **Custom webhook responses** (webhook.site parity): implemented in #47, in review (`docs/evidence/2026-11-10-webhook-responses.md`).

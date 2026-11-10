@@ -44,7 +44,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 22 | Grafana OnCall and other incident tools in the competitor matrix | P3 | Not started; needs primary-source verification |
 | 23 | Upgrade from the previous release candidate never qualified (data, sessions, keys, links after migrations) | P1 | In review (#55): `montral-upgrade.yml` seeds 17f55c1 through its API, upgrades to HEAD on the same PostgreSQL 18 database and reads every entity back; `docs/evidence/2026-11-10-upgrade-rollback-dr.md` |
 | 24 | Rollback path undefined and unqualified | P1 | In review (#55): supported rollback = restore the pre-upgrade backup into an empty database and start the old build (exact SHA-256 match); the old build on the upgraded schema refuses to start and changes nothing; self-host docs (en/zh) "Upgrade and rollback" |
-| 25 | Disaster recovery (database lost under a running server) unqualified, no RTO | P1 | In review (#55): live backups (snapshot `pg_dump -Fc` and the documented compose command), database dropped, documented restore into a new database, HEAD verified; RTO measured |
+| 25 | Disaster recovery (database lost under a running server) unqualified, no RTO | P1 | In review (#55): live backups (snapshot `pg_dump -Fc` and the documented compose command), database dropped, documented restore into a new database, HEAD verified; RTO 2.0 s on the synthetic dataset (run 42725960774); `docs/evidence/2026-11-10-upgrade-rollback-dr.md` |
 
 ## External dependencies (cannot be closed in engineering)
 

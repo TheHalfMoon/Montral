@@ -53,6 +53,8 @@ jobs:
           nproc
           free -m
           node --version
+      - name: Unit-test rolling load-window invariants
+        run: node --test scripts/load-window.test.mjs
       - name: Qualify load, backpressure and DB pool exhaustion
         shell: bash
         run: |

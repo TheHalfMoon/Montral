@@ -50,10 +50,19 @@ time on the same port.
 
 ### B. Rollback
 - **The old build on the upgraded schema fails safely.** Its documented read-only check (`migrate-plain.mjs --check`)
-  exits 1 with `Database migration history is ahead of this build`. The old server itself never listens: it retries
-  its migration and exits 1 after 59 s. Afterwards every table's row count and SHA-256 fingerprint, every catalog
-  object (columns, indexes, constraints, triggers with their enabled state, functions) and the migration history are
-  unchanged.
+  exits 1 with `Database migration history is ahead of this build`, which names the reason. The 17f55c1 server
+  itself does not say why: it never listens, retries its migration as if PostgreSQL were still starting, and exits 1
+  after 59 s with the generic `Database connection/migration unavailable after bounded startup retries`. A container
+  then restart-loops. Afterwards every table's row count and SHA-256 fingerprint, every catalog object (columns,
+  indexes, constraints, triggers with their enabled state, functions) and the migration history are unchanged.
+- **From this PR on, the server refuses at once and says why.** Found by review of this qualification:
+  - `validateMigrationHistory` tags "ahead" and "diverged" histories.
+  - `server.ts` exits 1 immediately, before listening and without the retry loop, with
+    `database schema is newer than this Montral build; restore the pre-upgrade backup or run the newer build`.
+    Connection failures keep retrying (unit test: `startup-schema.test.ts`).
+  - The qualification adds a migration row unknown to HEAD and asserts that HEAD exits 1 in 401 ms with that
+    message, never retries or listens, and changes no row. The row is then removed and the database is back to its
+    upgraded fingerprint.
 - **Supported rollback: restore the pre-upgrade backup into an empty database and start the old build.** The
   restore uses the documented container commands (`createdb`, then `pg_restore --no-owner`). The restored database
   equals the pre-upgrade state in every table's row count and SHA-256 fingerprint and in every catalog object. The
@@ -80,24 +89,25 @@ time on the same port.
      every catalog object.
 
 ## Results
-**Cited run:** [42725960774](https://github.com/TheHalfMoon/Montral/actions/runs/42725960774) on commit `77bb603`
-(job 4 min 6 s), with every check passing. Runner: GitHub-hosted `ubuntu-latest`, PostgreSQL 18.6 (Alpine) service,
+**Cited run:** [42736834472](https://github.com/TheHalfMoon/Montral/actions/runs/42736834472) on commit `d952071`,
+with every check passing. Times agree within about 10 % with the earlier green run 42725960774 (`77bb603`). Runner: GitHub-hosted `ubuntu-latest`, PostgreSQL 18.6 (Alpine) service,
 Node 24.22.1.
 
 | Measurement | Result |
 |---|---|
-| Seeded dataset | 48 tables before the upgrade (24 non-empty, 177 rows), 53 after |
+| Seeded dataset | asserted exactly: 2 projects, 8 monitors, 2 channels, 3 incidents (8 updates), 3 status pages, 1 share link, 2 inboxes (4 events), 10 maintenance windows, 1 API key; 48 tables (22 non-empty, 174 rows) before the upgrade, 53 after |
 | Old build start on an empty database | 1.1 s (53 migrations) |
-| Seeding through the old API | 1.5 s |
-| Pre-upgrade backup (documented command) | 0.22 s, 155 KB |
+| Seeding through the old API | 1.6 s |
+| Pre-upgrade backup (documented command) | 0.21 s |
 | HEAD start on the old database, migration included | 0.44 s (53 -> 54) |
 | Entities read back after the upgrade | all, field by field; counts unchanged |
-| Old build on the upgraded schema | refused: `migrate-plain --check` exit 1; server exit 1 after 59 s; 0 rows, 0 catalog objects changed |
-| Rollback restore (createdb + pg_restore, documented) | 0.57 s; exact SHA-256 match with the pre-upgrade state |
+| Old build (17f55c1) on the upgraded schema | `migrate-plain --check` exit 1 "history is ahead"; server exit 1 after 59 s (generic retry message); 0 rows, 0 catalog objects changed |
+| HEAD on a future schema | exit 1 after 401 ms, "database schema is newer than this Montral build; ...", no retry, no listen, 0 rows changed |
+| Rollback restore (createdb + pg_restore, documented) | 0.54 s; exact SHA-256 match with the pre-upgrade state |
 | Old build start on the restored backup | 0.44 s |
-| Live backups while HEAD runs | snapshot `pg_dump` 0.18 s (173 KB); documented command 0.22 s (173 KB) |
-| **RTO** (database dropped -> app verified) | **2.0 s**: createdb 0.10 s, pg_restore 0.50 s, start to healthy 0.44 s, verification 1.0 s |
-| Snapshot restore | 0.55 s; 53 tables, 186 rows, every SHA-256 fingerprint and catalog object equal |
+| Live backups while HEAD runs | snapshot `pg_dump` 0.18 s; documented command 0.21 s |
+| **RTO** (database dropped -> app verified) | **2.0 s** (1,965 ms): createdb 0.09 s, pg_restore 0.48 s, start to healthy 0.44 s, verification 0.95 s |
+| Snapshot restore | 0.49 s; 53 tables, 189 rows, every SHA-256 fingerprint and catalog object equal |
 
 ## Findings
 - **No application defect found.** The upgrade from 17f55c1 kept everything that was checked: sessions, API keys,
@@ -107,11 +117,12 @@ Node 24.22.1.
   qualified commands. Back up before upgrading. To roll back, restore into an **empty** database. Restoring a
   pre-upgrade dump over the upgraded database with `--clean` is called out as unsupported: objects the upgrade
   added are not in the dump and would stay behind.
-- **Restart loop.** A container started on a database that is too new exits after about a minute and is restarted
-  by its restart policy. The loop is harmless (no writes), but it is a sign that the wrong image is running.
+- **Restart loop with an unclear message (fixed going forward).** A 17f55c1 container started on a database that is
+  too new exits after about a minute with a message that looks like a connection problem, then restart-loops. Builds
+  from this PR on exit at once and say what to do. The loop never wrote anything.
 
 ## Limits
-- The dataset is small (177-186 rows), so the 2.0 s RTO is a floor for the procedure, not a capacity figure.
+- The dataset is small (174-189 rows), so the 2.0 s RTO is a floor for the procedure, not a capacity figure.
   Restore time grows with the database, mostly in `pg_restore`. Measure your own with a scratch restore (see
   Backup and restore).
 - One previous release (17f55c1) on one PostgreSQL major (18). Upgrades across several releases, and from

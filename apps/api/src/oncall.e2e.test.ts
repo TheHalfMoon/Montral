@@ -420,6 +420,23 @@ describe.skipIf(!url)("on-call schedules and escalation (PostgreSQL)", () => {
     expect(raced.filter((r) => r === "limit_schedule")).toHaveLength(7);
   });
 
+  it("rate-limits override creation to 60 attempts per hour, including rejected cap attempts", async () => {
+    const { owner, member } = await team();
+    const s = (await call(owner.cookie, "POST", "/oncall/schedules", { name: "Rate cap", timeZone: "UTC", layers: [layer([owner.id])] })).body;
+    expect(s.id).toBeTruthy();
+    const slot = (k: number) => ({
+      userId: member.id,
+      startsAt: new Date(Date.now() + (k + 1) * 3_600_000).toISOString(),
+      endsAt: new Date(Date.now() + (k + 1) * 3_600_000 + 1_800_000).toISOString(),
+    });
+    const responses: Res[] = [];
+    for (let k = 0; k < 61; k++) responses.push(await call(owner.cookie, "POST", `/oncall/schedules/${s.id}/overrides`, slot(k)));
+    expect(responses.slice(0, 50).every((r) => r.status === 201)).toBe(true);
+    expect(responses.slice(50, 60).every((r) => r.status === 409 && r.body.code === "override_limit")).toBe(true);
+    expect(responses[60].status).toBe(429);
+    expect(responses[60].body.error).toMatch(/too many overrides/i);
+  });
+
   it("an acknowledgement in the window between claiming a step and sending it stops the page", async () => {
     const { owner, member, orgId, projectId } = await team();
     const policy = (await call(owner.cookie, "POST", "/escalation-policies", { name: "Race", steps: [{ timeoutMin: 5, userIds: [member.id] }] })).body;

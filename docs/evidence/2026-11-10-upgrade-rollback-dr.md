@@ -138,3 +138,23 @@ Node 24.22.1.
   `montral-docker.yml`.
 - The migrations upgraded through are 0053 (on-call) and 0054 (OIDC SSO). Newer ones (for example #54's) are
   upgraded through on every pull request and push to main once they land.
+
+## Backup stream integrity (PR #58)
+
+A review of #55 found that the qualification could read a backup before Docker's piped output was fully on disk.
+`scripts/docker-file-transfer.mjs` now resolves only when the process exited 0 **and** every byte was read from the
+source or flushed to the destination, and fails closed: any non-zero exit, signal, spawn error or stream error on
+either side rejects; an existing destination is never overwritten (`wx`); a destination the call created is deleted
+again on failure, so no partial backup can be restored later; a process that ignores the kill cannot hang the run.
+
+`scripts/docker-file-transfer.test.mjs` (11 tests, real files, faked Docker process) covers: complete flush when the
+process exits first (4 MiB), existing destination untouched (`EEXIST`), destination that cannot be created (`ENOENT`),
+a write failing part-way (`ENOSPC`, partial file removed), non-zero exit, early termination by `SIGKILL`, a truncated
+source stream (`ECONNRESET`), spawn failure, restore from a missing file, restore input the process stops reading
+(`EPIPE`), and a complete 3 MiB restore. Negative control: against #58's original implementation 5 of these tests fail
+(partial or invalid backup files left behind).
+
+In the real qualification each documented backup is opened with `pg_restore --list` (this checks the custom-format
+header and table of contents only). Completeness is proven by restoring: the rollback restore of the pre-upgrade backup
+and the disaster-recovery restore are compared table by table with exact SHA-256 fingerprints, and a truncated copy
+(half of a real `pg_dump -Fc` archive) must be refused by the documented `pg_restore --exit-on-error` restore.

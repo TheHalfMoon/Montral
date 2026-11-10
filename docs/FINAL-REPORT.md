@@ -6,7 +6,7 @@ Nothing is released, deployed, packaged, published or tagged; that requires the 
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
 published to any registry.
 
-**Candidate revision:** `main` at `678c363` (2026-11-10). Every claim below points to a merged pull request, a CI run on
+**Original qualified candidate revision:** `678c363` (2026-11-10). **Current observed main:** `65dd117` (2026-11-10 UTC). The ten-run evidence below applies to `678c363`, not automatically to newer commits. Requalify the latest exact head before a release decision. Every claim below points to a merged pull request, a CI run on
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
@@ -57,8 +57,7 @@ periodic re-verification and owner notices; subscribers; maintenance windows; ba
 **Platform:** REST API, OAuth MCP server, API keys with project scopes, Terraform provider (unpublished), audit log
 with export, OIDC SSO, 2FA, roles, Docker self-hosting, upgrade/rollback/DR procedures.
 
-**Not implemented (ranked in the ledger):** SAML and SCIM, SMS/voice (paid provider — needs approval), scripted
-(code) browser checks, custom monitor regions for browser checks.
+**Post-candidate changes (not covered by the ten-run candidate table):** SCIM 2.0 provisioning (#67), atomic SCIM transitions and sign-in gate locking (#70, closes #68), browser scripted evaluate step (#66), two-replica Docker qualification (#65), and month-boundary browser-credit accounting fix (#71). These require current exact-head CI and security review before release claims. **Still not implemented or externally qualified:** native SAML (OIDC bridge documented), paid SMS/voice, custom browser-monitor regions, live provider integrations and physical-device qualification.
 
 ## 4. Test results at the candidate revision
 
@@ -86,7 +85,7 @@ monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the 
 restoring the pre-upgrade backup; disaster recovery into a new database (RTO 2.1 s — a floor on a tiny dataset, not a
 capacity figure); a newer schema refused at startup with a clear message.
 
-**Not demonstrated:** several app nodes behind a load balancer under real traffic; hosted or cross-region failover;
+**Post-candidate evidence:** #65 adds a disposable two-replica Docker/nginx qualification harness; this is not hosted production capacity evidence. **Not demonstrated:** hosted or cross-region failover;
 managed PITR; capacity beyond one 4-vCPU node; real network latency in the load test.
 
 ## 6. Security assessment
@@ -148,5 +147,5 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 
 ## 11. Open pull requests not from this programme
 
-Only #45 is open (draft by the Mac assistant: physical Mac/Safari evidence — keep; not touched by this programme). #46
+At the 2026-11-11 UTC check, GitHub search returned no open pull requests. This replaces the earlier #45 snapshot; the native Safari hardware gate remains unqualified regardless of PR state. #46
 was closed on 2026-11-10; #51 and #57 were closed when #54 merged; #58 was reviewed, fixed and merged as `678c363`.

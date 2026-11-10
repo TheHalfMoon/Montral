@@ -163,7 +163,9 @@ async function audit(query: Query, action: string, row: Row, values: Record<stri
  */
 function inTransaction<T>(c: Context<AppEnv>, work: (query: Query) => Promise<T>): Promise<T> {
   const database = c.get("database");
-  return database.transaction ? database.transaction((scoped) => work((sql, params) => scoped.query(sql, params))) : work(q(c));
+  // fail closed: SCIM changes are never applied step by step
+  if (!database.transaction) throw new ScimError(503, "SCIM provisioning needs a database with transactions");
+  return database.transaction((scoped) => work((sql, params) => scoped.query(sql, params)));
 }
 
 /** The record, locked until the transaction ends: concurrent changes of one person are applied one after the other. */
@@ -306,6 +308,12 @@ export const scimApi = new Hono<AppEnv>()
   .onError((e, c) => {
     if (e instanceof ScimError) return json(c, { schemas: [SCIM_ERROR], status: String(e.status), ...(e.scimType ? { scimType: e.scimType } : {}), detail: e.message }, e.status);
     if (e instanceof HTTPException && e.status < 500) return json(c, { schemas: [SCIM_ERROR], status: String(e.status), detail: e.message }, e.status);
+    // a deadlock or serialization failure rolled everything back: the provider may simply retry
+    const code = (e as { code?: unknown })?.code;
+    if (code === "40P01" || code === "40001") {
+      c.header("retry-after", "1");
+      return json(c, { schemas: [SCIM_ERROR], status: "503", detail: "Busy, try again" }, 503);
+    }
     console.error("SCIM request failed; private diagnostics suppressed");
     return json(c, { schemas: [SCIM_ERROR], status: "500", detail: "Internal error" }, 500);
   })
@@ -403,8 +411,9 @@ async function save(query: Query, env: Bindings, row: Row, f: Fields): Promise<R
  * What single sign-on may do for an address in a workspace: "allowed"; "inactive" (the provider deactivated the
  * person); "not_assigned" (SCIM is on, so only people the provider created may be provisioned, and this one was not).
  */
-export async function scimGate(query: Query, orgId: string, email: string): Promise<"allowed" | "inactive" | "not_assigned"> {
-  const [u] = await query<{ active: boolean }>(`SELECT active FROM scim_user WHERE organization_id = $1::text AND user_name = $2::text`, [orgId, email.toLowerCase()]);
+export async function scimGate(query: Query, orgId: string, email: string, o: { lock?: boolean } = {}): Promise<"allowed" | "inactive" | "not_assigned"> {
+  // with `lock` (inside a transaction) the record is held until commit, so a concurrent SCIM change waits for it
+  const [u] = await query<{ active: boolean }>(`SELECT active FROM scim_user WHERE organization_id = $1::text AND user_name = $2::text${o.lock ? " FOR SHARE" : ""}`, [orgId, email.toLowerCase()]);
   if (u) return u.active ? "allowed" : "inactive";
   const [t] = await query(`SELECT 1 AS one FROM scim_token WHERE organization_id = $1::text AND revoked_at IS NULL`, [orgId]);
   return t ? "not_assigned" : "allowed";

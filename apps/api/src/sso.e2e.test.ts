@@ -955,6 +955,50 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
       await q(`drop function if exists scim_audit_fail()`);
     }
 
+    // deterministic serialization: while a transaction holds the record, a PATCH waits; a first SSO sign-in that passed
+    // the quick check waits too and then sees the deactivation that was committed meanwhile
+    const pending = <T,>(p: Promise<T>) => { let done = false; void p.then(() => { done = true; }, () => { done = true; }); return () => done; };
+    {
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      const holder = database!.transaction!(async (tx) => {
+        await tx.query(`select 1 from scim_user where id = $1 for update`, [id]);
+        await gate;
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      const waiting = scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "displayName", value: "after-lock" }]) });
+      const finished = pending(waiting);
+      await new Promise((r) => setTimeout(r, 400));
+      expect(finished()).toBe(false);
+      release();
+      await holder;
+      expect((await waiting).status).toBe(200);
+      expect((await record(id)).display_name).toBe("after-lock");
+    }
+    {
+      const gina = `gina-atomic-${rand}@${domainB}`;
+      const g = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: gina } });
+      expect(g.status).toBe(201);
+      let release!: () => void;
+      const gate = new Promise<void>((r) => { release = r; });
+      // the provider deactivates gina in a transaction that is still open while her first SSO sign-in arrives
+      const deactivation = database!.transaction!(async (tx) => {
+        await tx.query(`select 1 from scim_user where id = $1 for update`, [g.body.id]);
+        await tx.query(`update scim_user set active = false where id = $1`, [g.body.id]);
+        await gate;
+      });
+      await new Promise((r) => setTimeout(r, 100));
+      const signIn = sso(idpB, new Jar(), { email: gina }, { sub: "atomic-gina", email: gina, email_verified: true });
+      const finished = pending(signIn);
+      await new Promise((r) => setTimeout(r, 400));
+      expect(finished()).toBe(false); // waiting on the record, not provisioning
+      release();
+      await deactivation;
+      expect(failure((await signIn).location)).toBe("access_removed");
+      const ginaId = await userIdOf(gina);
+      expect(ginaId === null || !(await member(ginaId))).toBe(true);
+    }
+
     // concurrent deactivations and reactivations of one person serialize: the final record and membership agree
     await q(`update scim_user set display_name = null where id = $1`, [id]);
     const flips = await Promise.all(Array.from({ length: 12 }, (_, i) => scim(`/Users/${id}`, { method: "PATCH", token, body: patch([{ op: "replace", path: "active", value: i % 2 === 0 }]) })));

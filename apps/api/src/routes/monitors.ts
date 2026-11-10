@@ -15,7 +15,7 @@ import { BROWSER_MIN_INTERVAL_SEC, browserCreationProblem, browserRuntimeHealth,
 import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secretRefs, type BrowserConfig } from "../browser-steps";
 import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
-import { checkOne, nextAfter, refundCredits } from "../scheduler";
+import { checkOne, nextAfter, refundCredits, spendAllOrNothing } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID } from "../regions";
 
@@ -658,7 +658,7 @@ export const monitors = new Hono<AppEnv>()
       const cost = region !== undefined ? 1 : creditCost(m);
       // a manual check is a request like any other: it takes a credit
       const spentAt = new Date();
-      if ((await c.get("entitlements").spendCredits(m.organizationId, cost, spentAt)) < cost) {
+      if (!(await spendAllOrNothing(m.organizationId, cost, c.get("entitlements"), spentAt))) {
         return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
       }
       if (region === undefined) {

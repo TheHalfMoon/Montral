@@ -260,9 +260,9 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
 /**
  * Take a browser check's credits before it runs. null: the workspace has none left (a partial grant is given back), so
  * the journey must not run. Otherwise the credits actually taken (0 when the ledger failed: monitoring goes on, as for
- * every other check, and nothing is given back later).
+ * every other check, and nothing is given back later). `spentAt` is the one instant the charge and any later refund are
+ * booked at (the caller keeps it for its refund).
  */
-/** `spentAt` is the one instant the charge and any later refund are booked at (the caller keeps it for its refund). */
 export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements, spentAt: Date = new Date()): Promise<number | null> {
   const cost = creditCost(m);
   if (cost === 0) return 0;
@@ -275,6 +275,17 @@ export async function reserveCredits(workspace: string, m: Monitor, entitlements
     return null;
   }
   return granted;
+}
+
+/**
+ * All or nothing: take `cost` credits at `spentAt`, or give back whatever part was granted and answer false (a manual
+ * check that cannot be paid in full does not run, and does not keep part of the allowance either).
+ */
+export async function spendAllOrNothing(workspace: string, cost: number, entitlements: Entitlements, spentAt: Date): Promise<boolean> {
+  const granted = await entitlements.spendCredits(workspace, cost, spentAt);
+  if (granted >= cost) return true;
+  if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);
+  return false;
 }
 
 /** Give back credits taken at `spentAt` (default now) to that period's allowance. */

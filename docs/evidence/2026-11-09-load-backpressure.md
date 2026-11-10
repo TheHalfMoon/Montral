@@ -80,7 +80,7 @@ container on the same host.
 | `/health` while slow (1 probe/s) | p99 8.1 ms, max 10.4 ms, 0 failures | max 5.6-10.4 ms |
 | **Recovery** (backlog drained, last-60 s lag p95 back under 90 s) | **131 s** | 131-141 s (141 s on the merged head, run 42593740378) |
 | After recovery (120 s window) | 3,658 checks/min, lag p95 62.2 s, every monitor checked | p95 62.2-70.7 s |
-| Catch-up after recovery | up to 6 results for one monitor in the first 120 s | 5-6 (with run coalescing: max 3 in 120 s, max 2 in any 60 s; see below) |
+| Catch-up after recovery | up to 6 results for one monitor in the first 120 s | 5-6 (with run coalescing, run 42767860622: max 3 in 120 s, max 2 in any 60 s; see below) |
 | Webhook fan-out (5,000 at concurrency 50) | **336 accepted/s**, all 202; p50 / p95 / p99 140 / 216 / 262 ms; stored 5,000 (5,000 distinct ids) | 259-338/s; p99 246-471 ms |
 | Hot inbox (3 x 200) | exactly 120 x 202 + 80 x 429 per burst; 360 accepted; **stored 250** (retention cap) | identical |
 | `/api/monitors`, 4,000 monitors, 5.3 MB response | 8.5 req/s; p50 / p95 / p99 1,135 / 1,429 / 1,558 ms; 0 errors | p95 1,424-1,936 ms |
@@ -192,15 +192,19 @@ recorded as a failure.
 ## Run coalescing (2026-11-10, #54)
 `beginRuns` now skips a queued run as superseded: it is never checked or
 billed. Two conditions trigger this:
-- A check of the same monitor **started** after the run was claimed, and either
+- **Covered.** A check of the same monitor **started** after the run was
+  claimed (stamped under the row lock that `claimDue` also takes), and either
   that check is less than half an interval old or the run is stale. A run is
   stale when its lease deadline, the next run's due time, passed more than
-  70 s ago (one tick plus the slot delay).
-- An earlier run started within its timeout + 15 s and has not recorded yet.
+  70 s ago (one tick plus the slot delay). A manual check's start is stamped
+  with the database clock.
+- **In flight.** An earlier run that started **after this run was claimed** is
+  less than its timeout + 15 s old and has not recorded yet. A run that started
+  before the claim never holds it back.
 
 A run claimed after the latest check started always starts.
 
-Three versions were measured on this workload before one held every invariant:
+### Variants measured before the final rule
 
 | Rule | Run | Phase 1 results / 300 s | Post-recovery max in 60 s |
 |---|---|---|---|
@@ -208,35 +212,51 @@ Three versions were measured on this workload before one held every invariant:
 | a result *recorded* after the claim | 42724447908 | **min 3** (a slow previous run swallowed the next interval) | - |
 | a check *started* after the claim | 42736427688 | **min 3** (queue wait pushed starts past the next claim, so the schedule was thinned) | - |
 | + half-interval window only | 42743694020 | 5-6 | **4** (queued runs of one monitor drain about 30 s apart) |
-| + stale-run rule (final) | **42751836174** | **4-6** (6 monitors at 4, 3,910 at 5, 84 at 6) | **2** |
+| + stale-run rule | 42751836174 | 4-6 | 2 |
+| + review fixes (lease fence, DB clock) | 42763407865 | 4-6 | 3 (failed only the uncapped-heap RSS bound; see below) |
 
-Final run 42751836174 on `7a4c34b`. Every threshold of the qualification
-passed, including the new ones:
-- **After recovery** (from the moment the target recovered to the end of the
-  post-recovery window, 19,289 results): at most **2** results per monitor in
-  any 60 s (3,999 monitors at 2, 1 at 1), and at most **2** in any 10 s (only
-  2 monitors had 2). The thresholds are 3 per 60 s and 2 per 10 s. At most 3
-  results per monitor in the first 120 s, against up to 6 before. Recovery
-  took 132 s. Afterwards every monitor was checked, with lag p95 70.2 s.
-- **Coalesced runs are counted, not hidden.** Of 87,445 claims, 9,447 were
-  released, 62,143 produced a result (== 62,143 target requests, 0
-  duplicates), 14,551 were skipped as coalesced and 1,304 were still
-  unfinished when the servers stopped. The script asserts that these add up
-  exactly.
-- **Phase 1 is unchanged:** 4,004 checks/min, lag p95 61.1 s, 4-6 results per
-  monitor per 300 s.
-- **DB_POOL_MAX=2 (overload):** 1,970 checks/min with lag p95 163 s. Before,
-  it was 2,694-3,322 checks/min with lag p95 111-168 s. Under sustained
-  overload most runs are stale when they start, so the server now skips runs
-  that a newer check already covered instead of replaying them. The
-  no-starvation rule (every monitor checked within 360 s) passed. The lower
-  rate is coalesced work, not lost monitoring.
+### Final run
+[42767860622](https://github.com/TheHalfMoon/Montral/actions/runs/42767860622)
+on `be8a63c`, the exact head of #54. Every threshold passed.
 
-Rejected alternative (#51): starting only the newest claimed generation. When
-a run starts after the next claim, every run is superseded before it starts,
-and the monitor is never checked. A run starts after the next claim whenever
-the tick (up to 30 s), the slot delay (up to 40 s) and the queue wait add up
-to more than the 60 s interval, as in the slow and pool-2 phases here.
+| Measurement | Result |
+|---|---|
+| Phase 1 throughput | 4,009 checks/min, lag p95 61.5 s, max 70.4 s |
+| Phase 1 results per monitor per 300 s | 4-6 (20 at 4, 3,954 at 5, 26 at 6) |
+| **No starvation, normal load** (new bound: at most 2 intervals + 1 tick = 150 s between results per monitor) | longest gap 89.5 s, over all 4,000 monitors |
+| Recovery | 131 s |
+| **No starvation, after recovery** (same 150 s bound) | longest gap 60.5 s |
+| Catch-up after recovery | at most 2 results per monitor in any 60 s (3,857 at 2, 143 at 1); at most 1 in any 10 s; at most 3 in the first 120 s (before: up to 6) |
+| Integrity | 68,326 results == 68,326 target requests; 0 duplicate generations |
+| Claims accounted for | 86,888 claims = 68,326 results + 8,607 releases + 9,955 skipped before start (coalesced, never began) + 0 started without a result |
+| Started runs without a result outside the two graceful stops | **0**, asserted |
+| `/api/monitors` response (4,000 monitors) | 5.43 MB; the four scheduler columns are kept out of the API |
+| RSS, reads and webhooks (uncapped heap) | max 790 MB and 676 MB (bound 1,024 MB) |
+| DB_POOL_MAX=2 (overload) | 2,697 checks/min, lag p95 119.6 s; no starvation under the looser overload bound (interval + 300 s), which applies to this phase only |
+
+Run classification comes from a test-only trigger, which logs every run start
+next to claims and releases. A claimed run that never recorded is then either
+**skipped before start** (coalesced: never checked, never billed) or **started
+without a result** (lost: crash, inconclusive probe, rejected write). The
+second kind must be zero outside the 30 s around each graceful stop.
+`qualify-crash-recovery.mjs` logs starts the same way and still fails on a
+lost non-latest run.
+
+**RSS finding during review.** Run 42763407865 failed only the uncapped-heap
+RSS bound in the read phases, at 1,244 and 1,396 MB (main at the time: 694 and
+828 MB). The four new scheduler columns had grown the 4,000-monitor
+`/api/monitors` response by 11 %, from 5.44 to 6.03 MB, and the read phase
+builds ten of these at once. They are scheduler-only state and are no longer
+returned. In the final run the response is 5.43 MB and RSS is back within the
+range of main.
+
+### Rejected alternative (#51)
+Starting only the newest claimed generation. When a run starts after the next
+claim, every run is superseded before it starts, and the monitor is never
+checked. A run starts after the next claim whenever the tick (up to 30 s), the
+slot delay (up to 40 s) and the queue wait add up to more than the 60 s
+interval, as in the slow and pool-2 phases here. It also drops an
+already-queued run when the queue refuses a newer claim.
 
 ## Limits
 - This covers a single Node process and a single-host PostgreSQL on a 4 vCPU /

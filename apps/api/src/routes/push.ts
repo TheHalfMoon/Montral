@@ -37,9 +37,11 @@ export const push = new Hono<AppEnv>()
       if (!c.get("projectScope")) {
         for (const orgId of await repo.managedOrgsWithoutPushChannel(userId)) {
           if (granted instanceof Map && !granted.has(orgId)) continue;
-          // nor into a workspace whose "require SSO" this credential does not satisfy
-          if (!(await ssoAllowsPrincipal(c, orgId, userId))) continue;
-          await repo.createChannel(orgId, null, { type: "push", name: "Mobile app", config: {}, enabled: true, autoEnable: true }).catch(() => {
+          await (async () => {
+            // nor into a workspace whose "require SSO" this credential does not satisfy (a failed check creates nothing)
+            if (!(await ssoAllowsPrincipal(c, orgId, userId))) return;
+            await repo.createChannel(orgId, null, { type: "push", name: "Mobile app", config: {}, enabled: true, autoEnable: true });
+          })().catch(() => {
             // DB/transport exceptions are untrusted; registration still works
             // even when optional auto-channel provisioning cannot finish.
             console.error("could not create the push channel; diagnostics suppressed");

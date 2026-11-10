@@ -200,6 +200,28 @@ describe("browser checks that did not happen", () => {
     expect(refunds.at(-1)).toEqual({ workspace: "o", n: 1 });
   });
 
+  it("books the charge and its refund at the same instant, even across a UTC month boundary", async () => {
+    const { repo } = fake();
+    const charged: Date[] = [];
+    const refunded: Date[] = [];
+    // the reservation itself crosses midnight UTC on the 1st
+    const ent = { spendCredits: async (_w: string, n: number, at?: Date) => { charged.push(at!); vi.setSystemTime(new Date("2026-12-01T00:00:00.500Z")); return n; }, refundCredits: async (_w: string, _n: number, at?: Date) => { refunded.push(at!); } } as never;
+    // the run is deferred for capacity, so its credits come back
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-30T23:59:59.999Z"));
+      next.push({ kind: "deferred", error: BROWSER_BUSY });
+      await checkMany(repo, [browserMonitor({ id: "edge" })], ent);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(charged).toHaveLength(1);
+    expect(refunded).toHaveLength(1);
+    // the very instant the charge was booked at (the same value, not a second clock reading)
+    expect(refunded[0]).toBe(charged[0]);
+    expect(charged[0].toISOString()).toBe("2026-11-30T23:59:59.999Z");
+  });
+
   it("a real run records its secrets version and clears the state in the database even when the snapshot says it is not unchecked", async () => {
     const { repo, runs, cleared } = fake();
     next.push({ kind: "run", error: "" });

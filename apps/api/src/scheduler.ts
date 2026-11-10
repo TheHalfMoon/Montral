@@ -245,7 +245,7 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
       // credits are taken before the journey is launched; without them it does not run (nothing recorded, like any other
       // monitor out of credits: the lease keeps its next due time)
       const spentAt = new Date();
-      const charged = await reserveCredits(workspace, m, entitlements);
+      const charged = await reserveCredits(workspace, m, entitlements, spentAt);
       if (charged === null) continue;
       let result: CheckResultKind = "done";
       try { result = await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
@@ -262,11 +262,11 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
  * the journey must not run. Otherwise the credits actually taken (0 when the ledger failed: monitoring goes on, as for
  * every other check, and nothing is given back later).
  */
-export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements): Promise<number | null> {
+/** `spentAt` is the one instant the charge and any later refund are booked at (the caller keeps it for its refund). */
+export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements, spentAt: Date = new Date()): Promise<number | null> {
   const cost = creditCost(m);
   if (cost === 0) return 0;
   let granted: number;
-  const spentAt = new Date();
   try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return 0; }
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
   if (granted < cost) {

@@ -29,7 +29,7 @@ import { dockerFileTransfer } from "./docker-file-transfer.mjs";
 import { spawn, execFile } from "node:child_process";
 import { createServer, request as httpRequest } from "node:http";
 import { createServer as createTcp } from "node:net";
-import { createReadStream, createWriteStream, existsSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
@@ -56,7 +56,7 @@ for (const [label, dir] of [["old", OLD_DIR], ["new", NEW_DIR]]) {
 if (!/^[0-9a-f]{12,64}$/.test(PG_CONTAINER)) throw new Error("Set MONTRAL_PG_CONTAINER to the PostgreSQL container id: the documented docker compose backup and restore run inside it");
 
 const dbUrl = (name) => { const u = new URL(connection); u.pathname = "/" + name; return u.href; };
-const DBS = { upgrade: `${baseDb}_up`, rollback: `${baseDb}_rb`, dr: `${baseDb}_dr_new`, drSnapshot: `${baseDb}_dr_snap` };
+const DBS = { upgrade: `${baseDb}_up`, rollback: `${baseDb}_rb`, dr: `${baseDb}_dr_new`, drSnapshot: `${baseDb}_dr_snap`, corrupt: `${baseDb}_corrupt` };
 for (const name of Object.values(DBS)) if (!/^montral_test_[a-z0-9_]+$/.test(name) || name.length > 63) throw new Error(`refusing database name ${name}`);
 const PG_USER = decodeURIComponent(baseUrl.username || "montral");
 const pgEnv = { ...process.env, PGHOST: baseUrl.hostname, PGPORT: baseUrl.port || "5432", PGUSER: PG_USER, PGPASSWORD: decodeURIComponent(baseUrl.password || "") };
@@ -452,6 +452,8 @@ try {
   // the documented backup command (`docker compose exec -T postgres pg_dump -U montral -Fc montral > montral-pre-upgrade.dump`)
   await timed("preUpgradeBackup", () => inContainer(["pg_dump", "-U", PG_USER, "-Fc", DBS.upgrade], { stdoutFile: preDump }));
   summary.preUpgradeDumpBytes = statSync(preDump).size;
+  // a backup is only a backup once it reads back as a complete custom-format archive (no silent truncation)
+  await hostTool("pg_restore", ["--list", preDump]).then(({ stdout }) => check(stdout.includes("TABLE DATA") && stdout.includes("organization"), "backup: the pre-upgrade dump is a readable custom-format archive"));
 
   log("A: HEAD on the same database");
   const upgradeStarted = new Date();
@@ -589,6 +591,17 @@ try {
   const liveAfter = await fingerprints(db(DBS.upgrade));
   summary.phases.disasterRecovery = { snapshotDumpBytes: statSync(snapDump).size, documentedDumpBytes: statSync(docDump).size };
   await hostTool("pg_restore", ["--list", docDump]).then(({ stdout }) => check(stdout.includes("TABLE DATA") && stdout.includes("organization"), "dr: the documented dump is a readable custom-format archive"));
+
+  // negative control: a truncated copy of a real backup must be refused by the documented restore, never restored
+  // silently as a partial database (the same --exit-on-error restore the runbook uses)
+  const truncated = join(temp, "dr-truncated.dump");
+  const full = readFileSync(docDump);
+  writeFileSync(truncated, full.subarray(0, Math.floor(full.length / 2)));
+  await createDb(DBS.corrupt);
+  const corruptRestore = await inContainer(["pg_restore", "-U", PG_USER, "-d", DBS.corrupt, "--no-owner", "--exit-on-error"], { stdinFile: truncated })
+    .then(() => "restored", (e) => e.message);
+  check(corruptRestore !== "restored" && /exited [1-9]/.test(corruptRestore), `dr: a truncated backup (${full.length >> 1} of ${full.length} bytes) is refused by the documented restore (${corruptRestore.slice(0, 80)})`);
+  await dropDb(DBS.corrupt);
 
   // the disaster: the server dies and the database is gone
   log("C: kill the server and drop the database");

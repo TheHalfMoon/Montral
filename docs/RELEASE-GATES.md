@@ -11,10 +11,10 @@ Every gate below passed on GitHub Actions at `678c363` (`main` after #58). Run i
 
 | # | Gate | Status | Evidence at `678c363` |
 |---|---|---|---|
-| G1 | Typecheck, unit and real-PostgreSQL E2E on PostgreSQL 17 and the shipped 18.6-alpine image | PASS | app CI 42837467149: API 1,406 passed / 22 skipped per leg (the 22 are real-Chromium browser-check tests, run required in G6), probe 22/22, web 129/129 |
+| G1 | Typecheck, unit and real-PostgreSQL E2E on PostgreSQL 17 and the shipped 18.6-alpine image | PASS | app CI 42837467149: API 1,406 passed / 22 skipped per leg (20 browser-check integration + 2 browser e2e tests that need Chromium, run required in G6), probe 22/22, web 129/129 |
 | G2 | macOS ARM64 qualification (PostgreSQL 18) | PASS | 42837467312: same counts; restore drill, crash recovery, Chromium journey |
 | G3 | Backup and full restore with content verification; no silent truncation | PASS | 42837467149: RESTORE_DRILL_PASS 60 tables + catalog negative control; 42837467329: transfer integrity tests 11/11, truncated dump refused by the documented restore |
-| G4 | Upgrade from the previous candidate (`17f55c1`), rollback, disaster recovery | PASS | 42837467329: every seeded entity kept; exact rollback restore; old build refuses the upgraded schema safely; RTO 2.1 s on the synthetic dataset |
+| G4 | Upgrade from the previous candidate (`17f55c1`), rollback, disaster recovery | PASS | 42837467329: every seeded entity kept; exact rollback restore; the old build fails safely against the upgraded schema (migration check refuses; started, it exits after ~59 s with a generic message and changes nothing); RTO 2.1 s on the synthetic dataset |
 | G5 | Docker image and compose: health, persistence, container recreation, PostgreSQL major-downgrade refusal | PASS | 42837467231: DOCKER_COMPOSE_PASS |
 | G6 | Browser-monitoring isolation (separate hardened runner, egress policy) | PASS | 42837467073: 118/118, BROWSER_RUNNER_PASS (runner has no app secrets and no database access) |
 | G7 | Cross-browser and WCAG 2.1 AA (Chromium, Firefox, WebKit, Pixel 7, iPhone 14; light and dark) | PASS | 42837467227: 55/55, 0 axe violations |
@@ -22,8 +22,8 @@ Every gate below passed on GitHub Actions at `678c363` (`main` after #58). Run i
 | G9 | Network partition and primary promotion (PostgreSQL 17 and 18.6-alpine) | PASS | 42837467413: FAILOVER_PASS on both |
 | G10 | Terraform provider acceptance (unpublished) | PASS | 42837467074: 22 TestAcc passed, 0 skipped, 0 failed |
 | G11 | Vendored source integrity | PASS | 42837467498 |
-| G12 | Independent review of every merged change, all findings fixed or recorded | PASS | `docs/FINAL-REPORT.md` §2; open low-severity follow-ups in `docs/TASK-LEDGER.md` rows 26–31 |
-| G13 | No open critical, high or medium security finding | PASS | `docs/FINAL-REPORT.md` §6 |
+| G12 | Review of every merged change, all findings fixed or recorded | PASS, with recorded gaps | `docs/FINAL-REPORT.md` §2 (agent reviewers in the programme, mostly not posted to GitHub): fixes in #47 and #48 not re-reviewed; a separate security review requested on #53 not done; open low-severity follow-ups in `docs/TASK-LEDGER.md` rows 26–29 |
+| G13 | No open critical, high or medium security finding | PASS (self-assessed) | `docs/FINAL-REPORT.md` §6; no third-party penetration test |
 
 **Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari on
 physical Apple hardware (blocked on Safari remote-automation authorization); Windows Docker Desktop / WSL 2 (not

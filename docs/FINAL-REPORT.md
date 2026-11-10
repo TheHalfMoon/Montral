@@ -35,7 +35,7 @@ fixes were verified by CI (and, for #48, by measurement) but not by a second rev
 | #55 | `52bb319` | Upgrade from `17f55c1`, rollback and disaster recovery in CI; refusal of a newer schema with a clear message | 2 (1 medium fixed). A later harness finding (backup stream not awaited before restore) was fixed by #58 |
 | #54 | `c1b7928` | Custom-domain withdrawal notices (transactional outbox); coalescing of stale queued checks after a backlog | 2 (1 medium fixed) |
 | #52 | `0b93696` | Synthetic browser monitoring in a separate hardened browser-runner | 6 (1 high, 11 medium fixed; cleared) |
-| #58 | `678c363` | Fail-closed Docker backup/restore transfer in the upgrade/DR harness: await exit and the full stream, never overwrite, remove partial files; truncated-dump negative control | 1 (no correctness defect; 2 low fixed) |
+| #58 | `678c363` | Fail-closed Docker backup/restore transfer in the upgrade/DR harness: await exit and the full stream, never overwrite, remove partial files; truncated-dump negative control | 1 agent review in the session, not posted to GitHub (no correctness defect; 2 low fixed); recorded in `docs/evidence/2026-11-10-upgrade-rollback-dr.md` |
 
 The previous round (#12–#43) is summarised in the git history and the earlier version of this report.
 
@@ -82,7 +82,7 @@ GitHub Actions on `678c363` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All 
 Demonstrated on real processes and real PostgreSQL: graceful SIGTERM; SIGKILL mid-retry with no duplicates; database
 outage recovery; network partition; primary promotion with no committed row lost; sustained load with 0 lost or
 duplicated checks; bounded backpressure and pool exhaustion; coalescing of stale queued checks (at most 2 results per
-monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the previous candidate; backups that are truncated, partially written or produced by a failed `pg_dump` are rejected rather than restored; rollback by
+monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the previous candidate; a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
 restoring the pre-upgrade backup; disaster recovery into a new database (RTO 2.1 s — a floor on a tiny dataset, not a
 capacity figure); a newer schema refused at startup with a clear message.
 

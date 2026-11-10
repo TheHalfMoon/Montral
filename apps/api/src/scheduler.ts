@@ -267,7 +267,7 @@ export async function reserveCredits(workspace: string, m: Monitor, entitlements
   if (cost === 0) return 0;
   let granted: number;
   const spentAt = new Date();
-  try { granted = await entitlements.spendCredits(workspace, cost); } catch { console.error("credits unavailable"); return 0; }
+  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return 0; }
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
   if (granted < cost) {
     if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);

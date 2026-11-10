@@ -187,10 +187,13 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     if (row.plan === "pro" || row.plan === "business") return row.plan;
     return "free";
   }
-  const spend = async (org: string, count: number, kind: "credits" | "emails") => {
+  const validAt = (at?: Date) => (at && !Number.isNaN(at.getTime()) ? at : new Date());
+  const spend = async (org: string, count: number, kind: "credits" | "emails", at?: Date) => {
     if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid usage amount");
     if (count === 0) return 0;
-    const [limits, { start }] = [TABLE[await tier(org)], calendarMonthUtc()];
+    // the period is fixed before the plan lookup, so a refund naming the same instant hits the same month
+    const { start } = calendarMonthUtc(validAt(at));
+    const limits = TABLE[await tier(org)];
     const rows = await database.query<{ granted: number }>(
       "SELECT montral_spend_usage($1::text,$2::timestamptz,$3::text,$4::integer,$5::integer) AS granted",
       [org, start.toISOString(), kind, count, limits[kind]],
@@ -200,7 +203,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   /** Credits given back for work that did not happen, in the period they were taken in (never below zero). */
   const refund = async (org: string, count: number, spentAt?: Date) => {
     if (!Number.isSafeInteger(count) || count <= 0) return;
-    const { start } = calendarMonthUtc(spentAt && !Number.isNaN(spentAt.getTime()) ? spentAt : new Date());
+    const { start } = calendarMonthUtc(validAt(spentAt));
     await database.query(
       "UPDATE montral_usage SET used = GREATEST(0, used - $3::integer) WHERE organization_id = $1::text AND period_start = $2::timestamptz AND kind = 'credits'",
       [org, start.toISOString(), count],
@@ -256,7 +259,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   };
   return {
     ...unmetered,
-    spendCredits: (org, count) => spend(org, count, "credits"),
+    spendCredits: (org, count, at) => spend(org, count, "credits", at),
     refundCredits: (org, count, spentAt) => refund(org, count, spentAt),
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),

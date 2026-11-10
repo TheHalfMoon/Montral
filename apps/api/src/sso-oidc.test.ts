@@ -168,6 +168,22 @@ describe("authorization request and token exchange", () => {
     expect(await run({ d: { ...d, tokenAuth: "client_secret_post" } })).toMatch(/^eyJ/);
   });
 
+  it("keeps an access token only when it is a plain Bearer token", async () => {
+    optIn();
+    const d = await discover(idp.issuer, { fresh: true });
+    const verifier = randomToken();
+    const exchange = async (body: Record<string, unknown>) => {
+      const { callback } = idp.authorize(authorizationUrl(d, { clientId: idp.clientId, redirectUri: "https://m.test/cb", state: "s", nonce: "n", codeChallenge: await sha256b64url(verifier) }), { sub: "x" }, { tokenResponse: { status: 200, body: { id_token: "eyJ.x.y", ...body } } });
+      return exchangeCode(d, { clientId: idp.clientId, clientSecret: idp.clientSecret, code: new URL(callback).searchParams.get("code")!, redirectUri: "https://m.test/cb", codeVerifier: verifier });
+    };
+    expect((await exchange({ access_token: "abc", token_type: "Bearer" })).accessToken).toBe("abc");
+    expect((await exchange({ access_token: "abc", token_type: "bearer" })).accessToken).toBe("abc");
+    expect((await exchange({ access_token: "abc" })).accessToken).toBe("abc");
+    for (const body of [{ access_token: "abc", token_type: "DPoP" }, { access_token: "a b" }, { access_token: "a\r\nX: y" }, { access_token: "" }, { access_token: 5 }, { access_token: "x".repeat(8193) }, {}]) {
+      expect((await exchange(body)).accessToken, JSON.stringify(body).slice(0, 60)).toBeNull();
+    }
+  });
+
   it("bounds the token response", async () => {
     optIn();
     const d = await discover(idp.issuer, { fresh: true });
@@ -218,11 +234,19 @@ describe("userinfo fallback for a missing verified email", () => {
     expect(idp.lastUserinfoAuth).toBe("");
   });
 
-  it("never sends the access token to a link-local/metadata userinfo address, even with the private opt-in", async () => {
+  it("never sends the access token to an endpoint the SSRF guard refuses", async () => {
     optIn();
-    const d = { ...(await discover(idp.issuer, { fresh: true })), userinfoEndpoint: "https://169.254.169.254/userinfo" };
+    const d = await discover(idp.issuer, { fresh: true });
     idp.userinfo.set("at-1", { body: { sub: "sub-1", email: "bob@corp.test", email_verified: true } });
+    // the same provider's own (private, plain-http) userinfo endpoint, once the private opt-in is gone
+    setSsoOptionsForTests(null);
+    idp.lastUserinfoAuth = "";
     expect(await withUserinfo(d, "at-1", { issuer: idp.issuer, ...base, subject: "sub-1" })).toMatchObject({ email: null, emailVerified: false });
+    expect(idp.lastUserinfoAuth).toBe("");
+    // with the opt-in it is reached (the control for the assertion above)
+    optIn();
+    expect((await withUserinfo(d, "at-1", { issuer: idp.issuer, ...base, subject: "sub-1" })).emailVerified).toBe(true);
+    expect(idp.lastUserinfoAuth).toBe("Bearer at-1");
   });
 });
 

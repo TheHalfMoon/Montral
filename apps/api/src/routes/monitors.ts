@@ -652,7 +652,7 @@ export const monitors = new Hono<AppEnv>()
       const cost = region !== undefined ? 1 : creditCost(m);
       // a manual check is a request like any other: it takes a credit
       const spentAt = new Date();
-      if ((await c.get("entitlements").spendCredits(m.organizationId, cost)) < cost) {
+      if ((await c.get("entitlements").spendCredits(m.organizationId, cost, spentAt)) < cost) {
         return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
       }
       if (region === undefined) {

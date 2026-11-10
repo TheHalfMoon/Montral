@@ -21,8 +21,10 @@ export interface Entitlements {
   /**
    * Take `credits` for work that is about to run. Resolves with how many were granted, between 0 and `credits`:
    * fewer than asked means the allowance for the current period is used up and the rest must not run.
+   *
+   * `at` (default now) picks the period, so a caller that may refund later can name the same instant.
    */
-  spendCredits(workspaceId: string, credits: number): Promise<number>;
+  spendCredits(workspaceId: string, credits: number, at?: Date): Promise<number>;
   /**
    * Give back credits taken with `spendCredits` for work that then did not happen (a browser check deferred for capacity,
    * or one the browser runtime could not run). `spentAt` is when they were taken: they go back to that period's

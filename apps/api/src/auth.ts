@@ -313,6 +313,12 @@ export function createAuth(database: Database, env: Bindings) {
                 throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
               }
             }
+            // a key may be pinned only to a workspace the caller belongs to: a former member cannot prepare a key that
+            // would start working again after a re-invitation
+            const pin = ctx.path.startsWith("/api-key/") ? text(plain(body.metadata)?.organizationId) : null;
+            if (pin && !(await query(`SELECT 1 AS one FROM member WHERE organization_id = $1::text AND user_id = $2::text`, [pin, session.user.id])).length) {
+              throw new APIError("FORBIDDEN", { message: "Not a member of this workspace", code: "NOT_A_MEMBER" });
+            }
           }
         }
         // LAST step for a removal or leave, after every guard above has passed (a call they refuse records nothing):

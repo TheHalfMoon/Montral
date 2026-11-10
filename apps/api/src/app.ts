@@ -52,6 +52,8 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const database = openDatabase(connectionString(c.env), { max: 1 });
     c.set("repo", database.repo);
     c.set("database", database);
+    // an edition's request middleware may query after the route has answered (edition.ts): never release early then
+    c.set("earlyDatabaseRelease", !edition.requestMiddleware);
     c.set("auth", createAuth(database, c.env));
     c.set("entitlements", edition.entitlements({ database, env: c.env }));
     try {

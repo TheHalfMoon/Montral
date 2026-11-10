@@ -9,7 +9,8 @@ import type { AppEnv } from "./env";
  * query `c.get("database")` after this call; the app's own close at the end of the request is skipped.
  */
 export function releaseDatabase(c: Context<AppEnv>) {
-  if (c.get("databaseReleased")) return;
+  // already released, or an edition's request middleware may still use the database after the route (edition.ts)
+  if (c.get("databaseReleased") || c.get("earlyDatabaseRelease") === false) return;
   const database = c.get("database");
   c.set("databaseReleased", true);
   if (!database?.close) return;

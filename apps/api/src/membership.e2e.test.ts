@@ -55,6 +55,8 @@ describe.skipIf(!url)("workspace membership", () => {
       expect(await db.repo.isMember(member.id, orgId)).toBe(false);
       expect(await db.query(`select 1 from apikey where id = $1`, [pinned.body.id])).toHaveLength(0);
       expect((await keyCall(pinned.body.key)).status).toBe(401);
+      // nor can the former member prepare a new key pinned to the workspace
+      expect((await call(cookie, "POST", "/auth/api-key/create", { name: "prepared", metadata: { organizationId: orgId } })).status).toBe(403);
       if (elsewhere) expect(await db.query(`select 1 from apikey where id = $1`, [elsewhere.body.id])).toHaveLength(1);
       // re-inviting the member does not bring the revoked key back
       const again = await call(owner.cookie, "POST", "/auth/organization/invite-member", { organizationId: orgId, email: member.email, role: "member" });

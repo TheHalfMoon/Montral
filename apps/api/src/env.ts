@@ -161,6 +161,8 @@ export type Variables = {
   databaseHeldUntil?: Promise<void>;
   /** The request gave its database back early (releaseDatabase): nothing may query it afterwards. */
   databaseReleased?: boolean;
+  /** false when an edition's request middleware may still query after the route (then nothing is released early) */
+  earlyDatabaseRelease?: boolean;
 };
 
 export type AppEnv = { Bindings: Bindings; Variables: Variables };

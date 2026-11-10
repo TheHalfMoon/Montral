@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import type { AppEnv } from "./env";
 import { capturedHeaders, fingerprint, hookDelaySlots, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
-function fixture(allowReceipt = true) {
+function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean) {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string; response?: any }> = [];
   const events: Array<{ id: string; inbox_id: string; organization_id: string; project_id: string; body: string; headers: unknown; response_status?: number | null }> = [];
   const audits: Array<{ action: string; changes: unknown }> = [];
@@ -69,6 +69,7 @@ function fixture(allowReceipt = true) {
   app.use("*", async (c, next) => {
     c.set("repo", repo as never);
     c.set("database", db as never);
+    if (earlyDatabaseRelease !== undefined) c.set("earlyDatabaseRelease", earlyDatabaseRelease);
     c.set("orgId", "org-a");
     c.set("projectId", projectId);
     c.set("allProjects", false);
@@ -533,18 +534,27 @@ describe("configurable receiver responses", () => {
   it("gives the request's database back before sleeping, and only once (no idle connection held through the delay)", async () => {
     const f = fixture();
     const { id, path } = await inbox(f);
-    await put(f, id, { status: 201, body: "slow", delayMs: 600 });
+    await put(f, id, { status: 201, body: "slow", delayMs: 1500 });
     const before = f.closed.length;
     const started = Date.now();
     const res = await f.app.request(path, { method: "POST", body: "x" });
     expect(res.status).toBe(201);
     expect(await res.text()).toBe("slow");
-    expect(Date.now() - started).toBeGreaterThanOrEqual(550);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(1400);
     const closes = f.closed.slice(before);
     expect(closes).toHaveLength(1);
     // released right after capture, well before the delay ended
-    expect(closes[0] - started).toBeLessThan(400);
+    expect(closes[0] - started).toBeLessThan(1000);
     expect(f.events.at(-1)?.response_status).toBe(201);
+  });
+
+  it("keeps the database through the delay when an edition's middleware may still query after the route", async () => {
+    const f = fixture(true, false);
+    const { id, path } = await inbox(f);
+    await put(f, id, { status: 201, body: "slow", delayMs: 300 });
+    const before = f.closed.length;
+    expect((await f.app.request(path, { method: "POST", body: "x" })).status).toBe(201);
+    expect(f.closed.length - before).toBe(0);
   });
 
   it("keeps the database for an answer without a delay", async () => {

@@ -640,6 +640,11 @@ export interface Repo {
   /**
    * Mark claimed runs as started by their monotonic generation. Older generations are discarded, even after a newer
    * run; `token` is the leased deadline, retained for old messages and heartbeat validation.
+   *
+   * Stale runs are coalesced: a generation-based run is also not started (superseded: never checked or billed) when a
+   * result for the monitor was recorded after the run was claimed, or while an earlier run that started within its
+   * timeout plus a short margin has not recorded its result yet. A backlog of queued runs for one monitor thus ends
+   * in one check, while a run claimed after the latest result always starts.
    */
   beginRuns(runs: { id: string; token: Date; generation?: number }[]): Promise<string[]>;
   /** Hand claimed monitors back, due right now, when their work could not be queued. Monitors that moved on since are left alone. */

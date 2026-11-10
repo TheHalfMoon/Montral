@@ -26,6 +26,30 @@ import { publicMonitorStatus } from "./public-monitor-status";
 import { oncallRepo } from "./oncall-repo";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Run coalescing: an earlier run counts as in flight for its timeout plus this long (timeouts are at most 30 s). */
+export const RUN_IN_FLIGHT_MARGIN_SEC = 15;
+/** A run is stale once its lease deadline (the next run's due time) is this far past: one 30 s tick + the 40 s slot delay. */
+export const STALE_RUN_SLACK_SEC = 70;
+/**
+ * Run coalescing for beginRuns: a generation-based run is superseded (skipped, never checked or billed) when
+ *  - a recorded check STARTED after this run was claimed (checked_through_generation, stamped by recordObservation
+ *    from run_started_through_generation), and either that check started less than half an interval ago
+ *    (checked_started_at), or this run is stale: its lease deadline, the next run's due time, passed more than a tick
+ *    plus the slot delay ago. Then this run would only repeat that check: a backlog draining. A monitor that is merely
+ *    late on every run (each starting a little after the next claim) is not thinned out: its runs start about an
+ *    interval apart and none is that stale, so none is skipped; or
+ *  - an earlier run started less than its timeout + RUN_IN_FLIGHT_MARGIN_SEC ago and has not recorded yet.
+ * That lease (at most 45 s) is shorter than the 60 s minimum interval, so a steady schedule never skips, and a run that
+ * died without a result blocks nothing once it has passed. A run claimed after the latest check began always starts.
+ */
+const coalesced = (generation: number, token: Date): SQL => {
+  const m = schema.monitor;
+  return sql`not (${m.checkedThroughGeneration} >= ${generation} and ${m.checkedStartedAt} is not null
+      and (${m.checkedStartedAt} > now() - make_interval(secs => (${m.intervalSec} / 2.0)::double precision)
+        or ${token.toISOString()}::timestamptz < now() - make_interval(secs => ${STALE_RUN_SLACK_SEC}::double precision)))
+    and not (${m.lastRunGeneration} > ${m.coverageGeneration} and ${m.runStartedAt} is not null
+      and ${m.runStartedAt} > now() - make_interval(secs => (${m.timeoutMs} / 1000.0 + ${RUN_IN_FLIGHT_MARGIN_SEC}::double precision)::double precision))`;
+};
 
 /** `col in (scope)` for a limited API key, nothing otherwise; spread into `and(...)`. */
 const inScope = (scope: Scope, col: Parameters<typeof inArray>[0]): SQL | undefined => (scope ? inArray(col, scope) : undefined);
@@ -662,8 +686,8 @@ export function createRepo(db: Db): Repo {
             : sql`${schema.monitor.lastRunGeneration} < ${generation} and ${schema.monitor.runGeneration} >= ${generation}`;
           const won = await db
             .update(schema.monitor)
-            .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation } : {}) })
-            .where(and(eq(schema.monitor.id, id), newer))
+            .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation, runStartedAt: sql`now()`, runStartedThroughGeneration: sql`${schema.monitor.runGeneration}` } : {}) })
+            .where(and(eq(schema.monitor.id, id), newer, generation === undefined ? undefined : coalesced(generation, token)))
             .returning({ id: schema.monitor.id });
           return won.length ? id : null;
         }),
@@ -1128,7 +1152,8 @@ export function createRepo(db: Db): Repo {
     async claimRetries(limit) {
       const t = schema.alertDelivery;
       // rows from before delivery states existed count as pending when they failed and wait for a retry
-      const due = sql`(${t.status} = 'pending' or (${t.status} is null and ${t.ok} = false)) and ${t.nextAttemptAt} <= now()`;
+      // custom-domain notices (domain.*) have no incident: their own sender retries them (apps/api/src/domain-notice.ts)
+      const due = sql`(${t.status} = 'pending' or (${t.status} is null and ${t.ok} = false)) and ${t.nextAttemptAt} <= now() and ${t.kind} not in ('domain.withdrawn', 'domain.failing')`;
       const claimed = await db
         .update(t)
         .set({ status: "sending", claimedAt: sql`now()`, nextAttemptAt: null })

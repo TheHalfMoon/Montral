@@ -74,8 +74,20 @@ async function appendObservation(db: Db, snapshot: Monitor, result: { ok: boolea
       }).where(eq(schema.monitor.id, current.id)).returning();
       return updated;
     }
-    if (generation !== undefined) await tx.update(schema.monitor).set({
+    // Run coalescing: the runs claimed before this check STARTED (beginRuns stamped run_started_through_generation
+    // under the row lock claimDue also takes; a manual check started from a snapshot loaded just before it). One of
+    // them that starts later would only repeat this check, so beginRuns skips it. A check that started before a claim
+    // never covers it, however late it finishes: a slow previous run cannot swallow the next interval's run.
+    // The check's start time goes with it: it supersedes a claimed run only for half an interval (see beginRuns).
+    const latestStarted = generation !== undefined && generation === current.lastRunGeneration;
+    const startedThrough = Math.min(current.runGeneration, generation === undefined ? (snapshot.runGeneration ?? 0)
+      : latestStarted ? current.runStartedThroughGeneration : generation);
+    // a manual check's start is not stored: its completion is a later, so stricter, stand-in
+    const startedAt = generation === undefined ? completedAt : latestStarted ? current.runStartedAt : null;
+    const covers = startedThrough > current.checkedThroughGeneration && startedAt !== null;
+    if (generation !== undefined || covers) await tx.update(schema.monitor).set({
       ...(generation !== undefined ? { coverageGeneration: generation } : {}),
+      ...(covers ? { checkedThroughGeneration: startedThrough, checkedStartedAt: startedAt } : {}),
     }).where(eq(schema.monitor.id, current.id));
     return current;
   });

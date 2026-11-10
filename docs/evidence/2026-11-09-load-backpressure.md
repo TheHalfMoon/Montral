@@ -80,7 +80,7 @@ container on the same host.
 | `/health` while slow (1 probe/s) | p99 8.1 ms, max 10.4 ms, 0 failures | max 5.6-10.4 ms |
 | **Recovery** (backlog drained, last-60 s lag p95 back under 90 s) | **131 s** | 131-141 s (141 s on the merged head, run 42593740378) |
 | After recovery (120 s window) | 3,658 checks/min, lag p95 62.2 s, every monitor checked | p95 62.2-70.7 s |
-| Catch-up after recovery | up to 6 results for one monitor in the first 120 s | 5-6 |
+| Catch-up after recovery | up to 6 results for one monitor in the first 120 s | 5-6 (with run coalescing: max 3 in 120 s, max 2 in any 60 s; see below) |
 | Webhook fan-out (5,000 at concurrency 50) | **336 accepted/s**, all 202; p50 / p95 / p99 140 / 216 / 262 ms; stored 5,000 (5,000 distinct ids) | 259-338/s; p99 246-471 ms |
 | Hot inbox (3 x 200) | exactly 120 x 202 + 80 x 429 per burst; 360 accepted; **stored 250** (retention cap) | identical |
 | `/api/monitors`, 4,000 monitors, 5.3 MB response | 8.5 req/s; p50 / p95 / p99 1,135 / 1,429 / 1,558 ms; 0 errors | p95 1,424-1,936 ms |
@@ -183,10 +183,60 @@ recorded as a failure.
   execute once it recovers. That gave up to 5-6 checks of one monitor within
   120 s: each is a distinct claimed run generation, not a duplicate of one run,
   and stale runs never overwrite newer state. Merging stale runs before they
-  execute would reduce both effects; it is not implemented here.
+  execute would reduce both effects. (Implemented on 2026-11-10: see "Run
+  coalescing" below.)
 - **A pool of 2 is under-provisioned for 4,000 monitors at 60 s.** Such a
   server reaches about 2,700-3,300 checks/min with lag p95 of 111-168 s. It
   degrades without errors or connection overrun.
+
+## Run coalescing (2026-11-10, #54)
+`beginRuns` now skips a queued run as superseded: it is never checked or
+billed. Two conditions trigger this:
+- A check of the same monitor **started** after the run was claimed, and either
+  that check is less than half an interval old or the run is stale. A run is
+  stale when its lease deadline, the next run's due time, passed more than
+  70 s ago (one tick plus the slot delay).
+- An earlier run started within its timeout + 15 s and has not recorded yet.
+
+A run claimed after the latest check started always starts.
+
+Three versions were measured on this workload before one held every invariant:
+
+| Rule | Run | Phase 1 results / 300 s | Post-recovery max in 60 s |
+|---|---|---|---|
+| none (before) | 42589028478 | 5-6 (min 4-5 over three runs) | up to 6 in 120 s |
+| a result *recorded* after the claim | 42724447908 | **min 3** (a slow previous run swallowed the next interval) | - |
+| a check *started* after the claim | 42736427688 | **min 3** (queue wait pushed starts past the next claim, so the schedule was thinned) | - |
+| + half-interval window only | 42743694020 | 5-6 | **4** (queued runs of one monitor drain about 30 s apart) |
+| + stale-run rule (final) | **42751836174** | **4-6** (6 monitors at 4, 3,910 at 5, 84 at 6) | **2** |
+
+Final run 42751836174 on `7a4c34b`. Every threshold of the qualification
+passed, including the new ones:
+- **After recovery** (from the moment the target recovered to the end of the
+  post-recovery window, 19,289 results): at most **2** results per monitor in
+  any 60 s (3,999 monitors at 2, 1 at 1), and at most **2** in any 10 s (only
+  2 monitors had 2). The thresholds are 3 per 60 s and 2 per 10 s. At most 3
+  results per monitor in the first 120 s, against up to 6 before. Recovery
+  took 132 s. Afterwards every monitor was checked, with lag p95 70.2 s.
+- **Coalesced runs are counted, not hidden.** Of 87,445 claims, 9,447 were
+  released, 62,143 produced a result (== 62,143 target requests, 0
+  duplicates), 14,551 were skipped as coalesced and 1,304 were still
+  unfinished when the servers stopped. The script asserts that these add up
+  exactly.
+- **Phase 1 is unchanged:** 4,004 checks/min, lag p95 61.1 s, 4-6 results per
+  monitor per 300 s.
+- **DB_POOL_MAX=2 (overload):** 1,970 checks/min with lag p95 163 s. Before,
+  it was 2,694-3,322 checks/min with lag p95 111-168 s. Under sustained
+  overload most runs are stale when they start, so the server now skips runs
+  that a newer check already covered instead of replaying them. The
+  no-starvation rule (every monitor checked within 360 s) passed. The lower
+  rate is coalesced work, not lost monitoring.
+
+Rejected alternative (#51): starting only the newest claimed generation. When
+a run starts after the next claim, every run is superseded before it starts,
+and the monitor is never checked. A run starts after the next claim whenever
+the tick (up to 30 s), the slot delay (up to 40 s) and the queue wait add up
+to more than the 60 s interval, as in the slow and pool-2 phases here.
 
 ## Limits
 - This covers a single Node process and a single-host PostgreSQL on a 4 vCPU /

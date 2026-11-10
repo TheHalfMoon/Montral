@@ -6,7 +6,7 @@ Montral had no browser or multi-step checks (task ledger item 16; gap matrix row
 request at a time, without cookies, forms or page JavaScript.
 
 ## Architecture
-- **Monitor type `browser`.** Migration `0054_monitor_browser` adds the enum value,
+- **Monitor type `browser`.** Migration `0055_monitor_browser` adds the enum value,
   the `monitor.browser` and `monitor.browser_secrets` jsonb columns, and the table
   `browser_check_run` (including a `deferred` flag).
 - **Declarative journey** (`browser-steps.ts`). Steps are `goto`, `click`, `fill`

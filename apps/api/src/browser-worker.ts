@@ -280,7 +280,7 @@ async function runStep(page: import("playwright-core").Page, step: BrowserStep, 
       // async function. Only `true` passes; what the script returns or throws is never stored (it may hold page data).
       let result: unknown;
       try {
-        result = await withTimeout(page.evaluate(`(async () => {\n"use strict";\n${step.script}\n})()`), budget);
+        result = await withTimeout(page.evaluate(`(async () => {\n"use strict";\n${step.script}\n})().then((v) => v === true)`), budget); // only a boolean crosses back to the worker
       } catch (e) {
         throw new StepFailed((e as Error)?.name === "TimeoutError" ? "timeout" : "scriptError");
       }

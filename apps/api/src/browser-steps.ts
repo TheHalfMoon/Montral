@@ -2,8 +2,10 @@
  * Browser (synthetic multi-step) checks: the declarative journey a monitor runs, and the pieces both sides share (the
  * API that validates it and the isolated worker process that executes it).
  *
- * A journey is a list of steps from a fixed vocabulary. There is no way to run JavaScript of the user's own: every step
- * maps to one Playwright call with bounded arguments, so the only code that runs in the page is the page's own.
+ * A journey is a list of steps from a fixed vocabulary; every step maps to one Playwright call with bounded arguments.
+ * The one exception is `evaluate`: JavaScript the user wrote, run inside the page (its renderer, in the target's origin,
+ * not subject to its CSP), never in the worker's Node process. Only owners and admins may add it, and a journey with a
+ * script never handles secrets.
  *
  * Limits (enforced here, and again by the worker before it runs anything):
  * - 1 to MAX_STEPS steps; the first one is a `goto` (the monitor's target is that URL);

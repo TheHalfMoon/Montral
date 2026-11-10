@@ -23,16 +23,16 @@ Each pull request passed independent review with every finding fixed and every C
 merging. Security-critical PRs (#49, #52) went through repeated rounds until a reviewer cleared them; for #47 and #48 the
 fixes were verified by CI (and, for #48, by measurement) but not by a second reviewer — noted as a residual risk.
 
-| PR | Commit | Change | Review rounds |
+| PR | Commit | Change | Independent reviews (agent reviewers in this programme) |
 |---|---|---|---|
-| #44 | `18be31f` | Dark-mode WCAG 2.1 AA scans on 5 browser projects; documentation links distinguishable without colour | 1 |
+| #44 | `18be31f` | Dark-mode WCAG 2.1 AA scans on 5 browser projects; documentation links distinguishable without colour | 1 (correctness/a11y) |
 | #47 | `b4590a4` | Configurable webhook responses (status, allow-listed headers, text bodies, XML/CSV as attachments, bounded delay) | 1 (2 medium, 3 low fixed; fixes verified by CI, not re-reviewed) |
 | #48 | `5c5adbb` | On-call: schedules, layers, DST-correct rotations, overrides, escalation policies paging the on-call person, iCal, MCP, UI | 1 (1 high, 3 medium, 4 low fixed; fixes verified by CI and measured, not re-reviewed) |
 | #50 | `05f5468` | Terraform provider (6 resources, 2 data sources, 22 acceptance tests); single-maintenance-window API | 2 (1 medium, 3 low fixed) |
-| #53 | `8c34eb7` | Product bug behind an e2e flake: a session's workspace could switch between requests | 1 |
-| #56 | `cdc92ed` | Mobile tap targets on segmented controls (found as an intermittent browser-test failure) | 1 |
-| #49 | `cd40984` | OIDC single sign-on: per-workspace and instance-wide, verified and re-checked domains, require-SSO for every credential type | 4 (1 high, 6 medium fixed; cleared) |
-| #55 | `52bb319` | Upgrade from `17f55c1`, rollback and disaster recovery in CI; refusal of a newer schema with a clear message | 2 (1 medium fixed) |
+| #53 | `8c34eb7` | Product bug behind an e2e flake: a session's workspace could switch between requests | 1 (correctness; a GitHub comment from the parallel assistant asked for a separate security review, not done) |
+| #56 | `cdc92ed` | Mobile tap targets on segmented controls (found as an intermittent browser-test failure) | 1 (correctness) |
+| #49 | `cd40984` | OIDC single sign-on: per-workspace and instance-wide, verified and re-checked domains, require-SSO for every credential type (the workspace owner is exempt as break-glass) | 4 (1 high, 6 medium fixed; cleared) |
+| #55 | `52bb319` | Upgrade from `17f55c1`, rollback and disaster recovery in CI; refusal of a newer schema with a clear message | 2 (1 medium fixed). **A later harness finding is unfixed:** the backup written by `scripts/qualify-upgrade.mjs` can be truncated (stream not awaited before restore); fix in draft #58 by the parallel assistant, not merged yet |
 | #54 | `c1b7928` | Custom-domain withdrawal notices (transactional outbox); coalescing of stale queued checks after a backlog | 2 (1 medium fixed) |
 | #52 | `0b93696` | Synthetic browser monitoring in a separate hardened browser-runner | 6 (1 high, 11 medium fixed; cleared) |
 
@@ -94,13 +94,13 @@ Every control below has a regression test in CI. This round added:
 
 | Area | Control | Evidence |
 |---|---|---|
-| Single sign-on | OIDC code flow with PKCE, state and nonce single-use; id_token validated with jose (asymmetric algorithms only); `email_verified` required; email never auto-links an existing account; verified domains re-checked; require-SSO enforced for sessions, API keys, agent tokens bound to the authorizing session, and auth-library endpoints; removed members blocked from re-provisioning | #49, `sso.e2e.test.ts`, `sso-oidc.test.ts` |
+| Single sign-on | OIDC code flow with PKCE, state and nonce single-use; id_token validated with jose (asymmetric algorithms only); `email_verified` required; email never auto-links an existing account; verified domains re-checked; require-SSO enforced for sessions, API keys, agent tokens bound to the authorizing session, and auth-library endpoints, with the owner exempt as break-glass; removed members blocked from re-provisioning | #49, `sso.e2e.test.ts`, `sso-oidc.test.ts` |
 | Browser checks | No user code; Chromium only in a separate runner with no database credentials or app secrets, off the database network, signed and replay-protected channel, sealed secrets, `cap_drop: ALL`, read-only root, custom seccomp; every request through an egress proxy that pins validated addresses; WebRTC and WebTransport proven not to leave the host; per-workspace fairness, time budget, credits reserved before launch; screenshots of secret-using runs restricted to managers | #52, browser-checks workflow |
 | Webhook responses | Header allow-list, text bodies only, XML/CSV as attachments with sandbox CSP, privacy headers non-overridable, delay never refuses capture | #47 |
 | On-call | Override limits and a single-sweep engine (paging cost under a millisecond), calendar links session-only and `no-store`, no member emails to API keys or agents | #48 |
 | Session workspace | Deterministic active workspace (previously a request could switch workspace) | #53 |
 
-**Open (none critical, high or medium):** low-severity follow-ups in ledger rows 26–29; no third-party penetration
+**Open security findings: none critical, high or medium.** Low-severity follow-ups in ledger rows 26–29. Separately (not a product security issue), the upgrade/DR qualification harness can truncate its backup file — ledger row 32, fix in draft #58; no third-party penetration
 test; GitHub Actions pinned by tag; reverse-proxy logs must redact bearer tokens in URLs (documented); OAuth dynamic
 client registration is unauthenticated (pre-existing; clients get nothing without user consent).
 
@@ -147,6 +147,7 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 
 ## 11. Open pull requests not from this programme
 
-Drafts from the parallel assistant: #45 (physical Mac/Safari evidence — keep), #46 (on-call resolver, superseded by
-#48), #51 (coalescing approach that can starve monitors under load — superseded by #54), #57 (load-script accounting,
-overlaps #54). Recommendation in ledger row 31; they were left untouched.
+Open drafts from the parallel assistant: #45 (physical Mac/Safari evidence — keep), #46 (on-call resolver, superseded by
+#48 — recommend closing), #58 (fixes the upgrade-harness backup truncation; its one failing check is the cross-browser
+job's Playwright install step, unrelated to the change — needs its own review and green CI before merge). #51 and #57
+were closed when #54 merged. This programme did not push to or close any of them.

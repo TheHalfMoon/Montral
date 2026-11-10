@@ -35,7 +35,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 13 | On-call schedules (rotations, overrides) | P2 | Done (#48, `5c5adbb`): schedules, layers, DST-correct rotations, restriction windows, overrides with limits, escalation policies paging whoever is on call, iCal feed, REST + MCP + UI; review (1 high, 3 medium, 4 low) fixed; `docs/evidence/2026-11-10-oncall.md` |
 | 14 | SSO (OIDC; SAML if justified) | P2 | Done (#49, `cd40984`): per-workspace OIDC with verified, re-checked domains; JIT provisioning; require-SSO enforced for sessions, API keys, agent tokens (bound to the authorizing session) and Better Auth endpoints, owner break-glass; removal blocks; instance-wide `OIDC_*`; four review rounds; SAML deferred with reasons (`docs/evidence/2026-11-10-oidc-sso.md`) |
 | 15 | Terraform provider / config-as-code | P2 | Done, unpublished (#50, `05f5468`): `terraform-provider-montral/` with 6 resources incl. `montral_escalation_policy` and 2 data sources; 22 acceptance tests in `montral-terraform.yml`; build from source, no registry publication without `GREEN LIGHT MONTRAL` |
-| 16 | Browser / multi-step synthetic checks | P3 | Done (#52, `0b93696`): declarative journeys; Chromium only in a separate hardened browser-runner (no app secrets, no database network, signed + replay-protected channel, sealed secrets, cap_drop ALL, read-only, custom seccomp); per-check egress proxy; per-workspace fairness, time budget, credits reserved before launch; five review rounds; `docs/evidence/2026-11-10-browser-checks.md` |
+| 16 | Browser / multi-step synthetic checks | P3 | Done (#52, `0b93696`): declarative journeys; Chromium only in a separate hardened browser-runner (no app secrets, no database network, signed + replay-protected channel, sealed secrets, cap_drop ALL, read-only, custom seccomp); per-check egress proxy; per-workspace fairness, time budget, credits reserved before launch; six independent reviews; `docs/evidence/2026-11-10-browser-checks.md` |
 | 17 | SMS / voice alerts | P3 | Blocked: paid provider, needs owner approval |
 | 18 | Custom webhook responses (webhook.site parity) | P3 | Done (#47, `b4590a4`): status/headers (allow-list)/text bodies; XML and CSV served as attachments; per-org delay slots never refuse capture; `docs/evidence/2026-11-10-webhook-responses.md` |
 | 19 | Owner email when a custom domain is withdrawn | P3 | Done (#54, `c1b7928`): owners/admins emailed once per withdrawal and once per failing streak, via a transactional outbox and the alert delivery log; `docs/evidence/2026-11-10-custom-domain-notices.md` |
@@ -44,7 +44,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 22 | Grafana OnCall and other incident tools in the competitor matrix | P3 | Not started; needs primary-source verification |
 | 23 | Upgrade from the previous release candidate never qualified (data, sessions, keys, links after migrations) | P1 | Done (#55, `52bb319`): `montral-upgrade.yml` seeds 17f55c1 through its API, upgrades to HEAD on the same PostgreSQL 18 database and reads every entity back |
 | 24 | Rollback path undefined and unqualified | P1 | Done (#55, `52bb319`): supported rollback = restore the pre-upgrade backup and start the old build (exact SHA-256 match); HEAD now refuses a newer schema at once with a clear message |
-| 25 | Disaster recovery (database lost under a running server) unqualified, no RTO | P1 | Done (#55, `52bb319`): live backup, database dropped, restore into a new database, HEAD verified; RTO 2.0 s on the synthetic dataset (a floor, not a capacity figure) |
+| 25 | Disaster recovery (database lost under a running server) unqualified, no RTO | P1 | Done (#55, `52bb319`): live backup, database dropped, restore into a new database, HEAD verified; RTO 1.9 s on the synthetic dataset at `0b93696` (run 42787353428; a floor, not a capacity figure) |
 
 ## Follow-ups found in review (low severity, not release-blocking)
 
@@ -55,7 +55,8 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 28 | SSO: no SCIM deprovisioning; no userinfo fallback for `email`/`email_verified`; one connection per workspace; members of two require-SSO workspaces with different IdPs cannot authorize agents | P3 | Open (documented) |
 | 29 | Coalescing: comment in `coverage.ts` calls the completion-time stand-in "stricter" (it is looser by ≤ 30 s) | P3 | Open |
 | 30 | Windows: Docker Desktop (WSL 2) path not tested — Docker/WSL unavailable on the development machine; Windows is not supported as a native server platform | P2 | Blocked (hardware/environment) |
-| 31 | Draft PRs from the parallel assistant: #46 (on-call resolver, superseded by #48), #51 (coalescing approach that can starve monitors — superseded by #54), #57 (load-script accounting, overlaps #54) | P3 | Owner decision: recommend closing #46 and #51; rebase or close #57 |
+| 31 | Draft PRs from the parallel assistant: #46 (on-call resolver, superseded by #48) | P3 | Owner decision: recommend closing #46 (#51 and #57 were closed when #54 merged) |
+| 32 | Upgrade/DR qualification harness: `scripts/qualify-upgrade.mjs` can read a truncated backup (Docker stream not awaited before restore); reported on #55 after merge | P2 | Open: fix in draft #58 (parallel assistant), needs review and green exact-head CI |
 
 ## External dependencies (cannot be closed in engineering)
 

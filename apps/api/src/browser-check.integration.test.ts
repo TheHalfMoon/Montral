@@ -255,6 +255,33 @@ describe.skipIf(!haveChromium)("browser checks in real Chromium", () => {
     expect(JSON.stringify({ ...out, browser: { ...out.browser, screenshotPng: undefined } })).not.toContain(PASSWORD);
   }, 60_000);
 
+  it("a script step passes only on true; false, a throw and a hang fail with fixed messages that hold nothing from the page", async () => {
+    const pass = await browserCheck(await monitor([
+      { action: "goto", url: `${base}/login` },
+      { action: "evaluate", script: "await new Promise((r) => setTimeout(r, 50)); return document.querySelector('#user') !== null && location.pathname === '/login';" },
+    ]), deps());
+    expect(pass).toMatchObject({ ok: true });
+    for (const [script, error] of [
+      ["return 'yes';", "Step 2 (evaluate): script did not return true"],
+      ["return document.title.length;", "Step 2 (evaluate): script did not return true"],
+      ["throw new Error('page secret ' + document.cookie + document.title);", "Step 2 (evaluate): script threw an error"],
+      ["await new Promise(() => {}); return true;", "Step 2 (evaluate): timed out"],
+    ] as const) {
+      const out = await browserCheck(await monitor([{ action: "goto", url: `${base}/login` }, { action: "evaluate", script, timeoutMs: 1500 }]), deps());
+      expect(out, script).toMatchObject({ ok: false, error });
+      expect(JSON.stringify(out)).not.toContain("page secret");
+    }
+    // a script cannot reach a private address either: its requests go through the same egress policy
+    const hitsBefore = canary.hits.length;
+    const probe = await browserCheck(await monitor([
+      { action: "goto", url: `${base}/login` },
+      { action: "evaluate", script: `for (const u of ['http://127.0.0.1:${canary.port}/from-script', 'http://169.254.169.254/latest/meta-data/']) { try { await fetch(u, { mode: 'no-cors' }); } catch {} } return true;`, timeoutMs: 8000 },
+    ]), deps());
+    expect(probe, probe.error).toMatchObject({ ok: true });
+    expect(probe.browser!.blockedRequests).toBeGreaterThanOrEqual(1);
+    expect(canary.hits.length).toBe(hitsBefore);
+  }, 90_000);
+
   it("a missing secret fails the fill step without running it", async () => {
     const out = await browserCheck({ ...(await monitor([{ action: "goto", url: `${base}/login` }, { action: "fill", selector: "#pass", secretRef: "pw" }])), browserSecrets: {} }, deps());
     expect(out).toMatchObject({ ok: false, error: "Step 2 (fill): secret is not set" });

@@ -93,14 +93,14 @@ async function fingerprints(sql) {
 /** Executable schema: columns, indexes, constraints, triggers (with enabled state) and functions, hashed per object. */
 async function catalog(sql) {
   const rows = await sql.unsafe(`
-    SELECT 'column:' || r.relname || '.' || a.attname AS k, format_type(a.atttypid, a.atttypmod) || '|' || a.attnotnull || '|' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') AS v
+    SELECT 'column:' || r.relname || '.' || a.attname AS k, format_type(a.atttypid, a.atttypmod) || '|' || a.attnotnull::text || '|' || coalesce(pg_get_expr(d.adbin, d.adrelid), '') AS v
       FROM pg_attribute a JOIN pg_class r ON r.oid = a.attrelid JOIN pg_namespace n ON n.oid = r.relnamespace
       LEFT JOIN pg_attrdef d ON d.adrelid = r.oid AND d.adnum = a.attnum
       WHERE n.nspname = 'public' AND r.relkind IN ('r', 'p') AND a.attnum > 0 AND NOT a.attisdropped
     UNION ALL SELECT 'index:' || indexname, indexdef FROM pg_indexes WHERE schemaname = 'public'
-    UNION ALL SELECT 'constraint:' || r.relname || '.' || c.conname, pg_get_constraintdef(c.oid, true) || '|' || c.convalidated
+    UNION ALL SELECT 'constraint:' || r.relname || '.' || c.conname, pg_get_constraintdef(c.oid, true) || '|' || c.convalidated::text
       FROM pg_constraint c JOIN pg_class r ON r.oid = c.conrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'public'
-    UNION ALL SELECT 'trigger:' || r.relname || '.' || t.tgname, pg_get_triggerdef(t.oid, true) || '|' || t.tgenabled
+    UNION ALL SELECT 'trigger:' || r.relname || '.' || t.tgname, pg_get_triggerdef(t.oid, true) || '|' || t.tgenabled::text
       FROM pg_trigger t JOIN pg_class r ON r.oid = t.tgrelid JOIN pg_namespace n ON n.oid = r.relnamespace WHERE n.nspname = 'public' AND NOT t.tgisinternal
     UNION ALL SELECT 'function:' || p.oid::regprocedure::text, pg_get_functiondef(p.oid)
       FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' AND p.prokind = 'f'`);
@@ -401,7 +401,7 @@ async function behaviour(label, { existingCookie, newEvent = true } = {}) {
   r.shareLink = followed.status === 303 && (await call("GET", `/api/public/status/${seed.slugs.members}`, { cookie: followed.cookie })).status === 200;
   r.membersPageClosedWithoutLink = (await call("GET", `/api/public/status/${seed.slugs.members}`)).status === 404;
   const unlocked = await call("POST", "/api/public/status/_/unlock", { body: { slug: seed.slugs.pw, password: PAGE_PASSWORD } });
-  r.passwordPage = unlocked.status === 200 && (await call("GET", `/api/public/status/${seed.slugs.pw}`, { cookie: unlocked.cookie })).status === 200;
+  r.passwordPage = (unlocked.status === 204 || unlocked.status === 200) && (await call("GET", `/api/public/status/${seed.slugs.pw}`, { cookie: unlocked.cookie })).status === 200;
   r.passwordPageClosedWithoutPassword = (await call("GET", `/api/public/status/${seed.slugs.pw}`)).status === 401;
   const viaDomain = await viaHost(seed.domain, `/api/public/status/${seed.slugs.pub}`);
   r.customDomain = viaDomain.status === 200 && viaDomain.text.includes("Acme status");

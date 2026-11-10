@@ -286,6 +286,13 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li>Owners see every configuration change, SSO sign-in and refused sign-in in the <a href="/docs/api#audit">audit log</a>.</li>
       <li>SAML is not supported; the reasons are in <code>docs/evidence/2026-11-10-oidc-sso.md</code>.</li>
     </ul>
+    <h3 id="scim">SCIM provisioning</h3>
+    <p>With single sign-on set up, the workspace owner can turn on SCIM 2.0 under Settings → Single sign-on → SCIM provisioning. Enter the base URL shown there (<code>https://your-host/api/scim/v2</code>) and the token (shown once; stored only as a hash) in the identity provider's SCIM app (Okta, Microsoft Entra ID, Authentik, Keycloak with a SCIM extension, …). Users are supported; groups and bulk requests are not.</p>
+    <ul>
+      <li><strong>Assign</strong> (create an active user): only addresses in the connection's verified domains. Once SCIM is on, single sign-on admits only assigned people. An existing Montral account with that verified address becomes a member at once; otherwise the account is created at the person's first SSO sign-in.</li>
+      <li><strong>Deactivate</strong> (<code>active: false</code>) or <strong>delete</strong>: the membership ends, the person's sessions are signed out and their API keys pinned to the workspace are revoked; single sign-on adds them back only after reactivation. The workspace owner cannot be deprovisioned. Every change is in the audit log as <code>scim.*</code>.</li>
+      <li><code>userName</code> is the email address and cannot be changed; filters <code>userName eq</code> and <code>externalId eq</code> are supported. Replacing the token revokes the old one; turning SCIM off keeps the records but stops the gate.</li>
+    </ul>
     <h2 id="apns">iOS push notifications (APNs)</h2>
     <p>The Montral iOS app can receive alerts as push notifications. The server sends them through Apple's APNs, so it needs an APNs credential. Push is off until all four variables below are set; <code>GET /api/config</code> then reports <code>push.apns: true</code> and the <em>Mobile app (push)</em> channel type appears under Alerting.</p>
     <h3>What you need</h3>
@@ -660,6 +667,13 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li>退出登录会结束 Montral 会话，但不会退出身份提供商。</li>
       <li>所有者可以在<a href="/docs/api#audit">审计日志</a>中看到所有配置变更、每次 SSO 登录以及被拒绝的登录。</li>
       <li>不支持 SAML，原因见 <code>docs/evidence/2026-11-10-oidc-sso.md</code>。</li>
+    </ul>
+    <h3 id="scim-zh">SCIM 预配</h3>
+    <p>设置好单点登录后，工作区所有者可在“设置 → 单点登录 → SCIM 预配”中开启 SCIM 2.0。将其中显示的基础 URL（<code>https://your-host/api/scim/v2</code>）和令牌（只显示一次，仅以哈希形式保存）填入身份提供商的 SCIM 应用（Okta、Microsoft Entra ID、Authentik、带 SCIM 扩展的 Keycloak 等）。支持用户；不支持组和批量请求。</p>
+    <ul>
+      <li><strong>分配</strong>（创建活跃用户）：仅限连接已验证域名下的地址。开启 SCIM 后，单点登录只接纳已分配的人员。已存在且地址已验证的 Montral 账号会立即成为成员；否则账号会在其首次 SSO 登录时创建。</li>
+      <li><strong>停用</strong>（<code>active: false</code>）或<strong>删除</strong>：成员身份结束，该人员的会话被登出，其绑定到此工作区的 API 密钥被吊销；只有重新启用后单点登录才会再次加入。工作区所有者不能被取消预配。每项变更都以 <code>scim.*</code> 记录在审计日志中。</li>
+      <li><code>userName</code> 即邮箱地址，不能更改；支持 <code>userName eq</code> 和 <code>externalId eq</code> 筛选。更换令牌会吊销旧令牌；关闭 SCIM 会保留记录但不再限制登录。</li>
     </ul>
     <h2 id="apns-zh">iOS 推送通知（APNs）</h2>
     <p>Montral iOS 应用可以通过推送接收告警。服务器经由 Apple 的 APNs 发送，因此需要 APNs 凭证。以下四个变量全部设置后才会启用推送；此时 <code>GET /api/config</code> 会返回 <code>push.apns: true</code>，告警页里也会出现 <em>手机 App 推送</em> 渠道类型。</p>

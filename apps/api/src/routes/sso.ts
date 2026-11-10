@@ -1,3 +1,4 @@
+import { scimAdmin } from "../scim";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import { audit, auditChanges, type Query } from "../audit";
@@ -77,6 +78,7 @@ export const ssoAdmin = new Hono<AppEnv>()
     if (!isOwnerRole(await c.get("repo").memberRole(c.get("userId"), c.get("orgId")))) return c.json({ error: "Only the workspace owner can manage single sign-on" }, 403);
     await next();
   })
+  .route("/scim", scimAdmin)
   .get("/", async (c) => c.json(await view(c)))
 
   .put("/", async (c) => {

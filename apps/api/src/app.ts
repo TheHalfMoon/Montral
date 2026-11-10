@@ -25,6 +25,7 @@ import { configureNetGuard } from "./netguard";
 import { configureSso } from "./sso-oidc";
 import { instanceConnection, ssoAllows, ssoSatisfiesAll } from "./sso-store";
 import { ssoAdmin } from "./routes/sso";
+import { scimApi } from "./scim";
 import { configureBrowserChecks } from "./browser-check";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
@@ -207,6 +208,8 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
 
   // public
   app.route("/api/public/status", publicStatus);
+  // SCIM 2.0 provisioning by the workspace's identity provider; its own bearer token, never a session (scim.ts)
+  app.route("/api/scim/v2", scimApi);
   // a person's on-call shifts as an iCalendar feed; the secret token in the path is the only credential (revocable)
   app.get("/api/public/oncall/:file", async (c) => {
     const m = /^([0-9a-f]{64})\.ics$/.exec(c.req.param("file"));

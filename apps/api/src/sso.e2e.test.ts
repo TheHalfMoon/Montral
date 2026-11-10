@@ -771,6 +771,100 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     for (const token of idpA.issued) expect(all).not.toContain(token);
   });
 
+  it("SCIM: owner-only token, provisioning gate, deactivation (sessions, keys, SSO refused) and reactivation", async () => {
+    const scim = async (path: string, init: { method?: string; body?: unknown; token?: string } = {}) => {
+      const headers: Record<string, string> = {};
+      if (init.token !== undefined) headers.authorization = `Bearer ${init.token}`;
+      if (init.body !== undefined) headers["content-type"] = "application/scim+json";
+      const r = await app.fetch(new Request(`${origin}/api/scim/v2${path}`, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), env as never);
+      const text = await r.text();
+      return { status: r.status, body: text ? JSON.parse(text) : null, type: r.headers.get("content-type") ?? "" };
+    };
+    const USER = "urn:ietf:params:scim:schemas:core:2.0:User";
+    const PATCH = "urn:ietf:params:scim:api:messages:2.0:PatchOp";
+    const member = async (userId: string) => (await q(`select 1 from member where organization_id = $1 and user_id = $2`, [ownerB.orgId, userId])).length === 1;
+    // management: the owner's session only (an API key is refused), and only with single sign-on set up
+    expect((await call("/api/sso/scim/token", { method: "POST", key: apiKey })).status).toBe(403);
+    const minted = await call("/api/sso/scim/token", { method: "POST", jar: ownerB.jar });
+    expect(minted.status, minted.text).toBe(201);
+    const token = minted.body.token as string;
+    expect(token).toMatch(/^montral_scim_[0-9a-f]{64}$/);
+    expect((await call("/api/sso/scim", { jar: ownerB.jar })).body).toMatchObject({ enabled: true, users: { active: 0, inactive: 0 } });
+    expect(await q(`select 1 from scim_token where token_hash = $1`, [token])).toHaveLength(0); // stored hashed only
+
+    // authentication
+    for (const bad of [undefined, "", "montral_scim_" + "0".repeat(64), token.slice(0, -1) + (token.endsWith("a") ? "b" : "a")]) {
+      expect((await scim("/Users", { token: bad })).status).toBe(401);
+    }
+    const spc = await scim("/ServiceProviderConfig", { token });
+    expect(spc.status).toBe(200);
+    expect(spc.type).toMatch(/^application\/scim\+json/);
+    expect(spc.body).toMatchObject({ patch: { supported: true }, bulk: { supported: false } });
+
+    // only addresses of the verified domain; someone not assigned cannot join through single sign-on
+    expect(await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: `x@other-${rand}.test` } })).toMatchObject({ status: 400, body: { scimType: "invalidValue" } });
+    const unassigned = `unassigned-${rand}@${domainB}`;
+    expect(failure((await sso(idpB, new Jar(), { email: unassigned }, { sub: "scim-unassigned", email: unassigned, email_verified: true })).location)).toBe("not_provisioned");
+    expect(await userIdOf(unassigned)).toBeNull();
+
+    // provisioning: the assigned person signs in with SSO and becomes a member
+    const alice = `alice-scim-${rand}@${domainB}`;
+    const created = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: alice.toUpperCase(), externalId: "ext-alice", name: { givenName: "Alice", familyName: "Scim" }, active: true } });
+    expect(created.status).toBe(201);
+    expect(created.body).toMatchObject({ userName: alice, externalId: "ext-alice", active: true, name: { givenName: "Alice" } });
+    const id = created.body.id as string;
+    expect((await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: alice } })).body).toMatchObject({ scimType: "uniqueness" });
+    expect((await scim(`/Users?filter=${encodeURIComponent(`userName eq "${alice}"`)}`, { token })).body).toMatchObject({ totalResults: 1, Resources: [{ id }] });
+    expect((await scim(`/Users?filter=${encodeURIComponent("title eq \"x\"")}`, { token })).body).toMatchObject({ scimType: "invalidFilter" });
+    const aliceJar = new Jar();
+    expect(failure((await sso(idpB, aliceJar, { email: alice }, { sub: "scim-alice", email: alice, email_verified: true })).location)).toBeNull();
+    const aliceId = (await userIdOf(alice))!;
+    expect(await member(aliceId)).toBe(true);
+    const key = await call("/api/auth/api-key/create", { method: "POST", jar: aliceJar, body: { name: "alice-key", metadata: { organizationId: ownerB.orgId } } });
+    expect(key.status, key.text).toBe(200);
+    expect((await call("/api/monitors", { key: key.body.key })).status).toBe(200);
+
+    // deactivation (Entra ID sends the boolean as a string): membership, sessions and pinned keys end; SSO adds nothing back
+    const off = await scim(`/Users/${id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "Replace", path: "active", value: "False" }] } });
+    expect(off.status).toBe(200);
+    expect(off.body.active).toBe(false);
+    expect(await member(aliceId)).toBe(false);
+    expect(await q(`select 1 from session where user_id = $1`, [aliceId])).toHaveLength(0);
+    expect(await q(`select 1 from apikey where id = $1`, [key.body.id])).toHaveLength(0);
+    await sso(idpB, new Jar(), { email: alice }, { sub: "scim-alice", email: alice, email_verified: true });
+    expect(await member(aliceId)).toBe(false);
+
+    // the owner is never deprovisioned
+    const ownerRow = (await q<{ id: string }>(`insert into scim_user (organization_id, user_name) values ($1, lower($2)) returning id::text as id`, [ownerB.orgId, ownerB.email]))[0].id;
+    expect((await scim(`/Users/${ownerRow}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "replace", value: { active: false } }] } })).body).toMatchObject({ scimType: "mutability" });
+    expect(await member(ownerB.id)).toBe(true);
+    expect((await q<{ active: boolean }>(`select active from scim_user where id = $1`, [ownerRow]))[0].active).toBe(true);
+    await q(`delete from scim_user where id = $1`, [ownerRow]);
+
+    // reactivation restores the membership with the connection's default role; userName cannot be changed
+    const on = await scim(`/Users/${id}`, { method: "PUT", token, body: { schemas: [USER], userName: alice, active: true } });
+    expect(on.status).toBe(200);
+    expect(await q<{ role: string }>(`select role from member where organization_id = $1 and user_id = $2`, [ownerB.orgId, aliceId])).toEqual([{ role: "member" }]);
+    expect((await scim(`/Users/${id}`, { method: "PUT", token, body: { userName: `bob-${rand}@${domainB}` } })).body).toMatchObject({ scimType: "mutability" });
+
+    // another workspace's records are invisible to this token
+    const foreign = (await q<{ id: string }>(`insert into scim_user (organization_id, user_name) values ($1, $2) returning id::text as id`, [ownerA.orgId, `foreign-${rand}@${domainA}`]))[0].id;
+    expect((await scim(`/Users/${foreign}`, { token })).status).toBe(404);
+    expect((await scim(`/Users/${foreign}`, { method: "DELETE", token })).status).toBe(404);
+    await q(`delete from scim_user where id = $1`, [foreign]);
+
+    // delete ends the membership and forgets the record
+    expect((await scim(`/Users/${id}`, { method: "DELETE", token })).status).toBe(204);
+    expect((await scim(`/Users/${id}`, { token })).status).toBe(404);
+    expect(await member(aliceId)).toBe(false);
+
+    const actions = (await auditOf(ownerB.orgId)).map((e) => e.action);
+    expect(actions).toEqual(expect.arrayContaining(["scim.token_create", "scim.user_create", "scim.user_deactivate", "scim.user_reactivate", "scim.user_delete"]));
+    // revoking the token switches SCIM off: the old token stops working
+    expect((await call("/api/sso/scim/token", { method: "DELETE", jar: ownerB.jar })).status).toBe(204);
+    expect((await scim("/Users", { token })).status).toBe(401);
+  });
+
   it("signs out the connection's sessions and voids its API keys when the issuer or client changes", async () => {
     const email = `bea2-${rand}@${domainB}`;
     const jar = new Jar();

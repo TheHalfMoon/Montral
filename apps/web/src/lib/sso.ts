@@ -15,6 +15,7 @@ export const SSO_ERRORS: Record<string, string> = {
   signup_closed: "Sign-ups are closed here. Ask a workspace owner to invite you.",
   sso_required: "Your workspace requires single sign-on. Use “Sign in with SSO”.",
   access_removed: "You were removed from this workspace. Ask an owner or admin to invite you again.",
+  not_provisioned: "Your identity provider has not assigned you to this workspace. Ask your administrator to assign you.",
 };
 
 /** Starts a single sign-on: by work email (its verified domain) or by workspace ID, then goes to the identity provider. */

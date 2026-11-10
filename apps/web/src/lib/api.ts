@@ -74,6 +74,9 @@ export type Incident = {
 
 export type Channel = { id: string; type: "slack" | "webhook" | "email" | "telegram" | "pagerduty" | "lark" | "push" | "discord" | "teams" | "ntfy" | "googlechat" | "mattermost" | "gotify" | "pushover"; name: string; config: { url?: string; secret?: string; to?: string; chatId?: string; botToken?: string; routingKey?: string; topic?: string; token?: string; priority?: string; userKey?: string; device?: string }; enabled: boolean; autoEnable?: boolean; projectId?: string | null };
 /** The workspace's single sign-on connection; the client secret is write-only and never part of it. */
+/** SCIM provisioning of the workspace (owner only); the token itself is shown only when created. */
+export type ScimStatus = { enabled: boolean; baseUrl: string; createdAt: string | null; lastUsedAt: string | null; users: { active: number; inactive: number } };
+
 export type SsoSettings = {
   callbackUrl: string;
   instanceProvider: boolean;
@@ -322,6 +325,9 @@ export const api = {
   sso: () => fetchJson<SsoSettings>("/sso"),
   saveSso: (b: SsoInput) => fetchJson<SsoSettings & { warning?: string }>("/sso", { method: "PUT", body: JSON.stringify(b) }),
   deleteSso: () => fetchJson<void>("/sso", { method: "DELETE" }),
+  scim: () => fetchJson<ScimStatus>("/sso/scim"),
+  createScimToken: () => fetchJson<{ token: string; baseUrl: string; replaced: boolean }>("/sso/scim/token", { method: "POST" }),
+  revokeScimToken: () => fetchJson<void>("/sso/scim/token", { method: "DELETE" }),
   testSso: (issuer: string) => fetchJson<{ ok: true; issuer: string; authorizationEndpoint: string; tokenEndpoint: string; jwksUri: string; algorithms: string[] }>("/sso/test", { method: "POST", body: JSON.stringify({ issuer }) }),
   verifySsoDomain: (domain: string) => fetchJson<{ verified: boolean }>(`/sso/domains/${encodeURIComponent(domain)}/verify`, { method: "POST" }),
   settings: () => req<WorkspaceSettings>("/settings"),

@@ -79,5 +79,3 @@ finally:
     print("RESULT_JSON="+json.dumps(summary,ensure_ascii=False),flush=True)
     print(f"NATIVE_SAFARI_SUMMARY={sum(x['pass'] for x in results)}/{len(results)} PASS",flush=True)
     sys.exit(0 if all(x["pass"] for x in results) else 1)
-
-[executed on device: macbook (c53fe654-f3ba-4caa-9f91-056ca6e0d9f4)]

@@ -1,3 +1,4 @@
+import { linkScimUser, scimGate } from "./scim";
 import type { Database } from "@montral/repo";
 import { APIError, createAuthEndpoint, getSessionFromCtx } from "better-auth/api";
 import { setSessionCookie } from "better-auth/cookies";
@@ -48,7 +49,7 @@ export function safeReturnTo(raw: unknown): string {
 /** Error codes the web app turns into a message (login page, or Account for a link). Never details of the failure. */
 export type SsoFailure =
   | "invalid_state" | "idp_error" | "invalid_id_token" | "connection_disabled" | "connection_misconfigured" | "email_not_verified"
-  | "domain_not_allowed" | "link_required" | "link_email_mismatch" | "identity_in_use" | "signup_closed" | "sso_required" | "access_removed";
+  | "domain_not_allowed" | "link_required" | "link_email_mismatch" | "identity_in_use" | "signup_closed" | "sso_required" | "access_removed" | "not_provisioned";
 
 export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) {
   const q: Query = (sql, params) => database.query(sql, params);
@@ -194,6 +195,14 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
               await refusal(conn, "removed", ctx.headers);
               return fail("access_removed");
             }
+            // with SCIM provisioning on, the provider decides who joins: only people it created (and did not deactivate)
+            if (conn.orgId) {
+              const gate = await scimGate(q, conn.orgId, identity.email);
+              if (gate !== "allowed") {
+                await refusal(conn, gate === "inactive" ? "scim_inactive" : "scim_not_assigned", ctx.headers);
+                return fail(gate === "inactive" ? "access_removed" : "not_provisioned");
+              }
+            }
             // the operator's provider follows DISABLE_SIGNUP; a workspace's own provider provisions into that workspace only
             if (!conn.orgId && ["true", "1"].includes(String(env.DISABLE_SIGNUP ?? "").trim().toLowerCase()) && !(await database.repo.hasPendingInvitation(identity.email))) return fail("signup_closed");
             const name = identity.name ?? identity.email.split("@")[0];
@@ -205,6 +214,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             // a concurrent sign-in of the same person created it first: theirs is the account (or the address was taken)
             userId ??= await userByIdentity(q, conn.id, identity.issuer, identity.subject);
             if (!userId) return fail("link_required");
+            if (conn.orgId) await linkScimUser(q, conn.orgId, identity.email, userId).catch(() => console.error("scim user could not be linked; private diagnostics suppressed"));
             if (!conn.orgId) {
               const ws = `${name}'s workspace`;
               const slug = (ws.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace") + "-" + Math.random().toString(36).slice(2, 6);

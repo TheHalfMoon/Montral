@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from "react";
 import { api, ApiError, type SsoSettings as Sso } from "../lib/api";
 import { t } from "../lib/i18n";
 import { toast } from "../lib/toast";
+import ScimSettings from "./ScimSettings";
 
 /**
  * Single sign-on (OpenID Connect) for the workspace, on the Settings page. Only the owner sees it (the API answers 403
@@ -114,6 +115,7 @@ export default function SsoSettings() {
         <button type="button" className="btn" disabled={busy || !issuer} onClick={test}>{t("Test connection")}</button>
         {c && <button type="button" className="btn" disabled={busy} onClick={remove}>{t("Delete")}</button>}
       </div>
+      {c && <ScimSettings />}
     </form>
   );
 }

@@ -702,6 +702,52 @@ export const ssoRemoval = pgTable(
   (t) => [index("sso_removal_org_email_idx").on(t.organizationId, t.email), index("sso_removal_org_account_idx").on(t.organizationId, t.accountId)],
 );
 
+/**
+ * The bearer token an identity provider uses for SCIM 2.0 provisioning into one workspace (stored as a SHA-256 hash,
+ * shown once). At most one active token per workspace; replacing it revokes the old one.
+ */
+export const scimToken = pgTable(
+  "scim_token",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    tokenHash: text("token_hash").notNull(),
+    createdBy: text("created_by").references(() => user.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("scim_token_hash_idx").on(t.tokenHash),
+    uniqueIndex("scim_token_active_org_idx").on(t.organizationId).where(sql`${t.revokedAt} is null`),
+  ],
+);
+
+/**
+ * A person as the workspace's identity provider manages them over SCIM: the address (userName), whether the provider
+ * wants them active, and the Montral account once there is one. An active row lets single sign-on provision the person;
+ * deactivating ends the membership and blocks single sign-on until the provider reactivates them.
+ */
+export const scimUser = pgTable(
+  "scim_user",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    /** lower-cased email address */
+    userName: text("user_name").notNull(),
+    externalId: text("external_id"),
+    displayName: text("display_name"),
+    givenName: text("given_name"),
+    familyName: text("family_name"),
+    active: boolean("active").notNull().default(true),
+    /** the Montral account, once one exists for the address (no foreign key: the record outlives a deleted account) */
+    userId: text("user_id"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [uniqueIndex("scim_user_org_name_idx").on(t.organizationId, t.userName), index("scim_user_org_user_idx").on(t.organizationId, t.userId)],
+);
+
 /** Fixed-window counters for public endpoints; shared across Worker isolates via Postgres. */
 export const rateLimit = pgTable("rate_limit", {
   key: text("key").primaryKey(),

@@ -245,7 +245,7 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
       // credits are taken before the journey is launched; without them it does not run (nothing recorded, like any other
       // monitor out of credits: the lease keeps its next due time)
       const spentAt = new Date();
-      const charged = await reserveCredits(workspace, m, entitlements);
+      const charged = await reserveCredits(workspace, m, entitlements, spentAt);
       if (charged === null) continue;
       let result: CheckResultKind = "done";
       try { result = await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
@@ -260,13 +260,13 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
 /**
  * Take a browser check's credits before it runs. null: the workspace has none left (a partial grant is given back), so
  * the journey must not run. Otherwise the credits actually taken (0 when the ledger failed: monitoring goes on, as for
- * every other check, and nothing is given back later).
+ * every other check, and nothing is given back later). `spentAt` is the one instant the charge and any later refund are
+ * booked at (the caller keeps it for its refund).
  */
-export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements): Promise<number | null> {
+export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements, spentAt: Date = new Date()): Promise<number | null> {
   const cost = creditCost(m);
   if (cost === 0) return 0;
   let granted: number;
-  const spentAt = new Date();
   try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return 0; }
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
   if (granted < cost) {
@@ -275,6 +275,17 @@ export async function reserveCredits(workspace: string, m: Monitor, entitlements
     return null;
   }
   return granted;
+}
+
+/**
+ * All or nothing: take `cost` credits at `spentAt`, or give back whatever part was granted and answer false (a manual
+ * check that cannot be paid in full does not run, and does not keep part of the allowance either).
+ */
+export async function spendAllOrNothing(workspace: string, cost: number, entitlements: Entitlements, spentAt: Date): Promise<boolean> {
+  const granted = await entitlements.spendCredits(workspace, cost, spentAt);
+  if (granted >= cost) return true;
+  if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);
+  return false;
 }
 
 /** Give back credits taken at `spentAt` (default now) to that period's allowance. */

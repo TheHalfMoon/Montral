@@ -47,7 +47,7 @@ vi.mock("./browser-check", async (importOriginal) => {
   };
 });
 
-const { checkMany, checkOne, deferBrowserCheck, reserveCredits, deferredTooLong, sendUncheckedDigests, shouldMarkUnchecked, BROWSER_TASK_BUDGET_MS, DEFERRED_RETRY_MS } = await import("./scheduler");
+const { checkMany, checkOne, deferBrowserCheck, reserveCredits, spendAllOrNothing, deferredTooLong, sendUncheckedDigests, shouldMarkUnchecked, BROWSER_TASK_BUDGET_MS, DEFERRED_RETRY_MS } = await import("./scheduler");
 const { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, RUNNER_UNREACHABLE } = await import("./browser-check");
 const { configureEmail, setMailTransport } = await import("./email");
 
@@ -198,6 +198,41 @@ describe("browser checks that did not happen", () => {
     setAllowance(1);
     expect(await reserveCredits("o", { type: "http", regions: ["eu", "us"] } as Monitor, entitlements)).toBeNull();
     expect(refunds.at(-1)).toEqual({ workspace: "o", n: 1 });
+  });
+
+  it("books the charge and its refund at the same instant, even across a UTC month boundary", async () => {
+    const { repo } = fake();
+    const charged: Date[] = [];
+    const refunded: Date[] = [];
+    // the clock passes midnight UTC on the 1st during the reservation; the refund must still name the charged instant
+    // (the very value passed to the charge: a second clock reading could fall in the new month)
+    const ent = { spendCredits: async (_w: string, n: number, at?: Date) => { charged.push(at!); vi.setSystemTime(new Date("2026-12-01T00:00:00.500Z")); return n; }, refundCredits: async (_w: string, _n: number, at?: Date) => { refunded.push(at!); } } as never;
+    // the run is deferred for capacity, so its credits come back
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-30T23:59:59.999Z"));
+      next.push({ kind: "deferred", error: BROWSER_BUSY });
+      await checkMany(repo, [browserMonitor({ id: "edge" })], ent);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(charged).toHaveLength(1);
+    expect(refunded).toHaveLength(1);
+    expect(refunded[0]).toBe(charged[0]);
+    expect(refunded[0].toISOString()).toBe("2026-11-30T23:59:59.999Z");
+    expect(charged[0].toISOString()).toBe("2026-11-30T23:59:59.999Z");
+  });
+
+  it("a manual check that cannot be paid in full gives the partial grant back at the charged instant", async () => {
+    const refunds: { n: number; at?: Date }[] = [];
+    const at = new Date("2026-11-30T23:59:59.999Z");
+    const ent = { spendCredits: async (_w: string, n: number) => Math.max(0, n - 1), refundCredits: async (_w: string, n: number, when?: Date) => { refunds.push({ n, at: when }); } } as never;
+    expect(await spendAllOrNothing("o", 3, ent, at)).toBe(false);
+    expect(refunds).toEqual([{ n: 2, at }]);
+    expect(await spendAllOrNothing("o", 1, ent, at)).toBe(false); // nothing granted: nothing to give back
+    expect(refunds).toHaveLength(1);
+    const full = { spendCredits: async (_w: string, n: number) => n, refundCredits: async () => { throw new Error("no refund expected"); } } as never;
+    expect(await spendAllOrNothing("o", 2, full, at)).toBe(true);
   });
 
   it("a real run records its secrets version and clears the state in the database even when the snapshot says it is not unchecked", async () => {

@@ -1,3 +1,4 @@
+import { releaseDatabase } from "./db-lifetime";
 import type { Database } from "@montral/repo";
 import type { AppEnv } from "./env";
 import { Hono } from "hono";
@@ -552,11 +553,19 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       [c.req.param("id"), c.get("orgId"), c.get("projectId"), JSON.stringify(config)],
     );
     if (!updated.length) return c.json({ error: "Not found" }, 404);
-    // Field names, the status and the delay only: bodies, header values and the redirect target are never recorded.
+    // Field names, statuses, the delay and the hosts redirects point to: bodies, header values and full redirect URLs
+    // are never recorded. Each method's override has its own status, so a redirecting override is visible.
+    const hosts = [config.location, ...Object.values(config.methods ?? {}).map((v) => v?.location)]
+      .filter((l): l is string => !!l).map((l) => URL.parse(l)?.host ?? "").filter(Boolean);
     await audit(c, "hook_inbox.response_update", { type: "hook_inbox", id: c.req.param("id") }, auditChanges({
       status: config.status, contentType: config.contentType, delayMs: config.delayMs,
       body: config.body ? true : undefined, headers: config.headers.length ? true : undefined,
       location: config.location ? true : undefined, methods: config.methods ? true : undefined,
+    }, {
+      ...(config.methods?.POST ? { postStatus: config.methods.POST.status } : {}),
+      ...(config.methods?.PUT ? { putStatus: config.methods.PUT.status } : {}),
+      ...(config.methods?.PATCH ? { patchStatus: config.methods.PATCH.status } : {}),
+      ...(hosts.length ? { redirectHost: [...new Set(hosts)].join(", ") } : {}),
     }));
     return c.json({ response: config });
   });
@@ -633,6 +642,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       // the delay. The delay never prevents capture.
       const release = hookDelaySlots.acquire(id, inbox.organization_id);
       if (release) {
+        // nothing below reads the database: hand the connection back before sleeping, so held delays cannot exhaust
+        // PostgreSQL connections (Workers opens one per request; Node's shared pool is unaffected)
+        releaseDatabase(c);
         try { await boundedDelay(config.value.delayMs, c.req.raw.signal); } finally { release(); }
       }
     }

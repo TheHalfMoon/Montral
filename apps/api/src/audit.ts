@@ -82,6 +82,8 @@ export const SAFE_VALUE_FIELDS: ReadonlySet<string> = new Set([
   "reminderIntervalMin", "domain", "method", "frequency", "count", "verified", "expiresInHours", "format", "reason",
   "timeZone", "repeatCount", "version", "level", "rotationType",
   "requireSso", "defaultRole",
+  // webhook response overrides: the status per method and the host (never the full URL) a redirect points to
+  "postStatus", "putStatus", "patchStatus", "redirectHost",
 ]);
 /**
  * Defense in depth: a value is dropped when its field name looks like a credential or a destination, even if someone

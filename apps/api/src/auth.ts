@@ -123,6 +123,27 @@ export async function givePersonalWorkspace(database: Pick<Database, "repo" | "q
   return id;
 }
 
+/**
+ * A member who leaves or is removed loses the API keys they pinned to that workspace: otherwise the keys would only be
+ * blocked while the membership is missing and would work again after a re-invitation. Keys pinned elsewhere, and
+ * unpinned keys (which follow the user's memberships), are kept. Metadata is parsed here, not cast in SQL, so one
+ * malformed row cannot fail the whole statement.
+ */
+export async function revokeKeysPinnedTo(query: <T>(sql: string, params?: unknown[]) => Promise<T[]>, orgId: string, userId: string) {
+  const keys = await query<{ id: string; metadata: unknown }>(`select id, metadata from apikey where reference_id = $1`, [userId]);
+  const pinned = keys.filter((k) => {
+    let meta = k.metadata;
+    if (typeof meta === "string") {
+      try { meta = JSON.parse(meta); } catch { return false; }
+      // Better Auth may store the metadata JSON-encoded twice
+      if (typeof meta === "string") { try { meta = JSON.parse(meta); } catch { return false; } }
+    }
+    return !!meta && typeof meta === "object" && (meta as { organizationId?: unknown }).organizationId === orgId;
+  });
+  if (pinned.length) await query(`delete from apikey where reference_id = $1 and id = any($2::text[])`, [userId, pinned.map((k) => k.id)]);
+  return pinned.length;
+}
+
 /** Removes everything that could let someone who never proved the email keep access to the user. */
 export async function purgeUnverifiedSecrets(database: Database, userId: string) {
   for (const sql of [
@@ -393,6 +414,8 @@ export function createAuth(database: Database, env: Bindings) {
           const orgId = text(gone?.organizationId);
           const userId = text(gone?.userId) ?? (ctx.path === "/organization/leave" ? (memberNote?.userId ?? null) : null);
           if (orgId && userId) {
+            // keys pinned to the workspace end with the membership (on their own: an SSO bookkeeping failure must not keep them)
+            await revokeKeysPinnedTo(query, orgId, userId).catch(() => console.error("api keys of a former member could not be revoked; private diagnostics suppressed"));
             try {
               // normally recorded before the call; a removal the before-hook could not attribute is recorded now
               if (!(removalNote && removalNote.orgId === orgId && removalNote.userId === userId)) await recordRemoval(query, orgId, userId);

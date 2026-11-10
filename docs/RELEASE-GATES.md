@@ -25,8 +25,8 @@ Every gate below passed on GitHub Actions at `678c363` (`main` after #58). Run i
 | G12 | Review of every merged change, all findings fixed or recorded | PASS, with recorded gaps | `docs/FINAL-REPORT.md` §2 (agent reviewers in the programme, mostly not posted to GitHub): fixes in #47 and #48 not re-reviewed; a separate security review requested on #53 not done; open low-severity follow-ups in `docs/TASK-LEDGER.md` rows 26–29 |
 | G13 | No open critical, high or medium security finding | PASS (self-assessed) | `docs/FINAL-REPORT.md` §6; no third-party penetration test |
 
-**Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari on
-physical Apple hardware (blocked on Safari remote-automation authorization); Windows Docker Desktop / WSL 2 (not
+**Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari authenticated app and VoiceOver on
+physical Apple hardware (the native Safari public landing passed 8/8 on a real Mac in #62; the full app and VoiceOver are still unverified); Windows Docker Desktop / WSL 2 (not
 tested; Windows is not a native server platform); ARM64 Linux hosts for the Docker image; PostgreSQL versions other
 than 17 and 18.6; several app replicas behind a load balancer; real external SMTP/APNs delivery.
 

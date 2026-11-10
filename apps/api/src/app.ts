@@ -6,7 +6,7 @@ import { HTTPException } from "hono/http-exception";
 import { createAuth, currentSession, NATIVE_CALLBACK, signupDisabled, slugify, turnstile } from "./auth";
 import { connectionString, type AppEnv } from "./env";
 import { mountMcp } from "./mcp-route";
-import { rejectInAllProjects, requireOrg } from "./middleware";
+import { rejectInAllProjects, requireOrg, ssoAllowsPrincipal } from "./middleware";
 import { alertLog, settings } from "./routes/alert-log";
 import { auditEvents } from "./routes/audit";
 import { channels } from "./routes/channels";
@@ -23,7 +23,7 @@ import { configureEmail, emailEnabled } from "./email";
 import { apnsConfigured, configureApns } from "./apns";
 import { configureNetGuard } from "./netguard";
 import { configureSso } from "./sso-oidc";
-import { instanceConnection } from "./sso-store";
+import { instanceConnection, ssoAllows, ssoSatisfiesAll } from "./sso-store";
 import { ssoAdmin } from "./routes/sso";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
@@ -251,7 +251,11 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const session = await currentSession(c.get("auth"), c.req.raw.headers);
     if (!session) return c.json({ error: "Unauthorized" }, 401);
     const repo = c.get("repo");
-    const spaces = await repo.workspacesOf(session.user.id);
+    const db = c.get("database");
+    // workspaces that require single sign-on are only offered to a session their connection created
+    const all = await repo.workspacesOf(session.user.id);
+    const allowed = await Promise.all(all.map((w) => ssoAllows((sql, params) => db.query(sql, params), w.id, session.user.id, session.session.id)));
+    const spaces = all.filter((_, i) => allowed[i]);
     const active = (session.session as { activeOrganizationId?: string | null }).activeOrganizationId;
     return c.json({
       active: active && spaces.some((w) => w.id === active) ? active : (spaces[0]?.id ?? null),
@@ -285,6 +289,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const granted = c.get("workspaceGrant");
     let spaces = await repo.workspacesOf(c.get("userId"));
     if (granted instanceof Map) spaces = spaces.filter((w) => granted.has(w.id));
+    // a workspace that requires single sign-on is not listed (names, projects) to a credential it would refuse
+    const allowed = await Promise.all(spaces.map((w) => ssoAllowsPrincipal(c, w.id, c.get("userId"))));
+    spaces = spaces.filter((_, i) => allowed[i]);
     const workspaces = await Promise.all(
       spaces.map(async (w) => ({
         id: w.id,
@@ -317,6 +324,13 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // interactive sessions only: an API key or agent token (even a project-limited one) never gets the whole account
   authed.get("/me/export", async (c) => {
     if (c.get("workspaceGrant") !== null) return c.json({ error: "Account export needs a signed-in session, not an API key or agent authorization" }, 403);
+    // the export holds the contents of workspaces the user owns or administers: every require-SSO one among them must
+    // accept this session
+    const proof = c.get("ssoProof");
+    const db = c.get("database");
+    if (!(await ssoSatisfiesAll((sql, params) => db.query(sql, params), c.get("userId"), proof?.id ?? ""))) {
+      return c.json({ error: "A workspace of yours requires single sign-on: sign in with SSO to export your account" }, 403);
+    }
     c.header("content-disposition", 'attachment; filename="montral-account-export.json"');
     return c.json({ exportedAt: new Date().toISOString(), ...(await c.get("repo").exportAccount(c.get("userId"))) });
   });

@@ -7,6 +7,7 @@ import { langFromHeader, tr } from "../mail-i18n";
 import type { AppEnv } from "../env";
 import type { Plan } from "../entitlements";
 import { currentSession } from "../auth";
+import { ssoAllows } from "../sso-store";
 import {
   accessCookie, hashPagePassword, hasAccessGrant, MAX_ACTIVE_SHARE_LINKS, newShareToken, redeemShareToken,
   SHARE_LINK_DEFAULT_HOURS, SHARE_LINK_MAX_HOURS, verifyPagePassword,
@@ -415,10 +416,15 @@ async function rssFeed(c: Context<AppEnv>) {
 /** Failed unlocks a page tolerates per hour before refusing all unlocks (share links and members are unaffected). */
 const UNLOCK_PAGE_FAILURES = 100;
 
-/** A members-only page is readable only through a browser session of a current member of its workspace. */
+/**
+ * A members-only page is readable only through a browser session of a current member of its workspace, and in a
+ * workspace that requires single sign-on only through a session its connection created (owners exempt).
+ */
 async function memberOfPageWorkspace(c: Context<AppEnv>, organizationId: string): Promise<boolean> {
   const session = await currentSession(c.get("auth"), c.req.raw.headers);
-  return !!session && (await c.get("repo").isMember(session.user.id, organizationId));
+  if (!session || !(await c.get("repo").isMember(session.user.id, organizationId))) return false;
+  const db = c.get("database");
+  return ssoAllows((sql, params) => db.query(sql, params), organizationId, session.user.id, session.session.id);
 }
 
 /**

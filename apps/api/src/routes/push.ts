@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { apnsConfigured } from "../apns";
 import type { AppEnv } from "../env";
+import { ssoAllowsPrincipal } from "../middleware";
 
 const hex = z.string().trim().regex(/^[0-9a-fA-F]{32,200}$/, "Must be a hex device token of 32 to 200 characters").transform((t) => t.toLowerCase());
 
@@ -36,6 +37,8 @@ export const push = new Hono<AppEnv>()
       if (!c.get("projectScope")) {
         for (const orgId of await repo.managedOrgsWithoutPushChannel(userId)) {
           if (granted instanceof Map && !granted.has(orgId)) continue;
+          // nor into a workspace whose "require SSO" this credential does not satisfy
+          if (!(await ssoAllowsPrincipal(c, orgId, userId))) continue;
           await repo.createChannel(orgId, null, { type: "push", name: "Mobile app", config: {}, enabled: true, autoEnable: true }).catch(() => {
             // DB/transport exceptions are untrusted; registration still works
             // even when optional auto-channel provisioning cannot finish.

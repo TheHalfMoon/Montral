@@ -136,6 +136,11 @@ export type Variables = {
    * (null = no limit); "all" = any workspace the user belongs to. null for a signed-in session.
    */
   workspaceGrant: null | "all" | Map<string, string[] | null>;
+  /**
+   * What proves how this request's credential came to be, for "require SSO" (middleware.ts ssoAllowsPrincipal): the
+   * session id, the API key id, or the session that authorized an agent token (null when the token has none).
+   */
+  ssoProof?: { kind: "session" | "api-key" | "oauth"; id: string | null };
   /** A streamed response still reading from the request's database: it is closed once this settles, not before. */
   databaseHeldUntil?: Promise<void>;
 };

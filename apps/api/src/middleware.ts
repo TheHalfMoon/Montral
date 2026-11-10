@@ -107,19 +107,11 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   // SSO connection produced: a session it created, an API key made from such a session, or an agent token whose
   // authorizing session (its `sid`) is such a session and is still alive.
   // Covers sessions and credentials from before the switch and from any other way of signing in.
-  {
-    const database = c.get("database");
-    const q = <T,>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
-    const required = await ssoRequirementOf(q, orgId);
-    if (required && !isOwnerRole(await repo.memberRole(userId, orgId))) {
-      const ok = identity.kind === "session"
-        ? await sessionVia(q, String((session?.session as { id?: unknown } | undefined)?.id ?? ""), required)
-        : identity.kind === "api-key"
-          ? await credentialVia(q, "api_key", identity.credentialId, required)
-          // an agent token counts only through the session that authorized it: a live SSO session of this connection
-          : !!grantSession && (await sessionVia(q, grantSession, required));
-      if (!ok) throw new HTTPException(403, { message: "This workspace requires single sign-on. Sign out and use Sign in with SSO; API keys and agent authorizations must be created after signing in with SSO." });
-    }
+  c.set("ssoProof", identity.kind === "session"
+    ? { kind: "session", id: String((session?.session as { id?: unknown } | undefined)?.id ?? "") || null }
+    : identity.kind === "api-key" ? { kind: "api-key", id: identity.credentialId } : { kind: "oauth", id: grantSession ?? null });
+  if (!(await ssoAllowsPrincipal(c, orgId, userId))) {
+    throw new HTTPException(403, { message: "This workspace requires single sign-on. Sign out and use Sign in with SSO; API keys and agent authorizations must be created after signing in with SSO." });
   }
   const projectId = await cachedProject(repo, orgId, wanted);
   if (scope && !scope.includes(projectId)) throw new HTTPException(403, { message: "API key has no access to this project" });
@@ -136,6 +128,26 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
   }));
   await next();
 });
+
+/**
+ * Whether this request's credential (c.get("ssoProof"), set by requireOrg) may act on `orgId` under its "require SSO":
+ * always for owners, non-members (the membership checks refuse those) and workspaces without the requirement;
+ * otherwise a session the workspace's connection created, an API key made from such a session, or an agent token
+ * whose authorizing session (`sid`) is a live session of that connection. Used by requireOrg for the active workspace
+ * and by routes that read or write other workspaces of the user (the workspace list, push channel provisioning).
+ */
+export async function ssoAllowsPrincipal(c: Context<AppEnv>, orgId: string, userId: string): Promise<boolean> {
+  const database = c.get("database");
+  const q = <T,>(sql: string, params?: unknown[]) => database.query<T>(sql, params);
+  const required = await ssoRequirementOf(q, orgId);
+  if (!required) return true;
+  const role = await c.get("repo").memberRole(userId, orgId);
+  if (!role || isOwnerRole(role)) return true;
+  const proof = c.get("ssoProof");
+  if (!proof?.id) return false;
+  if (proof.kind === "api-key") return credentialVia(q, "api_key", proof.id, required);
+  return sessionVia(q, proof.id, required);
+}
 
 /** True for workspace owners and admins (by session, API key or agent alike). */
 export async function isManager(c: Context<AppEnv>): Promise<boolean> {

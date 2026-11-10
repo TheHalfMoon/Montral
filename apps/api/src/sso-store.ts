@@ -230,17 +230,19 @@ export async function ssoSatisfiesAll(q: Query, userId: string, sessionId: strin
  * remembered, so neither can be provisioned into it again (not even after deleting the account) until someone
  * invites the address again.
  */
-export async function recordRemoval(q: Query, orgId: string, userId: string) {
-  await q(
+export async function recordRemoval(q: Query, orgId: string, userId: string): Promise<string[]> {
+  const rows = await q<{ id: string }>(
     `INSERT INTO sso_removal (organization_id, email, account_id)
      SELECT $1::text, lower(u.email), NULL FROM "user" u WHERE u.id = $2::text
      UNION ALL
      SELECT $1::text, lower(u.email), a.account_id FROM "user" u
        JOIN account a ON a.user_id = u.id
        JOIN sso_connection c ON a.provider_id = 'sso:' || c.id::text AND c.organization_id = $1::text
-      WHERE u.id = $2::text`,
+      WHERE u.id = $2::text
+     RETURNING id::text AS id`,
     [orgId, userId],
   );
+  return rows.map((r) => r.id);
 }
 
 export async function removedFrom(q: Query, orgId: string, email: string, accountId: string): Promise<boolean> {
@@ -251,7 +253,7 @@ export async function removedFrom(q: Query, orgId: string, email: string, accoun
   return rows.length > 0;
 }
 
-/** An invitation to the address lifts the block (for the address and the identities recorded with it). */
+/** An accepted invitation to the address lifts the block (for the address and the identities recorded with it). */
 export async function clearRemoval(q: Query, orgId: string, email: string) {
   await q(`DELETE FROM sso_removal WHERE organization_id = $1::text AND email = lower($2::text)`, [orgId, email]);
 }

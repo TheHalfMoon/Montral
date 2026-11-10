@@ -347,12 +347,41 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect(failure((await sso(idpA, new Jar(), { email }, { ...user, sub: "leaver-new-sub" })).location)).toBe("access_removed");
     expect(await userIdOf(email)).toBeNull();
     expect((await auditOf(ownerA.orgId)).some((e) => e.action === "sso.sign_in_refused" && e.changes?.values?.reason === "removed")).toBe(true);
-    // ...until an owner or admin invites the address again
+    // a pending invitation does not lift the block, and a cancelled one does not either...
     const inv = await call("/api/auth/organization/invite-member", { method: "POST", jar: ownerA.jar, body: { organizationId: ownerA.orgId, email, role: "member" } });
     expect(inv.status, inv.text).toBe(200);
-    const back = new Jar();
-    expect((await sso(idpA, back, { email }, user)).location).toBe(`${origin}/app`);
-    expect(await isMember(ownerA.orgId, (await userIdOf(email))!)).toBe(true);
+    expect(failure((await sso(idpA, new Jar(), { email }, user)).location)).toBe("access_removed");
+    expect((await call("/api/auth/organization/cancel-invitation", { method: "POST", jar: ownerA.jar, body: { invitationId: inv.body.id } })).status).toBe(200);
+    expect(failure((await sso(idpA, new Jar(), { email }, user)).location)).toBe("access_removed");
+    expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND email = $2", [ownerA.orgId, email])).not.toHaveLength(0);
+    // ...only accepting a new invitation does
+    const person = await signUp("leaver-again", email);
+    await join(ownerA, email, person.jar);
+    expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND email = $2", [ownerA.orgId, email])).toHaveLength(0);
+    expect(await isMember(ownerA.orgId, person.id)).toBe(true);
+  });
+
+  it("records a removal before it happens and refuses the removal when that record cannot be written", async () => {
+    const email = `blocked-${rand}@${domainA}`;
+    await sso(idpA, new Jar(), { email }, { sub: "blocked-sub", email, email_verified: true });
+    const id = (await userIdOf(email))!;
+    // make recording fail for this one workspace (a test-only constraint on a disposable database)
+    const constraint = `sso_removal_test_${rand.replace(/[^a-z0-9]/g, "")}`;
+    await q(`ALTER TABLE sso_removal ADD CONSTRAINT ${constraint} CHECK (organization_id <> '${ownerA.orgId.replace(/'/g, "")}') NOT VALID`);
+    try {
+      const refused = await call("/api/auth/organization/remove-member", { method: "POST", jar: ownerA.jar, body: { organizationId: ownerA.orgId, memberIdOrEmail: email } });
+      expect(refused.status).toBe(500);
+      expect(await isMember(ownerA.orgId, id)).toBe(true);
+    } finally {
+      await q(`ALTER TABLE sso_removal DROP CONSTRAINT ${constraint}`);
+    }
+    // a removal that fails for its own reasons leaves no block behind (the owner cannot be removed)
+    const owner = await call("/api/auth/organization/remove-member", { method: "POST", jar: ownerA.jar, body: { organizationId: ownerA.orgId, memberIdOrEmail: ownerA.email } });
+    expect(owner.status).toBeGreaterThanOrEqual(400);
+    expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND email = $2", [ownerA.orgId, ownerA.email.toLowerCase()])).toHaveLength(0);
+    // with recording possible, the removal goes through and the block is there
+    expect((await call("/api/auth/organization/remove-member", { method: "POST", jar: ownerA.jar, body: { organizationId: ownerA.orgId, memberIdOrEmail: email } })).status).toBe(200);
+    expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND email = $2", [ownerA.orgId, email])).not.toHaveLength(0);
   });
 
   it("refuses an email the provider did not verify, and a domain the connection may not use", async () => {
@@ -618,6 +647,26 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect(update.status).toBe(403);
     expect(update.body?.code).toBe("SSO_REQUIRED");
     expect(await asAgent(erinAgent.token!, ownerA.orgId)).toBe(200);
+
+    // Joining through an invitation with a non-SSO session is accepted, and from then on the workspace asks for SSO
+    // everywhere a membership alone used to be enough: the workspace list, the agent picker, the account export, a
+    // members-only status page.
+    expect((await call("/api/auth/organization/set-active", { method: "POST", jar: live, body: { organizationId: erin.orgId } })).status).toBe(200);
+    const listed = await call("/api/workspaces", { jar: live });
+    expect(listed.status, listed.text).toBe(200);
+    expect(listed.body.workspaces.map((w: any) => w.id)).toEqual([erin.orgId]);
+    expect((await call("/api/workspaces", { jar: erinSso })).body.workspaces.map((w: any) => w.id)).toContain(ownerA.orgId);
+    const picker = await call("/api/oauth/picker", { jar: live });
+    expect(picker.body.workspaces.map((w: any) => w.id)).toEqual([erin.orgId]);
+    expect((await call("/api/oauth/picker", { jar: erinSso })).body.workspaces.map((w: any) => w.id)).toContain(ownerA.orgId);
+    expect((await call("/api/me/export", { jar: live })).status).toBe(403);
+    expect((await call("/api/me/export", { jar: erinSso })).status).toBe(200);
+    const privateSlug = `sso-private-${rand}`;
+    const page = await call("/api/status-pages", { method: "POST", jar: ownerA.jar, body: { slug: privateSlug, title: "SSO members only", visibility: "members" } });
+    expect(page.status, page.text).toBe(201);
+    expect((await call(`/api/public/status/${privateSlug}`, { jar: live })).status).toBe(404);
+    expect((await call(`/api/public/status/${privateSlug}`, { jar: erinSso })).status).toBe(200);
+    expect((await call(`/api/public/status/${privateSlug}`, { jar: ownerA.jar })).status).toBe(200);
 
     // the operator's instance-wide provider is another connection: it does not satisfy workspace A's requirement
     const viaInstance = new Jar();

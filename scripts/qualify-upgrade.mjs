@@ -1,3 +1,4 @@
+import { dockerFileTransfer } from "./docker-file-transfer.mjs";
 #!/usr/bin/env node
 // Upgrade, rollback and disaster-recovery qualification of the self-hosted Node build against a real, disposable
 // local PostgreSQL. Everything is synthetic and local: the monitoring target, alert webhook and webhook senders are
@@ -113,32 +114,7 @@ const migrationsApplied = async (sql) => (await sql`SELECT count(*)::int AS n FR
 // ── tools: host pg_dump/pg_restore (version-matched) and the documented commands inside the PostgreSQL container ──
 async function hostTool(name, args) { return run(name, args, { env: pgEnv, timeout: 300_000, maxBuffer: 64 * 1024 * 1024 }); }
 /** `docker exec -i <container> <cmd...>` with optional stdin file / stdout file: what `docker compose exec -T postgres ...` runs. */
-async function inContainer(args, { stdinFile, stdoutFile } = {}) {
-  const proc = spawn("docker", ["exec", "-i", PG_CONTAINER, ...args], {
-    stdio: [stdinFile ? "pipe" : "ignore", stdoutFile ? "pipe" : "inherit", "pipe"],
-  });
-  let err = "";
-  proc.stderr.on("data", (chunk) => { err = (err + chunk).slice(-4000); });
-  const exited = new Promise((resolveExit, rejectExit) => {
-    proc.once("error", rejectExit);
-    proc.once("close", (code) => {
-      if (code === 0) resolveExit();
-      else rejectExit(new Error(`docker exec ${args[0]} exited ${code}: ${err}`));
-    });
-  });
-  // A child exit does not imply that the destination file has flushed its buffered bytes.
-  // pipeline waits for writable 'finish' and propagates both read and write failures.
-  const transfers = [];
-  if (stdinFile) transfers.push(pipeline(createReadStream(stdinFile), proc.stdin));
-  if (stdoutFile) transfers.push(pipeline(proc.stdout, createWriteStream(stdoutFile, { flags: "wx" })));
-  try {
-    await Promise.all([exited, ...transfers]);
-  } catch (error) {
-    proc.kill();
-    await Promise.allSettled([exited, ...transfers]);
-    throw error;
-  }
-}
+const inContainer = (args, options) => dockerFileTransfer(PG_CONTAINER, args, options);
 
 // ── synthetic target: monitors, the alert webhook and nothing else ───────────
 const alerts = [];

@@ -2,9 +2,11 @@ import type { Monitor, Repo } from "@montral/repo";
 import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminders, sendReminders, sweepDeliveries, wasDelivered } from "./alerts";
 import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
-import { measure } from "./probes";
+import { measure, type Measured } from "./probes";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
+import { BROWSER_UNCHECKED_AFTER } from "./browser-check";
+import { sendEmail } from "./email";
 import { AUDIT_RETENTION_DEFAULT_DAYS } from "./audit";
 
 /** Monitors that watch an expiry date (domain registration, TLS certificate) rather than whether a service answers. */
@@ -192,10 +194,25 @@ async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements)
 
 export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlements = unmetered, scheduled = false) {
   // a due heartbeat monitor means no ping arrived in time
-  const { out, results, note: regionNote } =
+  const measured: Measured =
     m.type === "heartbeat"
       ? { out: { ok: false, error: "Heartbeat missed" } as CheckOutcome, results: [{ region: "auto", ok: false, error: "Heartbeat missed" }], note: undefined as string | undefined }
       : await measure(m, repo);
+  const out = measured.out;
+  // A browser check that did not happen (capacity full, runner unreachable or refusing, Chromium not starting, no report)
+  // says nothing about the target, but it must not leave the monitor silently blind: it is recorded as a visible run,
+  // and after BROWSER_UNCHECKED_AFTER in a row the monitor is marked unchecked and its owners and admins are told, once
+  // per streak. The monitor's status stays what it was; the API and dashboard show it as unchecked.
+  if (m.type === "browser" && out.inconclusive && out.browser && repo.recordBrowserRun) {
+    const run = out.browser;
+    await step("browser run", () => repo.recordBrowserRun!({ monitorId: m.id, ok: false, kind: run.kind === "deferred" ? "deferred" : "error", usedSecrets: run.usedSecrets ?? false, failedStep: null, error: out.error ?? null, durationMs: 0, steps: [], blockedRequests: 0, peakRssMb: null, cpuMs: null }));
+    const inARow = repo.consecutiveUncheckedBrowserRuns ? await repo.consecutiveUncheckedBrowserRuns(m.id, BROWSER_UNCHECKED_AFTER).catch(() => 0) : 0;
+    if (inARow >= BROWSER_UNCHECKED_AFTER && repo.markUnchecked && (await repo.markUnchecked(m.id).catch(() => false))) {
+      await step("unchecked notice", () => notifyUnchecked(repo, m, out.error ?? "Browser check did not run"));
+    }
+    return;
+  }
+  const { results, note: regionNote } = measured;
   // the prober itself had no connectivity: the check says nothing about the monitor, so nothing is recorded or counted
   if (out.inconclusive) {
     console.warn(`check for ${m.id} discarded: probe unavailable`);
@@ -212,6 +229,16 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
   // one region is one row; several are rows per region that count as a single run in the rollup
   if (results.length === 1) await repo.recordCheck({ monitorId: m.id, region: results[0].region, ok: out.ok, statusCode: out.statusCode, latencyMs: out.latencyMs, error: out.error });
   else await repo.recordRegionResults(m.id, results, { ok: out.ok, latencyMs: out.latencyMs });
+  // a browser check also keeps its run: step timings, the failing step, what it measured and (if asked) a screenshot
+  const run = out.browser;
+  if (run && repo.recordBrowserRun) {
+    await step("browser run", () => repo.recordBrowserRun!({
+      monitorId: m.id, ok: run.ok, kind: "run", usedSecrets: run.usedSecrets ?? false, failedStep: run.failedStep, error: run.error, durationMs: run.durationMs, steps: run.steps,
+      blockedRequests: run.blockedRequests, peakRssMb: run.peakRssMb ?? null, cpuMs: run.cpuMs ?? null, screenshot: run.screenshotPng ?? null,
+    }));
+    // the journey ran: the monitor is checked again
+    if (m.uncheckedSince && repo.clearUnchecked) await step("unchecked clear", () => repo.clearUnchecked!(m.id));
+  }
   // Concurrent manual/scheduled checks must advance the latest streak atomically. A failure that
   // completed while this check was in flight cannot be overwritten by its old success count.
   const recovery = await repo.recordRecoveryProgress(m, out.ok);
@@ -389,6 +416,27 @@ export async function resolveIncident(repo: Repo, m: Monitor, slow = false, enti
     if ((await alertHistory(repo, inc)).muted) continue;
     await dispatchAlert(repo, m.organizationId, { kind: "incident.resolved", incident: { ...inc, resolvedAt: new Date() }, monitor: m, ...(slow ? { slow: true as const } : {}) }, m.channelIds, entitlements);
   }
+}
+
+const escapeHtml = (v: string) => v.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" } as Record<string, string>)[c]);
+
+/**
+ * Tells a workspace's owners and admins (e-mail, logged in the alert log like every delivery) that a browser monitor has
+ * stopped being checked, and why, in fixed words. Sent once per streak: markUnchecked only lets the first caller through.
+ */
+export async function notifyUnchecked(repo: Repo, m: Monitor, reason: string) {
+  const emails = repo.managerEmails ? await repo.managerEmails(m.organizationId) : [];
+  const subject = `${m.name}: browser checks are not running`;
+  const text = `The browser monitor "${m.name}" has not been checked for its last ${BROWSER_UNCHECKED_AFTER} runs. Latest reason: ${reason}.\n\nIt is shown as unchecked until a check runs again. The browser runtime's state is on the monitor's page.`;
+  const base = { organizationId: m.organizationId, projectId: m.projectId ?? null, channelId: null, channelName: "Owners and admins (email)", channelType: "email", kind: "monitor.unchecked", incidentId: null, monitorName: m.name };
+  const rows = [];
+  for (const to of emails) {
+    let ok = true;
+    try { await sendEmail({ to, subject, text, html: `<p>${escapeHtml(text).replace(/\n\n/g, "</p><p>")}</p>` }, true); } catch { ok = false; }
+    rows.push({ ...base, ok, status: ok ? ("sent" as const) : ("failed" as const), error: ok ? null : "email not sent", statusMessage: ok ? `sent: browser checks not running (${reason})` : `failed: email not sent; browser checks not running (${reason})` });
+  }
+  if (!rows.length) rows.push({ ...base, ok: false, status: "skipped" as const, error: "no owner or admin address", statusMessage: `skipped: browser checks not running (${reason}); no owner or admin address` });
+  await repo.logDeliveries(rows);
 }
 
 /** Heartbeats are due again one interval plus the grace period after the last expected ping. */

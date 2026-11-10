@@ -73,7 +73,7 @@ export const MONTRAL = {
 /** What Montral cannot do today. Every item was checked: there is no code path for it. */
 export const MONTRAL_GAPS: L[] = [
   l("TLS certificate and ICMP ping checks need the Node runtime (the Docker image); a Cloudflare Workers deployment cannot run them. Ping in Docker needs unprivileged ICMP, which Docker allows by default.", "TLS 证书与 ICMP ping 检测需要 Node 运行时（Docker 镜像）；部署在 Cloudflare Workers 上时无法运行。Docker 中的 ping 需要允许非特权 ICMP，Docker 默认允许。"),
-  l("No browser-based or multi-step transaction checks, and no real user monitoring.", "没有基于浏览器或多步骤的事务检测，也没有真实用户监控。"),
+  l("Browser (multi-step) checks run only on the self-hosted server with the optional browser-runner service, from a fixed set of steps: no scripted checks with your own code, and no real user monitoring.", "浏览器（多步骤）检测只能在配置了可选 browser-runner 服务的自托管服务器上运行，且只支持固定的步骤类型：不支持用你自己的代码编写的脚本化检测，也没有真实用户监控。"),
   l("No SMS or phone-call alerts and no on-call rotation schedules. Escalation works by channel and by minutes unacknowledged.", "没有短信或电话告警，也没有值班排班表。升级按告警渠道和未确认的分钟数进行。"),
   l("Database monitors check that the server answers; they send no credentials and run no queries.", "数据库监控只检查服务端是否应答，不发送凭据，也不执行查询。"),
 ];
@@ -112,8 +112,8 @@ const faqImport = (name: string): Faq => ({
 const faqGaps = (name: string): Faq => ({
   q: l(`What does ${name} do that Montral does not?`, `${name} 有哪些 Montral 没有的功能？`),
   a: l(
-    "Montral has no browser or multi-step checks, and no SMS, phone-call or on-call schedule features. Its TLS certificate and ICMP ping checks run only on the Node runtime, not on Cloudflare Workers. If you rely on one of those, check whether the other tool covers it before you switch.",
-    "Montral 没有浏览器或多步骤检测，也没有短信、电话告警或值班排班功能；其 TLS 证书与 ICMP ping 检测只能在 Node 运行时中运行，Cloudflare Workers 上不可用。如果你依赖其中之一，切换前请先确认。",
+    "Montral has no scripted browser checks with your own code, and no SMS, phone-call or on-call schedule features. Its TLS certificate and ICMP ping checks run only on the Node runtime, and its browser (multi-step) checks only on the self-hosted server with the browser-runner service, not on Cloudflare Workers. If you rely on one of those, check whether the other tool covers it before you switch.",
+    "Montral 不支持用你自己的代码编写的浏览器脚本检测，也没有短信、电话告警或值班排班功能；其 TLS 证书与 ICMP ping 检测只能在 Node 运行时中运行，浏览器（多步骤）检测只能在配置了 browser-runner 服务的自托管服务器上运行，Cloudflare Workers 上均不可用。如果你依赖其中之一，切换前请先确认。",
   ),
 });
 const faqPricing = (name: string): Faq => ({
@@ -247,12 +247,12 @@ export const TOOLS: Tool[] = [
       { topic: l("License", "许可证"), montral: MONTRAL.license, them: l("Closed source", "闭源") },
       { topic: l("Where it runs", "运行方式"), montral: MONTRAL.hosting, them: l("Hosted by the vendor only", "仅由厂商托管") },
       { topic: l("Uptime checks", "可用性检测"), montral: MONTRAL.types, them: l("Website and server uptime checks from the vendor's locations", "从厂商的检测节点对网站和服务器做可用性检测") },
-      { topic: l("Transaction checks and real user monitoring", "事务检测与真实用户监控"), montral: l("Not available", "不提供"), them: l("Offered as separate products", "作为独立产品提供") },
+      { topic: l("Transaction checks and real user monitoring", "事务检测与真实用户监控"), montral: l("Browser journeys from a fixed set of steps on the self-hosted server; no real user monitoring", "在自托管服务器上运行由固定步骤组成的浏览器流程；没有真实用户监控"), them: l("Offered as separate products", "作为独立产品提供") },
       { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Check their current pricing", "请查看其最新价格") },
     ],
     theyHave: [
-      l("Scripted, multi-step transaction checks and real user monitoring. Montral checks one request at a time.", "脚本化的多步骤事务检测和真实用户监控。Montral 每次只检测一个请求。"),
+      l("Scripted transaction checks with your own code, and real user monitoring. Montral's browser journeys use a fixed set of steps and run on the self-hosted server only.", "用你自己的代码编写的脚本化事务检测，以及真实用户监控。Montral 的浏览器流程只支持固定的步骤类型，且只能在自托管服务器上运行。"),
       l("Page speed measurement. Montral records response time of each check but does not analyse page loads.", "页面速度测量。Montral 会记录每次检测的响应时间，但不分析页面加载过程。"),
     ],
     bestThem: [
@@ -493,7 +493,7 @@ export const SEGMENTS: Segment[] = [
     ),
     limits: [
       l("Checks run at most once a minute.", "检测最快每分钟一次。"),
-      l("No synthetic browser tests for sign-in or checkout flows.", "不支持针对登录或结账流程的浏览器合成测试。"),
+      l("Browser journeys for sign-in or checkout flows need the self-hosted server with the browser-runner service; they do not run on Cloudflare Workers.", "针对登录或结账流程的浏览器流程需要配置了 browser-runner 服务的自托管服务器，不能在 Cloudflare Workers 上运行。"),
       l("TLS certificate expiry warnings need the Node runtime; on Cloudflare Workers track renewals separately.", "TLS 证书到期预警需要 Node 运行时；部署在 Cloudflare Workers 上时请另行跟踪续期。"),
     ],
     faq: [

@@ -45,6 +45,17 @@ services:
       # "true" lets webhook replay reach private development endpoints (never link-local / metadata addresses).
       # Separate from ALLOW_PRIVATE_TARGETS because replay returns response bodies to the user.
       MONTRAL_REPLAY_PRIVATE_TARGETS: ${MONTRAL_REPLAY_PRIVATE_TARGETS:-}
+      # Browser (multi-step) checks run in the separate, hardened browser-runner service:
+      # docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build. See /docs/self-host#browser-checks.
+      BROWSER_CHECKS: ${BROWSER_CHECKS:-}
+      BROWSER_RUNNER_URL: ${BROWSER_RUNNER_URL:-}
+      BROWSER_RUNNER_TOKEN: ${BROWSER_RUNNER_TOKEN:-}
+      BROWSER_CHECK_ALLOW_PRIVATE_TARGETS: ${BROWSER_CHECK_ALLOW_PRIVATE_TARGETS:-}
+      MAX_BROWSER_CHECKS: ${MAX_BROWSER_CHECKS:-}
+      BROWSER_CHECK_MAX_RSS_MB: ${BROWSER_CHECK_MAX_RSS_MB:-}
+      BROWSER_EXECUTABLE_PATH: ${BROWSER_EXECUTABLE_PATH:-}
+      # development only (NODE_ENV=development); refused otherwise
+      BROWSER_CHECK_SANDBOX: ${BROWSER_CHECK_SANDBOX:-}
       # User-Agent of HTTP checks (default: Montral/0.1 (+https://github.com/TheHalfMoon/Montral))
       CHECK_USER_AGENT: ${CHECK_USER_AGENT:-}
       # reference URLs of the offline self-check; unset = defaults, set but empty = self-check off (no colon on purpose)

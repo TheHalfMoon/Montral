@@ -13,6 +13,8 @@
     "inspect:monthly-transition": "tsx scripts/inspect-monthly-transition.ts",
     "rehearse:monthly-content-retention": "tsx scripts/rehearse-monthly-content-retention.ts",
     "build:node": "esbuild src/server.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/server.mjs --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
+    "build:browser-worker": "esbuild src/browser-worker.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/browser-worker.mjs --external:playwright-core --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
+    "build:browser-runner": "esbuild src/browser-runner.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/browser-runner.mjs --external:playwright-core --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
     "start": "node dist/server.mjs",
     "build:glama": "esbuild scripts/glama-api.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/glama-api.mjs --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\""
   },
@@ -39,6 +41,7 @@
     "drizzle-orm": "^0.45.4",
     "esbuild": "^0.28.2",
     "miniflare": "5.20261006.1-alpha",
+    "playwright-core": "1.64.1",
     "tsx": "^4.20.0",
     "typescript": "^5.9.0",
     "vitest": "^5.0.3",

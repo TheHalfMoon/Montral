@@ -73,6 +73,22 @@ export type Bindings = {
   AUDIT_RETENTION_DAYS?: string;
   /** "true" lets monitors and alert webhooks target private, loopback and link-local addresses (default: refused). */
   ALLOW_PRIVATE_TARGETS?: string;
+  /** "enabled" turns on browser (multi-step) checks; needs playwright-core and Chromium on the server (Node only). */
+  BROWSER_CHECKS?: string;
+  /** Browser checks running at once on this server (1-16, default 2); more are deferred (inconclusive), never queued without bound. */
+  MAX_BROWSER_CHECKS?: string;
+  /** Memory limit of one browser check's whole process tree, MiB (256-8192, default 1024); measured on Linux. */
+  BROWSER_CHECK_MAX_RSS_MB?: string;
+  /** Chromium executable for browser checks; default: the one Playwright installed. */
+  BROWSER_EXECUTABLE_PATH?: string;
+  /** "off" disables Chromium's own sandbox for browser checks: accepted only with NODE_ENV=development, refused otherwise. */
+  BROWSER_CHECK_SANDBOX?: string;
+  /** "true" lets browser checks reach private and internal addresses (separate from ALLOW_PRIVATE_TARGETS); never loopback, metadata or this server. */
+  BROWSER_CHECK_ALLOW_PRIVATE_TARGETS?: string;
+  /** URL of the browser-runner service (docker-compose.browser.yml); unset = browser checks run in this process. */
+  BROWSER_RUNNER_URL?: string;
+  /** Shared HMAC token for the browser-runner channel, at least 32 characters (openssl rand -hex 32). */
+  BROWSER_RUNNER_TOKEN?: string;
   /** User-Agent of HTTP checks. Default: Montral/0.1 (+https://github.com/TheHalfMoon/Montral). */
   CHECK_USER_AGENT?: string;
   /** Comma-separated URLs a failed network-level check fetches to tell "the target is down" from "this machine is offline". Unset: three well-known public URLs; empty: no self-check. */

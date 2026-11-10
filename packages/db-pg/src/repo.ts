@@ -25,6 +25,11 @@ import { coverageTime, recordHeartbeatObservation, recordObservation, timeCovera
 import { publicMonitorStatus } from "./public-monitor-status";
 import { oncallRepo } from "./oncall-repo";
 
+/** Browser-check runs kept per monitor, screenshots kept among them, and the age after which runs are purged. */
+export const BROWSER_RUNS_KEPT = 50;
+export const BROWSER_SCREENSHOTS_KEPT = 5;
+export const BROWSER_RUN_RETENTION_DAYS = 14;
+export const BROWSER_SCREENSHOT_MAX_BYTES = 200 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Run coalescing: an earlier run counts as in flight for its timeout plus this long (timeouts are at most 30 s). */
 export const RUN_IN_FLIGHT_MARGIN_SEC = 15;
@@ -576,7 +581,7 @@ export function createRepo(db: Db): Repo {
           delete effective.status;
           delete effective.nextCheckAt;
         }
-        const measured = ["paused", "target", "method", "expectedStatus", "intervalSec", "timeoutMs", "graceSec", "slowThresholdMs", "regions", "minRegionsFailing", "keyword", "keywordMode", "jsonPath", "jsonExpected", "jsonMatch", "expectedLocation", "headers", "wsMessage"];
+        const measured = ["paused", "target", "method", "expectedStatus", "intervalSec", "timeoutMs", "graceSec", "slowThresholdMs", "regions", "minRegionsFailing", "keyword", "keywordMode", "jsonPath", "jsonExpected", "jsonMatch", "expectedLocation", "headers", "wsMessage", "browser"];
         const comparable = (key: string, value: unknown) => JSON.stringify(
           key === "regions" && Array.isArray(value) ? [...value].sort() : value,
           (_name, part) => part && typeof part === "object" && !Array.isArray(part)
@@ -714,6 +719,58 @@ export function createRepo(db: Db): Repo {
       await db.insert(schema.checkResult).values({ monitorId: r.monitorId, region: r.region ?? "auto", ok: r.ok, statusCode: r.statusCode, latencyMs: r.latencyMs, error: r.error });
       await foldIntoRollup(r.monitorId, r.ok, r.latencyMs ?? null);
     },
+    async recordBrowserRun(r) {
+      await db.transaction(async (tx) => {
+        await tx.insert(schema.browserCheckRun).values({
+          monitorId: r.monitorId, ok: r.ok, failedStep: r.failedStep, error: r.error, durationMs: Math.max(0, Math.round(r.durationMs)),
+          steps: r.steps.slice(0, 32).map((s) => ({ action: String(s.action).slice(0, 32), ms: Math.max(0, Math.round(s.ms)), ok: !!s.ok })),
+          blockedRequests: r.blockedRequests, peakRssMb: r.peakRssMb, cpuMs: r.cpuMs, kind: r.kind ?? "run", usedSecrets: r.usedSecrets ?? false,
+          screenshot: r.screenshot && r.screenshot.byteLength <= BROWSER_SCREENSHOT_MAX_BYTES ? r.screenshot : null,
+        });
+        // bounded per monitor: the newest runs only, and screenshots only on the newest few of those
+        await tx.execute(sql`delete from browser_check_run where monitor_id = ${r.monitorId} and id not in (
+          select id from browser_check_run where monitor_id = ${r.monitorId} order by created_at desc, id desc limit ${BROWSER_RUNS_KEPT})`);
+        await tx.execute(sql`update browser_check_run set screenshot = null where monitor_id = ${r.monitorId} and screenshot is not null and id not in (
+          select id from browser_check_run where monitor_id = ${r.monitorId} and screenshot is not null order by created_at desc, id desc limit ${BROWSER_SCREENSHOTS_KEPT})`);
+      });
+    },
+    async listBrowserRuns(monitorId, limit) {
+      const rows = await db.select({
+        id: schema.browserCheckRun.id, monitorId: schema.browserCheckRun.monitorId, createdAt: schema.browserCheckRun.createdAt, ok: schema.browserCheckRun.ok,
+        failedStep: schema.browserCheckRun.failedStep, error: schema.browserCheckRun.error, durationMs: schema.browserCheckRun.durationMs, steps: schema.browserCheckRun.steps,
+        blockedRequests: schema.browserCheckRun.blockedRequests, peakRssMb: schema.browserCheckRun.peakRssMb, cpuMs: schema.browserCheckRun.cpuMs, kind: schema.browserCheckRun.kind, usedSecrets: schema.browserCheckRun.usedSecrets,
+        hasScreenshot: sql<boolean>`${schema.browserCheckRun.screenshot} is not null`,
+      }).from(schema.browserCheckRun).where(eq(schema.browserCheckRun.monitorId, monitorId)).orderBy(desc(schema.browserCheckRun.createdAt), desc(schema.browserCheckRun.id)).limit(Math.min(Math.max(limit, 1), BROWSER_RUNS_KEPT));
+      return rows;
+    },
+    async consecutiveUncheckedBrowserRuns(monitorId, limit) {
+      const rows = await db.select({ kind: schema.browserCheckRun.kind }).from(schema.browserCheckRun)
+        .where(eq(schema.browserCheckRun.monitorId, monitorId)).orderBy(desc(schema.browserCheckRun.createdAt), desc(schema.browserCheckRun.id)).limit(limit);
+      const first = rows.findIndex((r) => r.kind === "run");
+      return first === -1 ? rows.length : first;
+    },
+    async browserRunScreenshot(monitorId, runId) {
+      const [row] = await db.select({ screenshot: schema.browserCheckRun.screenshot, usedSecrets: schema.browserCheckRun.usedSecrets }).from(schema.browserCheckRun)
+        .where(and(eq(schema.browserCheckRun.id, runId), eq(schema.browserCheckRun.monitorId, monitorId)));
+      return row?.screenshot ? { png: row.screenshot, usedSecrets: row.usedSecrets } : null;
+    },
+    async purgeSecretScreenshots(monitorId) {
+      await db.update(schema.browserCheckRun).set({ screenshot: null })
+        .where(and(eq(schema.browserCheckRun.monitorId, monitorId), eq(schema.browserCheckRun.usedSecrets, true), isNotNull(schema.browserCheckRun.screenshot)));
+    },
+    async markUnchecked(monitorId) {
+      const rows = await db.update(schema.monitor).set({ uncheckedSince: new Date() })
+        .where(and(eq(schema.monitor.id, monitorId), isNull(schema.monitor.uncheckedSince))).returning({ id: schema.monitor.id });
+      return rows.length === 1;
+    },
+    async clearUnchecked(monitorId) {
+      await db.update(schema.monitor).set({ uncheckedSince: null }).where(and(eq(schema.monitor.id, monitorId), isNotNull(schema.monitor.uncheckedSince)));
+    },
+    async managerEmails(orgId) {
+      const rows = await db.select({ email: schema.user.email }).from(schema.member).innerJoin(schema.user, eq(schema.user.id, schema.member.userId))
+        .where(and(eq(schema.member.organizationId, orgId), inArray(schema.member.role, ["owner", "admin"])));
+      return [...new Set(rows.map((r) => r.email).filter(Boolean))];
+    },
     async recordRegionResults(monitorId, results, summary) {
       if (!results.length) return;
       await db.insert(schema.checkResult).values(
@@ -765,6 +822,7 @@ export function createRepo(db: Db): Repo {
       await db.execute(sql`delete from check_result r using monitor m
         where m.id = r.monitor_id
           and r.checked_at < now() - make_interval(days => coalesce((select s.check_retention_days from workspace_setting s where s.organization_id = m.organization_id), ${DEFAULT_CHECK_RETENTION_DAYS}))`);
+      await db.delete(schema.browserCheckRun).where(lte(schema.browserCheckRun.createdAt, new Date(Date.now() - BROWSER_RUN_RETENTION_DAYS * 864e5)));
       await db.delete(schema.checkRollup).where(lte(schema.checkRollup.bucket, new Date(Date.now() - ROLLUP_RETENTION_DAYS * 864e5)));
       // counters only matter within their window (the longest is an hour)
       await db.execute(sql`delete from rate_limit where window_start < now() - interval '1 day'`);

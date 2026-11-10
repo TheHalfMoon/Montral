@@ -56,6 +56,7 @@ CREATE TABLE "sso_flow" (
 CREATE TABLE "sso_removal" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"organization_id" text NOT NULL,
+	"user_id" text NOT NULL,
 	"email" text NOT NULL,
 	"account_id" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL

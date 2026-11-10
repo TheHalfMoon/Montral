@@ -9,6 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createAuth } from "./auth";
 import { recheckSsoDomains } from "./sso-domains";
 import { setSsoOptionsForTests } from "./sso-oidc";
+import { removedFrom } from "./sso-store";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
@@ -667,6 +668,29 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await call(`/api/public/status/${privateSlug}`, { jar: live })).status).toBe(404);
     expect((await call(`/api/public/status/${privateSlug}`, { jar: erinSso })).status).toBe(200);
     expect((await call(`/api/public/status/${privateSlug}`, { jar: ownerA.jar })).status).toBe(200);
+    // the workspace switcher's own list (Better Auth's organization/list) leaves it out too
+    const orgList = await call("/api/auth/organization/list", { jar: live });
+    expect(orgList.status).toBe(200);
+    expect(orgList.body.map((o: any) => o.id)).not.toContain(ownerA.orgId);
+    expect(orgList.text).not.toContain(slugA);
+    expect((await call("/api/auth/organization/list", { jar: erinSso })).body.map((o: any) => o.id)).toContain(ownerA.orgId);
+    // a refused removal records nothing: her non-SSO session asking to remove a colleague (and to leave) is refused
+    // by the require-SSO guard before any removal block is written
+    const tryRemove = await call("/api/auth/organization/remove-member", { method: "POST", jar: live, body: { organizationId: ownerA.orgId, memberIdOrEmail: dana.email } });
+    expect(tryRemove.status).toBe(403);
+    const tryLeave = await call("/api/auth/organization/leave", { method: "POST", jar: live, body: { organizationId: ownerA.orgId } });
+    expect(tryLeave.status).toBe(403);
+    expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND user_id = ANY (ARRAY[$2, $3]::text[])", [ownerA.orgId, dana.id, erin.id])).toHaveLength(0);
+    expect(await isMember(ownerA.orgId, dana.id)).toBe(true);
+    expect(await isMember(ownerA.orgId, erin.id)).toBe(true);
+    // a removal Better Auth itself refuses (a member may not remove anyone) leaves no block either
+    const byMember = await call("/api/auth/organization/remove-member", { method: "POST", jar: erinSso, body: { organizationId: ownerA.orgId, memberIdOrEmail: dana.email } });
+    expect(byMember.status).toBeGreaterThanOrEqual(400);
+    expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND user_id = $2", [ownerA.orgId, dana.id])).toHaveLength(0);
+    // and a leftover block of someone who is still a member never counts (removedFrom ignores it)
+    await q("INSERT INTO sso_removal (organization_id, user_id, email) VALUES ($1, $2, $3)", [ownerA.orgId, dana.id, dana.email.toLowerCase()]);
+    expect(await removedFrom((sql, params) => q(sql, params), ownerA.orgId, dana.email, "none|none")).toBe(false);
+    await q("DELETE FROM sso_removal WHERE organization_id = $1 AND user_id = $2", [ownerA.orgId, dana.id]);
 
     // the operator's instance-wide provider is another connection: it does not satisfy workspace A's requirement
     const viaInstance = new Jar();

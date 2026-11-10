@@ -232,10 +232,10 @@ export async function ssoSatisfiesAll(q: Query, userId: string, sessionId: strin
  */
 export async function recordRemoval(q: Query, orgId: string, userId: string): Promise<string[]> {
   const rows = await q<{ id: string }>(
-    `INSERT INTO sso_removal (organization_id, email, account_id)
-     SELECT $1::text, lower(u.email), NULL FROM "user" u WHERE u.id = $2::text
+    `INSERT INTO sso_removal (organization_id, user_id, email, account_id)
+     SELECT $1::text, u.id, lower(u.email), NULL FROM "user" u WHERE u.id = $2::text
      UNION ALL
-     SELECT $1::text, lower(u.email), a.account_id FROM "user" u
+     SELECT $1::text, u.id, lower(u.email), a.account_id FROM "user" u
        JOIN account a ON a.user_id = u.id
        JOIN sso_connection c ON a.provider_id = 'sso:' || c.id::text AND c.organization_id = $1::text
       WHERE u.id = $2::text
@@ -247,7 +247,9 @@ export async function recordRemoval(q: Query, orgId: string, userId: string): Pr
 
 export async function removedFrom(q: Query, orgId: string, email: string, accountId: string): Promise<boolean> {
   const rows = await q(
-    `SELECT 1 AS one FROM sso_removal WHERE organization_id = $1::text AND (email = lower($2::text) OR account_id = $3::text) LIMIT 1`,
+    // a block whose person is still a member of the workspace is a leftover of a removal that did not happen: ignored
+    `SELECT 1 AS one FROM sso_removal r WHERE r.organization_id = $1::text AND (r.email = lower($2::text) OR r.account_id = $3::text)
+        AND NOT EXISTS (SELECT 1 FROM member m WHERE m.organization_id = r.organization_id AND m.user_id = r.user_id) LIMIT 1`,
     [orgId, email, accountId],
   );
   return rows.length > 0;

@@ -617,6 +617,8 @@ export const ssoRemoval = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+    /** the removed user (no foreign key: the record outlives a deleted account) */
+    userId: text("user_id").notNull(),
     email: text("email").notNull(),
     /** "<issuer>|<subject>" of an SSO identity the person had at the workspace's connection; null for the address row */
     accountId: text("account_id"),

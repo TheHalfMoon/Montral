@@ -252,29 +252,6 @@ export function createAuth(database: Database, env: Bindings) {
         if (MEMBERSHIP_ENDING_PATHS.has(ctx.path)) {
           const session = await getSessionFromCtx(ctx).catch(() => null);
           memberNote = await noteMembershipBefore(query, session as never, ctx.body).catch(() => null);
-          // The removal is recorded BEFORE the membership ends, so the block can never be missing: when it cannot be
-          // written, the removal itself is refused (fail closed). A failed call deletes the rows again (after-hook).
-          if (session) {
-            const body = plain(ctx.body) ?? {};
-            const orgId = text(body.organizationId) ?? text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId);
-            let userId: string | null = null;
-            if (orgId && ctx.path === "/organization/leave") userId = session.user.id;
-            if (orgId && ctx.path === "/organization/remove-member" && text(body.memberIdOrEmail)) {
-              const [m] = await query<{ user_id: string }>(
-                `SELECT m.user_id FROM member m JOIN "user" u ON u.id = m.user_id WHERE m.organization_id = $1::text AND (m.id = $2::text OR lower(u.email) = lower($2::text)) LIMIT 1`,
-                [orgId, body.memberIdOrEmail],
-              );
-              userId = m?.user_id ?? null;
-            }
-            if (orgId && userId) {
-              try {
-                removalNote = { orgId, userId, ids: await recordRemoval(query, orgId, userId) };
-              } catch {
-                console.error("sso removal could not be recorded; private diagnostics suppressed");
-                throw new APIError("INTERNAL_SERVER_ERROR", { message: "The removal could not be recorded. Nothing was changed; try again." });
-              }
-            }
-          }
         }
         // access tokens are issued for the MCP endpoint; the resource row is created on first use because the
         // identifier is this deployment's own URL (known only at runtime, so it cannot ship in a migration)
@@ -313,6 +290,34 @@ export function createAuth(database: Database, env: Bindings) {
             for (const orgId of new Set(targets)) {
               if (orgId && !(await ssoAllows(query, orgId, session.user.id, session.session.id))) {
                 throw new APIError("FORBIDDEN", { message: SSO_REQUIRED_MESSAGE, code: "SSO_REQUIRED" });
+              }
+            }
+          }
+        }
+        // LAST step for a removal or leave, after every guard above has passed (a call they refuse records nothing):
+        // the removal is recorded BEFORE the membership ends, so the block can never be missing; when it cannot be
+        // written, the removal itself is refused (fail closed). If the call then fails, the after-hook deletes the rows
+        // again, and a block whose person is still a member never counts (sso-store.ts removedFrom).
+        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          if (session) {
+            const body = plain(ctx.body) ?? {};
+            const orgId = text(body.organizationId) ?? text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId);
+            let userId: string | null = null;
+            if (orgId && ctx.path === "/organization/leave") userId = session.user.id;
+            if (orgId && ctx.path === "/organization/remove-member" && text(body.memberIdOrEmail)) {
+              const [m] = await query<{ user_id: string }>(
+                `SELECT m.user_id FROM member m JOIN "user" u ON u.id = m.user_id WHERE m.organization_id = $1::text AND (m.id = $2::text OR lower(u.email) = lower($2::text)) LIMIT 1`,
+                [orgId, body.memberIdOrEmail],
+              );
+              userId = m?.user_id ?? null;
+            }
+            if (orgId && userId) {
+              try {
+                removalNote = { orgId, userId, ids: await recordRemoval(query, orgId, userId) };
+              } catch {
+                console.error("sso removal could not be recorded; private diagnostics suppressed");
+                throw new APIError("INTERNAL_SERVER_ERROR", { message: "The removal could not be recorded. Nothing was changed; try again." });
               }
             }
           }
@@ -368,9 +373,20 @@ export function createAuth(database: Database, env: Bindings) {
         // provisioning cannot bring them back even after they delete their account; their SSO links to the workspace
         // go; and someone removed from a workspace with SSO is signed out everywhere. Accepting a new invitation to the
         // address lifts the block. If the call failed, the rows recorded for it are deleted again.
-        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path) && removalNote && !returned) {
+        // the call failed (or the person is somehow still a member): the block recorded for it goes again
+        if (MEMBERSHIP_ENDING_PATHS.has(ctx.path) && removalNote && (!returned || (await repo.isMember(removalNote.userId, removalNote.orgId).catch(() => false)))) {
           await query(`DELETE FROM sso_removal WHERE id = ANY (string_to_array($1::text, ',')::uuid[])`, [removalNote.ids.join(",")])
             .catch(() => console.error("sso removal could not be withdrawn; private diagnostics suppressed"));
+        }
+        // the workspace switcher's list leaves out require-SSO workspaces this session does not qualify for (like
+        // GET /api/workspaces)
+        if (ctx.path === "/organization/list" && Array.isArray(ctx.context.returned)) {
+          const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
+          if (session) {
+            const all = ctx.context.returned as { id?: unknown }[];
+            const keep = await Promise.all(all.map((o) => (typeof o?.id === "string" ? ssoAllows(query, o.id, session.user.id, session.session.id) : Promise.resolve(true))));
+            if (keep.includes(false)) return ctx.json(all.filter((_, i) => keep[i]));
+          }
         }
         if (MEMBERSHIP_ENDING_PATHS.has(ctx.path) && returned) {
           const gone = ctx.path === "/organization/remove-member" ? plain(returned.member) : returned;

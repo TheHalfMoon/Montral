@@ -24,6 +24,7 @@
 //
 // Output: a JSON summary (also written to LOAD_SUMMARY_PATH) and a final
 // `LOAD_QUALIFICATION_PASS: ...` line, or a non-zero exit listing failures.
+import { densestMonitorWindow } from "./load-window.mjs";
 import { spawn } from "node:child_process";
 import { createServer as createTcp } from "node:net";
 import { createServer } from "node:http";
@@ -521,25 +522,9 @@ try {
     select o.monitor_id::text as id, extract(epoch from o.observed_at)::float8 as t from monitor_observation o
     join monitor m on m.id = o.monitor_id and m.organization_id = ${orgId}
     where o.observed_at >= ${new Date(recoverFrom)} and o.observed_at < ${w2To} order by o.monitor_id, o.observed_at`;
-  const densest = (windowSec) => {
-    let max = 0, monitorsOver = {}, i = 0;
-    while (i < obs.length) {
-      let j = i;
-      while (j < obs.length && obs[j].id === obs[i].id) j++;
-      let worst = 0;
-      for (let a = i, b = i; b < j; b++) {
-        while (obs[b].t - obs[a].t >= windowSec) a++;
-        worst = Math.max(worst, b - a + 1);
-      }
-      max = Math.max(max, worst);
-      monitorsOver[worst] = (monitorsOver[worst] ?? 0) + 1;
-      i = j;
-    }
-    return { max, histogram: monitorsOver };
-  };
   p2.coalescing = {
     windowFrom: new Date(recoverFrom).toISOString(), windowTo: w2To.toISOString(), results: obs.length,
-    perInterval: densest(INTERVAL_SEC), perTick: densest(T.coalesceTickWindowSec),
+    perInterval: densestMonitorWindow(obs, INTERVAL_SEC), perTick: densestMonitorWindow(obs, T.coalesceTickWindowSec),
   };
   p2.recoveryResources = summarizePhase("p2_recovery");
   summary.phases.backpressure = p2;

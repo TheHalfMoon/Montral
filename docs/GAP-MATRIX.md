@@ -3,7 +3,7 @@
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list
 at the end. **Y** yes, **N** no, **P** partial, **$** paid tier/add-on only,
-**?** not verified. Montral's column reflects `main` at `8fedf26` (2026-11-09), with the
+**?** not verified. Montral's column reflects `main` at `0b93696` (2026-11-10), with the
 merging pull request in brackets, verified against the code, not marketing copy.
 
 ## Matrix
@@ -21,14 +21,14 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Heartbeat / cron | Y | Y | Y | ? | Y | Y | N |
 | WebSocket | Y | Y | ? | ? | ? | Y | N |
 | Database (Postgres/MySQL/Redis) | Y | Y | N | N | N | N | N |
-| Browser / multi-step | P (#52, pending merge): declarative journeys (goto, click, fill, press, waitFor, assertText/Url/Status) in isolated headless Chromium in a separate hardened browser-runner service (no app secrets, no database network, signed channel); secrets encrypted, egress policy; no user scripts; refused on Workers | N | $ | N | N | P | N |
+| Browser / multi-step | Y on Node/Docker with the browser-runner (#52): declarative journeys (goto, click, fill, press, waitFor, assertText/Url/Status) in isolated headless Chromium in a separate hardened browser-runner service (no app secrets, no database network, signed channel); secrets encrypted, egress policy; no user scripts; refused on Workers | N | $ | N | N | P | N |
 | Multi-region | Y (edge probes) | N | ? | Y | Y | P | n/a |
 | Alert channels | 14, 4 added in #28 (email, Slack, Telegram, Lark, Discord, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
 | SMS / voice | N | via providers | Y | ? | Y | via providers | N |
 | Manual incidents + timeline | Y | N | Y | Y | P | P | n/a |
 | Acknowledge | Y | N | Y | ? | ? | N | n/a |
 | Reminders / escalation | Y (policies with step timeouts and repeats, people and on-call schedules as targets: #48) | N | Y | ? | N | N | n/a |
-| On-call schedules | Y (#48; layered rotations in an IANA zone, restriction windows, overrides, iCal feed; awaiting review) | N | Y | ? | N | N | n/a |
+| On-call schedules | Y (#48; layered rotations in an IANA zone, restriction windows, overrides, iCal feed) | N | Y | ? | N | N | n/a |
 | Postmortems | Y | N | Y | ? | P | N | n/a |
 | Public status page | Y | Y | Y | Y | Y | Y | n/a |
 | Members-only page | Y (#18) | N | $ (SSO) | $ | ? | P | n/a |
@@ -42,13 +42,13 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Webhook inspection | Y | N | N | N | N | N | Y |
 | Webhook search / paging | Y (#13) | N | N | N | N | N | Y |
 | Webhook replay / forward | Y (#17, SSRF-guarded) | N | N | N | N | N | Y |
-| Custom webhook responses | Y (status, headers, text body, delay, per method; #47, in review) | N | N | N | N | N | $ |
+| Custom webhook responses | Y (status, headers, text body, delay, per method; #47) | N | N | N | N | N | $ |
 | REST API | Y | P | Y | Y | Y | P | Y |
 | MCP server | Y (OAuth) | N | Y | Y | Y | N | ? |
 | Terraform / config-as-code | Y, unpublished: build from source (`terraform-provider-montral/`) | N | Y | Y | ? | Y (YAML) | N |
 | Self-hosting | Y (Docker/Node + Postgres; also Workers) | Y (MIT) | N | Y (AGPL) | N | Y (Apache) | P |
 | 2FA | Y | Y | ? | ? | Y | n/a | ? |
-| SSO (OIDC/SAML) | P (#49: OIDC per workspace + instance-wide, JIT, require-SSO; no SAML) | N | $ | ? | $ | Y | ? |
+| SSO (OIDC/SAML) | P (#49: OIDC per workspace + instance-wide, JIT, require-SSO incl. API keys/agents; no SAML, no SCIM) | N | $ | ? | $ | Y | ? |
 | Roles | P (owner/admin/member) | N | Y | ? | Y | N | $ |
 | Audit log | Y (#39; append-only, API/CSV/JSONL export, MCP, retention) | N | $ | ? | ? | N | N |
 | Mobile app | P (iOS push app) | N | Y | ? | Y | N | N |
@@ -84,14 +84,14 @@ Ranked by user value, reliability and security, then cost.
 Done since the matrix was first written: TLS certificate expiry (#26), JSON body
 assertions (#27), Google Chat / Mattermost / Gotify / Pushover (#28), custom domains
 (#29) with periodic re-verification (#33), ICMP ping (#38), workspace audit log (#39), on-call
-schedules with escalation policies (#48, awaiting review).
+schedules with escalation policies (#48).
 
 Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
 1. ~~**SSO (OIDC; SAML if justified)**~~: OIDC done in #49; SAML deferred (XML-signature risk, no safe library on both runtimes; bridge through Keycloak/Authentik).
-2. **Terraform provider / config-as-code**: implemented in `terraform-provider-montral/` (#50, in review; unpublished, build from source).
-3. **Browser / multi-step checks**: declarative journeys in #52 (pending merge; `docs/evidence/2026-11-10-browser-checks.md`). Still missing against Better Stack / Checkly-style products: scripted checks with user code, multiple browsers, regions other than `auto`.
-4. **Custom webhook responses** (webhook.site parity): implemented in #47, in review (`docs/evidence/2026-11-10-webhook-responses.md`).
+2. **Terraform provider / config-as-code**: implemented in `terraform-provider-montral/` (#50; unpublished, build from source).
+3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). Still missing against Better Stack / Checkly-style products: scripted checks with user code, multiple browsers, regions other than `auto`.
+4. **Custom webhook responses** (webhook.site parity): implemented in #47 (`docs/evidence/2026-11-10-webhook-responses.md`).
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
 
 Grafana OnCall and other incident-response tools named in the brief are not yet in

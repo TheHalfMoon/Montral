@@ -147,6 +147,7 @@ const freePort = () => new Promise((r) => { const s = createTcp(); s.listen(0, "
 const port = await freePort();
 const base = `http://127.0.0.1:${port}`;
 let server = null;
+let temp = null; // backups of this run; removed in finally whatever happens
 const spawned = [];
 function start(label, dir, database) {
   const proc = spawn(process.execPath, [join(dir, "apps/api/dist/server.mjs")], {
@@ -366,7 +367,8 @@ function compareSnapshots(label, before, after) {
 const counts = (s) => ({
   projects: s.projects.length,
   monitors: Object.values(s.monitors).flat().length,
-  channels: Object.values(s.channels).flat().length,
+  // workspace-wide channels are listed in every project: count each once
+  channels: new Set(Object.values(s.channels).flat().map((c) => c.id)).size,
   incidents: s.incidents.length,
   incidentUpdates: s.incidents.reduce((n, i) => n + i.updates.length, 0),
   statusPages: s.pages.length,
@@ -449,11 +451,14 @@ try {
   noSchedulerErrors("old build", server);
   const preUpgrade = await fingerprints(db(DBS.upgrade));
   const preUpgradeCatalog = await catalog(db(DBS.upgrade));
+  // the seed must have produced exactly what was created, so no later comparison can pass on empty lists
+  const expected = { projects: 2, monitors: 8, channels: 2, incidents: 3, incidentUpdates: 8, statusPages: 3, shareLinks: 1, inboxes: 2, webhookEvents: 4, maintenanceWindows: 10, apiKeys: 1 };
+  check(JSON.stringify(counts(beforeOld)) === JSON.stringify(expected), `seed: the old API lists exactly the seeded entities ${JSON.stringify(counts(beforeOld))}`);
   summary.seeded = { counts: counts(beforeOld), oldMigrations, tables: Object.keys(preUpgrade).length, rows: Object.values(preUpgrade).reduce((n, t) => n + t.n, 0), nonEmptyTables: Object.values(preUpgrade).filter((t) => t.n > 0).length };
   log("seeded", JSON.stringify(summary.seeded));
 
   // pre-upgrade backup: the documented step before every upgrade (also the rollback path, B)
-  const temp = mkdtempSync(join(tmpdir(), "montral-upgrade-"));
+  temp = mkdtempSync(join(tmpdir(), "montral-upgrade-"));
   summary.tempDir = temp;
   const preDump = join(temp, "pre-upgrade.dump");
   // the documented backup command (`docker compose exec -T postgres pg_dump -U montral -Fc montral > montral-pre-upgrade.dump`)
@@ -501,7 +506,7 @@ try {
     try { if ((await fetch(base + "/health", { signal: AbortSignal.timeout(1000) })).ok) { served = true; break; } } catch {}
     await sleep(500);
   }
-  const oldOnNew = { served, exit: server.exitInfo, secondsToExit: server.exitInfo ? Math.round((Date.now() - t0) / 1000) : null, refusal: /history is ahead of this build|migration unavailable after bounded startup retries/.test(server.log) };
+  const oldOnNew = { served, exit: server.exitInfo, secondsToExit: server.exitInfo ? Math.round((Date.now() - t0) / 1000) : null, /* builds before the startup refusal (17f55c1) retry ~60 s and exit with this generic message; the reason itself is proven by migrate-plain --check above */ genericRetryExit: server.log.includes("Database connection/migration unavailable after bounded startup retries") };
   if (served) {
     // It started anyway: that is acceptable only if it works on the new schema. Record and verify.
     oldOnNew.mode = "works";
@@ -514,8 +519,8 @@ try {
   }
   summary.phases.oldBuildOnUpgradedSchema = oldOnNew;
   log("old on upgraded schema", JSON.stringify(oldOnNew));
-  check(oldOnNew.mode === "fails safely" ? oldOnNew.exit && oldOnNew.exit.code !== 0 && oldOnNew.refusal : Object.values(oldOnNew.behaviour).every(Boolean),
-    `rollback: the old build on the upgraded schema ${oldOnNew.mode === "fails safely" ? "refuses to start (migration history ahead of the build), exit " + JSON.stringify(oldOnNew.exit) : "works"}`);
+  check(oldOnNew.mode === "fails safely" ? oldOnNew.exit && oldOnNew.exit.code !== 0 && oldOnNew.genericRetryExit : Object.values(oldOnNew.behaviour).every(Boolean),
+    `rollback: the old build on the upgraded schema ${oldOnNew.mode === "fails safely" ? "never serves: it retries its migration and exits " + JSON.stringify(oldOnNew.exit) + " after " + oldOnNew.secondsToExit + " s with the generic 'Database connection/migration unavailable after bounded startup retries' (this build predates the specific refusal)" : "works"}`);
   if (oldOnNew.mode === "fails safely") {
     const afterAttempt = await fingerprints(db(DBS.upgrade));
     const changed = diffKeys(upgradedFp, afterAttempt);
@@ -523,6 +528,30 @@ try {
     const catalogChanged = diffKeys(upgradedCatalog, await catalog(db(DBS.upgrade)));
     check(catalogChanged.length === 0 && (await migrationsApplied(db(DBS.upgrade))) === upgradedMigrations, `rollback: the refused start changed no schema object or migration history (${catalogChanged.slice(0, 5).join(", ")})`);
   }
+
+  // (b1') HEAD on a schema newer than itself (a migration it does not know): it must refuse at once with the fixed
+  // message, never listen, never enter the retry loop, and change nothing.
+  log("B: HEAD on a future schema");
+  const [{ next }] = await db(DBS.upgrade)`SELECT coalesce(max(created_at), 0)::bigint + 1 AS next FROM public.__drizzle_migrations`;
+  await db(DBS.upgrade)`INSERT INTO public.__drizzle_migrations (hash, created_at) VALUES ('synthetic-future-migration-not-known-to-this-build', ${next})`;
+  const futureFp = await fingerprints(db(DBS.upgrade));
+  server = start("HEAD on a future schema", NEW_DIR, DBS.upgrade);
+  const tf = Date.now();
+  let futureServed = false;
+  while (!server.exitInfo && Date.now() - tf < 30_000) {
+    try { if ((await fetch(base + "/health", { signal: AbortSignal.timeout(1000) })).ok) { futureServed = true; break; } } catch {}
+    await sleep(200);
+  }
+  const future = { served: futureServed, exit: server.exitInfo, msToExit: server.exitInfo ? Date.now() - tf : null,
+    clearMessage: server.log.includes("database schema is newer than this Montral build; restore the pre-upgrade backup or run the newer build"),
+    retried: /retrying|bounded startup retries/.test(server.log) };
+  await stop(server, "SIGKILL");
+  summary.phases.headOnFutureSchema = future;
+  check(!future.served && future.exit?.code === 1 && future.clearMessage && !future.retried && future.msToExit !== null && future.msToExit < 15_000,
+    `rollback: HEAD on a schema newer than itself exits 1 at once (${future.msToExit} ms) with "database schema is newer than this Montral build; ...", without retrying or listening`);
+  check(diffKeys(futureFp, await fingerprints(db(DBS.upgrade))).length === 0, "rollback: HEAD's refusal changed no row");
+  await db(DBS.upgrade)`DELETE FROM public.__drizzle_migrations WHERE hash = 'synthetic-future-migration-not-known-to-this-build'`;
+  check(diffKeys(upgradedFp, await fingerprints(db(DBS.upgrade))).length === 0, "rollback: synthetic future migration removed, database back to the upgraded state");
 
   // (b2) supported rollback: restore the pre-upgrade backup into a fresh database and start the old build on it
   log("B: restore the pre-upgrade backup into a new database, old build on it");
@@ -627,13 +656,13 @@ try {
   summary.phases.disasterRecovery.snapshot = { tables: Object.keys(snapshotFp).length, rows: Object.values(snapshotFp).reduce((n, v) => n + v.n, 0) };
   await dropDb(DBS.drSnapshot);
   await dropDb(DBS.dr);
-  rmSync(temp, { recursive: true, force: true });
 } catch (error) {
   failures.push("aborted: " + (error?.stack ?? String(error)).slice(0, 3000));
   console.error(error);
   for (const p of spawned) if (p.log) console.error(`── ${p.label} log tail ──\n${p.log.slice(-3000)}`);
 } finally {
   for (const p of spawned) if (p.exitInfo === null) p.kill("SIGKILL");
+  if (temp) rmSync(temp, { recursive: true, force: true });
   target.closeAllConnections?.();
   target.close();
   for (const name of [...clients.keys()]) await closeDb(name);

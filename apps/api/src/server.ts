@@ -25,6 +25,7 @@ import { appHosts, lookupCustomDomain, recheckCustomDomains } from "./custom-dom
 import { recheckSsoDomains } from "./sso-domains";
 import { routeCustomDomain, STATUS_DOMAIN_HEADER } from "./custom-domain-node";
 import { auditRetentionDays } from "./audit";
+import { fatalMigrationProblem } from "./startup-schema";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -146,7 +147,14 @@ for (let attempt = 1; ; attempt++) {
     const applied = await migrateMontralSchema(database, edition);
     if (applied.length) console.log(`migrations applied: ${applied.join(", ")}`);
     break;
-  } catch {
+  } catch (error) {
+    // A database migrated by a newer (or another) build: retrying cannot help, so refuse at once, before listening.
+    const fatal = fatalMigrationProblem(error);
+    if (fatal) {
+      console.error(`montral: ${fatal}`);
+      await database.close(1).catch(() => {});
+      process.exit(1);
+    }
     if (attempt >= 30) throw new Error("Database connection/migration unavailable after bounded startup retries");
     console.warn("database connection/migration unavailable; retrying");
     await new Promise((r) => setTimeout(r, 2000));

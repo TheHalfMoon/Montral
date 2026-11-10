@@ -65,7 +65,7 @@ docker compose up -d --build</code></pre>
       <li><strong>Upgrade</strong>: update the source, then <code>docker compose up -d --build</code>. Migrations run in one transaction when the new container starts, before it accepts requests; containers starting together wait for each other. Data, sign-in sessions, API keys, share links, password pages, custom domains and webhook receiver URLs keep working (with the same <code>BETTER_AUTH_SECRET</code>).</li>
       <li><strong>Check</strong>: <code>/health</code> answers, you can sign in, and monitors show new checks within a minute.</li>
     </ol>
-    <p><strong>An older build does not start on an upgraded database.</strong> It sees migrations it does not know, refuses to start (<code>Database migration history is ahead of this build</code>, also reported by <code>migrate-plain.mjs --check</code>), and exits after about a minute of retries without changing anything. Going back to the old build therefore always means going back to the pre-upgrade backup:</p>
+    <p><strong>An older build does not start on an upgraded database</strong>, and it changes nothing. Builds from this version on exit at once with <code>database schema is newer than this Montral build; restore the pre-upgrade backup or run the newer build</code>. Earlier builds (up to the 17f55c1 release candidate) retry for about a minute, exit with the generic <code>Database connection/migration unavailable after bounded startup retries</code>, and the container keeps restarting. With any build, <code>pnpm --filter @montral/db-pg exec node migrate-plain.mjs --check</code> names the reason: <code>Database migration history is ahead of this build</code>. Going back to the old build therefore always means going back to the pre-upgrade backup:</p>
     <pre><code>docker compose stop montral
 docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral-upgraded.dump   # what the upgraded version wrote
 docker compose exec postgres dropdb -U montral montral
@@ -412,7 +412,7 @@ docker compose up -d --build</code></pre>
       <li><strong>升级</strong>：更新源码后执行 <code>docker compose up -d --build</code>。新容器启动时会在接受请求之前，在一个事务中执行迁移；同时启动的多个容器会互相等待。数据、登录会话、API 密钥、分享链接、密码保护的状态页、自定义域名和 Webhook 接收地址都继续有效（前提是 <code>BETTER_AUTH_SECRET</code> 不变）。</li>
       <li><strong>检查</strong>：<code>/health</code> 正常响应，可以登录，监控在一分钟内出现新的检测记录。</li>
     </ol>
-    <p><strong>旧版本无法在升级后的数据库上启动。</strong>它会发现自己不认识的迁移，拒绝启动（<code>Database migration history is ahead of this build</code>，<code>migrate-plain.mjs --check</code> 也会报告），重试约一分钟后退出，不会改动任何数据。因此，回到旧版本就意味着回到升级前的备份：</p>
+    <p><strong>旧版本无法在升级后的数据库上启动</strong>，也不会改动任何数据。从这个版本起，程序会立即退出并提示 <code>database schema is newer than this Montral build; restore the pre-upgrade backup or run the newer build</code>。更早的版本（直到 17f55c1 候选发布版本）会重试约一分钟，然后以通用信息 <code>Database connection/migration unavailable after bounded startup retries</code> 退出，容器会不断重启。无论哪个版本，<code>pnpm --filter @montral/db-pg exec node migrate-plain.mjs --check</code> 都会给出原因：<code>Database migration history is ahead of this build</code>。因此，回到旧版本就意味着回到升级前的备份：</p>
     <pre><code>docker compose stop montral
 docker compose exec -T postgres pg_dump -U montral -Fc montral &gt; montral-upgraded.dump   # 保存新版本写入的数据
 docker compose exec postgres dropdb -U montral montral

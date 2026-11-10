@@ -144,15 +144,8 @@ async function reactivate(query: Query, env: Bindings, orgId: string, row: Row) 
   if (!conn?.domains?.includes(domain)) throw new ScimError(400, "The address is not in one of the workspace's verified single sign-on domains", "invalidValue");
   await clearRemoval(query, orgId, row.user_name);
   if (row.user_id) {
-    // one statement under an advisory lock on (workspace, account), so a concurrent request cannot add a second row
-    await query(
-      `WITH lock AS (SELECT pg_advisory_xact_lock(hashtext($2::text || ':' || $3::text)))
-       INSERT INTO member (id, organization_id, user_id, role, created_at)
-       SELECT $1::text, $2::text, $3::text, $4::text, now() FROM lock
-        WHERE EXISTS (SELECT 1 FROM "user" WHERE id = $3::text)
-          AND NOT EXISTS (SELECT 1 FROM member WHERE organization_id = $2::text AND user_id = $3::text)`,
-      [crypto.randomUUID(), orgId, row.user_id, conn.defaultRole],
-    );
+    // serialized per (workspace, account) inside the database (migration 0057): concurrent SCIM requests add one row
+    await query(`SELECT montral_scim_add_member($1::text, $2::text, $3::text, $4::text)`, [crypto.randomUUID(), orgId, row.user_id, conn.defaultRole]);
   }
 }
 
@@ -353,9 +346,9 @@ export const scimApi = new Hono<AppEnv>()
     const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a SCIM User", "invalidSyntax");
     if (body.userName !== undefined && userNameOf(body.userName) !== row.user_name) throw new ScimError(400, "userName cannot be changed; delete the user and create the new address", "mutability");
-    // a replace: attributes left out are cleared, `active` defaults to true
+    // a replace: attributes left out are cleared; `active` has no default (RFC 7643), so leaving it out keeps it
     const f = fieldsOf(body);
-    return json(c, resource(c.env, await save(c, row, { externalId: f.externalId ?? null, displayName: f.displayName ?? null, givenName: f.givenName ?? null, familyName: f.familyName ?? null, active: f.active ?? true })));
+    return json(c, resource(c.env, await save(c, row, { externalId: f.externalId ?? null, displayName: f.displayName ?? null, givenName: f.givenName ?? null, familyName: f.familyName ?? null, active: f.active ?? row.active })));
   })
   .patch("/Users/:id", async (c) => {
     const row = await load(q(c), c.get("orgId"), c.req.param("id"));

@@ -80,6 +80,8 @@ jobs:
           sudo apt-get -o Acquire::Retries=5 update -qq
           sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -y postgresql-client-18
           echo /usr/lib/postgresql/18/bin >> "$GITHUB_PATH"
+      - name: Negative tests for Docker backup stream integrity
+        run: node --test scripts/docker-file-transfer.test.mjs
       - name: Qualify upgrade, rollback and disaster recovery
         env:
           UPGRADE_OLD_DIR: ${{ runner.temp }}/montral-old

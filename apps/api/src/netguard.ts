@@ -153,6 +153,55 @@ export function addressBlocked(ip: string): boolean {
   return false;
 }
 
+/**
+ * True for an IP literal that is link-local or a cloud metadata endpoint, in any spelling the v6 parser accepts
+ * (IPv4-mapped, IPv4-compatible, NAT64, 6to4): 169.254.0.0/16, 0.0.0.0/8, fe80::/10, fd00:ec2::254 (AWS IMDS over IPv6)
+ * and 100.100.100.200 (Alibaba Cloud). Browser checks refuse these even with ALLOW_PRIVATE_TARGETS: a page must never be
+ * able to read instance credentials, whatever the operator allowed for internal services.
+ */
+export function linkLocalOrMetadata(ip: string): boolean {
+  const v4 = (b: number[]) => (b[0] === 169 && b[1] === 254) || b[0] === 0 || (b[0] === 100 && b[1] === 100 && b[2] === 100 && b[3] === 200);
+  const four = v4Bytes(ip);
+  if (four) return v4(four);
+  if (!ip.includes(":")) return false;
+  const b = v6Bytes(ip);
+  if (!b) return true; // unparseable: never dialled
+  const zeros = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 10) && b[10] === 0xff && b[11] === 0xff) return v4(b.slice(12));
+  // IPv4-compatible (::a.b.c.d): not 0.0.0.0/8 here, which would take in :: and ::1 (loopback, refused elsewhere when it matters)
+  if (zeros(0, 12)) return (b[12] === 169 && b[13] === 254) || (b[12] === 100 && b[13] === 100 && b[14] === 100 && b[15] === 200);
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zeros(4, 12)) return v4(b.slice(12));
+  if (b[0] === 0x20 && b[1] === 0x02) return v4(b.slice(2, 6));
+  if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;
+  // fd00:ec2::254
+  return b[0] === 0xfd && b[1] === 0x00 && b[2] === 0x0e && b[3] === 0xc2 && zeros(4, 14) && b[14] === 0x02 && b[15] === 0x54;
+}
+
+/**
+ * The canonical form of an IP literal for comparisons: IPv4 dotted; IPv6 that embeds IPv4 (mapped, compatible, NAT64)
+ * as that IPv4; other IPv6 as 8 lower-case groups without zero compression. null when it is not an IP literal.
+ */
+export function canonicalIp(ip: string): string | null {
+  const s = ip.replace(/^\[|\]$/g, "").toLowerCase();
+  const four = v4Bytes(s);
+  if (four) return four.join(".");
+  if (!s.includes(":")) return null;
+  const b = v6Bytes(s);
+  if (!b) return null;
+  const zeros = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zeros(0, 10) && b[10] === 0xff && b[11] === 0xff) return b.slice(12).join(".");
+  if (zeros(0, 12) && !(zeros(12, 15) && b[15] <= 1)) return b.slice(12).join(".");
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && zeros(4, 12)) return b.slice(12).join(".");
+  return Array.from({ length: 8 }, (_, i) => ((b[2 * i] << 8) | b[2 * i + 1]).toString(16)).join(":");
+}
+
+/** Loopback in any spelling: 127.0.0.0/8, ::1, and IPv4 loopback embedded in IPv6. Unparseable input counts as loopback. */
+export function loopbackAddress(ip: string): boolean {
+  const c = canonicalIp(ip);
+  if (c === null) return true;
+  return c.startsWith("127.") || c === "0:0:0:0:0:0:0:1";
+}
+
 const INTERNAL_SUFFIXES = [".localhost", ".local", ".localdomain", ".internal", ".home.arpa", ".lan", ".intranet", ".corp", ".private"];
 
 /** Lower-cased host without brackets or a trailing dot; IPv4 spellings (2130706433, 0x7f.1, 127.1) become dotted. */
@@ -358,14 +407,14 @@ export async function targetProblem(type: string, target: string): Promise<strin
   let host: string | undefined;
   if (type === "ping") {
     host = pingHost(target)!;
-  } else if (type === "http" || type === "websocket") {
+  } else if (type === "http" || type === "websocket" || type === "browser") {
     let u: URL;
     try {
       u = new URL(target);
     } catch {
       return null; // reported by the check itself, as before
     }
-    if (type === "http" && u.protocol !== "http:" && u.protocol !== "https:") return "Only http:// and https:// URLs can be monitored.";
+    if ((type === "http" || type === "browser") && u.protocol !== "http:" && u.protocol !== "https:") return "Only http:// and https:// URLs can be monitored.";
     if (type === "websocket" && u.protocol !== "ws:" && u.protocol !== "wss:") return "Only ws:// and wss:// URLs can be monitored.";
     host = u.hostname;
   } else {

@@ -25,6 +25,7 @@ import { configureNetGuard } from "./netguard";
 import { configureSso } from "./sso-oidc";
 import { instanceConnection, ssoAllows, ssoSatisfiesAll } from "./sso-store";
 import { ssoAdmin } from "./routes/sso";
+import { configureBrowserChecks } from "./browser-check";
 import { configureProbes } from "./probes";
 import { allow, clientIp, safeEqual } from "./ratelimit";
 import { AuthBodyTimeoutError, limitedAuthBody } from "./auth-body-budget";
@@ -45,6 +46,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     configureEmail(c.env);
     configureNetGuard(c.env);
     configureSso(c.env);
+    configureBrowserChecks(c.env);
     configureProbes(c.env);
     configureApns(c.env);
     const database = openDatabase(connectionString(c.env), { max: 1 });

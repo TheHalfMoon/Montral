@@ -2,9 +2,11 @@ import type { Monitor, Repo } from "@montral/repo";
 import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminders, sendReminders, sweepDeliveries, wasDelivered } from "./alerts";
 import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
-import { measure } from "./probes";
+import { measure, type Measured } from "./probes";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
+import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, browserAvailable, browserCheckWorstCaseMs, browserProbeDue } from "./browser-check";
+import { sendEmail } from "./email";
 import { AUDIT_RETENTION_DEFAULT_DAYS } from "./audit";
 
 /** Monitors that watch an expiry date (domain registration, TLS certificate) rather than whether a service answers. */
@@ -99,6 +101,8 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
   // incidents nobody has acknowledged: repeat the alert, escalate to the next level
   await step("alert reminders", () => sendReminders(repo, entitlements, queue ? 10 : 3));
   await step("alert escalations", () => sendEscalations(repo, entitlements, queue ? 10 : 3));
+  // browser monitors that went unchecked: one digest per workspace to its owners and admins, at most one an hour
+  await step("unchecked digests", () => sendUncheckedDigests(repo, entitlements));
   // cheap housekeeping once an hour
   if (new Date().getMinutes() === 0) await step("expired monitor purge", () => repo.purgeExpired());
   // audit events past their retention go through the database's prune function (the table refuses other deletes)
@@ -178,44 +182,178 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
   return monitors.filter((m) => allowed.has(m.id));
 }
 
-async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements) {
-  const monitors = await withinCredits(due, entitlements);
-  if (monitors.length < due.length) console.warn(`credits exhausted: skipped ${due.length - monitors.length} of ${due.length} checks`);
-  for (let i = 0; i < monitors.length; i += CONCURRENCY) {
-    // one failing monitor must not take the rest of the batch down with it
-    const batch = monitors.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(batch.map((m) => checkOne(repo, m, entitlements, true)));
-    // Rejected exception objects can contain private probe targets or bearer tokens.
-    results.forEach((r, j) => r.status === "rejected" && console.error(`check failed for ${batch[j].id}`));
+/** Wall time one queue task may spend on a workspace's browser checks (well under the 5-minute stall watchdog). */
+export const BROWSER_TASK_BUDGET_MS = 120_000;
+/**
+ * What one browser check can take at most (browser-check.ts): slot wait, an availability probe if one is due, start-up,
+ * its journey, shutdown and the runner call's grace. The longest journey (60 s) through the runner comes to 120 s.
+ */
+export const browserCheckCeilingMs = (m: Pick<Monitor, "browser">) => browserCheckWorstCaseMs((m.browser as { timeoutMs?: number } | null)?.timeoutMs ?? 30_000);
+/** Workspaces whose browser checks a queue task of this process is running: at most one task (queue slot) each. */
+const browserTasksRunning = new Set<string>();
+
+export type CheckManyOptions = { browserBudgetMs?: number; now?: () => number };
+
+export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements, opts: CheckManyOptions = {}) {
+  // Browser monitors are charged one by one just before their journey is launched (browserTask), the rest up front.
+  const browser = due.filter((m) => m.type === "browser");
+  const others = await withinCredits(due.filter((m) => m.type !== "browser"), entitlements);
+  if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
+  // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and
+  // third due browser monitors would wait at that gate and be deferred every cycle; instead each workspace's browser
+  // monitors form one task that checks them one after another, within BROWSER_TASK_BUDGET_MS. Every other check is its
+  // own task.
+  // a rejected error can hold private targets or tokens: only the monitor id is logged
+  const tasks: (() => Promise<void>)[] = others.map((m) => () => checkOne(repo, m, entitlements, true).then(() => {}, () => console.error(`check failed for ${m.id}`)));
+  const byWorkspace = new Map<string, Monitor[]>();
+  for (const m of browser) (byWorkspace.get(m.organizationId) ?? byWorkspace.set(m.organizationId, []).get(m.organizationId)!).push(m);
+  for (const [workspace, list] of byWorkspace) tasks.push(() => browserTask(repo, workspace, list, entitlements, opts));
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const task = tasks[next++];
+      // one failing check must not take the rest down with it; a rejected error can hold private targets or tokens
+      try { await task(); } catch { console.error("check task failed; private diagnostic suppressed"); }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
+}
+
+/**
+ * One workspace's due browser monitors, one after another. A check starts only while its worst case still fits in the
+ * task's budget; the rest are deferred (retried within a minute or two, like a busy server), so a task never comes near
+ * the stall watchdog and never holds its queue slot for long. If another task of this process is already running this
+ * workspace's browser checks, this one defers its monitors instead of taking a second slot.
+ */
+async function browserTask(repo: Repo, workspace: string, list: Monitor[], entitlements: Entitlements, opts: CheckManyOptions) {
+  const now = opts.now ?? Date.now;
+  const budget = opts.browserBudgetMs ?? BROWSER_TASK_BUDGET_MS;
+  if (browserTasksRunning.has(workspace)) {
+    for (const m of list) await step("browser deferral", () => deferBrowserCheck(repo, m, BROWSER_BUSY));
+    return;
+  }
+  browserTasksRunning.add(workspace);
+  const started = now();
+  try {
+    // a due availability probe runs first, on this task's clock, so no check has to fit one into its own worst case
+    if (browserProbeDue()) await browserAvailable().catch(() => false);
+    for (const m of list) {
+      if (now() - started + browserCheckCeilingMs(m) > budget) {
+        await step("browser deferral", () => deferBrowserCheck(repo, m, BROWSER_BUSY));
+        continue;
+      }
+      // credits are taken before the journey is launched; without them it does not run (nothing recorded, like any other
+      // monitor out of credits: the lease keeps its next due time)
+      const charged = await reserveCredits(workspace, m, entitlements);
+      if (charged === null) continue;
+      let result: CheckResultKind = "done";
+      try { result = await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
+      // a check that did not happen (deferred for capacity, or the runtime could not run it) gets its credits back
+      if ((result === "deferred" || result === "error") && charged > 0) await refundCredits(workspace, charged, entitlements);
+    }
+  } finally {
+    browserTasksRunning.delete(workspace);
   }
 }
 
-export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlements = unmetered, scheduled = false) {
+/**
+ * Take a browser check's credits before it runs. null: the workspace has none left (a partial grant is given back), so
+ * the journey must not run. Otherwise the credits actually taken (0 when the ledger failed: monitoring goes on, as for
+ * every other check, and nothing is given back later).
+ */
+export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements): Promise<number | null> {
+  const cost = creditCost(m);
+  if (cost === 0) return 0;
+  let granted: number;
+  try { granted = await entitlements.spendCredits(workspace, cost); } catch { console.error("credits unavailable"); return 0; }
+  if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
+  if (granted < cost) {
+    if (granted > 0) await refundCredits(workspace, granted, entitlements);
+    console.warn("credits exhausted: skipped 1 browser check");
+    return null;
+  }
+  return granted;
+}
+
+export async function refundCredits(workspace: string, credits: number, entitlements: Entitlements) {
+  if (!entitlements.refundCredits) return;
+  await entitlements.refundCredits(workspace, credits).catch(() => console.error("credit refund failed"));
+}
+
+export type CheckResultKind = "done" | "deferred" | "error" | "skipped";
+
+/**
+ * A capacity deferral: no run row per retry (only one 'deferred' run per interval, from the repository), a retry within
+ * DEFERRED_RETRY_MS..2x, and the monitor marked unchecked once the streak has lasted BROWSER_UNCHECKED_AFTER intervals,
+ * judged from the streak's start on the monitor, not from retained rows.
+ */
+export async function deferBrowserCheck(repo: Repo, m: Monitor, reason: string, now = Date.now()) {
+  await repo.setMonitorState(m.id, { nextCheckAt: new Date(now + DEFERRED_RETRY_MS + Math.floor(Math.random() * DEFERRED_RETRY_MS)) });
+  if (!repo.noteBrowserDeferral) return;
+  const { deferredSince } = await repo.noteBrowserDeferral(m.id, m.intervalSec, reason);
+  if (deferredTooLong(deferredSince, m.intervalSec, now) && repo.markUnchecked) await repo.markUnchecked(m.id);
+}
+
+/** Has a deferral streak lasted BROWSER_UNCHECKED_AFTER of the monitor's intervals? */
+export const deferredTooLong = (since: Date, intervalSec: number, now = Date.now()) => now - since.getTime() >= BROWSER_UNCHECKED_AFTER * intervalSec * 1000;
+
+export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlements = unmetered, scheduled = false): Promise<CheckResultKind> {
   // a due heartbeat monitor means no ping arrived in time
-  const { out, results, note: regionNote } =
+  const measured: Measured =
     m.type === "heartbeat"
       ? { out: { ok: false, error: "Heartbeat missed" } as CheckOutcome, results: [{ region: "auto", ok: false, error: "Heartbeat missed" }], note: undefined as string | undefined }
       : await measure(m, repo);
+  const out = measured.out;
+  // A browser check that did not happen (capacity full, runner unreachable or refusing, Chromium not starting, no report)
+  // says nothing about the target, but it must not leave the monitor silently blind: it is recorded as a visible run,
+  // and after BROWSER_UNCHECKED_AFTER in a row the monitor is marked unchecked and its owners and admins are told, once
+  // per streak. The monitor's status stays what it was; the API and dashboard show it as unchecked.
+  if (m.type === "browser" && out.inconclusive && out.browser && repo.recordBrowserRun) {
+    const run = out.browser;
+    if (run.kind === "deferred") {
+      // capacity: retried soon, counted on the monitor's deferral streak, no run row per retry
+      await step("browser deferral", () => deferBrowserCheck(repo, m, out.error ?? BROWSER_BUSY));
+      return "deferred";
+    }
+    // the runtime failed: one visible error run per scheduled check; 3 in a row mark the monitor unchecked
+    await step("browser run", () => repo.recordBrowserRun!({ monitorId: m.id, ok: false, kind: "error", usedSecrets: run.usedSecrets ?? false, failedStep: null, error: out.error ?? null, durationMs: 0, steps: [], blockedRequests: 0, peakRssMb: null, cpuMs: null }));
+    if (repo.clearBrowserDeferral) await step("deferral clear", () => repo.clearBrowserDeferral!(m.id));
+    const recent = repo.recentBrowserRunKinds ? await repo.recentBrowserRunKinds(m.id, 50).catch(() => []) : [];
+    if (shouldMarkUnchecked(recent, m.intervalSec) && repo.markUnchecked) await step("unchecked mark", () => repo.markUnchecked!(m.id));
+    return "error";
+  }
+  const { results, note: regionNote } = measured;
   // the prober itself had no connectivity: the check says nothing about the monitor, so nothing is recorded or counted
   if (out.inconclusive) {
     console.warn(`check for ${m.id} discarded: probe unavailable`);
-    return;
+    return "skipped";
   }
   // a region that failed without the monitor going down leaves a trace, so a skipped change can be explained
   if (regionNote && out.ok) console.info(`monitor ${m.id}: no change, some regions unavailable`);
-  if (!(await repo.recordObservation(m, out, { generation: scheduled ? m.runGeneration : undefined }))) return;
+  if (!(await repo.recordObservation(m, out, { generation: scheduled ? m.runGeneration : undefined }))) return "skipped";
   if (out.domainExpiry) {
-    if (!(await repo.acceptDomainExpiry(m, out.domainExpiry))) return;
+    if (!(await repo.acceptDomainExpiry(m, out.domainExpiry))) return "skipped";
     m = { ...m, domainExpiry: out.domainExpiry };
   }
   const inMaintenance = await repo.underMaintenance(m);
   // one region is one row; several are rows per region that count as a single run in the rollup
   if (results.length === 1) await repo.recordCheck({ monitorId: m.id, region: results[0].region, ok: out.ok, statusCode: out.statusCode, latencyMs: out.latencyMs, error: out.error });
   else await repo.recordRegionResults(m.id, results, { ok: out.ok, latencyMs: out.latencyMs });
+  // a browser check also keeps its run: step timings, the failing step, what it measured and (if asked) a screenshot
+  const run = out.browser;
+  if (run && repo.recordBrowserRun) {
+    await step("browser run", () => repo.recordBrowserRun!({
+      monitorId: m.id, ok: run.ok, kind: "run", usedSecrets: run.usedSecrets ?? false, secretsVersion: m.browserSecretsVersion ?? 0, failedStep: run.failedStep, error: run.error, durationMs: run.durationMs, steps: run.steps,
+      blockedRequests: run.blockedRequests, peakRssMb: run.peakRssMb ?? null, cpuMs: run.cpuMs ?? null, screenshot: run.screenshotPng ?? null,
+    }));
+    // the journey ran: the monitor is checked again (conditional in the database, whatever this snapshot of it says)
+    if (repo.clearUnchecked) await step("unchecked clear", () => repo.clearUnchecked!(m.id));
+    if (repo.clearBrowserDeferral) await step("deferral clear", () => repo.clearBrowserDeferral!(m.id));
+  }
   // Concurrent manual/scheduled checks must advance the latest streak atomically. A failure that
   // completed while this check was in flight cannot be overwritten by its old success count.
   const recovery = await repo.recordRecoveryProgress(m, out.ok);
-  if (!recovery) return;
+  if (!recovery) return "skipped";
   // Regular monitors keep the due time the lease gave them (a fixed cadence, whatever the check duration). A heartbeat is
   // due one interval plus grace after this moment.
   const next = m.type === "heartbeat" ? { nextCheckAt: nextAfter(m) } : {};
@@ -223,7 +361,7 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
   if (inMaintenance && !out.ok) {
     console.info(`monitor ${m.id}: ${SUPPRESSED_MAINTENANCE}`);
     await repo.setMonitorState(m.id, { lastCheckedAt: new Date(), ...next });
-    return;
+    return "skipped";
   }
   const failures = out.ok ? 0 : m.consecutiveFailures + 1;
   // expiry checks (domain, certificate) watch a date: their latency says nothing about the service
@@ -258,10 +396,11 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
   });
 
   if (opensOutage || lateOpen) await openIncident(repo, m, out.error ?? "Check failed", evaluation(m, regionNote, lateOpen), entitlements);
-  if (recovering && !(await completeRecovery(repo, m, slow ? "degraded" : "up", finalSlow, entitlements))) return;
+  if (recovering && !(await completeRecovery(repo, m, slow ? "degraded" : "up", finalSlow, entitlements))) return "skipped";
   if (slowTrips) await openSlowIncident(repo, m, out.latencyMs!, entitlements);
   if (slowClears) await resolveIncident(repo, m, true, entitlements);
   if (pending && !recovering) await repo.setMonitorState(m.id, { status, consecutiveSlow: finalSlow });
+  return "done";
 }
 
 async function openSlowIncident(repo: Repo, m: Monitor, latencyMs: number, entitlements: Entitlements) {
@@ -388,6 +527,65 @@ export async function resolveIncident(repo: Repo, m: Monitor, slow = false, enti
     if (!(await repo.resolveIncident(inc.id, slow ? "Response time is back under the threshold." : "Checks are passing again."))) continue;
     if ((await alertHistory(repo, inc)).muted) continue;
     await dispatchAlert(repo, m.organizationId, { kind: "incident.resolved", incident: { ...inc, resolvedAt: new Date() }, monitor: m, ...(slow ? { slow: true as const } : {}) }, m.channelIds, entitlements);
+  }
+}
+
+
+/** A deferred browser check is retried after this (plus up to as much jitter), instead of a whole interval later. */
+export const DEFERRED_RETRY_MS = 30_000;
+/** Digests of unchecked browser monitors per workspace: at most this many per hour. */
+export const UNCHECKED_DIGESTS_PER_HOUR = 1;
+
+/**
+ * Is a browser monitor unchecked because of runtime errors? Its latest runs (newest first) that did not happen form the
+ * streak; BROWSER_UNCHECKED_AFTER errors in it mark the monitor. Capacity deferrals are judged separately, by how long
+ * the monitor's deferral streak has lasted (deferredTooLong).
+ */
+export function shouldMarkUnchecked(recent: { kind: string; createdAt: Date }[], _intervalSec?: number): boolean {
+  const end = recent.findIndex((r) => r.kind === "run");
+  const streak = end === -1 ? recent : recent.slice(0, end);
+  return streak.filter((r) => r.kind === "error").length >= BROWSER_UNCHECKED_AFTER;
+}
+
+const escapeHtml = (v: string) => v.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" } as Record<string, string>)[c]);
+
+/**
+ * One e-mail per workspace (to each owner and admin, within the workspace's e-mail allowance) listing its browser
+ * monitors that went unchecked and why, in fixed words; at most UNCHECKED_DIGESTS_PER_HOUR per hour per workspace
+ * (counted in the database, shared by every server). Monitors that go unchecked meanwhile wait for the next digest.
+ * Every recipient is logged in the alert log (monitor.unchecked).
+ */
+export async function sendUncheckedDigests(repo: Repo, entitlements: Entitlements = unmetered) {
+  if (!repo.pendingUncheckedDigests || !repo.markUncheckedNotified) return;
+  for (const d of await repo.pendingUncheckedDigests()) {
+    if (!(await repo.withinLimit(`browser-unchecked-digest:${d.organizationId}`, UNCHECKED_DIGESTS_PER_HOUR, 3600))) continue;
+    const emails = repo.managerEmails ? await repo.managerEmails(d.organizationId) : [];
+    const granted = emails.length ? await entitlements.spendEmails(d.organizationId, emails.length).catch(() => emails.length) : 0;
+    const allowed = Number.isSafeInteger(granted) ? Math.max(0, Math.min(granted, emails.length)) : 0;
+    const names = d.monitors.map((m) => `- ${m.name}: ${m.reason ?? "browser check did not run"}`).join("\n");
+    const subject = d.monitors.length === 1 ? `${d.monitors[0].name}: browser checks are not running` : `${d.monitors.length} browser monitors are not being checked`;
+    const text = `These browser monitors have not been checked for a while and are shown as unchecked until a check runs again:\n\n${names}\n\nThe browser runtime's state is on each monitor's page. You get at most one such e-mail per hour for this workspace.`;
+    const html = `<p>${escapeHtml(text).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
+    // the e-mail (to managers, who see every project) lists everything; the alert log gets one row per project, naming
+    // only that project's monitors, so a member scoped to one project never reads another project's monitor names
+    const outcomes: { status: "sent" | "failed" | "skipped"; error: string | null; label: string }[] = [];
+    for (const [i, to] of emails.entries()) {
+      if (i >= allowed) { outcomes.push({ status: "skipped", error: "e-mail allowance used up", label: "skipped: e-mail allowance used up" }); continue; }
+      let ok = true;
+      try { await sendEmail({ to, subject, text, html }, true); } catch { ok = false; }
+      outcomes.push(ok ? { status: "sent", error: null, label: "sent" } : { status: "failed", error: "email not sent", label: "failed: email not sent" });
+    }
+    if (!outcomes.length) outcomes.push({ status: "skipped", error: "no owner or admin address", label: "skipped: no owner or admin address" });
+    const byProject = new Map<string | null, typeof d.monitors>();
+    for (const m of d.monitors) (byProject.get(m.projectId) ?? byProject.set(m.projectId, []).get(m.projectId)!).push(m);
+    const rows = [];
+    for (const [projectId, mons] of byProject) {
+      const summary = mons.map((m) => `${m.name} (${m.reason ?? "did not run"})`).join(", ").slice(0, 400);
+      const base = { organizationId: d.organizationId, projectId, channelId: null, channelName: "Owners and admins (email)", channelType: "email", kind: "monitor.unchecked", incidentId: null, monitorName: mons.length === 1 ? mons[0].name : `${mons.length} browser monitors` };
+      for (const o of outcomes) rows.push({ ...base, ok: o.status === "sent", status: o.status, error: o.error, statusMessage: `${o.label}; unchecked: ${summary}` });
+    }
+    await repo.logDeliveries(rows);
+    await repo.markUncheckedNotified(d.monitors.map((m) => m.id));
   }
 }
 

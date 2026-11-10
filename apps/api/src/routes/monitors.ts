@@ -11,8 +11,11 @@ import { creditCost } from "../entitlements";
 import { isWorkers, targetProblem } from "../netguard";
 import { WORKERS_UNSUPPORTED } from "../certificate";
 import { PING_WORKERS_UNSUPPORTED } from "../ping";
+import { BROWSER_MIN_INTERVAL_SEC, browserCreationProblem, browserRuntimeHealth, browserUrlProblem } from "../browser-check";
+import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secretRefs, type BrowserConfig } from "../browser-steps";
+import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
-import { checkOne, nextAfter } from "../scheduler";
+import { checkOne, nextAfter, refundCredits } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID } from "../regions";
 
@@ -21,8 +24,8 @@ import { JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, MAX_JSON_PATH_LENGTH, jsonP
 
 const fields = {
   name: z.string().min(1).max(120).describe("Display name shown in the dashboard, alerts and status-page components."),
-  type: z.enum(["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping"]).describe("Check protocol; immutable after creation. HTTP checks a URL, WebSocket checks the handshake (and optionally a reply), certificate checks the TLS certificate a host presents and ping sends one ICMP echo request (both self-hosted Node runtime only), heartbeat waits for incoming pings, and other types check a service."),
-  target: z.string().max(2048).describe("HTTP: absolute http(s) URL. WebSocket: ws:// or wss:// URL. TCP: host:port. DNS: hostname. Domain: explicit registered domain, without scheme or path; not a subdomain. Certificate: host or host:port (default port 443). Ping: hostname or IP address, without scheme, port or path. Database/Redis: connection URL for that protocol. Heartbeat: leave empty. Public targets only by default."),
+  type: z.enum(["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping", "browser"]).describe("Check protocol; immutable after creation. HTTP checks a URL, WebSocket checks the handshake (and optionally a reply), certificate checks the TLS certificate a host presents and ping sends one ICMP echo request (both self-hosted Node runtime only), browser runs a declarative multi-step journey in headless Chromium (self-hosted Node server with BROWSER_CHECKS=enabled only), heartbeat waits for incoming pings, and other types check a service."),
+  target: z.string().max(2048).describe("HTTP: absolute http(s) URL. WebSocket: ws:// or wss:// URL. TCP: host:port. DNS: hostname. Domain: explicit registered domain, without scheme or path; not a subdomain. Certificate: host or host:port (default port 443). Ping: hostname or IP address, without scheme, port or path. Browser: set from the first goto step (ignored when given). Database/Redis: connection URL for that protocol. Heartbeat: leave empty. Public targets only by default."),
   domainExpiryWarnDays: z.number().int().min(1).max(365).describe("Domain and certificate monitors: fail when the registration or certificate expiration is this many days away or closer; unknown domain dates also fail explicitly."),
   method: z.enum(HTTP_METHODS).describe("HTTP request method; ignored for other monitor types."),
   requestBody: z.string().max(MAX_REQUEST_BODY_BYTES).nullable().describe("HTTP request body, up to 16384 UTF-8 bytes; unavailable with GET or HEAD. Set Content-Type using headers. Null clears it. Masked values preserve stored secrets on update; owners and admins can read bodies."),
@@ -44,6 +47,8 @@ const fields = {
   headers: z.record(z.string().max(100), z.string().max(2000)).describe("HTTP (or WebSocket handshake) request headers; replaces the header map. An empty object removes all custom headers. Existing masked values preserve stored secrets."),
   // sent as one text message after the handshake; blank means "handshake only"
   wsMessage: z.string().max(2000).transform((v) => v || null).nullable().describe("WebSocket only: text message sent once the connection is open; a message must then come back within the timeout. Not a secret: put credentials in headers. Null or empty string checks the handshake only."),
+  browser: browserConfigSchema.nullable().describe("Browser monitors only: { steps, timeoutMs, screenshot }. steps (1-20, the first a goto) use a fixed vocabulary: goto {url}, click {selector}, fill {selector, value | secretRef}, press {key}, waitFor {selector | text}, assertText {selector?, contains | equals}, assertUrl {pattern; * wildcard, a leading / matches path and query}, assertStatus {code}; each may set timeoutMs (500-30000, default 10000). timeoutMs is the whole journey (5000-60000, default 30000). screenshot: never (default) or on_failure (PNG up to 200 KB, secret fields masked). No JavaScript of your own runs."),
+  browserSecrets: browserSecretsSchema.describe("Browser monitors only: secrets for fill steps (secretRef), name -> value. Write-only: responses show every name with ••••••••. Send •••••••• to keep a stored value, null to delete it; the map replaces the stored one. Encrypted at rest. Changing the journey while keeping stored secrets requires an owner or admin."),
   dnsRecordType: z.enum(["A", "AAAA", "CNAME", "MX", "TXT", "NS"]).describe("DNS record type; default A. Queries Cloudflare's public DoH resolver."),
   dnsExpectedValue: z.string().max(2000).transform((v) => v || null).nullable().describe("Optional DNS answer value. At least one answer of the selected type must match. TXT uses quoted DNS presentation; MX includes priority. Empty or null accepts any answer of that type."),
   dnsMatchMode: z.enum(["exact", "contains"]).describe("DNS answer match: exact or case-sensitive substring. Hostnames in CNAME/NS and MX exact matches ignore case and trailing dots."),
@@ -82,6 +87,8 @@ const body = z.object({
   expectedLocation: fields.expectedLocation.default(null),
   headers: fields.headers.default({}),
   wsMessage: fields.wsMessage.default(null),
+  browser: fields.browser.default(null),
+  browserSecrets: fields.browserSecrets.default({}),
   dnsRecordType: fields.dnsRecordType.default("A"),
   dnsExpectedValue: fields.dnsExpectedValue.default(null),
   dnsMatchMode: fields.dnsMatchMode.default("exact"),
@@ -103,6 +110,8 @@ export const monitorImportSchema = z.object({
   monitors: z.array(z.record(z.string(), z.unknown())).min(1).max(IMPORT_MAX).describe("Monitor records. Give each a stable sourceId (or id). Source IDs ignore surrounding whitespace. Missing ids use a hash of type, name and target. Repeated identities are skipped, never overwritten."),
 });
 const FIELD_KEYS = Object.keys(fields);
+/** Never exported: values are write-only, and the export would only carry the mask. */
+const NOT_EXPORTED = ["channelIds", "dependsOnMonitorId", "escalationPolicyId", "browserSecrets"];
 
 /** Accepts our own export plus the common spellings of other tools (UptimeRobot, Uptime Kuma, common monitoring tool style). */
 function normaliseImport(raw: unknown): unknown {
@@ -153,7 +162,37 @@ export function jsonAssertionProblem(v: { type: string; method?: string | null; 
   return null;
 }
 
-const creationProblem = (v: z.infer<typeof body>) => v.requestBody === MASK ? "A masked request body cannot be imported or created; supply the original body" : v.type === "certificate" && isWorkers() ? `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : v.type === "ping" && isWorkers() ? `${PING_WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers` : requestBodyProblem(v) ?? jsonAssertionProblem(v);
+/** Browser fields on a monitor of another type, or a browser monitor without its journey. */
+const browserFieldProblem = (type: string, v: { browser?: unknown; browserSecrets?: Record<string, unknown> }) =>
+  type === "browser" ? (v.browser ? null : "A browser monitor needs a journey (browser.steps)") : v.browser || Object.keys(v.browserSecrets ?? {}).length ? "browser and browserSecrets are for browser monitors only" : null;
+
+function creationProblem(v: z.infer<typeof body>): string | null {
+  if (v.requestBody === MASK) return "A masked request body cannot be imported or created; supply the original body";
+  if (Object.values(v.browserSecrets).some((x) => x === MASK || x === null)) return "Browser secrets must be given as values when a monitor is created";
+  const browser = browserFieldProblem(v.type, v);
+  if (browser) return browser;
+  if (v.type === "certificate" && isWorkers()) return `${WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers`;
+  if (v.type === "ping" && isWorkers()) return `${PING_WORKERS_UNSUPPORTED}; this deployment runs on Cloudflare Workers`;
+  return requestBodyProblem(v) ?? jsonAssertionProblem(v);
+}
+
+/**
+ * What a spot check returns: the verdict fields only. Never the browser run (steps, screenshot bytes) or any other
+ * nested object a check type may add, so nothing binary or secret-derived is ever serialised into a response.
+ */
+export function spotCheckResult(o: { ok: boolean; statusCode?: number; latencyMs?: number; error?: string }) {
+  return { ok: o.ok === true, ...(typeof o.statusCode === "number" ? { statusCode: o.statusCode } : {}), ...(typeof o.latencyMs === "number" ? { latencyMs: o.latencyMs } : {}), ...(typeof o.error === "string" ? { error: o.error } : {}) };
+}
+
+/** Every goto of a journey must be a target this deployment allows (the egress policy refuses the rest at run time too). */
+async function journeyTargetProblem(config: BrowserConfig): Promise<string | null> {
+  for (const s of config.steps) {
+    if (s.action !== "goto") continue;
+    const problem = await browserUrlProblem(s.url);
+    if (problem) return problem;
+  }
+  return null;
+}
 
 /** Types whose expiry is checked rather than their availability: an interval of 1 hour to 1 day is enough and is enforced. */
 const EXPIRY_TYPES: readonly string[] = ["domain", "certificate"];
@@ -161,6 +200,8 @@ const expiryInterval = (sec: number) => Math.min(86400, Math.max(sec, 3600));
 
 const newMonitor = (v: z.infer<typeof body>) => ({
   ...v,
+  // by now every value is ciphertext (create) or the map is empty (other types): nulls and masks were refused
+  browserSecrets: v.browserSecrets as Record<string, string>,
   ...(v.type !== "dns" ? DNS_DEFAULTS : {}),
   heartbeatToken: v.type === "heartbeat" ? crypto.randomUUID().replace(/-/g, "") : null,
   // a new heartbeat monitor must not be "missed" before its first ping is even due
@@ -250,16 +291,20 @@ async function policyProblem(c: Context<AppEnv>, projectId: string | null, polic
 
 /** HTTP 400 for a target that points at a private address (unless the deployment allows those), or null. */
 async function refuseTarget(c: Context<AppEnv>, type: string, target: string) {
-  const error = await targetProblem(type, target);
+  // browser checks follow their own policy (BROWSER_CHECK_ALLOW_PRIVATE_TARGETS, loopback and own addresses never)
+  const error = type === "browser" ? await browserUrlProblem(target) : await targetProblem(type, target);
   return error ? c.json({ error, code: "target_not_allowed" }, 400) : null;
 }
 
-/** Request headers and bodies (often tokens) are shown to owners and admins only. */
+/** Request headers and bodies (often tokens) are shown to owners and admins only; browser secrets to nobody. */
 /** Scheduler bookkeeping of run coalescing (beginRuns): never part of the API (it would add ~150 bytes per monitor to every list). */
-const SCHEDULER_ONLY = new Set(["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt"]);
+// and of browser checks: the deferral streak, digest bookkeeping and the secrets version (uncheckedSince is shown)
+const SCHEDULER_ONLY = new Set(["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt", "deferredSince", "lastDeferredRunAt", "uncheckedNotifiedAt", "browserSecretsVersion"]);
 const withoutSchedulerFields = <T,>(m: T): T => Object.fromEntries(Object.entries(m as object).filter(([k]) => !SCHEDULER_ONLY.has(k))) as T;
-const shown = async <T extends { headers?: Record<string, string> | null; requestBody?: string | null }>(c: Context<AppEnv>, rows: T[]): Promise<T[]> =>
-  (await isManager(c)) ? rows.map(withoutSchedulerFields) : rows.map((m) => withoutSchedulerFields({ ...m, ...(m.headers ? { headers: maskHeaders(m.headers) } : {}), ...(m.requestBody ? { requestBody: MASK } : {}) }));
+const shown = async <T extends { headers?: Record<string, string> | null; requestBody?: string | null; browserSecrets?: Record<string, string> | null }>(c: Context<AppEnv>, rows: T[]): Promise<T[]> => {
+  const all = rows.map((m) => withoutSchedulerFields(m.browserSecrets !== undefined ? { ...m, browserSecrets: maskedSecrets(m.browserSecrets) } : m));
+  return (await isManager(c)) ? all : all.map((m) => ({ ...m, ...(m.headers ? { headers: maskHeaders(m.headers) } : {}), ...(m.requestBody ? { requestBody: MASK } : {}) }));
+};
 
 /** Source fields that look like credentials: a record carrying one is refused rather than imported without its authentication. */
 const CREDENTIAL_KEY = /auth|user|pass|secret|token|cred|bearer|oauth/i;
@@ -293,7 +338,7 @@ async function importMonitors(c: Context<AppEnv>, preview: boolean) {
     if (!parsed.success) { row.error = parsed.error.issues.map((i) => `${i.path.join(".") || "item"}: ${i.message}`).join("; "); continue; }
     const v = parsed.data;
     row.name = v.name;
-    const invalid = creationProblem(v);
+    const invalid = v.type === "browser" ? "Browser monitors cannot be imported; create them with POST /api/monitors" : creationProblem(v);
     if (invalid) { row.error = invalid; continue; }
     const source = sourceSchema.safeParse(r.source ?? defaultSource.data);
     if (!source.success) { row.error = "Invalid source namespace"; continue; }
@@ -365,6 +410,20 @@ export const monitors = new Hono<AppEnv>()
     const invalid = creationProblem(v);
     if (invalid) return c.json({ error: invalid }, 400);
     if (EXPIRY_TYPES.includes(v.type)) v.intervalSec = expiryInterval(v.intervalSec);
+    // the id is chosen here so the secrets can be encrypted bound to this monitor (see browser-secrets.ts)
+    const id = crypto.randomUUID();
+    if (v.type === "browser") v.intervalSec = Math.max(v.intervalSec, BROWSER_MIN_INTERVAL_SEC);
+    if (v.type === "browser" && v.browser) {
+      const unsupported = await browserCreationProblem();
+      if (unsupported) return c.json(unsupported, 400);
+      // the monitor's target is where the journey starts
+      v.target = (v.browser.steps[0] as { url: string }).url;
+      const missing = missingSecretProblem(v.browser, Object.keys(v.browserSecrets));
+      if (missing) return c.json({ error: missing, code: "browser_secret_missing" }, 400);
+      const badStep = await journeyTargetProblem(v.browser);
+      if (badStep) return c.json({ error: badStep, code: "target_not_allowed" }, 400);
+      v.browserSecrets = await applySecretUpdate(c.env.BETTER_AUTH_SECRET, c.get("orgId"), id, v.browserSecrets as Record<string, string>, {});
+    }
     const blocked = await refuseTarget(c, v.type, v.target);
     if (blocked) return blocked;
     const badRegion = await regionProblem(c, v.type, v.regions);
@@ -376,14 +435,19 @@ export const monitors = new Hono<AppEnv>()
     const refused = await overPlan(c, { add: 1, intervalSec: v.type === "heartbeat" ? undefined : v.intervalSec });
     if (refused) return refused;
     const channelIds = await withAutoChannels(repo, c.get("orgId"), c.get("projectId"), v.channelIds);
-    const created = await repo.createMonitor(c.get("orgId"), c.get("projectId"), newMonitor({ ...v, channelIds }));
+    const created = await repo.createMonitor(c.get("orgId"), c.get("projectId"), { ...newMonitor({ ...v, channelIds }), id });
     await audit(c, "monitor.create", { type: "monitor", id: created.id, projectId: created.projectId }, auditChanges(v));
     return c.json((await shown(c, [created]))[0], 201);
   })
   // JSON backup of this project's monitors; feed it back to POST /import (here or in another workspace)
+  // the browser runtime of this server (enabled, runner or in-process, last failure in fixed words); no secrets
+  .get("/browser-runtime", (c) => {
+    c.header("cache-control", "no-store");
+    return c.json(browserRuntimeHealth());
+  })
   .get("/export", async (c) => {
     const rows = await c.get("repo").exportMonitors(c.get("orgId"), c.get("projectId"));
-    const monitors = (await shown(c, rows)).map((m) => Object.fromEntries(FIELD_KEYS.filter((k) => k !== "channelIds" && k !== "dependsOnMonitorId" && k !== "escalationPolicyId").map((k) => [k, (m as unknown as Record<string, unknown>)[k]]).concat([["source", m.importSource ?? "montral"], ["sourceId", m.importSourceId ?? m.id]])));
+    const monitors = (await shown(c, rows)).map((m) => Object.fromEntries(FIELD_KEYS.filter((k) => !NOT_EXPORTED.includes(k)).map((k) => [k, (m as unknown as Record<string, unknown>)[k]]).concat([["source", m.importSource ?? "montral"], ["sourceId", m.importSourceId ?? m.id]])));
     c.header("content-disposition", 'attachment; filename="montral-monitors.json"');
     return c.json({ version: 1, exportedAt: new Date().toISOString(), monitors });
   })
@@ -407,6 +471,35 @@ export const monitors = new Hono<AppEnv>()
     const repo = c.get("repo");
     const v = c.req.valid("json");
     if (Object.keys(v).length === 0) return c.json({ error: "No changes" }, 400);
+    // browser journeys and their write-only secrets; the target follows the first goto step
+    if (v.browser !== undefined || v.browserSecrets !== undefined || v.target !== undefined) {
+      const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+      if (!current) return c.json({ error: "Not found" }, 404);
+      if (current.type !== "browser") {
+        const problem = browserFieldProblem(current.type, { browser: v.browser, browserSecrets: v.browserSecrets ?? {} });
+        if (problem) return c.json({ error: problem }, 400);
+      } else {
+        if (v.target !== undefined && v.browser === undefined && v.target !== current.target) return c.json({ error: "The target of a browser monitor is the URL of its first goto step: change the journey instead" }, 400);
+        if (v.browser === null) return c.json({ error: "A browser monitor needs a journey (browser.steps)" }, 400);
+        const config = (v.browser ?? current.browser) as BrowserConfig;
+        const stored = current.browserSecrets ?? {};
+        const keepsStored = Object.keys(stored).length > 0 && (v.browserSecrets === undefined || Object.entries(v.browserSecrets).some(([k, x]) => x === MASK && stored[k] !== undefined));
+        const changesJourney = v.browser !== undefined && !sameJson(v.browser, current.browser);
+        // a stored secret goes wherever the journey types it: only managers may point the journey elsewhere around it
+        if (keepsStored && changesJourney && !(await isManager(c))) {
+          return c.json({ error: "Only workspace owners and admins can change a browser journey while keeping its stored secrets", code: "protected_browser_secrets" }, 403);
+        }
+        const nextSecrets = v.browserSecrets !== undefined ? await applySecretUpdate(c.env.BETTER_AUTH_SECRET, current.organizationId, current.id, v.browserSecrets, stored) : stored;
+        const missing = missingSecretProblem(config, Object.keys(nextSecrets));
+        if (missing) return c.json({ error: missing, code: "browser_secret_missing" }, 400);
+        if (v.browser) {
+          const badStep = await journeyTargetProblem(v.browser);
+          if (badStep) return c.json({ error: badStep, code: "target_not_allowed" }, 400);
+          v.target = (v.browser.steps[0] as { url: string }).url;
+        }
+        if (v.browserSecrets !== undefined) (v as { browserSecrets?: Record<string, string | null> }).browserSecrets = nextSecrets;
+      }
+    }
     if (v.dnsRecordType !== undefined || v.dnsExpectedValue !== undefined || v.dnsMatchMode !== undefined) {
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
       if (!current) return c.json({ error: "Not found" }, 404);
@@ -467,6 +560,7 @@ export const monitors = new Hono<AppEnv>()
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
       if (current) {
         if (EXPIRY_TYPES.includes(current.type) && v.intervalSec !== undefined) v.intervalSec = expiryInterval(v.intervalSec);
+        if (current.type === "browser" && v.intervalSec !== undefined) v.intervalSec = Math.max(v.intervalSec, BROWSER_MIN_INTERVAL_SEC);
         // only a faster interval is checked against the plan's floor; leaving an older, faster one in place is fine
         const faster = v.intervalSec !== undefined && v.intervalSec < current.intervalSec && current.type !== "heartbeat";
         const resuming = v.paused === false && current.status === "paused";
@@ -474,11 +568,16 @@ export const monitors = new Hono<AppEnv>()
         if (refused) return refused;
       }
     }
+    const { browserSecrets: secretsPatch, ...plain } = v;
     const row = await repo.updateMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"), {
-      ...v,
+      ...plain,
+      // replaced above by the encrypted map (masks kept, nulls dropped)
+      ...(secretsPatch !== undefined ? { browserSecrets: secretsPatch as Record<string, string> } : {}),
       ...(v.paused !== undefined ? { status: v.paused ? "paused" : "pending", nextCheckAt: new Date() } : {}),
     });
     if (!row) return c.json({ error: "Not found" }, 404);
+    // new or removed secrets: screenshots of runs that typed the old ones go, whoever could see them before
+    if (row.type === "browser" && secretsPatch !== undefined && repo.purgeSecretScreenshots) await repo.purgeSecretScreenshots(row.id);
     await audit(c, "monitor.update", { type: "monitor", id: row.id, projectId: row.projectId }, auditChanges(v));
     // a heartbeat's deadline depends on interval + grace, so re-derive it when either changes
     if (row.type === "heartbeat" && (v.intervalSec !== undefined || v.graceSec !== undefined) && v.paused === undefined) {
@@ -494,6 +593,31 @@ export const monitors = new Hono<AppEnv>()
     if (existing) await audit(c, "monitor.delete", { type: "monitor", id: existing.id, projectId: existing.projectId }, auditChanges({}, { name: existing.name, type: existing.type }));
     return c.body(null, 204);
   })
+  // Browser monitors: the latest runs (step timings, failing step, fixed errors) and a run's screenshot, within the workspace
+  .get("/:id/browser-runs", uuidParams, async (c) => {
+    const repo = c.get("repo");
+    const m = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!m) return c.json({ error: "Not found" }, 404);
+    c.header("cache-control", "no-store");
+    if (m.type !== "browser" || !repo.listBrowserRuns) return c.json({ runs: [] });
+    const runs = await repo.listBrowserRuns(m.id, 50);
+    // decided per run, by what that run typed: removing secrets later does not open its screenshot to members
+    const manager = await isManager(c);
+    return c.json({ runs: manager ? runs : runs.map((r) => (r.usedSecrets ? { ...r, hasScreenshot: false } : r)) });
+  })
+  .get("/:id/browser-runs/:runId/screenshot", uuidParams, async (c) => {
+    const repo = c.get("repo");
+    const runId = c.req.param("runId");
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) return c.json({ error: "Not found" }, 404);
+    const m = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+    if (!m || m.type !== "browser" || !repo.browserRunScreenshot) return c.json({ error: "Not found" }, 404);
+    const shot = await repo.browserRunScreenshot(m.id, runId);
+    if (!shot) return c.json({ error: "Not found" }, 404);
+    // a page may show what a secret-filled step typed (masking covers the fields only): such a run's screenshot is for
+    // owners and admins only, judged by the run itself, whatever the monitor holds now
+    if (shot.usedSecrets && !(await isManager(c))) return c.json({ error: "Screenshots of runs that used secrets are visible to owners and admins only", code: "screenshot_managers_only" }, 403);
+    return new Response(Uint8Array.from(shot.png), { headers: { "content-type": "image/png", "cache-control": "private, no-store", "x-content-type-options": "nosniff", "content-security-policy": "default-src 'none'; sandbox", "content-disposition": "inline; filename=\"browser-check.png\"" } });
+  })
   // Runs the monitor's check now. With `region` it is one request from that region instead: the answer is returned and
   // nothing is recorded, so a spot check from elsewhere cannot flip the monitor's state.
   .post("/:id/check", uuidParams, async (c) => {
@@ -505,6 +629,9 @@ export const monitors = new Hono<AppEnv>()
     if (!m) return c.json({ error: "Not found" }, 404);
     if (m.type === "heartbeat") return c.json({ error: "Heartbeat monitors have no check to run", code: "regions_not_supported" }, 400);
     if (region !== undefined) {
+      // a browser spot check would return the run itself (steps, screenshot) outside the workspace's run history and its
+      // per-run screenshot authorization: browser monitors are checked through the recorded path only
+      if (m.type === "browser") return c.json({ error: "Browser monitors have no spot check; run the check without a region and read its runs", code: "regions_not_supported" }, 400);
       if (!(PROBE_TYPES as readonly string[]).includes(m.type) && region !== AUTO) {
         return c.json({ error: `Regions other than auto are available for ${PROBE_TYPES.join(" and ")} monitors only`, code: "regions_not_supported" }, 400);
       }
@@ -528,12 +655,14 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
       }
       if (region === undefined) {
-        await checkOne(repo, m, c.get("entitlements"));
+        const result = await checkOne(repo, m, c.get("entitlements"));
+        // a browser check that did not happen (deferred for capacity, runtime failure) gives its credits back
+        if (result === "deferred" || result === "error") await refundCredits(m.organizationId, cost, c.get("entitlements"));
         return c.json({ ok: true });
       }
       const run = await runInRegion(region, m, repo);
       if ("unreachable" in run) return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
-      return c.json({ ok: true, region, result: run.outcome });
+      return c.json({ ok: true, region, result: spotCheckResult(run.outcome) });
     } finally {
       release();
     }

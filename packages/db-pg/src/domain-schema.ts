@@ -5,6 +5,7 @@ import {
   bigserial,
   boolean,
   check,
+  customType,
   doublePrecision,
   index,
   integer,
@@ -17,10 +18,10 @@ import {
   uniqueIndex,
   uuid,
 } from "drizzle-orm/pg-core";
-import type { DomainExpiry } from "@montral/repo";
+import type { BrowserJourney, DomainExpiry } from "@montral/repo";
 import { organization, session, user } from "./auth-schema";
 
-export const monitorType = pgEnum("monitor_type", ["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping"]);
+export const monitorType = pgEnum("monitor_type", ["http", "tcp", "dns", "heartbeat", "postgres", "mysql", "redis", "websocket", "domain", "certificate", "ping", "browser"]);
 export const monitorStatus = pgEnum("monitor_status", ["pending", "up", "degraded", "down", "paused"]);
 export const incidentStatus = pgEnum("incident_status", ["investigating", "identified", "monitoring", "resolved"]);
 export const incidentUpdateVisibility = pgEnum("incident_update_visibility", ["public", "internal"]);
@@ -59,7 +60,7 @@ export const monitor = pgTable(
     importSourceId: text("import_source_id"),
     name: text("name").notNull(),
     type: monitorType("type").notNull().default("http"),
-    /** URL for http, ws(s):// URL for websocket, host:port for tcp / postgres / mysql / redis, hostname for dns, host or host:port for certificate, hostname or IP address for ping. */
+    /** URL for http, ws(s):// URL for websocket, host:port for tcp / postgres / mysql / redis, hostname for dns, host or host:port for certificate, hostname or IP address for ping, start URL (the first goto step) for browser. */
     target: text("target").notNull(),
     method: text("method").notNull().default("GET"),
     requestBody: text("request_body"),
@@ -116,6 +117,20 @@ export const monitor = pgTable(
     headers: jsonb("headers").$type<Record<string, string>>().notNull().default({}),
     /** websocket: text sent once the connection is open; a reply must then come back */
     wsMessage: text("ws_message"),
+    /** browser: the declarative journey (steps, total timeout, screenshot policy); validated by the API, never user code */
+    browser: jsonb("browser").$type<BrowserJourney>(),
+    /** browser: secret name -> AES-GCM ciphertext (key derived from BETTER_AUTH_SECRET); never returned by the API */
+    browserSecrets: jsonb("browser_secrets").$type<Record<string, string>>().notNull().default({}),
+    /** browser: since when the monitor's checks have not been running (runtime errors or capacity); null while they run */
+    uncheckedSince: timestamp("unchecked_since", { withTimezone: true }),
+    /** browser: when the owners/admins digest covering the current unchecked streak went out; null until it has */
+    uncheckedNotifiedAt: timestamp("unchecked_notified_at", { withTimezone: true }),
+    /** browser: bumped whenever the secrets change; a run started on an older version keeps no screenshot */
+    browserSecretsVersion: integer("browser_secrets_version").notNull().default(0),
+    /** browser: start of the current capacity-deferral streak (null while checks run); judged against the interval */
+    deferredSince: timestamp("deferred_since", { withTimezone: true }),
+    /** browser: when the current streak last stored a 'deferred' run (at most one per interval, so retries never fill the history) */
+    lastDeferredRunAt: timestamp("last_deferred_run_at", { withTimezone: true }),
     dnsRecordType: text("dns_record_type").$type<"A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS">().notNull().default("A"),
     dnsExpectedValue: text("dns_expected_value"),
     dnsMatchMode: text("dns_match_mode").$type<"exact" | "contains">().notNull().default("exact"),
@@ -172,6 +187,43 @@ export const checkResult = pgTable(
     checkedAt: timestamp("checked_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index("check_result_monitor_time_idx").on(t.monitorId, t.checkedAt)],
+);
+
+const bytea = customType<{ data: Uint8Array; driverData: Buffer }>({
+  dataType: () => "bytea",
+  toDriver: (v) => Buffer.from(v),
+  fromDriver: (v) => new Uint8Array(v),
+});
+
+/**
+ * One run of a browser check: per-step timings, the failing step and a fixed error, what the run measured, and (only
+ * when the monitor asks for it, on failure) a small PNG with secret fields masked. Bounded per monitor by the repo
+ * (latest runs only; screenshots only on the newest of them) and by age in purgeExpired.
+ */
+export const browserCheckRun = pgTable(
+  "browser_check_run",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    monitorId: uuid("monitor_id").notNull().references(() => monitor.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    ok: boolean("ok").notNull(),
+    /** 0-based index of the step that failed; null when every step passed or the run was stopped as a whole */
+    failedStep: integer("failed_step"),
+    error: text("error"),
+    durationMs: integer("duration_ms").notNull(),
+    steps: jsonb("steps").$type<{ action: string; ms: number; ok: boolean }[]>().notNull().default([]),
+    blockedRequests: integer("blocked_requests").notNull().default(0),
+    peakRssMb: integer("peak_rss_mb"),
+    cpuMs: integer("cpu_ms"),
+    screenshot: bytea("screenshot"),
+    /** run: the journey ran; deferred: capacity (server or workspace) was full; error: the browser runtime failed (runner
+     * unreachable or refusing, Chromium not starting, no report). Deferred and error runs keep a monitor visibly unchecked. */
+    kind: text("kind").$type<"run" | "deferred" | "error">().notNull().default("run"),
+    /** the journey typed stored secrets: its screenshot is for owners and admins only, whatever the monitor holds later */
+    usedSecrets: boolean("used_secrets").notNull().default(false),
+  },
+  (t) => [index("browser_check_run_monitor_time_idx").on(t.monitorId, t.createdAt), check("browser_check_run_screenshot_size_chk", sql`octet_length(${t.screenshot}) <= 204800`),
+    check("browser_check_run_kind_chk", sql`${t.kind} in ('run', 'deferred', 'error')`)],
 );
 
 /** Pre-aggregated check results per monitor and hour: uptime and latency stats read this instead of scanning check_result. */

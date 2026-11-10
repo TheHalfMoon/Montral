@@ -23,6 +23,11 @@ export interface Entitlements {
    * fewer than asked means the allowance for the current period is used up and the rest must not run.
    */
   spendCredits(workspaceId: string, credits: number): Promise<number>;
+  /**
+   * Give back credits taken with `spendCredits` for work that then did not happen (a browser check deferred for capacity,
+   * or one the browser runtime could not run). Missing means credits are never given back.
+   */
+  refundCredits?(workspaceId: string, credits: number): Promise<void>;
   /** The allowance and what is used of it, for display. null when the workspace is not metered. */
   creditBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** Like `spendCredits`, for notification emails (alerts and status-page subscriber mails). System mails are never counted. */

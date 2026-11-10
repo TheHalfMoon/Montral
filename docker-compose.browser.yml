@@ -1,0 +1,57 @@
+# Browser (multi-step) checks: adds a separate, hardened browser-runner service next to the default app image.
+#
+#   echo "BROWSER_RUNNER_TOKEN=$(openssl rand -hex 32)" >> .env
+#   docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build
+#
+# Chromium never runs in the app's container. The runner gets no database URL and no app secrets, is not on the
+# database's network, and only accepts jobs signed with BROWSER_RUNNER_TOKEN (HMAC per request, replay-protected). The
+# app stays the same default image. Sizing: each browser check running at once needs roughly 600 MB of memory and up to
+# one CPU core (MAX_BROWSER_CHECKS, default 2), within the runner's limits below. See /docs/self-host#browser-checks.
+services:
+  montral:
+    environment:
+      BROWSER_CHECKS: ${BROWSER_CHECKS:-enabled}
+      BROWSER_RUNNER_URL: http://browser-runner:8090
+      BROWSER_RUNNER_TOKEN: ${BROWSER_RUNNER_TOKEN:?set BROWSER_RUNNER_TOKEN in .env (openssl rand -hex 32)}
+    # the app keeps the default network (database, internet) and reaches the runner over an internal-only network
+    networks: [default, browser-jobs]
+    # a real PID 1 that reaps exited children (ping processes)
+    init: true
+    depends_on:
+      browser-runner: { condition: service_healthy }
+
+  browser-runner:
+    image: ${MONTRAL_BROWSER_RUNNER_IMAGE:-montral-browser-runner:local}
+    build:
+      context: .
+      target: browser-runner
+    restart: unless-stopped
+    # PID 1 is Docker's init (tini): Chromium processes orphaned by a crashed worker are reaped, never left as zombies
+    init: true
+    # only what the runner needs: never DATABASE_URL, BETTER_AUTH_SECRET or any other app setting
+    environment:
+      BROWSER_RUNNER_TOKEN: ${BROWSER_RUNNER_TOKEN:?set BROWSER_RUNNER_TOKEN in .env (openssl rand -hex 32)}
+      MAX_BROWSER_CHECKS: ${MAX_BROWSER_CHECKS:-2}
+      BROWSER_CHECK_MAX_RSS_MB: ${BROWSER_CHECK_MAX_RSS_MB:-1024}
+    # browser-jobs: internal (no route out), shared with the app only; browser-egress: the internet. Not `default`, so the
+    # database is neither resolvable nor routable from here.
+    networks: [browser-jobs, browser-egress]
+    # Docker's default seccomp profile plus exactly clone/unshare/setns/chroot, which Chromium's sandbox needs for its
+    # user, PID and network namespaces (see the comment in the profile). No capabilities at all, no privilege gain.
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./docker/browser-runner-seccomp.json
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs:
+      - /tmp:size=1g,mode=1777
+      - /dev/shm:size=256m
+    pids_limit: 1024
+    mem_limit: 2g
+    cpus: 2
+    # Optional, stronger still: run the runner under gVisor (runtime: runsc) where it is installed; see the docs.
+
+networks:
+  browser-jobs:
+    internal: true
+  browser-egress: {}

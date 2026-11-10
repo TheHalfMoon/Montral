@@ -7,11 +7,16 @@ import { domainCheck } from "./domain-expiry";
 import { websocketCheck } from "./websocket";
 import { certificateCheck } from "./certificate";
 import { pingCheck } from "./ping";
+import { browserCheck, type BrowserOutcome } from "./browser-check";
 import { clip, jsonAssertionError } from "./json-assertion";
 
 export type CheckInput = {
-  type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping";
+  type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping" | "browser";
   target: string;
+  /** browser: workspace the monitor belongs to (secrets are bound to it), its journey and its encrypted secrets. */
+  organizationId?: string;
+  browser?: unknown;
+  browserSecrets?: Record<string, string> | null;
   /** domain and certificate: fail when the expiry date is this many days away or closer (default 30). */
   domainExpiryWarnDays?: number;
   method: string;
@@ -42,6 +47,8 @@ export type CheckOutcome = {
   error?: string;
   /** The check could not be carried out from here (the prober itself is offline): nothing to record about the target. */
   inconclusive?: boolean;
+  /** browser: step timings, failing step, measured resources and an optional screenshot, stored as a run. */
+  browser?: BrowserOutcome;
 };
 
 /**
@@ -64,6 +71,7 @@ export async function runCheck(m: CheckInput, repo?: Repo): Promise<CheckOutcome
       case "websocket": return await websocketCheck(m, started);
       case "certificate": return await certificateCheck(m, started);
       case "ping": return await pingCheck(m, started);
+      case "browser": return await browserCheck(m);
       default: return { ok: true };
     }
   } catch (e) {
@@ -75,7 +83,7 @@ export async function runCheck(m: CheckInput, repo?: Repo): Promise<CheckOutcome
 /** The host a check dials, or null when it has none of its own (dns checks ask a public resolver, not the target). */
 function dialedHost(m: CheckInput): string | null {
   try {
-    if (m.type === "http" || m.type === "websocket") return new URL(m.target).hostname;
+    if (m.type === "http" || m.type === "websocket" || m.type === "browser") return new URL(m.target).hostname;
     if (m.type === "dns" || m.type === "heartbeat") return null;
     if (m.type === "ping") return pingHost(m.target);
     return hostPort(m.target, 1)?.hostname ?? null;

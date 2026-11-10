@@ -10,6 +10,7 @@ import { createApp } from "./app";
 import { configureEmail, setMailTransport } from "./email";
 import { configureApns } from "./apns";
 import { configureNetGuard } from "./netguard";
+import { configureBrowserChecks } from "./browser-check";
 import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
@@ -78,6 +79,7 @@ if (smtpConfig) {
 }
 configureEmail(env);
 configureNetGuard(env);
+configureBrowserChecks(env);
 configureProbes(env);
 configureApns(env);
 

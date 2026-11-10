@@ -14,7 +14,7 @@ export const DEFAULT_ALERT_LOG_DAYS = 30;
 export const AUDIT_PRUNE_BATCH = 5000;
 export const AUDIT_PRUNE_MAX_BATCHES = 20;
 
-export type MonitorType = "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping";
+export type MonitorType = "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping" | "browser";
 export type MonitorStatus = "pending" | "up" | "degraded" | "down" | "paused";
 export type IncidentStatus = "investigating" | "identified" | "monitoring" | "resolved";
 export type IncidentSeverity = "minor" | "major";
@@ -100,6 +100,18 @@ export interface Monitor {
   headers: Record<string, string>;
   /** websocket: text sent once the connection is open; null = only the handshake (and a greeting, with a keyword) */
   wsMessage: string | null;
+  /** browser: the declarative journey ({ steps, timeoutMs, screenshot }, see apps/api/src/browser-steps.ts); null for other types */
+  browser?: BrowserJourney | null;
+  /** browser: secret name -> AES-GCM ciphertext (apps/api/src/browser-secrets.ts). Never returned by the API. */
+  browserSecrets?: Record<string, string>;
+  /** browser: since when its checks have not been running (runtime errors or capacity); null while they run */
+  uncheckedSince?: Date | null;
+  uncheckedNotifiedAt?: Date | null;
+  /** browser: bumped whenever the secrets change (screenshots of runs started on an older version are dropped) */
+  browserSecretsVersion?: number;
+  /** browser: start of the current capacity-deferral streak; null while checks run */
+  deferredSince?: Date | null;
+  lastDeferredRunAt?: Date | null;
   dnsRecordType?: "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS";
   dnsExpectedValue?: string | null;
   dnsMatchMode?: "exact" | "contains";
@@ -122,13 +134,13 @@ export interface Monitor {
 export type MonitorInput = Pick<
   Monitor,
   | "name" | "type" | "target" | "method" | "requestBody" | "domainExpiryWarnDays" | "expectedStatus" | "intervalSec" | "timeoutMs" | "failureThreshold" | "recoveryThreshold" | "regions"
-  | "dnsRecordType" | "dnsExpectedValue" | "dnsMatchMode" | "keyword" | "keywordMode" | "jsonPath" | "jsonExpected" | "jsonMatch" | "expectedLocation" | "headers" | "wsMessage" | "graceSec" | "channelIds" | "tags" | "slowThresholdMs" | "slowAlertAfter"
+  | "dnsRecordType" | "dnsExpectedValue" | "dnsMatchMode" | "keyword" | "keywordMode" | "jsonPath" | "jsonExpected" | "jsonMatch" | "expectedLocation" | "headers" | "wsMessage" | "browser" | "browserSecrets" | "graceSec" | "channelIds" | "tags" | "slowThresholdMs" | "slowAlertAfter"
   | "dependsOnMonitorId" | "minRegionsFailing" | "escalationPolicyId"
 >;
 export type ImportMonitor = { source: string; sourceId: string; input: NewMonitor };
 export type ImportResult = { source: string; sourceId: string; status: "ready" | "created" | "duplicate"; monitorId: string | null; /** For a duplicate: what already holds this identity. */ existing?: { name: string; target: string } };
 export type ImportBatch = { rows: ImportResult[]; limit: { active: number; max: number; requested: number } | null };
-export type NewMonitor = MonitorInput & { heartbeatToken?: string | null; nextCheckAt?: Date };
+export type NewMonitor = MonitorInput & { heartbeatToken?: string | null; nextCheckAt?: Date; /** chosen by the caller when something (browser secrets) must be bound to the id before insert */ id?: string };
 /** Only named fields change; the type is immutable. */
 export type MonitorPatch = Partial<Omit<MonitorInput, "type">> & { paused?: boolean; status?: MonitorStatus; nextCheckAt?: Date };
 /** Bookkeeping written by the checker and the heartbeat endpoint. */
@@ -154,6 +166,20 @@ export interface CheckResult {
   checkedAt: Date;
 }
 /** `region` is where the check ran from (default `auto`: the scheduler's own location). */
+/** A browser journey as stored; validated by the API (browser-steps.ts), opaque here. */
+export type BrowserJourney = { steps: Record<string, unknown>[]; timeoutMs: number; screenshot: "never" | "on_failure" };
+/** One run of a browser check: step timings and the failing step, never page content. */
+export type BrowserRun = {
+  id: string; monitorId: string; createdAt: Date; ok: boolean; failedStep: number | null; error: string | null; durationMs: number;
+  steps: { action: string; ms: number; ok: boolean }[]; blockedRequests: number; peakRssMb: number | null; cpuMs: number | null; hasScreenshot: boolean;
+  /** run: the journey ran; deferred: capacity was full; error: the browser runtime failed (the check did not happen) */
+  kind: "run" | "deferred" | "error";
+  /** the journey typed stored secrets (its screenshot is for owners and admins only) */
+  usedSecrets: boolean;
+};
+export type NewBrowserRun = Omit<BrowserRun, "id" | "createdAt" | "hasScreenshot" | "kind" | "usedSecrets"> & { screenshot?: Uint8Array | null; kind?: BrowserRun["kind"]; usedSecrets?: boolean; /** the monitor's browserSecretsVersion when the run started */ secretsVersion?: number };
+/** Browser monitors of one workspace that went unchecked and are not yet in a digest to its owners and admins. */
+export type UncheckedDigest = { organizationId: string; monitors: { id: string; name: string; projectId: string | null; reason: string | null }[] };
 export type NewCheck = { monitorId: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null; region?: string };
 /** One region's result of a run that was checked from several. */
 export type RegionResult = { region: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null };
@@ -673,6 +699,33 @@ export interface Repo {
    * the only deletion the append-only audit table allows. Returns how many were removed. Optional for test backends.
    */
   pruneAuditEvents?(olderThanDays: number, options?: { batch?: number; maxBatches?: number }): Promise<number>;
+  /** Store one browser-check run (bounded per monitor: older runs and screenshots are dropped). Optional for test backends. */
+  recordBrowserRun?(r: NewBrowserRun): Promise<void>;
+  /** The latest browser-check runs of a monitor, newest first, without screenshot bytes. */
+  listBrowserRuns?(monitorId: string, limit: number): Promise<BrowserRun[]>;
+  /** The PNG of one run of that monitor and whether that run used secrets, or null. */
+  browserRunScreenshot?(monitorId: string, runId: string): Promise<{ png: Uint8Array; usedSecrets: boolean } | null>;
+  /** The kinds and times of the monitor's latest browser runs, newest first. */
+  recentBrowserRunKinds?(monitorId: string, limit: number): Promise<{ kind: BrowserRun["kind"]; createdAt: Date }[]>;
+  /** Unchecked browser monitors not yet covered by a digest, grouped by workspace. */
+  pendingUncheckedDigests?(): Promise<UncheckedDigest[]>;
+  /**
+   * A capacity deferral of a browser monitor: starts (or continues) its deferral streak and stores a 'deferred' run at
+   * most once per interval. Returns when the streak started.
+   */
+  noteBrowserDeferral?(monitorId: string, intervalSec: number, reason: string): Promise<{ deferredSince: Date }>;
+  /** The check happened (ran, or failed in the runtime): the deferral streak is over. */
+  clearBrowserDeferral?(monitorId: string): Promise<void>;
+  /** Record that a digest covered these monitors' current unchecked streak. */
+  markUncheckedNotified?(monitorIds: string[]): Promise<void>;
+  /** Drop the screenshots of the monitor's runs that used secrets (its secrets changed). */
+  purgeSecretScreenshots?(monitorId: string): Promise<void>;
+  /** Mark the monitor unchecked now; true only for the call that started the streak. */
+  markUnchecked?(monitorId: string): Promise<boolean>;
+  /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */
+  clearUnchecked?(monitorId: string): Promise<void>;
+  /** E-mail addresses of the workspace's owners and admins. */
+  managerEmails?(orgId: string): Promise<string[]>;
   /** Fixed-window counter shared across isolates; true while within `limit`. */
   withinLimit(key: string, limit: number, windowSec: number): Promise<boolean>;
 

@@ -2,7 +2,7 @@ import { resolveRoute } from "./routes";
 import { go } from "./locale-path";
 
 export type Monitor = {
-  id: string; name: string; type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping"; target: string; method: string; requestBody?: string | null;
+  id: string; name: string; type: "http" | "tcp" | "dns" | "heartbeat" | "postgres" | "mysql" | "redis" | "websocket" | "domain" | "certificate" | "ping" | "browser"; target: string; method: string; requestBody?: string | null;
   domainExpiryWarnDays?: number;
   domainExpiry?: { state: "valid" | "expiring" | "expired" | "unknown"; expiresAt: string | null; checkedAt: string; cacheUntil: string; source: string | null; error: string | null } | null;
   expectedStatus: number; intervalSec: number; timeoutMs: number; failureThreshold: number; recoveryThreshold?: number; consecutiveSuccesses?: number;
@@ -24,7 +24,15 @@ export type Monitor = {
   minRegionsFailing?: number;
   /** a workspace escalation policy used instead of the project's escalation levels; null = the project's */
   escalationPolicyId?: string | null;
+  /** browser: the declarative journey; secrets are write-only (every name comes back as ••••••••) */
+  browser?: BrowserJourney | null;
+  browserSecrets?: Record<string, string>;
+  /** browser: since when its checks have not been running (runtime errors or capacity); null while they run */
+  uncheckedSince?: string | null;
 };
+export type BrowserRuntime = { enabled: boolean; mode: "runner" | "in-process"; available: boolean | null; checkedAt: string | null; lastError: string | null; lastErrorAt: string | null };
+export type BrowserJourney = { steps: Record<string, unknown>[]; timeoutMs: number; screenshot: "never" | "on_failure" };
+export type BrowserRun = { id: string; createdAt: string; ok: boolean; failedStep: number | null; error: string | null; durationMs: number; steps: { action: string; ms: number; ok: boolean }[]; blockedRequests: number; peakRssMb: number | null; cpuMs: number | null; hasScreenshot: boolean; kind: "run" | "deferred" | "error"; usedSecrets: boolean };
 export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null; endsAt: string | null };
 export type HookInbox = { id: string; name: string; created_at: string };
 export type HookEvent = { id: string; method: string; content_type: string | null; headers: Record<string,string>; body: string; created_at: string; response_status?: number | null };
@@ -276,6 +284,8 @@ export const api = {
   hookResponse: (id: string) => req<{ response: HookResponse | null }>(`/hooks/inboxes/${id}/response`),
   setHookResponse: (id: string, response: HookResponse) => req<{ response: HookResponse }>(`/hooks/inboxes/${id}/response`, { method: "PUT", body: JSON.stringify(response) }),
   resetHookResponse: (id: string) => req<void>(`/hooks/inboxes/${id}/response`, { method: "DELETE" }),
+  browserRuntime: () => req<BrowserRuntime>("/monitors/browser-runtime"),
+  browserRuns: (id: string) => req<{ runs: BrowserRun[] }>(`/monitors/${id}/browser-runs`),
   timeCoverage: (id: string, days: 7 | 30) => req<TimeCoverage>(`/monitors/${id}/time-coverage?days=${days}`),
   monitors: () => req<Monitor[]>("/monitors"),
   monitor: (id: string) => req<Monitor & { results: CheckResult[]; regionStats: RegionStat[] }>(`/monitors/${id}`),

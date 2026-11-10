@@ -1,4 +1,5 @@
 import TimeCoverage from "./TimeCoverage";
+import { BrowserRuns } from "./BrowserJourney";
 import { adoptProject, backToAll, navigate } from "../lib/nav";
 import { monitorState } from "../lib/domain-expiry";
 import { t } from "../lib/i18n";
@@ -89,6 +90,7 @@ export default function MonitorDetail({ id }: { id: string }) {
 
       {err && <p className="err">{err}</p>}
       <TimeCoverage id={id} />
+      {m.type === "browser" && <BrowserRuns monitorId={id} uncheckedSince={m.uncheckedSince} />}
       {editing && <MonitorForm monitor={m} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
 
       <div className="kp">

@@ -109,6 +109,9 @@ export interface Monitor {
   uncheckedNotifiedAt?: Date | null;
   /** browser: bumped whenever the secrets change (screenshots of runs started on an older version are dropped) */
   browserSecretsVersion?: number;
+  /** browser: start of the current capacity-deferral streak; null while checks run */
+  deferredSince?: Date | null;
+  lastDeferredRunAt?: Date | null;
   dnsRecordType?: "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS";
   dnsExpectedValue?: string | null;
   dnsMatchMode?: "exact" | "contains";
@@ -706,6 +709,13 @@ export interface Repo {
   recentBrowserRunKinds?(monitorId: string, limit: number): Promise<{ kind: BrowserRun["kind"]; createdAt: Date }[]>;
   /** Unchecked browser monitors not yet covered by a digest, grouped by workspace. */
   pendingUncheckedDigests?(): Promise<UncheckedDigest[]>;
+  /**
+   * A capacity deferral of a browser monitor: starts (or continues) its deferral streak and stores a 'deferred' run at
+   * most once per interval. Returns when the streak started.
+   */
+  noteBrowserDeferral?(monitorId: string, intervalSec: number, reason: string): Promise<{ deferredSince: Date }>;
+  /** The check happened (ran, or failed in the runtime): the deferral streak is over. */
+  clearBrowserDeferral?(monitorId: string): Promise<void>;
   /** Record that a digest covered these monitors' current unchecked streak. */
   markUncheckedNotified?(monitorIds: string[]): Promise<void>;
   /** Drop the screenshots of the monitor's runs that used secrets (its secrets changed). */

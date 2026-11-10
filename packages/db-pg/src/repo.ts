@@ -28,6 +28,8 @@ import { oncallRepo } from "./oncall-repo";
 /** Browser-check runs kept per monitor, screenshots kept among them, and the age after which runs are purged. */
 export const BROWSER_RUNS_KEPT = 50;
 export const BROWSER_SCREENSHOTS_KEPT = 5;
+/** Runs that did not happen (deferred once per interval, runtime errors) kept per monitor, apart from real runs. */
+export const BROWSER_NOT_RUN_KEPT = 20;
 export const BROWSER_RUN_RETENTION_DAYS = 14;
 export const BROWSER_SCREENSHOT_MAX_BYTES = 200 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -736,8 +738,12 @@ export function createRepo(db: Db): Repo {
           screenshot,
         });
         // bounded per monitor: the newest runs only, and screenshots only on the newest few of those
-        await tx.execute(sql`delete from browser_check_run where monitor_id = ${r.monitorId} and id not in (
-          select id from browser_check_run where monitor_id = ${r.monitorId} order by created_at desc, id desc limit ${BROWSER_RUNS_KEPT})`);
+        // real runs and runs that did not happen are kept separately: deferrals and runtime errors never push real
+        // runs (and their screenshots) out of the history
+        await tx.execute(sql`delete from browser_check_run where monitor_id = ${r.monitorId} and kind = 'run' and id not in (
+          select id from browser_check_run where monitor_id = ${r.monitorId} and kind = 'run' order by created_at desc, id desc limit ${BROWSER_RUNS_KEPT})`);
+        await tx.execute(sql`delete from browser_check_run where monitor_id = ${r.monitorId} and kind <> 'run' and id not in (
+          select id from browser_check_run where monitor_id = ${r.monitorId} and kind <> 'run' order by created_at desc, id desc limit ${BROWSER_NOT_RUN_KEPT})`);
         await tx.execute(sql`update browser_check_run set screenshot = null where monitor_id = ${r.monitorId} and screenshot is not null and id not in (
           select id from browser_check_run where monitor_id = ${r.monitorId} and screenshot is not null order by created_at desc, id desc limit ${BROWSER_SCREENSHOTS_KEPT})`);
       });
@@ -764,6 +770,27 @@ export function createRepo(db: Db): Repo {
       const byOrg = new Map<string, { id: string; name: string; projectId: string | null; reason: string | null }[]>();
       for (const r of found) (byOrg.get(r.organization_id) ?? byOrg.set(r.organization_id, []).get(r.organization_id)!).push({ id: r.id, name: r.name, projectId: r.project_id, reason: r.reason });
       return [...byOrg].map(([organizationId, monitors]) => ({ organizationId, monitors }));
+    },
+    async noteBrowserDeferral(monitorId, intervalSec, reason) {
+      return db.transaction(async (tx) => {
+        const [m] = await tx.update(schema.monitor)
+          .set({ deferredSince: sql`coalesce(${schema.monitor.deferredSince}, now())` })
+          .where(eq(schema.monitor.id, monitorId))
+          .returning({ deferredSince: schema.monitor.deferredSince, lastDeferredRunAt: schema.monitor.lastDeferredRunAt });
+        if (!m?.deferredSince) return { deferredSince: new Date() };
+        // one visible 'deferred' run per interval, however often the check is retried
+        const due = !m.lastDeferredRunAt || Date.now() - m.lastDeferredRunAt.getTime() >= intervalSec * 1000;
+        if (due) {
+          await tx.insert(schema.browserCheckRun).values({ monitorId, ok: false, kind: "deferred", error: reason.slice(0, 200), durationMs: 0, steps: [] });
+          await tx.update(schema.monitor).set({ lastDeferredRunAt: new Date() }).where(eq(schema.monitor.id, monitorId));
+          await tx.execute(sql`delete from browser_check_run where monitor_id = ${monitorId} and kind <> 'run' and id not in (
+            select id from browser_check_run where monitor_id = ${monitorId} and kind <> 'run' order by created_at desc, id desc limit ${BROWSER_NOT_RUN_KEPT})`);
+        }
+        return { deferredSince: m.deferredSince };
+      });
+    },
+    async clearBrowserDeferral(monitorId) {
+      await db.update(schema.monitor).set({ deferredSince: null, lastDeferredRunAt: null }).where(and(eq(schema.monitor.id, monitorId), isNotNull(schema.monitor.deferredSince)));
     },
     async markUncheckedNotified(monitorIds) {
       if (!monitorIds.length) return;

@@ -1,9 +1,12 @@
 /**
  * Browser checks that did not happen are never silently blind, and fairness never starves a monitor:
- * - runtime errors and deferrals are recorded as visible runs; errors mark a monitor unchecked after 3 in a row,
- *   deferrals only when they have lasted 3 intervals (a deferred check is retried within a minute);
- * - a workspace's browser monitors due together are checked one after another, never deferred by its own gate;
- * - owners and admins get one digest per workspace (at most one an hour) listing every unchecked monitor;
+ * - runtime errors are recorded as visible runs and mark a monitor unchecked after 3 in a row;
+ * - capacity deferrals are a streak on the monitor (no run row per retry, one 'deferred' row per interval at most, no
+ *   credits) and mark it unchecked once the streak has lasted 3 intervals, however long the interval;
+ * - a workspace's browser monitors due together are checked one after another, never deferred by its own gate, within
+ *   a time budget per queue task (the rest deferred), and one workspace never holds two queue slots;
+ * - owners and admins get one digest per workspace (at most one an hour) listing every unchecked monitor, and the alert
+ *   log gets one row per project naming only that project's monitors;
  * - a real run clears the state in the database, whatever the in-memory snapshot says.
  */
 import type { AlertDelivery, Monitor, NewBrowserRun, NewCheck, Repo, UncheckedDigest } from "@montral/repo";
@@ -14,6 +17,10 @@ const next: Next[] = [];
 /** browser checks in flight per workspace, as the real per-workspace gate would see them */
 const inFlight = new Map<string, number>();
 let gateModel = false;
+/** fake clock for the queue-task budget: each slow check "takes" slowMs of it; release lets a check finish */
+const clock = { t: 0 };
+let slowMs = 0;
+let hold: Promise<void> | null = null;
 vi.mock("./browser-check", async (importOriginal) => {
   const real = await importOriginal<typeof import("./browser-check")>();
   const runOutcome = () => ({ ok: true, latencyMs: 10, browser: { ok: true, kind: "run", usedSecrets: true, steps: [{ action: "goto", ms: 10, ok: true }], failedStep: null, error: null, statusCode: 200, durationMs: 10, blockedRequests: 0, popupsClosed: 0 } });
@@ -21,6 +28,8 @@ vi.mock("./browser-check", async (importOriginal) => {
   return {
     ...real,
     browserCheck: async (m: { organizationId: string }) => {
+      if (hold) await hold;
+      if (slowMs) { clock.t += slowMs; return runOutcome(); }
       if (gateModel) {
         // one per workspace, no waiting: a second concurrent check of the same workspace would be deferred
         if ((inFlight.get(m.organizationId) ?? 0) >= 1) return notRun({ kind: "deferred", error: real.BROWSER_BUSY });
@@ -35,7 +44,7 @@ vi.mock("./browser-check", async (importOriginal) => {
   };
 });
 
-const { checkMany, checkOne, sendUncheckedDigests, shouldMarkUnchecked, DEFERRED_RETRY_MS } = await import("./scheduler");
+const { checkMany, checkOne, deferBrowserCheck, deferredTooLong, sendUncheckedDigests, shouldMarkUnchecked, BROWSER_TASK_BUDGET_MS, DEFERRED_RETRY_MS } = await import("./scheduler");
 const { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, RUNNER_UNREACHABLE } = await import("./browser-check");
 const { configureEmail, setMailTransport } = await import("./email");
 
@@ -46,7 +55,16 @@ function fake() {
   const deliveries: Partial<AlertDelivery>[] = [];
   const marked: string[] = [];
   const cleared: string[] = [];
+  const credits: { workspace: string; n: number }[] = [];
+  const deferral = new Map<string, Date>();
+  const deferredNotes: string[] = [];
   const repo = {
+    noteBrowserDeferral: async (id: string) => {
+      deferredNotes.push(id);
+      if (!deferral.has(id)) deferral.set(id, new Date());
+      return { deferredSince: deferral.get(id)! };
+    },
+    clearBrowserDeferral: async (id: string) => void deferral.delete(id),
     recordBrowserRun: async (r: NewBrowserRun) => void runs.unshift({ ...r, createdAt: new Date() }),
     recentBrowserRunKinds: async (id: string, limit: number) => runs.filter((r) => r.monitorId === id).slice(0, limit).map((r) => ({ kind: r.kind ?? "run", createdAt: r.createdAt })),
     markUnchecked: async (id: string) => { marked.push(id); return true; },
@@ -60,12 +78,13 @@ function fake() {
     openIncidents: async () => [],
     logDeliveries: async (rows: Partial<AlertDelivery>[]) => void deliveries.push(...rows),
   } as unknown as Repo;
-  return { repo, runs, checks, states, deliveries, marked, cleared };
+  const entitlements = { spendCredits: async (workspace: string, n: number) => (credits.push({ workspace, n }), n) } as never;
+  return { repo, runs, checks, states, deliveries, marked, cleared, credits, deferral, deferredNotes, entitlements };
 }
 
 const browserMonitor = (over: Partial<Monitor> = {}) => ({ id: "b1", organizationId: "o", projectId: "p", name: "Journey", type: "browser", target: "https://example.com/", regions: ["auto"], status: "up", consecutiveFailures: 0, consecutiveSlow: 0, failureThreshold: 3, slowThresholdMs: 5000, slowAlertAfter: 0, channelIds: [], paused: false, intervalSec: 300, uncheckedSince: null, browserSecretsVersion: 4, browser: { steps: [{ action: "goto", url: "https://example.com/" }], timeoutMs: 30_000, screenshot: "never" }, ...over }) as unknown as Monitor;
 
-afterEach(() => { next.length = 0; gateModel = false; setMailTransport(undefined); });
+afterEach(() => { next.length = 0; gateModel = false; slowMs = 0; hold = null; clock.t = 0; setMailTransport(undefined); });
 
 describe("when a browser monitor counts as unchecked", () => {
   const at = (minAgo: number, kind: string) => ({ kind, createdAt: new Date(Date.now() - minAgo * 60_000) });
@@ -74,13 +93,16 @@ describe("when a browser monitor counts as unchecked", () => {
     expect(shouldMarkUnchecked([at(0, "error"), at(5, "error"), at(10, "run"), at(15, "error")], 300)).toBe(false);
     expect(shouldMarkUnchecked([at(0, "error"), at(1, "deferred"), at(5, "error"), at(6, "error")], 300)).toBe(true);
   });
-  it("capacity deferrals count only once they have lasted 3 intervals", () => {
-    // a busy moment: many deferrals, retried within minutes
+  it("capacity deferrals are judged by how long the streak on the monitor has lasted, not by stored rows", () => {
+    // rows never decide it: a busy moment's deferred rows mark nothing
     expect(shouldMarkUnchecked(Array.from({ length: 8 }, (_, i) => at(i, "deferred")), 300)).toBe(false);
-    // deferred for more than 3 intervals (15 minutes at 5-minute intervals)
-    expect(shouldMarkUnchecked([at(0, "deferred"), at(8, "deferred"), at(16, "deferred")], 300)).toBe(true);
-    expect(shouldMarkUnchecked([at(0, "deferred"), at(16, "run")], 300)).toBe(false);
     expect(shouldMarkUnchecked([], 300)).toBe(false);
+    const now = Date.now();
+    expect(deferredTooLong(new Date(now - 14 * 60_000), 300, now)).toBe(false);
+    expect(deferredTooLong(new Date(now - 15 * 60_000), 300, now)).toBe(true);
+    // a 30-minute interval: 89 minutes is not yet 3 intervals, 90 is
+    expect(deferredTooLong(new Date(now - 89 * 60_000), 1800, now)).toBe(false);
+    expect(deferredTooLong(new Date(now - 90 * 60_000), 1800, now)).toBe(true);
   });
 });
 
@@ -96,15 +118,49 @@ describe("browser checks that did not happen", () => {
     expect(deliveries).toEqual([]); // the digest goes out from housekeeping, aggregated per workspace
   });
 
-  it("a deferred check is retried within a minute or two, and a few deferrals never mark the monitor", async () => {
-    const { repo, states, marked } = fake();
+  it("a deferred check is retried within a minute or two, stores no run row itself, and a few deferrals never mark the monitor", async () => {
+    const { repo, runs, states, marked, deferredNotes } = fake();
     next.push({ kind: "deferred", error: BROWSER_BUSY }, { kind: "deferred", error: BROWSER_BUSY }, { kind: "deferred", error: BROWSER_BUSY });
     const before = Date.now();
-    for (let i = 0; i < 3; i++) await checkOne(repo, browserMonitor());
+    for (let i = 0; i < 3; i++) expect(await checkOne(repo, browserMonitor())).toBe("deferred");
     const retry = states[0].state.nextCheckAt as Date;
     expect(retry.getTime()).toBeGreaterThanOrEqual(before + DEFERRED_RETRY_MS);
     expect(retry.getTime()).toBeLessThanOrEqual(Date.now() + 2 * DEFERRED_RETRY_MS);
+    expect(runs).toEqual([]); // the repository stores at most one 'deferred' row per interval (browser-check.e2e)
+    expect(deferredNotes).toEqual(["b1", "b1", "b1"]);
     expect(marked).toEqual([]);
+  });
+
+  it("a 30-minute monitor deferred for 3 intervals is marked unchecked, however many retries were kept", async () => {
+    const { repo, marked, deferral } = fake();
+    const m = browserMonitor({ intervalSec: 1800 });
+    const start = Date.now();
+    deferral.set("b1", new Date(start));
+    // retries every 45-105 s for 89 minutes: never marked
+    for (let t = 0; t < 89 * 60_000; t += 75_000) await deferBrowserCheck(repo, m, BROWSER_BUSY, start + t);
+    expect(marked).toEqual([]);
+    await deferBrowserCheck(repo, m, BROWSER_BUSY, start + 90 * 60_000);
+    expect(marked).toEqual(["b1"]);
+  });
+
+  it("a real run or a runtime error ends the deferral streak", async () => {
+    const { repo, deferral } = fake();
+    deferral.set("b1", new Date(Date.now() - 60_000));
+    next.push({ kind: "run", error: "" });
+    await checkOne(repo, browserMonitor());
+    expect(deferral.has("b1")).toBe(false);
+    deferral.set("b1", new Date(Date.now() - 60_000));
+    next.push({ kind: "error", error: RUNNER_UNREACHABLE });
+    await checkOne(repo, browserMonitor());
+    expect(deferral.has("b1")).toBe(false);
+  });
+
+  it("charges credits only for journeys that ran, never for deferrals or runtime errors", async () => {
+    const { repo, credits, entitlements } = fake();
+    next.push({ kind: "deferred", error: BROWSER_BUSY }, { kind: "error", error: RUNNER_UNREACHABLE }, { kind: "run", error: "" });
+    for (let i = 0; i < 3; i++) await checkMany(repo, [browserMonitor()], entitlements);
+    expect(credits).toHaveLength(1);
+    expect(credits[0].workspace).toBe("o");
   });
 
   it("a real run records its secrets version and clears the state in the database even when the snapshot says it is not unchecked", async () => {
@@ -127,6 +183,50 @@ describe("fairness never starves a workspace's monitors", () => {
       const mine = runs.filter((r) => r.monitorId === id);
       expect(mine.map((r) => r.kind), id).toEqual(["run", "run", "run"]);
     }
+  });
+});
+
+describe("a queue task's browser time is bounded", () => {
+  it("4 browser monitors of 90 s each due together: the task returns within its budget and defers the rest", async () => {
+    slowMs = 90_000;
+    const { repo, runs, states, deferredNotes, credits, entitlements } = fake();
+    // a 45-second journey: worst case 90 s, so a second one can never fit after the first in 120 s
+    const monitors = ["a", "b", "c", "d"].map((id) => browserMonitor({ id, name: id, browser: { steps: [{ action: "goto", url: "https://example.com/" }], timeoutMs: 45_000, screenshot: "never" } as never }));
+    await checkMany(repo, monitors, entitlements, { now: () => clock.t });
+    expect(clock.t).toBeLessThan(BROWSER_TASK_BUDGET_MS);
+    expect(runs.map((r) => r.monitorId)).toEqual(["a"]);
+    expect(deferredNotes).toEqual(["b", "c", "d"]);
+    // deferred, not failed: retried within a minute or two
+    for (const id of ["b", "c", "d"]) expect(states.find((s) => s.id === id)?.state.nextCheckAt).toBeInstanceOf(Date);
+    expect(credits).toHaveLength(1);
+  });
+
+  it("checks that fit run one after another within the budget", async () => {
+    slowMs = 10_000;
+    const { repo, runs, deferredNotes, entitlements } = fake();
+    const monitors = ["a", "b", "c"].map((id) => browserMonitor({ id, name: id }));
+    await checkMany(repo, monitors, entitlements, { now: () => clock.t });
+    expect(runs.map((r) => r.monitorId).sort()).toEqual(["a", "b", "c"]);
+    expect(deferredNotes).toEqual([]);
+  });
+
+  it("one workspace never holds two queue slots: a second task while one runs defers its monitors", async () => {
+    let release!: () => void;
+    hold = new Promise((r) => (release = r));
+    const { repo, runs, deferredNotes, entitlements } = fake();
+    next.push({ kind: "run", error: "" }, { kind: "run", error: "" });
+    const first = checkMany(repo, [browserMonitor({ id: "a" })], entitlements);
+    await new Promise((r) => setTimeout(r, 10));
+    await checkMany(repo, [browserMonitor({ id: "b" })], entitlements);
+    expect(deferredNotes).toEqual(["b"]);
+    // another workspace is not held up
+    const third = checkMany(repo, [browserMonitor({ id: "x", organizationId: "other" })], entitlements);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(deferredNotes).toEqual(["b"]);
+    hold = null;
+    release();
+    await Promise.all([first, third]);
+    expect(runs.map((r) => r.monitorId).sort()).toEqual(["a", "x"]);
   });
 });
 
@@ -160,6 +260,33 @@ describe("digest to owners and admins", () => {
     await sendUncheckedDigests(repo);
     expect(sent).toHaveLength(2);
     expect(notified).toHaveLength(10);
+  });
+
+  it("logs one alert-log row per project, naming only that project's monitors", async () => {
+    configureEmail({ EMAIL_FROM: "alerts@example.com" } as never);
+    setMailTransport(async () => {});
+    const deliveries: Partial<AlertDelivery>[] = [];
+    const d: UncheckedDigest = { organizationId: "o", monitors: [
+      { id: "m1", name: "Checkout journey", projectId: "p1", reason: RUNNER_UNREACHABLE },
+      { id: "m2", name: "Secret launch page", projectId: "p2", reason: RUNNER_UNREACHABLE },
+      { id: "m3", name: "Login journey", projectId: "p1", reason: RUNNER_UNREACHABLE },
+    ] };
+    const repo = {
+      pendingUncheckedDigests: async () => [d],
+      markUncheckedNotified: async () => {},
+      withinLimit: async () => true,
+      managerEmails: async () => ["owner@example.com"],
+      logDeliveries: async (rows: Partial<AlertDelivery>[]) => void deliveries.push(...rows),
+    } as unknown as Repo;
+    await sendUncheckedDigests(repo);
+    expect(deliveries.map((r) => r.projectId).sort()).toEqual(["p1", "p2"]);
+    expect(deliveries.some((r) => r.projectId == null)).toBe(false);
+    const p1 = deliveries.find((r) => r.projectId === "p1")!;
+    const p2 = deliveries.find((r) => r.projectId === "p2")!;
+    expect(p1.statusMessage).toContain("Checkout journey");
+    expect(p1.statusMessage).toContain("Login journey");
+    expect(`${p1.statusMessage} ${p1.monitorName}`).not.toContain("Secret launch page");
+    expect(`${p2.statusMessage} ${p2.monitorName}`).not.toMatch(/Checkout|Login/);
   });
 
   it("respects the workspace's e-mail allowance", async () => {

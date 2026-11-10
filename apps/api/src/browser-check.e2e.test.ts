@@ -270,6 +270,24 @@ describe.skipIf(!url || !haveChromium)("browser monitors through the API (Postgr
       expect((await call(owner.cookie, "POST", `${path}/check`, {})).status).toBe(200);
       expect((await call(member.cookie, "GET", path)).body.uncheckedSince).toBeNull();
 
+      // capacity deferrals: a streak on the monitor, retried every minute or so, but at most one 'deferred' run per
+      // interval, and runs that did not happen never evict real runs from the history
+      const kinds = async () => Object.fromEntries((await db.query<{ kind: string; n: string }>("select kind, count(*)::text as n from browser_check_run where monitor_id = $1 group by kind", [id])).map((r) => [r.kind, Number(r.n)]));
+      const before = await kinds();
+      const first = await db.repo.noteBrowserDeferral!(id, BROWSER_MIN_INTERVAL_SEC, "Browser checks are busy");
+      for (let i = 0; i < 5; i++) expect((await db.repo.noteBrowserDeferral!(id, BROWSER_MIN_INTERVAL_SEC, "Browser checks are busy")).deferredSince.getTime()).toBe(first.deferredSince.getTime());
+      expect((await kinds()).deferred ?? 0).toBe((before.deferred ?? 0) + 1);
+      // an interval later the streak goes on and one more row is stored
+      await db.query("update monitor set last_deferred_run_at = now() - interval '301 seconds' where id = $1", [id]);
+      expect((await db.repo.noteBrowserDeferral!(id, BROWSER_MIN_INTERVAL_SEC, "Browser checks are busy")).deferredSince.getTime()).toBe(first.deferredSince.getTime());
+      expect((await kinds()).deferred ?? 0).toBe((before.deferred ?? 0) + 2);
+      await db.repo.clearBrowserDeferral!(id);
+      expect(await db.query("select deferred_since, last_deferred_run_at from monitor where id = $1", [id])).toEqual([{ deferred_since: null, last_deferred_run_at: null }]);
+      for (let i = 0; i < 30; i++) await db.repo.recordBrowserRun!({ monitorId: id, ok: false, kind: "error", usedSecrets: false, failedStep: null, error: "Browser runner unreachable", durationMs: 0, steps: [], blockedRequests: 0, peakRssMb: null, cpuMs: null, screenshot: null });
+      const kept = await kinds();
+      expect(kept.run).toBe(before.run);
+      expect((kept.error ?? 0) + (kept.deferred ?? 0)).toBe(20);
+
       // the ciphertext is bound to this monitor: copied onto another monitor it is "not set" there
       const twin = await call(owner.cookie, "POST", "/monitors", { name: "Twin", type: "browser", browser: journey(start), browserSecrets: { password: "twin-value" } });
       expect(twin.status).toBe(201);

@@ -23,5 +23,7 @@ ALTER TABLE "monitor" ADD COLUMN "browser_secrets" jsonb DEFAULT '{}'::jsonb NOT
 ALTER TABLE "monitor" ADD COLUMN "unchecked_since" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "monitor" ADD COLUMN "unchecked_notified_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "monitor" ADD COLUMN "browser_secrets_version" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "monitor" ADD COLUMN "deferred_since" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "monitor" ADD COLUMN "last_deferred_run_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "browser_check_run" ADD CONSTRAINT "browser_check_run_monitor_id_monitor_id_fk" FOREIGN KEY ("monitor_id") REFERENCES "public"."monitor"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "browser_check_run_monitor_time_idx" ON "browser_check_run" USING btree ("monitor_id","created_at");

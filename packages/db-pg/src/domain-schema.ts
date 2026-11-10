@@ -127,6 +127,10 @@ export const monitor = pgTable(
     uncheckedNotifiedAt: timestamp("unchecked_notified_at", { withTimezone: true }),
     /** browser: bumped whenever the secrets change; a run started on an older version keeps no screenshot */
     browserSecretsVersion: integer("browser_secrets_version").notNull().default(0),
+    /** browser: start of the current capacity-deferral streak (null while checks run); judged against the interval */
+    deferredSince: timestamp("deferred_since", { withTimezone: true }),
+    /** browser: when the current streak last stored a 'deferred' run (at most one per interval, so retries never fill the history) */
+    lastDeferredRunAt: timestamp("last_deferred_run_at", { withTimezone: true }),
     dnsRecordType: text("dns_record_type").$type<"A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS">().notNull().default("A"),
     dnsExpectedValue: text("dns_expected_value"),
     dnsMatchMode: text("dns_match_mode").$type<"exact" | "contains">().notNull().default("exact"),

@@ -7,6 +7,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { browserCheckWorstCaseMs, browserProbeDue, browserProbeWorstCaseMs, resetBrowserAvailability } from "./browser-check";
 import { BROWSER_BUSY, BROWSER_DISABLED, BROWSER_TIME_LIMIT, BROWSER_WORKERS_UNSUPPORTED, browserRuntimeHealth, knownReportError, REPORT_MALFORMED, browserAvailable, browserCheck, browserCreationProblem, browserSettings, browserSlots, configureBrowserChecks, descendants, runBrowserWorker, workerEnv, workspaceSlots } from "./browser-check";
 import { encryptSecret } from "./browser-secrets";
 import { runCheck } from "./checker";
@@ -44,6 +45,26 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 afterEach(() => { configureBrowserChecks({}); vi.unstubAllGlobals(); });
+
+describe("worst-case time of one check (queue-task admission)", () => {
+  it("counts the slot wait, a due probe, start-up, the journey, shutdown and the runner's grace", async () => {
+    configureBrowserChecks({ BROWSER_CHECKS: "enabled", BETTER_AUTH_SECRET: AUTH, BROWSER_RUNNER_URL: "http://127.0.0.1:9", BROWSER_RUNNER_TOKEN: "worst-case-runner-token-0123456789abcdef" });
+    resetBrowserAvailability();
+    expect(browserProbeDue()).toBe(true);
+    expect(browserProbeWorstCaseMs()).toBe(45_000);
+    expect(browserCheckWorstCaseMs(60_000)).toBe(15_000 + 45_000 + 20_000 + 60_000 + 10_000 + 15_000);
+    // once the probe has answered (here: unreachable, cached for a minute) the longest journey fits 120 s exactly
+    await browserAvailable();
+    expect(browserProbeDue()).toBe(false);
+    expect(browserCheckWorstCaseMs(60_000)).toBe(120_000);
+    // in-process: no runner grace
+    configureBrowserChecks({ BROWSER_CHECKS: "enabled", BETTER_AUTH_SECRET: AUTH });
+    resetBrowserAvailability();
+    expect(browserProbeWorstCaseMs()).toBe(30_000);
+    expect(browserCheckWorstCaseMs(30_000)).toBe(15_000 + 30_000 + 20_000 + 30_000 + 10_000);
+    resetBrowserAvailability();
+  });
+});
 
 const journey = (mode: string) => ({ steps: [{ action: "goto", url: "https://example.com/" }, { action: "click", selector: mode }], timeoutMs: 5000, screenshot: "never" });
 

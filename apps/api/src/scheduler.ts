@@ -5,7 +5,7 @@ import { sendMonthlyReports } from "./reports";
 import { measure, type Measured } from "./probes";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
-import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER } from "./browser-check";
+import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, browserAvailable, browserCheckWorstCaseMs, browserProbeDue } from "./browser-check";
 import { sendEmail } from "./email";
 import { AUDIT_RETENTION_DEFAULT_DAYS } from "./audit";
 
@@ -184,15 +184,18 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
 
 /** Wall time one queue task may spend on a workspace's browser checks (well under the 5-minute stall watchdog). */
 export const BROWSER_TASK_BUDGET_MS = 120_000;
-/** What one browser check can take at most: waiting for a server slot, start-up, its journey, shutdown. */
-export const browserCheckCeilingMs = (m: Pick<Monitor, "browser">) => 15_000 + 20_000 + ((m.browser as { timeoutMs?: number } | null)?.timeoutMs ?? 30_000) + 10_000;
+/**
+ * What one browser check can take at most (browser-check.ts): slot wait, an availability probe if one is due, start-up,
+ * its journey, shutdown and the runner call's grace. The longest journey (60 s) through the runner comes to 120 s.
+ */
+export const browserCheckCeilingMs = (m: Pick<Monitor, "browser">) => browserCheckWorstCaseMs((m.browser as { timeoutMs?: number } | null)?.timeoutMs ?? 30_000);
 /** Workspaces whose browser checks a queue task of this process is running: at most one task (queue slot) each. */
 const browserTasksRunning = new Set<string>();
 
 export type CheckManyOptions = { browserBudgetMs?: number; now?: () => number };
 
 export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements, opts: CheckManyOptions = {}) {
-  // Browser monitors are charged when their journey actually runs (a deferred check costs nothing), the rest up front.
+  // Browser monitors are charged one by one just before their journey is launched (browserTask), the rest up front.
   const browser = due.filter((m) => m.type === "browser");
   const others = await withinCredits(due.filter((m) => m.type !== "browser"), entitlements);
   if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
@@ -232,22 +235,49 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
   browserTasksRunning.add(workspace);
   const started = now();
   try {
+    // a due availability probe runs first, on this task's clock, so no check has to fit one into its own worst case
+    if (browserProbeDue()) await browserAvailable().catch(() => false);
     for (const m of list) {
       if (now() - started + browserCheckCeilingMs(m) > budget) {
         await step("browser deferral", () => deferBrowserCheck(repo, m, BROWSER_BUSY));
         continue;
       }
+      // credits are taken before the journey is launched; without them it does not run (nothing recorded, like any other
+      // monitor out of credits: the lease keeps its next due time)
+      const charged = await reserveCredits(workspace, m, entitlements);
+      if (charged === null) continue;
       let result: CheckResultKind = "done";
       try { result = await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
-      // credits for journeys that ran; a deferral or a runtime failure costs nothing
-      if (result !== "deferred" && result !== "error") {
-        const cost = creditCost(m);
-        if (cost > 0) await entitlements.spendCredits(workspace, cost).catch(() => (console.error("credits unavailable"), cost));
-      }
+      // a check that did not happen (deferred for capacity, or the runtime could not run it) gets its credits back
+      if ((result === "deferred" || result === "error") && charged > 0) await refundCredits(workspace, charged, entitlements);
     }
   } finally {
     browserTasksRunning.delete(workspace);
   }
+}
+
+/**
+ * Take a browser check's credits before it runs. null: the workspace has none left (a partial grant is given back), so
+ * the journey must not run. Otherwise the credits actually taken (0 when the ledger failed: monitoring goes on, as for
+ * every other check, and nothing is given back later).
+ */
+export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements): Promise<number | null> {
+  const cost = creditCost(m);
+  if (cost === 0) return 0;
+  let granted: number;
+  try { granted = await entitlements.spendCredits(workspace, cost); } catch { console.error("credits unavailable"); return 0; }
+  if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
+  if (granted < cost) {
+    if (granted > 0) await refundCredits(workspace, granted, entitlements);
+    console.warn("credits exhausted: skipped 1 browser check");
+    return null;
+  }
+  return granted;
+}
+
+export async function refundCredits(workspace: string, credits: number, entitlements: Entitlements) {
+  if (!entitlements.refundCredits) return;
+  await entitlements.refundCredits(workspace, credits).catch(() => console.error("credit refund failed"));
 }
 
 export type CheckResultKind = "done" | "deferred" | "error" | "skipped";

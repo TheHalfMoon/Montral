@@ -594,7 +594,10 @@ export function createRepo(db: Db): Repo {
         const resetExpiry = (effective.target !== undefined && effective.target !== current.target) || (effective.domainExpiryWarnDays !== undefined && effective.domainExpiryWarnDays !== current.domainExpiryWarnDays);
         // new secrets invalidate screenshots of runs still in flight with the old ones (see recordBrowserRun)
         const secretsBump = effective.browserSecrets !== undefined ? { browserSecretsVersion: sql`${schema.monitor.browserSecretsVersion} + 1` } : {};
-        const [row] = await tx.update(schema.monitor).set({ ...effective, ...secretsBump, ...(resetExpiry ? { domainExpiry: null } : {}), ...(changedPause ? { consecutiveSuccesses: 0 } : {}), ...(changed ? { coverageRevision: current.coverageRevision + 1 } : {}) })
+        // paused, resumed, or what is checked changed (interval, journey, target, ...): an old deferral streak or unchecked
+        // state says nothing about the monitor as it is now, so a long pause never marks it unchecked at its first deferral
+        const resetBrowser = changed ? { deferredSince: null, lastDeferredRunAt: null, uncheckedSince: null, uncheckedNotifiedAt: null } : {};
+        const [row] = await tx.update(schema.monitor).set({ ...effective, ...secretsBump, ...resetBrowser, ...(resetExpiry ? { domainExpiry: null } : {}), ...(changedPause ? { consecutiveSuccesses: 0 } : {}), ...(changed ? { coverageRevision: current.coverageRevision + 1 } : {}) })
           .where(eq(schema.monitor.id, id)).returning();
         if (changed) {
           const at = await coverageTime(tx, id);

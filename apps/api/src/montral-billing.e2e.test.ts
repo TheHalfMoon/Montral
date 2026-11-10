@@ -96,6 +96,13 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(parallel.reduce((total, n) => total + n, 0)).toBe(4500);
     expect(await limits.creditBalance(org)).toMatchObject({ limit: 4500, used: 4500 });
     expect(await limits.spendCredits(org, 100)).toBe(0);
+    // a browser check that did not happen gives its credit back: it can be spent again, and a refund never goes below 0
+    await limits.refundCredits!(org, 1);
+    expect(await limits.creditBalance(org)).toMatchObject({ used: 4499 });
+    expect(await limits.spendCredits(org, 5)).toBe(1);
+    await limits.refundCredits!(org, 1_000_000);
+    expect(await limits.creditBalance(org)).toMatchObject({ used: 0 });
+    expect(await limits.spendCredits(org, 4500)).toBe(4500);
     const emails = await Promise.all(Array.from({ length: 6 }, () => limits.spendEmails(org, 5)));
     expect(emails.reduce((total, n) => total + n, 0)).toBe(20);
     expect(await limits.emailBalance(org)).toMatchObject({ limit: 20, used: 20 });

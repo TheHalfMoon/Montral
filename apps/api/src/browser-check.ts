@@ -404,6 +404,19 @@ const AVAILABLE_TTL_MS = 10 * 60_000;
 const UNAVAILABLE_TTL_MS = 60_000;
 const RUNNER_GRACE_MS = 15_000;
 
+/** How long an availability probe can take at most (browserAvailable). */
+export const browserProbeWorstCaseMs = () => LAUNCH_ALLOWANCE_MS + SHUTDOWN_ALLOWANCE_MS + (settings.runnerUrl ? RUNNER_GRACE_MS : 0);
+/** Would the next check have to probe the runtime first (no fresh cached answer)? */
+export const browserProbeDue = (now = Date.now()) =>
+  settings.enabled && !settings.sandboxRefused && !(availability && now - availability.at < (availability.ok ? AVAILABLE_TTL_MS : UNAVAILABLE_TTL_MS));
+/**
+ * The longest one browser check can take, from asking for a slot to its answer: the slot wait, an availability probe
+ * when one is due, Chromium's start-up allowance, the journey's timeout, the shutdown allowance and, through the
+ * browser-runner, the grace the call is given beyond the runner's own hard timeout.
+ */
+export const browserCheckWorstCaseMs = (journeyTimeoutMs: number, now = Date.now()) =>
+  WAIT_MS + (browserProbeDue(now) ? browserProbeWorstCaseMs() : 0) + LAUNCH_ALLOWANCE_MS + journeyTimeoutMs + SHUTDOWN_ALLOWANCE_MS + (settings.runnerUrl ? RUNNER_GRACE_MS : 0);
+
 /** Fixed messages of runs that did not happen because the browser runtime failed (recorded as `error` runs). */
 export const RUNNER_UNREACHABLE = "Browser runner unreachable";
 export const RUNNER_REJECTED = "Browser runner refused the request (check BROWSER_RUNNER_TOKEN)";

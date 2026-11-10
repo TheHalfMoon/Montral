@@ -14,7 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
 import { BROWSER_MIN_INTERVAL_SEC, configureBrowserChecks, resetBrowserAvailability, setBrowserTestAllowance } from "./browser-check";
 import { MASK } from "./secrets";
-import { sendUncheckedDigests } from "./scheduler";
+import { deferBrowserCheck, sendUncheckedDigests } from "./scheduler";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
@@ -287,6 +287,43 @@ describe.skipIf(!url || !haveChromium)("browser monitors through the API (Postgr
       const kept = await kinds();
       expect(kept.run).toBe(before.run);
       expect((kept.error ?? 0) + (kept.deferred ?? 0)).toBe(20);
+
+      // scheduler bookkeeping never leaves the API; uncheckedSince (shown on the dashboard) does
+      const visible = (await call(owner.cookie, "GET", path)).body;
+      expect(visible).toHaveProperty("uncheckedSince");
+      for (const k of ["deferredSince", "lastDeferredRunAt", "uncheckedNotifiedAt", "browserSecretsVersion"]) expect(visible, k).not.toHaveProperty(k);
+      const listed = (await call(owner.cookie, "GET", "/monitors")).body;
+      const mine = (Array.isArray(listed) ? listed : listed.monitors).find((x: any) => x.id === id);
+      for (const k of ["deferredSince", "uncheckedNotifiedAt", "browserSecretsVersion"]) expect(mine, k).not.toHaveProperty(k);
+
+      // a pause, a resume or an edit of what is checked starts the browser state afresh
+      const streak = async () => (await db.query<{ d: Date | null; l: Date | null; u: Date | null; n: Date | null }>("select deferred_since as d, last_deferred_run_at as l, unchecked_since as u, unchecked_notified_at as n from monitor where id = $1", [id]))[0];
+      const stale = () => db.query("update monitor set deferred_since = now() - interval '2 days', last_deferred_run_at = now() - interval '2 days', unchecked_since = now() - interval '2 days', unchecked_notified_at = now() - interval '2 days' where id = $1", [id]);
+      await stale();
+      expect((await call(owner.cookie, "PATCH", path, { paused: true })).status).toBe(200);
+      expect(await streak()).toEqual({ d: null, l: null, u: null, n: null });
+      // a streak left from before a long pause (as if a deferral raced the pause) is dropped by the resume, so the first
+      // deferral after it does not mark the monitor unchecked at once
+      await stale();
+      expect((await call(owner.cookie, "PATCH", path, { paused: false })).status).toBe(200);
+      expect(await streak()).toEqual({ d: null, l: null, u: null, n: null });
+      const [resumed] = await db.repo.monitorsByIds([id]);
+      await deferBrowserCheck(db.repo, resumed, "Browser checks are busy");
+      const firstDeferral = await streak();
+      expect(firstDeferral.d).not.toBeNull();
+      expect(firstDeferral.u).toBeNull();
+      // an edit of the interval or the journey resets it too
+      await stale();
+      expect((await call(owner.cookie, "PATCH", path, { intervalSec: BROWSER_MIN_INTERVAL_SEC * 2 })).status).toBe(200);
+      expect(await streak()).toEqual({ d: null, l: null, u: null, n: null });
+      await stale();
+      expect((await call(owner.cookie, "PATCH", path, { browser: { ...journey(start), timeoutMs: 15000 } })).status).toBe(200);
+      expect(await streak()).toEqual({ d: null, l: null, u: null, n: null });
+      // a rename changes nothing that is checked: the state stays
+      await stale();
+      expect((await call(owner.cookie, "PATCH", path, { name: "Renamed journey" })).status).toBe(200);
+      expect((await streak()).d).not.toBeNull();
+      await db.query("update monitor set deferred_since = null, last_deferred_run_at = null, unchecked_since = null, unchecked_notified_at = null, next_check_at = now() + interval '1 day' where id = $1", [id]);
 
       // the ciphertext is bound to this monitor: copied onto another monitor it is "not set" there
       const twin = await call(owner.cookie, "POST", "/monitors", { name: "Twin", type: "browser", browser: journey(start), browserSecrets: { password: "twin-value" } });

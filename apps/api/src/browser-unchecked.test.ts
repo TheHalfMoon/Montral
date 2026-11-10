@@ -21,6 +21,8 @@ let gateModel = false;
 const clock = { t: 0 };
 let slowMs = 0;
 let hold: Promise<void> | null = null;
+/** journeys actually handed to the browser runtime */
+let launched = 0;
 vi.mock("./browser-check", async (importOriginal) => {
   const real = await importOriginal<typeof import("./browser-check")>();
   const runOutcome = () => ({ ok: true, latencyMs: 10, browser: { ok: true, kind: "run", usedSecrets: true, steps: [{ action: "goto", ms: 10, ok: true }], failedStep: null, error: null, statusCode: 200, durationMs: 10, blockedRequests: 0, popupsClosed: 0 } });
@@ -28,6 +30,7 @@ vi.mock("./browser-check", async (importOriginal) => {
   return {
     ...real,
     browserCheck: async (m: { organizationId: string }) => {
+      launched++;
       if (hold) await hold;
       if (slowMs) { clock.t += slowMs; return runOutcome(); }
       if (gateModel) {
@@ -44,7 +47,7 @@ vi.mock("./browser-check", async (importOriginal) => {
   };
 });
 
-const { checkMany, checkOne, deferBrowserCheck, deferredTooLong, sendUncheckedDigests, shouldMarkUnchecked, BROWSER_TASK_BUDGET_MS, DEFERRED_RETRY_MS } = await import("./scheduler");
+const { checkMany, checkOne, deferBrowserCheck, reserveCredits, deferredTooLong, sendUncheckedDigests, shouldMarkUnchecked, BROWSER_TASK_BUDGET_MS, DEFERRED_RETRY_MS } = await import("./scheduler");
 const { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, RUNNER_UNREACHABLE } = await import("./browser-check");
 const { configureEmail, setMailTransport } = await import("./email");
 
@@ -56,6 +59,8 @@ function fake() {
   const marked: string[] = [];
   const cleared: string[] = [];
   const credits: { workspace: string; n: number }[] = [];
+  const refunds: { workspace: string; n: number }[] = [];
+  let allowance = Infinity;
   const deferral = new Map<string, Date>();
   const deferredNotes: string[] = [];
   const repo = {
@@ -78,13 +83,18 @@ function fake() {
     openIncidents: async () => [],
     logDeliveries: async (rows: Partial<AlertDelivery>[]) => void deliveries.push(...rows),
   } as unknown as Repo;
-  const entitlements = { spendCredits: async (workspace: string, n: number) => (credits.push({ workspace, n }), n) } as never;
-  return { repo, runs, checks, states, deliveries, marked, cleared, credits, deferral, deferredNotes, entitlements };
+  const entitlements = {
+    spendCredits: async (workspace: string, n: number) => { const g = Math.max(0, Math.min(n, allowance)); allowance -= g; credits.push({ workspace, n: g }); return g; },
+    refundCredits: async (workspace: string, n: number) => { allowance += n; refunds.push({ workspace, n }); },
+  } as never;
+  const setAllowance = (n: number) => { allowance = n; };
+  const net = () => credits.reduce((a, c) => a + c.n, 0) - refunds.reduce((a, c) => a + c.n, 0);
+  return { repo, runs, checks, states, deliveries, marked, cleared, credits, refunds, net, setAllowance, deferral, deferredNotes, entitlements };
 }
 
 const browserMonitor = (over: Partial<Monitor> = {}) => ({ id: "b1", organizationId: "o", projectId: "p", name: "Journey", type: "browser", target: "https://example.com/", regions: ["auto"], status: "up", consecutiveFailures: 0, consecutiveSlow: 0, failureThreshold: 3, slowThresholdMs: 5000, slowAlertAfter: 0, channelIds: [], paused: false, intervalSec: 300, uncheckedSince: null, browserSecretsVersion: 4, browser: { steps: [{ action: "goto", url: "https://example.com/" }], timeoutMs: 30_000, screenshot: "never" }, ...over }) as unknown as Monitor;
 
-afterEach(() => { next.length = 0; gateModel = false; slowMs = 0; hold = null; clock.t = 0; setMailTransport(undefined); });
+afterEach(() => { launched = 0; next.length = 0; gateModel = false; slowMs = 0; hold = null; clock.t = 0; setMailTransport(undefined); });
 
 describe("when a browser monitor counts as unchecked", () => {
   const at = (minAgo: number, kind: string) => ({ kind, createdAt: new Date(Date.now() - minAgo * 60_000) });
@@ -155,12 +165,39 @@ describe("browser checks that did not happen", () => {
     expect(deferral.has("b1")).toBe(false);
   });
 
-  it("charges credits only for journeys that ran, never for deferrals or runtime errors", async () => {
-    const { repo, credits, entitlements } = fake();
+  it("takes credits before launching a journey and gives them back when it did not happen: a run is charged exactly once", async () => {
+    const { repo, credits, refunds, net, entitlements } = fake();
     next.push({ kind: "deferred", error: BROWSER_BUSY }, { kind: "error", error: RUNNER_UNREACHABLE }, { kind: "run", error: "" });
     for (let i = 0; i < 3; i++) await checkMany(repo, [browserMonitor()], entitlements);
-    expect(credits).toHaveLength(1);
-    expect(credits[0].workspace).toBe("o");
+    expect(launched).toBe(3);
+    expect(credits.map((c) => c.n)).toEqual([1, 1, 1]); // reserved before each launch
+    expect(refunds).toEqual([{ workspace: "o", n: 1 }, { workspace: "o", n: 1 }]); // the deferral and the runtime error
+    expect(net()).toBe(1);
+  });
+
+  it("a workspace without credits launches no journey and records nothing (not a deferral, not unchecked)", async () => {
+    const { repo, runs, states, marked, deferredNotes, setAllowance, entitlements } = fake();
+    setAllowance(0);
+    for (let i = 0; i < 5; i++) await checkMany(repo, [browserMonitor(), browserMonitor({ id: "b2" })], entitlements);
+    expect(launched).toBe(0);
+    expect(runs).toEqual([]);
+    expect(states).toEqual([]);
+    expect(deferredNotes).toEqual([]);
+    expect(marked).toEqual([]);
+  });
+
+  it("with one credit left, one journey runs and the next is not launched; a partial grant is given back", async () => {
+    const { repo, runs, refunds, net, setAllowance, entitlements } = fake();
+    setAllowance(1);
+    next.push({ kind: "run", error: "" }, { kind: "run", error: "" });
+    await checkMany(repo, [browserMonitor({ id: "a" }), browserMonitor({ id: "b" })], entitlements);
+    expect(launched).toBe(1);
+    expect(runs.map((r) => r.monitorId)).toEqual(["a"]);
+    expect(net()).toBe(1);
+    // a reservation costing 2 with 1 left: the 1 granted is given back and the check must not run
+    setAllowance(1);
+    expect(await reserveCredits("o", { type: "http", regions: ["eu", "us"] } as Monitor, entitlements)).toBeNull();
+    expect(refunds.at(-1)).toEqual({ workspace: "o", n: 1 });
   });
 
   it("a real run records its secrets version and clears the state in the database even when the snapshot says it is not unchecked", async () => {

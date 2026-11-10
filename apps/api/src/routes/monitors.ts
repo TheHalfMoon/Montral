@@ -15,7 +15,7 @@ import { BROWSER_MIN_INTERVAL_SEC, browserCreationProblem, browserRuntimeHealth,
 import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secretRefs, type BrowserConfig } from "../browser-steps";
 import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
-import { checkOne, nextAfter } from "../scheduler";
+import { checkOne, nextAfter, refundCredits } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID } from "../regions";
 
@@ -298,7 +298,8 @@ async function refuseTarget(c: Context<AppEnv>, type: string, target: string) {
 
 /** Request headers and bodies (often tokens) are shown to owners and admins only; browser secrets to nobody. */
 /** Scheduler bookkeeping of run coalescing (beginRuns): never part of the API (it would add ~150 bytes per monitor to every list). */
-const SCHEDULER_ONLY = new Set(["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt", "lastDeferredRunAt"]);
+// and of browser checks: the deferral streak, digest bookkeeping and the secrets version (uncheckedSince is shown)
+const SCHEDULER_ONLY = new Set(["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt", "deferredSince", "lastDeferredRunAt", "uncheckedNotifiedAt", "browserSecretsVersion"]);
 const withoutSchedulerFields = <T,>(m: T): T => Object.fromEntries(Object.entries(m as object).filter(([k]) => !SCHEDULER_ONLY.has(k))) as T;
 const shown = async <T extends { headers?: Record<string, string> | null; requestBody?: string | null; browserSecrets?: Record<string, string> | null }>(c: Context<AppEnv>, rows: T[]): Promise<T[]> => {
   const all = rows.map((m) => withoutSchedulerFields(m.browserSecrets !== undefined ? { ...m, browserSecrets: maskedSecrets(m.browserSecrets) } : m));
@@ -654,7 +655,9 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
       }
       if (region === undefined) {
-        await checkOne(repo, m, c.get("entitlements"));
+        const result = await checkOne(repo, m, c.get("entitlements"));
+        // a browser check that did not happen (deferred for capacity, runtime failure) gives its credits back
+        if (result === "deferred" || result === "error") await refundCredits(m.organizationId, cost, c.get("entitlements"));
         return c.json({ ok: true });
       }
       const run = await runInRegion(region, m, repo);

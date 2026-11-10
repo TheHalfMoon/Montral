@@ -88,7 +88,7 @@ export async function createRunnerServer(o: RunnerOptions) {
       const peer = (req.socket.remoteAddress ?? "").replace(/^::ffff:/, "");
       const { testAbortAfterMs: _testOnly, ...jobFields } = job;
       // secrets arrive sealed with a key derived from the token (see browser-runner-protocol.ts); none in clear text
-      const secrets = payload.sealedSecrets === undefined ? {} : await openSecrets(o.token, payload.sealedSecrets);
+      const secrets = payload.sealedSecrets === undefined ? {} : await openSecrets(o.token, payload.sealedSecrets, nonce);
       if (secrets === null) return reply(res, 400, { error: "bad request" }, nonce);
       const safeJob: WorkerJob = {
         ...jobFields,

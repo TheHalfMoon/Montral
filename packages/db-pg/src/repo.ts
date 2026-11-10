@@ -590,7 +590,9 @@ export function createRepo(db: Db): Repo {
         const changed = Object.entries(effective).some(([key, value]) => measured.includes(key)
           && comparable(key, value) !== comparable(key, current[key as keyof typeof current]));
         const resetExpiry = (effective.target !== undefined && effective.target !== current.target) || (effective.domainExpiryWarnDays !== undefined && effective.domainExpiryWarnDays !== current.domainExpiryWarnDays);
-        const [row] = await tx.update(schema.monitor).set({ ...effective, ...(resetExpiry ? { domainExpiry: null } : {}), ...(changedPause ? { consecutiveSuccesses: 0 } : {}), ...(changed ? { coverageRevision: current.coverageRevision + 1 } : {}) })
+        // new secrets invalidate screenshots of runs still in flight with the old ones (see recordBrowserRun)
+        const secretsBump = effective.browserSecrets !== undefined ? { browserSecretsVersion: sql`${schema.monitor.browserSecretsVersion} + 1` } : {};
+        const [row] = await tx.update(schema.monitor).set({ ...effective, ...secretsBump, ...(resetExpiry ? { domainExpiry: null } : {}), ...(changedPause ? { consecutiveSuccesses: 0 } : {}), ...(changed ? { coverageRevision: current.coverageRevision + 1 } : {}) })
           .where(eq(schema.monitor.id, id)).returning();
         if (changed) {
           const at = await coverageTime(tx, id);
@@ -721,11 +723,17 @@ export function createRepo(db: Db): Repo {
     },
     async recordBrowserRun(r) {
       await db.transaction(async (tx) => {
+        // a run that typed secrets and started before they changed keeps no screenshot (the purge may already have run)
+        let screenshot = r.screenshot && r.screenshot.byteLength <= BROWSER_SCREENSHOT_MAX_BYTES ? r.screenshot : null;
+        if (screenshot && r.usedSecrets) {
+          const [cur] = await tx.select({ v: schema.monitor.browserSecretsVersion }).from(schema.monitor).where(eq(schema.monitor.id, r.monitorId)).for("share");
+          if (!cur || cur.v !== (r.secretsVersion ?? -1)) screenshot = null;
+        }
         await tx.insert(schema.browserCheckRun).values({
           monitorId: r.monitorId, ok: r.ok, failedStep: r.failedStep, error: r.error, durationMs: Math.max(0, Math.round(r.durationMs)),
           steps: r.steps.slice(0, 32).map((s) => ({ action: String(s.action).slice(0, 32), ms: Math.max(0, Math.round(s.ms)), ok: !!s.ok })),
           blockedRequests: r.blockedRequests, peakRssMb: r.peakRssMb, cpuMs: r.cpuMs, kind: r.kind ?? "run", usedSecrets: r.usedSecrets ?? false,
-          screenshot: r.screenshot && r.screenshot.byteLength <= BROWSER_SCREENSHOT_MAX_BYTES ? r.screenshot : null,
+          screenshot,
         });
         // bounded per monitor: the newest runs only, and screenshots only on the newest few of those
         await tx.execute(sql`delete from browser_check_run where monitor_id = ${r.monitorId} and id not in (
@@ -743,11 +751,23 @@ export function createRepo(db: Db): Repo {
       }).from(schema.browserCheckRun).where(eq(schema.browserCheckRun.monitorId, monitorId)).orderBy(desc(schema.browserCheckRun.createdAt), desc(schema.browserCheckRun.id)).limit(Math.min(Math.max(limit, 1), BROWSER_RUNS_KEPT));
       return rows;
     },
-    async consecutiveUncheckedBrowserRuns(monitorId, limit) {
-      const rows = await db.select({ kind: schema.browserCheckRun.kind }).from(schema.browserCheckRun)
-        .where(eq(schema.browserCheckRun.monitorId, monitorId)).orderBy(desc(schema.browserCheckRun.createdAt), desc(schema.browserCheckRun.id)).limit(limit);
-      const first = rows.findIndex((r) => r.kind === "run");
-      return first === -1 ? rows.length : first;
+    recentBrowserRunKinds: (monitorId, limit) =>
+      db.select({ kind: schema.browserCheckRun.kind, createdAt: schema.browserCheckRun.createdAt }).from(schema.browserCheckRun)
+        .where(eq(schema.browserCheckRun.monitorId, monitorId)).orderBy(desc(schema.browserCheckRun.createdAt), desc(schema.browserCheckRun.id)).limit(Math.min(Math.max(limit, 1), BROWSER_RUNS_KEPT)),
+    async pendingUncheckedDigests() {
+      const found = await rows<{ organization_id: string; id: string; name: string; project_id: string | null; reason: string | null }>(db.execute(sql`
+        select m.organization_id, m.id, m.name, m.project_id,
+          (select r.error from browser_check_run r where r.monitor_id = m.id order by r.created_at desc, r.id desc limit 1) as reason
+        from monitor m
+        where m.type = 'browser' and m.paused = false and m.unchecked_since is not null and m.unchecked_notified_at is null
+        order by m.organization_id, m.name limit 1000`));
+      const byOrg = new Map<string, { id: string; name: string; projectId: string | null; reason: string | null }[]>();
+      for (const r of found) (byOrg.get(r.organization_id) ?? byOrg.set(r.organization_id, []).get(r.organization_id)!).push({ id: r.id, name: r.name, projectId: r.project_id, reason: r.reason });
+      return [...byOrg].map(([organizationId, monitors]) => ({ organizationId, monitors }));
+    },
+    async markUncheckedNotified(monitorIds) {
+      if (!monitorIds.length) return;
+      await db.update(schema.monitor).set({ uncheckedNotifiedAt: new Date() }).where(and(inArray(schema.monitor.id, monitorIds), isNotNull(schema.monitor.uncheckedSince)));
     },
     async browserRunScreenshot(monitorId, runId) {
       const [row] = await db.select({ screenshot: schema.browserCheckRun.screenshot, usedSecrets: schema.browserCheckRun.usedSecrets }).from(schema.browserCheckRun)
@@ -764,7 +784,7 @@ export function createRepo(db: Db): Repo {
       return rows.length === 1;
     },
     async clearUnchecked(monitorId) {
-      await db.update(schema.monitor).set({ uncheckedSince: null }).where(and(eq(schema.monitor.id, monitorId), isNotNull(schema.monitor.uncheckedSince)));
+      await db.update(schema.monitor).set({ uncheckedSince: null, uncheckedNotifiedAt: null }).where(and(eq(schema.monitor.id, monitorId), isNotNull(schema.monitor.uncheckedSince)));
     },
     async managerEmails(orgId) {
       const rows = await db.select({ email: schema.user.email }).from(schema.member).innerJoin(schema.user, eq(schema.user.id, schema.member.userId))

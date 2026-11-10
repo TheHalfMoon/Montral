@@ -82,7 +82,7 @@ jobs:
           export BROWSER_CHECK_TESTS=required
           export BROWSER_WORKER_BUNDLE="$PWD/apps/api/dist/browser-worker.mjs"
           cd apps/api
-          npx vitest run src/browser-check.integration.test.ts src/browser-check.e2e.test.ts src/browser-check.test.ts src/browser-egress.test.ts src/browser-steps.test.ts src/browser-secrets.test.ts src/browser-runner.test.ts src/browser-unchecked.test.ts src/guards/browser-runtime.test.ts --reporter=verbose
+          npx vitest run src/browser-check.integration.test.ts src/browser-check.e2e.test.ts src/browser-check.test.ts src/browser-egress.test.ts src/browser-steps.test.ts src/browser-secrets.test.ts src/browser-runner.test.ts src/browser-unchecked.test.ts src/browser-spot-check.test.ts src/guards/browser-runtime.test.ts --reporter=verbose
 
   runner:
     name: Hardened browser-runner stack (app + runner + PostgreSQL) runs a journey end to end

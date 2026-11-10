@@ -610,8 +610,8 @@ export async function browserCheck(m: BrowserCheckInput, deps: BrowserDeps = {})
       try {
         // the secrets travel encrypted with a key derived from the runner token; the rest of the job is only signed
         const { secrets: plain, ...rest } = job;
-        const sealedSecrets = await sealSecrets(settings.runnerToken, plain);
-        const r = await callRunner<unknown>(settings.runnerUrl, settings.runnerToken, "/v1/run", { job: { ...rest, secrets: {} }, sealedSecrets, hardTimeoutMs, maxRssMb }, hardTimeoutMs + RUNNER_GRACE_MS);
+        const token = settings.runnerToken;
+        const r = await callRunner<unknown>(settings.runnerUrl, token, "/v1/run", async (nonce: string) => ({ job: { ...rest, secrets: {} }, sealedSecrets: await sealSecrets(token, plain, nonce), hardTimeoutMs, maxRssMb }), hardTimeoutMs + RUNNER_GRACE_MS);
         if (r.status === 429) return deferred();
         const body = r.body as { run?: unknown } | null;
         if (r.status !== 200 || !body || typeof body !== "object" || !("run" in body)) {

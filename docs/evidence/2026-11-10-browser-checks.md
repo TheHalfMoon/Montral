@@ -126,6 +126,13 @@ the 1024 MiB default per check, and the runner's 2 GB / 2 CPUs for the default o
 5. **(low) Non-loopback canary.** The WebRTC/WebTransport test also targets UDP and TCP canaries on the machine's non-loopback interface address (required in CI); both see nothing.
 6. **(info)** The runner's 401 answer is the same for every reason. Secrets are sealed (AES-256-GCM with a key derived from the token); the rest of a job is signed but not encrypted, on an internal-only network.
 
+## Response to the clearance review (head 5132dca)
+1. **(medium) Screenshot bypass through spot checks.** Browser monitors refuse `region` on `POST /monitors/:id/check` (400). MCP `run_check` is the same REST call. Every spot check now returns only `ok`, `statusCode`, `latencyMs` and `error` (`spotCheckResult`), so no run, steps or bytes are serialised. Tests: e2e (`auto` and a named region give 400), unit (result reduction, MCP mapping).
+2. **(medium) Spurious "unchecked" and e-mail storms.** `checkMany` turns each workspace's due browser monitors into one sequential task, so the per-workspace gate never defers them. A deferred check is retried after 30–60 s. Deferrals count toward "unchecked" only when they have lasted 3 intervals; runtime errors count after 3 in a row. Notices go out as one digest per workspace from housekeeping, listing every unchecked monitor: at most 1 per hour per workspace (database counter), within the e-mail allowance (`spendEmails`). Tests: 3 monitors of one workspace due together all run on every cycle; 10 monitors in an outage give one digest per manager listing all 10, and none again within the hour; allowance respected.
+3. **(low) Purge race.** Monitors carry `browser_secrets_version`, bumped on every secrets change. A run records the version it started with, and its screenshot is dropped at save time when it used secrets and the version moved on. Test: e2e with the repository against PostgreSQL.
+4. **(low) Stale clear.** `clearUnchecked` always runs after a real run, as a conditional UPDATE in the database. Test: a stale in-memory snapshot still clears.
+5. **(low) Sealed secrets.** The AAD includes the request's nonce, so a sealed blob opens only inside the signed request it was made for. Test: a blob replayed into a new, validly signed request is refused.
+
 ## What is NOT covered
 - **Scripting.** No user JavaScript, conditionals, loops, file uploads,
   multi-tab flows (popups are closed) or MFA/TOTP generation.

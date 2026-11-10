@@ -46,8 +46,9 @@ export function sameHex(a: string, b: string): boolean {
 const requestText = (method: string, path: string, t: number, n: string, bodyHash: string) => `v1\n${method.toUpperCase()}\n${path}\n${t}\n${n}\n${bodyHash}`;
 const responseText = (n: string, status: number, bodyHash: string) => `v1-response\n${n}\n${status}\n${bodyHash}`;
 
-export async function signRequest(token: string, method: string, path: string, body: string, now = Date.now()): Promise<{ header: string; nonce: string }> {
-  const nonce = hex(crypto.getRandomValues(new Uint8Array(16)));
+export const newNonce = () => hex(crypto.getRandomValues(new Uint8Array(16)));
+
+export async function signRequest(token: string, method: string, path: string, body: string, now = Date.now(), nonce = newNonce()): Promise<{ header: string; nonce: string }> {
   const s = await hmac(token, requestText(method, path, now, nonce, await sha256Hex(body)));
   return { header: `t=${now},n=${nonce},s=${s}`, nonce };
 }
@@ -98,19 +99,22 @@ async function sealKey(token: string): Promise<CryptoKey> {
 const b64 = (b: Uint8Array) => btoa(String.fromCharCode(...b));
 const unb64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 
-export async function sealSecrets(token: string, secrets: Record<string, string>): Promise<string> {
+/** `nonce` is the request's: a sealed blob opens only within the one signed request it was made for. */
+const sealAad = (nonce: string) => enc.encode(`montral:browser-runner:sealed-secrets:v1:${nonce}`);
+
+export async function sealSecrets(token: string, secrets: Record<string, string>, nonce: string): Promise<string> {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: SEAL_INFO }, await sealKey(token), enc.encode(JSON.stringify(secrets))));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv, additionalData: sealAad(nonce) }, await sealKey(token), enc.encode(JSON.stringify(secrets))));
   return `${b64(iv)}.${b64(ct)}`;
 }
 
 /** The secrets, or null when they cannot be opened (another token, tampered, not an object of strings). */
-export async function openSecrets(token: string, sealed: unknown): Promise<Record<string, string> | null> {
+export async function openSecrets(token: string, sealed: unknown, nonce: string): Promise<Record<string, string> | null> {
   if (typeof sealed !== "string") return null;
   const m = /^([A-Za-z0-9+/=]{16})\.([A-Za-z0-9+/=]{24,})$/.exec(sealed);
   if (!m) return null;
   try {
-    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(m[1]), additionalData: SEAL_INFO }, await sealKey(token), unb64(m[2]));
+    const pt = await crypto.subtle.decrypt({ name: "AES-GCM", iv: unb64(m[1]), additionalData: sealAad(nonce) }, await sealKey(token), unb64(m[2]));
     const v: unknown = JSON.parse(new TextDecoder().decode(pt));
     if (!v || typeof v !== "object" || Array.isArray(v) || !Object.values(v).every((x) => typeof x === "string")) return null;
     return v as Record<string, string>;
@@ -150,10 +154,12 @@ export class RunnerError extends Error {
 }
 
 /** One signed call to the runner. Throws RunnerError; never includes the job or the response in the error. */
-export async function callRunner<T>(baseUrl: string, token: string, path: "/v1/run" | "/v1/probe", payload: unknown, timeoutMs: number): Promise<{ status: number; body: T }> {
-  const body = JSON.stringify(payload);
+/** `payload` may be built from the request's nonce (to seal secrets for exactly this request). */
+export async function callRunner<T>(baseUrl: string, token: string, path: "/v1/run" | "/v1/probe", payload: unknown | ((nonce: string) => Promise<unknown>), timeoutMs: number): Promise<{ status: number; body: T }> {
+  const requestNonce = newNonce();
+  const body = JSON.stringify(typeof payload === "function" ? await (payload as (n: string) => Promise<unknown>)(requestNonce) : payload);
   if (enc.encode(body).byteLength > MAX_REQUEST_BYTES) throw new RunnerError("too_large");
-  const { header, nonce } = await signRequest(token, "POST", path, body);
+  const { header, nonce } = await signRequest(token, "POST", path, body, Date.now(), requestNonce);
   let res: Response;
   try {
     res = await fetch(new URL(path, baseUrl), { method: "POST", body, headers: { "content-type": "application/json", [RUNNER_HEADER]: header }, signal: AbortSignal.timeout(timeoutMs), redirect: "manual" });

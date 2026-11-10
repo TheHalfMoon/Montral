@@ -120,16 +120,20 @@ describe("browser-runner from the app's side", () => {
   const configure = (url: string) => { configureBrowserChecks({ BROWSER_CHECKS: "enabled", BETTER_AUTH_SECRET: "app-secret-0123456789abcdef", BROWSER_RUNNER_URL: url, BROWSER_RUNNER_TOKEN: TOKEN }); resetBrowserAvailability(); };
 
   it("secrets travel sealed with a key from the token: not readable in the request, opened by the runner only", async () => {
-    const sealed = await sealSecrets(TOKEN, { password: "hunter2-in-transit" });
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const sealed = await sealSecrets(TOKEN, { password: "hunter2-in-transit" }, nonce);
     expect(sealed).not.toContain("hunter2");
-    expect(await openSecrets(TOKEN, sealed)).toEqual({ password: "hunter2-in-transit" });
-    expect(await openSecrets("another-token-0123456789abcdef0123456789", sealed)).toBeNull();
-    expect(await openSecrets(TOKEN, sealed.slice(0, -4) + "AAA=")).toBeNull();
+    expect(await openSecrets(TOKEN, sealed, nonce)).toEqual({ password: "hunter2-in-transit" });
+    expect(await openSecrets("another-token-0123456789abcdef0123456789", sealed, nonce)).toBeNull();
+    expect(await openSecrets(TOKEN, sealed.slice(0, -4) + "AAA=", nonce)).toBeNull();
+    // bound to the request it was sealed for: under another request's nonce it does not open
+    expect(await openSecrets(TOKEN, sealed, "fedcba9876543210fedcba9876543210")).toBeNull();
     seen.length = 0;
-    const r = await callRunner(base, TOKEN, "/v1/run", { job: job({ secrets: {} }), sealedSecrets: sealed, hardTimeoutMs: 1000, maxRssMb: 512 }, 10_000);
+    const r = await callRunner(base, TOKEN, "/v1/run", async (n: string) => ({ job: job({ secrets: {} }), sealedSecrets: await sealSecrets(TOKEN, { password: "hunter2-in-transit" }, n), hardTimeoutMs: 1000, maxRssMb: 512 }), 10_000);
     expect(r.status).toBe(200);
     expect(seen[0].job.secrets).toEqual({ password: "hunter2-in-transit" });
-    // a sealed blob that does not open is refused
+    // a blob sealed for another request (replayed into a new, validly signed one) is refused
+    expect((await callRunner(base, TOKEN, "/v1/run", { job: job(), sealedSecrets: sealed, hardTimeoutMs: 1000, maxRssMb: 512 }, 10_000)).status).toBe(400);
     expect((await callRunner(base, TOKEN, "/v1/run", { job: job(), sealedSecrets: "AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", hardTimeoutMs: 1000, maxRssMb: 512 }, 10_000)).status).toBe(400);
   });
 

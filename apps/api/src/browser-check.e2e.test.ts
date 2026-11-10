@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
 import { BROWSER_MIN_INTERVAL_SEC, configureBrowserChecks, resetBrowserAvailability, setBrowserTestAllowance } from "./browser-check";
 import { MASK } from "./secrets";
+import { sendUncheckedDigests } from "./scheduler";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
@@ -189,6 +190,11 @@ describe.skipIf(!url || !haveChromium)("browser monitors through the API (Postgr
       const preview = await call(owner.cookie, "POST", "/monitors/import/preview", { monitors: [{ sourceId: "b1", name: "B", type: "browser", browser: journey(start) }] });
       expect(preview.body.report[0].error).toMatch(/cannot be imported/);
 
+      // no spot check for browser monitors: it would hand back the run (and its screenshot) outside the run history
+      for (const region of ["auto", "us-east"]) {
+        expect(await call(member.cookie, "POST", `${path}/check`, { region }), region).toMatchObject({ status: 400, body: { code: "regions_not_supported" } });
+      }
+
       // one real run through "check now", recorded with its steps
       expect((await call(owner.cookie, "POST", `${path}/check`, {})).status).toBe(200);
       const runs = await call(member.cookie, "GET", `${path}/browser-runs`);
@@ -221,6 +227,15 @@ describe.skipIf(!url || !haveChromium)("browser monitors through the API (Postgr
       expect((await call(member.cookie, "PATCH", path, { browserSecrets: {} })).status).toBe(200);
       expect((await call(member.cookie, "GET", `${path}/browser-runs/${failed.id}/screenshot`)).status).toBe(404);
       expect((await call(owner.cookie, "GET", `${path}/browser-runs/${failed.id}/screenshot`)).status).toBe(404);
+      // an in-flight run that started before the secrets changed keeps no screenshot (the purge already ran)
+      const png = Uint8Array.from(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64"));
+      const [{ browser_secrets_version: version }] = await db.query<{ browser_secrets_version: number }>("select browser_secrets_version from monitor where id = $1", [id]);
+      const lateRun = { monitorId: id, ok: false, kind: "run" as const, usedSecrets: true, failedStep: 0, error: "Step 1 (goto): timed out", durationMs: 5, steps: [], blockedRequests: 0, peakRssMb: null, cpuMs: null, screenshot: png };
+      await db.repo.recordBrowserRun!({ ...lateRun, secretsVersion: version - 1 });
+      expect((await call(owner.cookie, "GET", `${path}/browser-runs`)).body.runs[0]).toMatchObject({ usedSecrets: true, hasScreenshot: false });
+      await db.repo.recordBrowserRun!({ ...lateRun, secretsVersion: version });
+      expect((await call(owner.cookie, "GET", `${path}/browser-runs`)).body.runs[0]).toMatchObject({ usedSecrets: true, hasScreenshot: true });
+
       // a run that typed no secret keeps its screenshot visible to members
       expect((await call(owner.cookie, "POST", `${path}/check`, {})).status).toBe(200);
       const plainRun = (await call(member.cookie, "GET", `${path}/browser-runs`)).body.runs[0];
@@ -242,6 +257,9 @@ describe.skipIf(!url || !haveChromium)("browser monitors through the API (Postgr
         // the last real verdict stays (nothing about the target was learned); the dashboard shows "unchecked"
         expect(shown.status).toBe(statusBefore);
         expect((await broken.call(member.cookie, "GET", "/monitors/browser-runtime")).body).toMatchObject({ enabled: true, mode: "runner", available: false, lastError: "Browser runner unreachable" });
+        // owners and admins hear about it from the next housekeeping pass: one digest for the workspace
+        await sendUncheckedDigests(db.repo);
+        await sendUncheckedDigests(db.repo);
         const notices = await db.query<{ kind: string; status: string; status_message: string }>("select kind, status, status_message from alert_delivery where organization_id = $1 and kind = 'monitor.unchecked'", [orgId]);
         expect(notices).toHaveLength(1);
         expect(notices[0].status_message).toContain("Browser runner unreachable");

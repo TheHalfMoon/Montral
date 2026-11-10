@@ -123,6 +123,10 @@ export const monitor = pgTable(
     browserSecrets: jsonb("browser_secrets").$type<Record<string, string>>().notNull().default({}),
     /** browser: since when the monitor's checks have not been running (runtime errors or capacity); null while they run */
     uncheckedSince: timestamp("unchecked_since", { withTimezone: true }),
+    /** browser: when the owners/admins digest covering the current unchecked streak went out; null until it has */
+    uncheckedNotifiedAt: timestamp("unchecked_notified_at", { withTimezone: true }),
+    /** browser: bumped whenever the secrets change; a run started on an older version keeps no screenshot */
+    browserSecretsVersion: integer("browser_secrets_version").notNull().default(0),
     dnsRecordType: text("dns_record_type").$type<"A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS">().notNull().default("A"),
     dnsExpectedValue: text("dns_expected_value"),
     dnsMatchMode: text("dns_match_mode").$type<"exact" | "contains">().notNull().default("exact"),

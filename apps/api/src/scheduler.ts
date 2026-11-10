@@ -101,6 +101,8 @@ async function housekeeping(repo: Repo, queue: CheckQueue | undefined, total = 0
   // incidents nobody has acknowledged: repeat the alert, escalate to the next level
   await step("alert reminders", () => sendReminders(repo, entitlements, queue ? 10 : 3));
   await step("alert escalations", () => sendEscalations(repo, entitlements, queue ? 10 : 3));
+  // browser monitors that went unchecked: one digest per workspace to its owners and admins, at most one an hour
+  await step("unchecked digests", () => sendUncheckedDigests(repo, entitlements));
   // cheap housekeeping once an hour
   if (new Date().getMinutes() === 0) await step("expired monitor purge", () => repo.purgeExpired());
   // audit events past their retention go through the database's prune function (the table refuses other deletes)
@@ -180,16 +182,30 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
   return monitors.filter((m) => allowed.has(m.id));
 }
 
-async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements) {
+export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements) {
   const monitors = await withinCredits(due, entitlements);
   if (monitors.length < due.length) console.warn(`credits exhausted: skipped ${due.length - monitors.length} of ${due.length} checks`);
-  for (let i = 0; i < monitors.length; i += CONCURRENCY) {
-    // one failing monitor must not take the rest of the batch down with it
-    const batch = monitors.slice(i, i + CONCURRENCY);
-    const results = await Promise.allSettled(batch.map((m) => checkOne(repo, m, entitlements, true)));
-    // Rejected exception objects can contain private probe targets or bearer tokens.
-    results.forEach((r, j) => r.status === "rejected" && console.error(`check failed for ${batch[j].id}`));
+  // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and
+  // third due browser monitors would wait at that gate and be deferred every cycle; instead each workspace's browser
+  // monitors form one task that checks them one after another. Every other check is its own task.
+  const tasks: Monitor[][] = [];
+  const browserByWorkspace = new Map<string, Monitor[]>();
+  for (const m of monitors) {
+    if (m.type !== "browser") { tasks.push([m]); continue; }
+    const list = browserByWorkspace.get(m.organizationId);
+    if (list) list.push(m); else { const l = [m]; browserByWorkspace.set(m.organizationId, l); tasks.push(l); }
   }
+  let next = 0;
+  const worker = async () => {
+    while (next < tasks.length) {
+      const task = tasks[next++];
+      for (const m of task) {
+        // one failing monitor must not take the rest down with it; a rejected error can hold private targets or tokens
+        try { await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, tasks.length) }, worker));
 }
 
 export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlements = unmetered, scheduled = false) {
@@ -205,11 +221,12 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
   // per streak. The monitor's status stays what it was; the API and dashboard show it as unchecked.
   if (m.type === "browser" && out.inconclusive && out.browser && repo.recordBrowserRun) {
     const run = out.browser;
-    await step("browser run", () => repo.recordBrowserRun!({ monitorId: m.id, ok: false, kind: run.kind === "deferred" ? "deferred" : "error", usedSecrets: run.usedSecrets ?? false, failedStep: null, error: out.error ?? null, durationMs: 0, steps: [], blockedRequests: 0, peakRssMb: null, cpuMs: null }));
-    const inARow = repo.consecutiveUncheckedBrowserRuns ? await repo.consecutiveUncheckedBrowserRuns(m.id, BROWSER_UNCHECKED_AFTER).catch(() => 0) : 0;
-    if (inARow >= BROWSER_UNCHECKED_AFTER && repo.markUnchecked && (await repo.markUnchecked(m.id).catch(() => false))) {
-      await step("unchecked notice", () => notifyUnchecked(repo, m, out.error ?? "Browser check did not run"));
-    }
+    const kind = run.kind === "deferred" ? "deferred" : "error";
+    await step("browser run", () => repo.recordBrowserRun!({ monitorId: m.id, ok: false, kind, usedSecrets: run.usedSecrets ?? false, failedStep: null, error: out.error ?? null, durationMs: 0, steps: [], blockedRequests: 0, peakRssMb: null, cpuMs: null }));
+    // a deferred check is tried again soon (with jitter), not only at its next interval
+    if (kind === "deferred") await step("deferred retry", () => repo.setMonitorState(m.id, { nextCheckAt: new Date(Date.now() + DEFERRED_RETRY_MS + Math.floor(Math.random() * DEFERRED_RETRY_MS)) }));
+    const recent = repo.recentBrowserRunKinds ? await repo.recentBrowserRunKinds(m.id, 50).catch(() => []) : [];
+    if (shouldMarkUnchecked(recent, m.intervalSec) && repo.markUnchecked) await step("unchecked mark", () => repo.markUnchecked!(m.id));
     return;
   }
   const { results, note: regionNote } = measured;
@@ -233,11 +250,11 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
   const run = out.browser;
   if (run && repo.recordBrowserRun) {
     await step("browser run", () => repo.recordBrowserRun!({
-      monitorId: m.id, ok: run.ok, kind: "run", usedSecrets: run.usedSecrets ?? false, failedStep: run.failedStep, error: run.error, durationMs: run.durationMs, steps: run.steps,
+      monitorId: m.id, ok: run.ok, kind: "run", usedSecrets: run.usedSecrets ?? false, secretsVersion: m.browserSecretsVersion ?? 0, failedStep: run.failedStep, error: run.error, durationMs: run.durationMs, steps: run.steps,
       blockedRequests: run.blockedRequests, peakRssMb: run.peakRssMb ?? null, cpuMs: run.cpuMs ?? null, screenshot: run.screenshotPng ?? null,
     }));
-    // the journey ran: the monitor is checked again
-    if (m.uncheckedSince && repo.clearUnchecked) await step("unchecked clear", () => repo.clearUnchecked!(m.id));
+    // the journey ran: the monitor is checked again (conditional in the database, whatever this snapshot of it says)
+    if (repo.clearUnchecked) await step("unchecked clear", () => repo.clearUnchecked!(m.id));
   }
   // Concurrent manual/scheduled checks must advance the latest streak atomically. A failure that
   // completed while this check was in flight cannot be overwritten by its old success count.
@@ -418,25 +435,58 @@ export async function resolveIncident(repo: Repo, m: Monitor, slow = false, enti
   }
 }
 
+
+/** A deferred browser check is retried after this (plus up to as much jitter), instead of a whole interval later. */
+export const DEFERRED_RETRY_MS = 30_000;
+/** Digests of unchecked browser monitors per workspace: at most this many per hour. */
+export const UNCHECKED_DIGESTS_PER_HOUR = 1;
+
+/**
+ * Is a browser monitor unchecked? Its latest runs (newest first) that did not happen form the streak. Runtime errors
+ * count at once: BROWSER_UNCHECKED_AFTER of them in the streak. Capacity deferrals count only by time: a streak that has
+ * lasted BROWSER_UNCHECKED_AFTER intervals (deferred checks are retried within a minute, so a busy moment never counts).
+ */
+export function shouldMarkUnchecked(recent: { kind: string; createdAt: Date }[], intervalSec: number, now = Date.now()): boolean {
+  const end = recent.findIndex((r) => r.kind === "run");
+  const streak = end === -1 ? recent : recent.slice(0, end);
+  if (!streak.length) return false;
+  if (streak.filter((r) => r.kind === "error").length >= BROWSER_UNCHECKED_AFTER) return true;
+  const oldest = streak[streak.length - 1].createdAt.getTime();
+  return streak.length >= BROWSER_UNCHECKED_AFTER && now - oldest >= BROWSER_UNCHECKED_AFTER * intervalSec * 1000;
+}
+
 const escapeHtml = (v: string) => v.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" } as Record<string, string>)[c]);
 
 /**
- * Tells a workspace's owners and admins (e-mail, logged in the alert log like every delivery) that a browser monitor has
- * stopped being checked, and why, in fixed words. Sent once per streak: markUnchecked only lets the first caller through.
+ * One e-mail per workspace (to each owner and admin, within the workspace's e-mail allowance) listing its browser
+ * monitors that went unchecked and why, in fixed words; at most UNCHECKED_DIGESTS_PER_HOUR per hour per workspace
+ * (counted in the database, shared by every server). Monitors that go unchecked meanwhile wait for the next digest.
+ * Every recipient is logged in the alert log (monitor.unchecked).
  */
-export async function notifyUnchecked(repo: Repo, m: Monitor, reason: string) {
-  const emails = repo.managerEmails ? await repo.managerEmails(m.organizationId) : [];
-  const subject = `${m.name}: browser checks are not running`;
-  const text = `The browser monitor "${m.name}" has not been checked for its last ${BROWSER_UNCHECKED_AFTER} runs. Latest reason: ${reason}.\n\nIt is shown as unchecked until a check runs again. The browser runtime's state is on the monitor's page.`;
-  const base = { organizationId: m.organizationId, projectId: m.projectId ?? null, channelId: null, channelName: "Owners and admins (email)", channelType: "email", kind: "monitor.unchecked", incidentId: null, monitorName: m.name };
-  const rows = [];
-  for (const to of emails) {
-    let ok = true;
-    try { await sendEmail({ to, subject, text, html: `<p>${escapeHtml(text).replace(/\n\n/g, "</p><p>")}</p>` }, true); } catch { ok = false; }
-    rows.push({ ...base, ok, status: ok ? ("sent" as const) : ("failed" as const), error: ok ? null : "email not sent", statusMessage: ok ? `sent: browser checks not running (${reason})` : `failed: email not sent; browser checks not running (${reason})` });
+export async function sendUncheckedDigests(repo: Repo, entitlements: Entitlements = unmetered) {
+  if (!repo.pendingUncheckedDigests || !repo.markUncheckedNotified) return;
+  for (const d of await repo.pendingUncheckedDigests()) {
+    if (!(await repo.withinLimit(`browser-unchecked-digest:${d.organizationId}`, UNCHECKED_DIGESTS_PER_HOUR, 3600))) continue;
+    const emails = repo.managerEmails ? await repo.managerEmails(d.organizationId) : [];
+    const granted = emails.length ? await entitlements.spendEmails(d.organizationId, emails.length).catch(() => emails.length) : 0;
+    const allowed = Number.isSafeInteger(granted) ? Math.max(0, Math.min(granted, emails.length)) : 0;
+    const names = d.monitors.map((m) => `- ${m.name}: ${m.reason ?? "browser check did not run"}`).join("\n");
+    const subject = d.monitors.length === 1 ? `${d.monitors[0].name}: browser checks are not running` : `${d.monitors.length} browser monitors are not being checked`;
+    const text = `These browser monitors have not been checked for a while and are shown as unchecked until a check runs again:\n\n${names}\n\nThe browser runtime's state is on each monitor's page. You get at most one such e-mail per hour for this workspace.`;
+    const html = `<p>${escapeHtml(text).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
+    const base = { organizationId: d.organizationId, projectId: null, channelId: null, channelName: "Owners and admins (email)", channelType: "email", kind: "monitor.unchecked", incidentId: null, monitorName: d.monitors.length === 1 ? d.monitors[0].name : `${d.monitors.length} browser monitors` };
+    const summary = d.monitors.map((m) => `${m.name} (${m.reason ?? "did not run"})`).join(", ").slice(0, 400);
+    const rows = [];
+    for (const [i, to] of emails.entries()) {
+      if (i >= allowed) { rows.push({ ...base, ok: false, status: "skipped" as const, error: "e-mail allowance used up", statusMessage: `skipped: e-mail allowance used up; unchecked: ${summary}` }); continue; }
+      let ok = true;
+      try { await sendEmail({ to, subject, text, html }, true); } catch { ok = false; }
+      rows.push({ ...base, ok, status: ok ? ("sent" as const) : ("failed" as const), error: ok ? null : "email not sent", statusMessage: `${ok ? "sent" : "failed: email not sent"}; unchecked: ${summary}` });
+    }
+    if (!rows.length) rows.push({ ...base, ok: false, status: "skipped" as const, error: "no owner or admin address", statusMessage: `skipped: no owner or admin address; unchecked: ${summary}` });
+    await repo.logDeliveries(rows);
+    await repo.markUncheckedNotified(d.monitors.map((m) => m.id));
   }
-  if (!rows.length) rows.push({ ...base, ok: false, status: "skipped" as const, error: "no owner or admin address", statusMessage: `skipped: browser checks not running (${reason}); no owner or admin address` });
-  await repo.logDeliveries(rows);
 }
 
 /** Heartbeats are due again one interval plus the grace period after the last expected ping. */

@@ -176,6 +176,14 @@ function creationProblem(v: z.infer<typeof body>): string | null {
   return requestBodyProblem(v) ?? jsonAssertionProblem(v);
 }
 
+/**
+ * What a spot check returns: the verdict fields only. Never the browser run (steps, screenshot bytes) or any other
+ * nested object a check type may add, so nothing binary or secret-derived is ever serialised into a response.
+ */
+export function spotCheckResult(o: { ok: boolean; statusCode?: number; latencyMs?: number; error?: string }) {
+  return { ok: o.ok === true, ...(typeof o.statusCode === "number" ? { statusCode: o.statusCode } : {}), ...(typeof o.latencyMs === "number" ? { latencyMs: o.latencyMs } : {}), ...(typeof o.error === "string" ? { error: o.error } : {}) };
+}
+
 /** Every goto of a journey must be a target this deployment allows (the egress policy refuses the rest at run time too). */
 async function journeyTargetProblem(config: BrowserConfig): Promise<string | null> {
   for (const s of config.steps) {
@@ -620,6 +628,9 @@ export const monitors = new Hono<AppEnv>()
     if (!m) return c.json({ error: "Not found" }, 404);
     if (m.type === "heartbeat") return c.json({ error: "Heartbeat monitors have no check to run", code: "regions_not_supported" }, 400);
     if (region !== undefined) {
+      // a browser spot check would return the run itself (steps, screenshot) outside the workspace's run history and its
+      // per-run screenshot authorization: browser monitors are checked through the recorded path only
+      if (m.type === "browser") return c.json({ error: "Browser monitors have no spot check; run the check without a region and read its runs", code: "regions_not_supported" }, 400);
       if (!(PROBE_TYPES as readonly string[]).includes(m.type) && region !== AUTO) {
         return c.json({ error: `Regions other than auto are available for ${PROBE_TYPES.join(" and ")} monitors only`, code: "regions_not_supported" }, 400);
       }
@@ -648,7 +659,7 @@ export const monitors = new Hono<AppEnv>()
       }
       const run = await runInRegion(region, m, repo);
       if ("unreachable" in run) return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
-      return c.json({ ok: true, region, result: run.outcome });
+      return c.json({ ok: true, region, result: spotCheckResult(run.outcome) });
     } finally {
       release();
     }

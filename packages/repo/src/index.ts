@@ -106,6 +106,9 @@ export interface Monitor {
   browserSecrets?: Record<string, string>;
   /** browser: since when its checks have not been running (runtime errors or capacity); null while they run */
   uncheckedSince?: Date | null;
+  uncheckedNotifiedAt?: Date | null;
+  /** browser: bumped whenever the secrets change (screenshots of runs started on an older version are dropped) */
+  browserSecretsVersion?: number;
   dnsRecordType?: "A" | "AAAA" | "CNAME" | "MX" | "TXT" | "NS";
   dnsExpectedValue?: string | null;
   dnsMatchMode?: "exact" | "contains";
@@ -171,7 +174,9 @@ export type BrowserRun = {
   /** the journey typed stored secrets (its screenshot is for owners and admins only) */
   usedSecrets: boolean;
 };
-export type NewBrowserRun = Omit<BrowserRun, "id" | "createdAt" | "hasScreenshot" | "kind" | "usedSecrets"> & { screenshot?: Uint8Array | null; kind?: BrowserRun["kind"]; usedSecrets?: boolean };
+export type NewBrowserRun = Omit<BrowserRun, "id" | "createdAt" | "hasScreenshot" | "kind" | "usedSecrets"> & { screenshot?: Uint8Array | null; kind?: BrowserRun["kind"]; usedSecrets?: boolean; /** the monitor's browserSecretsVersion when the run started */ secretsVersion?: number };
+/** Browser monitors of one workspace that went unchecked and are not yet in a digest to its owners and admins. */
+export type UncheckedDigest = { organizationId: string; monitors: { id: string; name: string; projectId: string | null; reason: string | null }[] };
 export type NewCheck = { monitorId: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null; region?: string };
 /** One region's result of a run that was checked from several. */
 export type RegionResult = { region: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null };
@@ -697,13 +702,17 @@ export interface Repo {
   listBrowserRuns?(monitorId: string, limit: number): Promise<BrowserRun[]>;
   /** The PNG of one run of that monitor and whether that run used secrets, or null. */
   browserRunScreenshot?(monitorId: string, runId: string): Promise<{ png: Uint8Array; usedSecrets: boolean } | null>;
-  /** How many of the monitor's latest browser runs in a row did not happen (deferred or error), up to `limit`. */
-  consecutiveUncheckedBrowserRuns?(monitorId: string, limit: number): Promise<number>;
+  /** The kinds and times of the monitor's latest browser runs, newest first. */
+  recentBrowserRunKinds?(monitorId: string, limit: number): Promise<{ kind: BrowserRun["kind"]; createdAt: Date }[]>;
+  /** Unchecked browser monitors not yet covered by a digest, grouped by workspace. */
+  pendingUncheckedDigests?(): Promise<UncheckedDigest[]>;
+  /** Record that a digest covered these monitors' current unchecked streak. */
+  markUncheckedNotified?(monitorIds: string[]): Promise<void>;
   /** Drop the screenshots of the monitor's runs that used secrets (its secrets changed). */
   purgeSecretScreenshots?(monitorId: string): Promise<void>;
-  /** Mark the monitor unchecked now; true only for the call that started the streak (notify once per streak). */
+  /** Mark the monitor unchecked now; true only for the call that started the streak. */
   markUnchecked?(monitorId: string): Promise<boolean>;
-  /** A run happened: the monitor is checked again. */
+  /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */
   clearUnchecked?(monitorId: string): Promise<void>;
   /** E-mail addresses of the workspace's owners and admins. */
   managerEmails?(orgId: string): Promise<string[]>;

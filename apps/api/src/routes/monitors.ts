@@ -47,7 +47,7 @@ const fields = {
   headers: z.record(z.string().max(100), z.string().max(2000)).describe("HTTP (or WebSocket handshake) request headers; replaces the header map. An empty object removes all custom headers. Existing masked values preserve stored secrets."),
   // sent as one text message after the handshake; blank means "handshake only"
   wsMessage: z.string().max(2000).transform((v) => v || null).nullable().describe("WebSocket only: text message sent once the connection is open; a message must then come back within the timeout. Not a secret: put credentials in headers. Null or empty string checks the handshake only."),
-  browser: browserConfigSchema.nullable().describe("Browser monitors only: { steps, timeoutMs, screenshot }. steps (1-20, the first a goto) use a fixed vocabulary: goto {url}, click {selector}, fill {selector, value | secretRef}, press {key}, waitFor {selector | text}, assertText {selector?, contains | equals}, assertUrl {pattern; * wildcard, a leading / matches path and query}, assertStatus {code}; each may set timeoutMs (500-30000, default 10000). timeoutMs is the whole journey (5000-60000, default 30000). screenshot: never (default) or on_failure (PNG up to 200 KB, secret fields masked). No JavaScript of your own runs."),
+  browser: browserConfigSchema.nullable().describe("Browser monitors only: { steps, timeoutMs, screenshot }. steps (1-20, the first a goto): goto {url}, click {selector}, fill {selector, value | secretRef}, press {key}, waitFor {selector | text}, assertText {selector?, contains | equals}, assertUrl {pattern; * wildcard, a leading / matches path and query}, assertStatus {code}; each may set timeoutMs (500-30000, default 10000). timeoutMs is the whole journey (5000-60000, default 30000). screenshot: never (default) or on_failure (PNG up to 200 KB, secret fields masked). evaluate {script} runs page JavaScript that must return true (owners and admins only; no secrets in such a journey)."),
   browserSecrets: browserSecretsSchema.describe("Browser monitors only: secrets for fill steps (secretRef), name -> value. Write-only: responses show every name with ••••••••. Send •••••••• to keep a stored value, null to delete it; the map replaces the stored one. Encrypted at rest. Changing the journey while keeping stored secrets requires an owner or admin."),
   dnsRecordType: z.enum(["A", "AAAA", "CNAME", "MX", "TXT", "NS"]).describe("DNS record type; default A. Queries Cloudflare's public DoH resolver."),
   dnsExpectedValue: z.string().max(2000).transform((v) => v || null).nullable().describe("Optional DNS answer value. At least one answer of the selected type must match. TXT uses quoted DNS presentation; MX includes priority. Empty or null accepts any answer of that type."),
@@ -163,6 +163,9 @@ export function jsonAssertionProblem(v: { type: string; method?: string | null; 
 }
 
 /** Browser fields on a monitor of another type, or a browser monitor without its journey. */
+/** Whether a journey has a script (evaluate) step. */
+const hasScript = (b: unknown) => !!b && typeof b === "object" && Array.isArray((b as { steps?: unknown }).steps) && (b as { steps: { action?: unknown }[] }).steps.some((s) => s?.action === "evaluate");
+const scriptForbidden = (c: Context<AppEnv>) => c.json({ error: "Only workspace owners and admins can add or change a browser journey with a script step", code: "browser_script_requires_manager" }, 403);
 const browserFieldProblem = (type: string, v: { browser?: unknown; browserSecrets?: Record<string, unknown> }) =>
   type === "browser" ? (v.browser ? null : "A browser monitor needs a journey (browser.steps)") : v.browser || Object.keys(v.browserSecrets ?? {}).length ? "browser and browserSecrets are for browser monitors only" : null;
 
@@ -409,6 +412,7 @@ export const monitors = new Hono<AppEnv>()
     const v = c.req.valid("json");
     const invalid = creationProblem(v);
     if (invalid) return c.json({ error: invalid }, 400);
+    if (hasScript(v.browser) && !(await isManager(c))) return scriptForbidden(c);
     if (EXPIRY_TYPES.includes(v.type)) v.intervalSec = expiryInterval(v.intervalSec);
     // the id is chosen here so the secrets can be encrypted bound to this monitor (see browser-secrets.ts)
     const id = crypto.randomUUID();
@@ -485,6 +489,8 @@ export const monitors = new Hono<AppEnv>()
         const stored = current.browserSecrets ?? {};
         const keepsStored = Object.keys(stored).length > 0 && (v.browserSecrets === undefined || Object.entries(v.browserSecrets).some(([k, x]) => x === MASK && stored[k] !== undefined));
         const changesJourney = v.browser !== undefined && !sameJson(v.browser, current.browser);
+        // a script step acts with the target's origin (same-origin requests, past its CSP): owners and admins only
+        if (changesJourney && hasScript(v.browser) && !(await isManager(c))) return scriptForbidden(c);
         // a stored secret goes wherever the journey types it: only managers may point the journey elsewhere around it
         if (keepsStored && changesJourney && !(await isManager(c))) {
           return c.json({ error: "Only workspace owners and admins can change a browser journey while keeping its stored secrets", code: "protected_browser_secrets" }, 403);

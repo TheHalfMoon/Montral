@@ -2,8 +2,10 @@
  * Browser (synthetic multi-step) checks: the declarative journey a monitor runs, and the pieces both sides share (the
  * API that validates it and the isolated worker process that executes it).
  *
- * A journey is a list of steps from a fixed vocabulary. There is no way to run JavaScript of the user's own: every step
- * maps to one Playwright call with bounded arguments, so the only code that runs in the page is the page's own.
+ * A journey is a list of steps from a fixed vocabulary; every step maps to one Playwright call with bounded arguments.
+ * The one exception is `evaluate`: JavaScript the user wrote, run inside the page (its renderer, in the target's origin,
+ * not subject to its CSP), never in the worker's Node process. Only owners and admins may add it, and a journey with a
+ * script never handles secrets.
  *
  * Limits (enforced here, and again by the worker before it runs anything):
  * - 1 to MAX_STEPS steps; the first one is a `goto` (the monitor's target is that URL);
@@ -18,6 +20,8 @@ export const MAX_SELECTOR_LENGTH = 500;
 export const MAX_VALUE_LENGTH = 1000;
 export const MAX_TEXT_LENGTH = 500;
 export const MAX_URL_LENGTH = 2048;
+/** a script step's source; runs inside the page (its renderer), never in the runner's Node process */
+export const MAX_SCRIPT_LENGTH = 4000;
 export const MAX_SECRETS = 10;
 export const MAX_SECRET_VALUE_LENGTH = 1000;
 export const STEP_TIMEOUT_MIN_MS = 500;
@@ -65,13 +69,18 @@ export const browserStepSchema = z.discriminatedUnion("action", [
     .refine((s) => (s.contains === undefined) !== (s.equals === undefined), "assertText needs exactly one of contains or equals"),
   z.object({ action: z.literal("assertUrl"), pattern: z.string().min(1).max(MAX_URL_LENGTH), timeoutMs }).strict(),
   z.object({ action: z.literal("assertStatus"), code: z.number().int().min(100).max(599) }).strict(),
+  // a scripted check: the body of an async function evaluated in the page (like the browser console); passes only when it
+  // returns true. It has the page's own powers, inside the isolated runner and behind the same egress policy.
+  z.object({ action: z.literal("evaluate"), script: z.string().min(1).max(MAX_SCRIPT_LENGTH).refine((s) => !/\u0000/.test(s), "Script contains a NUL character"), timeoutMs }).strict(),
 ]);
 export type BrowserStep = z.infer<typeof browserStepSchema>;
 export type BrowserAction = BrowserStep["action"];
 
 export const browserConfigSchema = z.object({
   steps: z.array(browserStepSchema).min(1).max(MAX_STEPS)
-    .refine((s) => s[0]?.action === "goto", "The first step must be goto: it opens the page the journey starts on"),
+    .refine((s) => s[0]?.action === "goto", "The first step must be goto: it opens the page the journey starts on")
+    // a script can read anything typed into the page, so a journey with a script never handles secrets
+    .refine((s) => !(s.some((x) => x.action === "evaluate") && s.some((x) => x.action === "fill" && x.secretRef)), "A journey with a script step cannot use secrets"),
   timeoutMs: z.number().int().min(TOTAL_TIMEOUT_MIN_MS).max(TOTAL_TIMEOUT_MAX_MS).default(TOTAL_TIMEOUT_DEFAULT_MS),
   screenshot: z.enum(["never", "on_failure"]).default("never"),
 }).strict();
@@ -155,6 +164,8 @@ export const STEP_FAILURES = {
   crashed: "page crashed",
   transfer: "page exceeded the transfer limit",
   failed: "failed",
+  scriptFalse: "script did not return true",
+  scriptError: "script threw an error",
 } as const;
 export type StepFailure = keyof typeof STEP_FAILURES;
 

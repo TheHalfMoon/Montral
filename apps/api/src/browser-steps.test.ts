@@ -33,7 +33,6 @@ describe("browser journey validation", () => {
 
   it("refuses anything that would run code or reach outside http(s)", () => {
     for (const s of [
-      { action: "evaluate", script: "fetch('/x')" },
       { action: "addInitScript", script: "1" },
       { action: "goto", url: "javascript:alert(1)" },
       { action: "goto", url: "file:///etc/passwd" },
@@ -44,6 +43,20 @@ describe("browser journey validation", () => {
       { action: "goto", url: "/relative" },
       { action: "click", selector: "#a", script: "x" },
     ]) expect(ok([goto, s]), JSON.stringify(s)).toBe(false);
+  });
+
+  it("accepts a page script step within limits, and never together with secrets", () => {
+    const script = { action: "evaluate", script: "return document.title.length > 0;" };
+    expect(ok([goto, script])).toBe(true);
+    expect(ok([goto, { ...script, timeoutMs: 5000 }])).toBe(true);
+    expect(ok([script])).toBe(false); // the first step is still goto
+    for (const bad of [{ action: "evaluate", script: "" }, { action: "evaluate", script: "x".repeat(4001) }, { action: "evaluate", script: "a\u0000b" }, { action: "evaluate", script: "1", world: "node" }, { action: "evaluate" }]) {
+      expect(ok([goto, bad]), JSON.stringify(bad).slice(0, 60)).toBe(false);
+    }
+    // a script can read what was typed into the page: a journey with one never uses secrets
+    expect(ok([goto, { action: "fill", selector: "#p", secretRef: "PASSWORD" }, script])).toBe(false);
+    expect(ok([goto, { action: "fill", selector: "#p", value: "visible" }, script])).toBe(true);
+    expect(stepError(1, "evaluate", "scriptFalse")).toBe("Step 2 (evaluate): script did not return true");
   });
 
   it("refuses Playwright's internal and framework selector engines and control characters", () => {

@@ -7,10 +7,10 @@ import Select from "./Select";
 export const SECRET_MASK = "••••••••";
 
 /** One step as edited: the action plus its fields as text (converted on save). */
-export type StepDraft = { action: string; url?: string; selector?: string; value?: string; secretRef?: string; key?: string; text?: string; contains?: string; equals?: string; pattern?: string; code?: string; timeoutMs?: string };
+export type StepDraft = { action: string; url?: string; selector?: string; value?: string; secretRef?: string; key?: string; text?: string; contains?: string; equals?: string; pattern?: string; code?: string; script?: string; timeoutMs?: string };
 
-const ACTIONS = ["goto", "click", "fill", "press", "waitFor", "assertText", "assertUrl", "assertStatus"] as const;
-const LABEL: Record<string, string> = { goto: "Open URL", click: "Click", fill: "Fill in", press: "Press key", waitFor: "Wait for", assertText: "Check text", assertUrl: "Check URL", assertStatus: "Check status" };
+const ACTIONS = ["goto", "click", "fill", "press", "waitFor", "assertText", "assertUrl", "assertStatus", "evaluate"] as const;
+const LABEL: Record<string, string> = { goto: "Open URL", click: "Click", fill: "Fill in", press: "Press key", waitFor: "Wait for", assertText: "Check text", assertUrl: "Check URL", assertStatus: "Check status", evaluate: "Run script" };
 export const MAX_JOURNEY_STEPS = 20;
 
 export const draftsOf = (j: BrowserJourney | null | undefined): StepDraft[] =>
@@ -32,6 +32,7 @@ export function journeyOf(drafts: StepDraft[], timeoutMs: number, screenshot: "n
       case "assertText": keep("selector"); if (d.equals !== undefined && d.contains === undefined) s.equals = d.equals; else keep("contains"); break;
       case "assertUrl": keep("pattern"); break;
       case "assertStatus": s.code = Number(d.code) || 200; break;
+      case "evaluate": keep("script"); break;
     }
     if (d.timeoutMs && d.action !== "assertStatus") s.timeoutMs = Number(d.timeoutMs);
     return s;
@@ -57,7 +58,7 @@ export function JourneyEditor({ steps, setSteps, timeoutMs, setTimeoutMs, screen
   return (
     <>
       <div className="fld">{t("Journey steps")}
-        <span className="muted" style={{ fontSize: 12.5, fontWeight: 400 }}>{t("Runs in a fresh headless Chromium for every check. Only these step types exist: no scripts of your own run. The first step opens the start page. Requests to private or internal addresses are refused. Checks run at most every 5 minutes.")}</span>
+        <span className="muted" style={{ fontSize: 12.5, fontWeight: 400 }}>{t("Runs in a fresh headless Chromium for every check. A script step runs inside the page, like the browser console, and passes only when it returns true; a journey with a script cannot use secrets. The first step opens the start page. Requests to private or internal addresses are refused. Checks run at most every 5 minutes.")}</span>
         {steps.map((s, i) => (
           <div key={i} style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 6, alignItems: "center" }}>
             <span className="faint mono" style={{ width: 22 }}>{i + 1}.</span>
@@ -77,6 +78,7 @@ export function JourneyEditor({ steps, setSteps, timeoutMs, setTimeoutMs, screen
             {s.action === "assertText" && <>{field(i, "selector", "Selector (optional)", "h1")}{field(i, "contains", "Must contain", "Welcome")}</>}
             {s.action === "assertUrl" && field(i, "pattern", "URL pattern", "/dashboard*", 2048)}
             {s.action === "assertStatus" && field(i, "code", "Status", "200", 3)}
+            {s.action === "evaluate" && <textarea className="in mono" rows={3} style={{ flex: "1 1 100%", minWidth: 0 }} value={s.script ?? ""} maxLength={4000} placeholder={"return document.querySelectorAll(\".item\").length > 0;"} aria-label={t("Script (returns true to pass)")} onChange={(e) => put(i, { script: e.target.value })} />}
             {s.action !== "assertStatus" && <input className="in mono" style={{ width: 90 }} value={s.timeoutMs ?? ""} placeholder="10000" aria-label={t("Step timeout (ms)")} onChange={(e) => put(i, { timeoutMs: e.target.value.replace(/\D/g, "") })} />}
             <button type="button" className="btn" disabled={i <= 1} onClick={() => move(i, -1)} aria-label={t("Move up")}>↑</button>
             <button type="button" className="btn" disabled={i === 0 || i === steps.length - 1} onClick={() => move(i, 1)} aria-label={t("Move down")}>↓</button>

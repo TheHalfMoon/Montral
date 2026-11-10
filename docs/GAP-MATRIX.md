@@ -3,7 +3,7 @@
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list
 at the end. **Y** yes, **N** no, **P** partial, **$** paid tier/add-on only,
-**?** not verified. Montral's column reflects `main` at `0b93696` (2026-11-10), with the
+**?** not verified. Montral's column reflects `main` at `678c363` (2026-11-10), with the
 merging pull request in brackets, verified against the code, not marketing copy.
 
 ## Matrix

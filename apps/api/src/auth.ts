@@ -140,7 +140,8 @@ export async function revokeKeysPinnedTo(query: <T>(sql: string, params?: unknow
     }
     return !!meta && typeof meta === "object" && (meta as { organizationId?: unknown }).organizationId === orgId;
   });
-  if (pinned.length) await query(`delete from apikey where reference_id = $1 and id = any($2::text[])`, [userId, pinned.map((k) => k.id)]);
+  // ids as one comma-separated text parameter (array parameters do not pass through the raw query interface)
+  if (pinned.length) await query(`delete from apikey where reference_id = $1::text and id = any(string_to_array($2::text, ','))`, [userId, pinned.map((k) => k.id).join(",")]);
   return pinned.length;
 }
 

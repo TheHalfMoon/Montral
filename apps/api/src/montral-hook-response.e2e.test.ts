@@ -116,12 +116,12 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     const events = (await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events as { method: string; response_status: number | null }[];
     expect(events.map((e) => [e.method, e.response_status])).toEqual([["PUT", 409], ["POST", 201], ["POST", 202]]);
 
-    // Audit: field names and the status only; body text, header values never stored.
+    // Audit: field names, the statuses (per method too); body text, header values never stored.
     const audits = await q<{ changes: { fields: string[]; values?: Record<string, unknown> } }>(
       "SELECT changes FROM audit_event WHERE organization_id=$1 AND action='hook_inbox.response_update' AND target_id=$2", [owner.orgId, id]);
     expect(audits).toHaveLength(1);
     expect(audits[0].changes.fields).toEqual(expect.arrayContaining(["status", "body", "headers", "methods", "contentType", "delayMs"]));
-    expect(audits[0].changes.values).toEqual({ status: 201 });
+    expect(audits[0].changes.values).toEqual({ status: 201, putStatus: 409 });
     expect(JSON.stringify(audits)).not.toMatch(/mock-123|evt_mock|conflict/);
 
     // Reset goes back to the default and is audited too.

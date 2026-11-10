@@ -50,3 +50,17 @@ test("nonzero Docker exit rejects even with valid output", async () => {
     await assert.rejects(dockerFileTransfer("fake", ["pg_dump"], { stdoutFile: join(dir, "backup.dump"), spawnProcess: () => fakeSpawn({ exitCode: 17 }) }), /exited 17/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("destination write failure rejects rather than reporting a valid backup", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "montral-transfer-"));
+  try {
+    // Opening a directory as a file fails on supported CI platforms.
+    await assert.rejects(
+      dockerFileTransfer("fake", ["pg_dump"], {
+        stdoutFile: dir,
+        spawnProcess: () => fakeSpawn({ early: true }),
+      }),
+      { code: "EISDIR" },
+    );
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});

@@ -169,6 +169,8 @@ export const ssoAdmin = new Hono<AppEnv>()
     if (!gone) return c.body(null, 204);
     await q(c)(`DELETE FROM account WHERE provider_id = $1::text`, [providerIdOf(gone.id)]);
     await invalidateConnection(q(c), gone.id);
+    // SCIM provisioning depends on the connection: its token stops working with it
+    await q(c)(`UPDATE scim_token SET revoked_at = now() WHERE organization_id = $1::text AND revoked_at IS NULL`, [orgId]);
     await audit(c, "sso.connection_delete", { type: "sso_connection", id: gone.id, projectId: null }, null);
     return c.body(null, 204);
   })

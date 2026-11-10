@@ -834,6 +834,21 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     await sso(idpB, new Jar(), { email: alice }, { sub: "scim-alice", email: alice, email_verified: true });
     expect(await member(aliceId)).toBe(false);
 
+    // SCIM never adds an existing account (an invitation does); but it removes a member whatever their verification state
+    const dave = await signUp("dave-scim", `dave-scim-${rand}@${domainB}`);
+    const daveRow = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: dave.email } });
+    expect(daveRow.status).toBe(201);
+    expect(await member(dave.id)).toBe(false);
+    await q(`insert into member (id, organization_id, user_id, role, created_at) values ($1, $2, $3, 'member', now())`, [crypto.randomUUID(), ownerB.orgId, dave.id]);
+    await q(`update "user" set email_verified = false where id = $1`, [dave.id]);
+    // a routine attribute update never touches the membership
+    expect((await scim(`/Users/${daveRow.body.id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "replace", path: "displayName", value: "Dave" }] } })).status).toBe(200);
+    expect(await member(dave.id)).toBe(true);
+    expect((await scim(`/Users/${daveRow.body.id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "replace", path: "active", value: false }] } })).status).toBe(200);
+    expect(await member(dave.id)).toBe(false);
+    // oversized bodies are refused before parsing
+    expect((await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: `big-${rand}@${domainB}`, displayName: "x".repeat(70_000) } })).status).toBe(413);
+
     // the owner is never deprovisioned
     const ownerRow = (await q<{ id: string }>(`insert into scim_user (organization_id, user_name) values ($1, lower($2)) returning id::text as id`, [ownerB.orgId, ownerB.email]))[0].id;
     expect((await scim(`/Users/${ownerRow}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "replace", value: { active: false } }] } })).body).toMatchObject({ scimType: "mutability" });

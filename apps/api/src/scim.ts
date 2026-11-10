@@ -1,4 +1,6 @@
 import { Hono, type Context } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { limitedJsonBody } from "./json-body-budget";
 import { auditChanges, recordAuditEvent, type Query } from "./audit";
 import { revokeKeysPinnedTo } from "./auth";
 import type { AppEnv, Bindings } from "./env";
@@ -10,11 +12,11 @@ import { clearRemoval, connectionById, isOwnerRole, recordRemoval, type SsoConne
  * updates, deactivates and deletes people with a per-workspace bearer token.
  *
  * - Creating an active user for an address of the connection's verified domains lets single sign-on provision that
- *   person (once a token exists, a workspace provisions only people its provider assigned). An existing Montral account
- *   with a verified email in that domain becomes a member at once; otherwise the account is created at the first SSO
- *   sign-in, as without SCIM.
+ *   person (once a token exists, a workspace provisions only people its provider assigned); the account is created at the
+ *   first SSO sign-in, as without SCIM. SCIM never adds an existing account to the workspace (that takes an invitation).
  * - Deactivating (active=false) or deleting ends the membership like a removal: the person's sessions are signed out,
- *   API keys pinned to the workspace are revoked, and single sign-on refuses them until the provider reactivates them (which makes an existing account a member again). The workspace owner cannot be deprovisioned.
+ *   API keys pinned to the workspace are revoked, and single sign-on refuses them until the provider reactivates them (which restores the membership of the account it removed).
+ *   The workspace owner cannot be deprovisioned. Only a change of `active` touches memberships.
  * - Users only; groups and bulk operations are not supported (ServiceProviderConfig says so).
  */
 
@@ -42,6 +44,9 @@ export async function sha256Hex(s: string): Promise<string> {
 }
 
 export const newScimToken = () => SCIM_TOKEN_PREFIX + Array.from(crypto.getRandomValues(new Uint8Array(32)), (b) => b.toString(16).padStart(2, "0")).join("");
+
+/** SCIM bodies are small: 64 KiB at most, like the rest of the API's JSON. */
+const readBody = (c: Context<AppEnv>) => limitedJsonBody(c.req.raw, 64 * 1024).catch((e) => { if (e instanceof HTTPException) throw e; return null; });
 
 class ScimError extends Error {
   constructor(readonly status: number, detail: string, readonly scimType?: string) { super(detail); }
@@ -97,44 +102,58 @@ async function workspaceConnection(query: Query, env: Bindings, orgId: string): 
   return row ? connectionById(query, env, row.id) : null;
 }
 
-async function verifiedAccount(query: Query, email: string): Promise<string | null> {
-  // only an account whose owner proved the address: an unverified sign-up for someone else's address is never added
-  const [u] = await query<{ id: string }>(`SELECT id FROM "user" WHERE lower(email) = $1::text AND email_verified = true LIMIT 1`, [email]);
-  return u?.id ?? null;
+/**
+ * The member of the workspace with this address, verified or not (a removal needs no proof of ownership), or the account
+ * this record already points at.
+ */
+async function memberFor(query: Query, orgId: string, row: Row): Promise<{ userId: string; role: string } | null> {
+  const [m] = await query<{ user_id: string; role: string }>(
+    `SELECT m.user_id, m.role FROM member m JOIN "user" u ON u.id = m.user_id
+      WHERE m.organization_id = $1::text AND (m.user_id = $2::text OR lower(u.email) = $3::text)
+      ORDER BY (m.user_id = $2::text) DESC LIMIT 1`,
+    [orgId, row.user_id ?? "", row.user_name],
+  );
+  return m ? { userId: m.user_id, role: m.role } : null;
+}
+
+/** Ends the membership like a removal; the owner is refused. Returns the account it ended, if any. */
+async function deprovision(query: Query, orgId: string, row: Row): Promise<string | null> {
+  const m = await memberFor(query, orgId, row);
+  if (!m) return null;
+  if (isOwnerRole(m.role)) throw new ScimError(400, "The workspace owner cannot be deprovisioned over SCIM", "mutability");
+  // the block is written before the membership ends (as for a removal), so it can never be missing
+  await recordRemoval(query, orgId, m.userId);
+  await query(`DELETE FROM member WHERE organization_id = $1::text AND user_id = $2::text`, [orgId, m.userId]);
+  // The SSO link stays (unlike a removal in the app): a link never adds anyone to a workspace, and an account made by
+  // single sign-on has no other way to sign in, so reactivation must find it. The block above refuses JIT.
+  await query(`DELETE FROM session WHERE user_id = $1::text`, [m.userId]);
+  await revokeKeysPinnedTo(query, orgId, m.userId);
+  // remembered: reactivating this record restores this account's membership (it was a member, by its own consent)
+  await query(`UPDATE scim_user SET user_id = $2::text WHERE id = $1::uuid`, [row.id, m.userId]);
+  return m.userId;
 }
 
 /**
- * Makes the stored wish real. Active: lift a block from an earlier deactivation and, for an existing verified account,
- * restore the membership (with the connection's default role). Inactive: end the membership like a removal.
+ * Reactivation (or creation as active): lifts the block of an earlier deactivation. A membership comes back only for the
+ * account this record already points at (someone who was a member, or who joined through SSO for this record); SCIM
+ * never adds any other existing account (that takes an invitation), and new people join through SSO.
  */
-async function apply(query: Query, env: Bindings, orgId: string, row: Row): Promise<string | null> {
-  const userId = row.user_id ?? (await verifiedAccount(query, row.user_name));
-  if (row.active) {
-    await clearRemoval(query, orgId, row.user_name);
-    if (userId) {
-      const conn = await workspaceConnection(query, env, orgId);
-      await query(
-        `INSERT INTO member (id, organization_id, user_id, role, created_at)
-         SELECT $1::text, $2::text, $3::text, $4::text, now()
-          WHERE NOT EXISTS (SELECT 1 FROM member WHERE organization_id = $2::text AND user_id = $3::text)`,
-        [crypto.randomUUID(), orgId, userId, conn?.defaultRole ?? "member"],
-      );
-    }
-  } else if (userId) {
-    const [m] = await query<{ role: string }>(`SELECT role FROM member WHERE organization_id = $1::text AND user_id = $2::text`, [orgId, userId]);
-    if (m && isOwnerRole(m.role)) throw new ScimError(400, "The workspace owner cannot be deprovisioned over SCIM", "mutability");
-    if (m) {
-      // the block is written before the membership ends (as for a removal), so it can never be missing
-      await recordRemoval(query, orgId, userId);
-      await query(`DELETE FROM member WHERE organization_id = $1::text AND user_id = $2::text`, [orgId, userId]);
-      // The SSO link stays (unlike a removal in the app): a link never adds anyone to a workspace, and an account made
-      // by single sign-on has no other way to sign in, so reactivation must find it. The block above refuses JIT.
-      await query(`DELETE FROM session WHERE user_id = $1::text`, [userId]);
-      await revokeKeysPinnedTo(query, orgId, userId);
-    }
+async function reactivate(query: Query, env: Bindings, orgId: string, row: Row) {
+  const conn = await workspaceConnection(query, env, orgId);
+  const domain = row.user_name.slice(row.user_name.lastIndexOf("@") + 1);
+  if (!conn?.domains?.includes(domain)) throw new ScimError(400, "The address is not in one of the workspace's verified single sign-on domains", "invalidValue");
+  await clearRemoval(query, orgId, row.user_name);
+  if (row.user_id) {
+    // one statement under an advisory lock on (workspace, account), so a concurrent request cannot add a second row
+    await query(
+      `WITH lock AS (SELECT pg_advisory_xact_lock(hashtext($2::text || ':' || $3::text)))
+       INSERT INTO member (id, organization_id, user_id, role, created_at)
+       SELECT $1::text, $2::text, $3::text, $4::text, now() FROM lock
+        WHERE EXISTS (SELECT 1 FROM "user" WHERE id = $3::text)
+          AND NOT EXISTS (SELECT 1 FROM member WHERE organization_id = $2::text AND user_id = $3::text)`,
+      [crypto.randomUUID(), orgId, row.user_id, conn.defaultRole],
+    );
   }
-  if (userId && userId !== row.user_id) await query(`UPDATE scim_user SET user_id = $2::text WHERE id = $1::uuid`, [row.id, userId]);
-  return userId;
 }
 
 async function audit(c: Context<AppEnv>, action: string, row: Row, values: Record<string, string | boolean>) {
@@ -279,6 +298,7 @@ export const scimApi = new Hono<AppEnv>()
   })
   .onError((e, c) => {
     if (e instanceof ScimError) return json(c, { schemas: [SCIM_ERROR], status: String(e.status), ...(e.scimType ? { scimType: e.scimType } : {}), detail: e.message }, e.status);
+    if (e instanceof HTTPException && e.status < 500) return json(c, { schemas: [SCIM_ERROR], status: String(e.status), detail: e.message }, e.status);
     console.error("SCIM request failed; private diagnostics suppressed");
     return json(c, { schemas: [SCIM_ERROR], status: "500", detail: "Internal error" }, 500);
   })
@@ -290,7 +310,7 @@ export const scimApi = new Hono<AppEnv>()
   }] }))
   .get("/Users", async (c) => {
     const filter = filterOf(c.req.query("filter"));
-    const startIndex = Math.max(1, Number.parseInt(c.req.query("startIndex") ?? "1", 10) || 1);
+    const startIndex = Math.min(1_000_000, Math.max(1, Number.parseInt(c.req.query("startIndex") ?? "1", 10) || 1));
     const count = Math.min(MAX_PAGE, Math.max(0, Number.parseInt(c.req.query("count") ?? "100", 10) || 0));
     const where = filter ? `AND ${filter.column} = $2::text` : "";
     const args: unknown[] = [c.get("orgId"), ...(filter ? [filter.value] : [])];
@@ -301,7 +321,7 @@ export const scimApi = new Hono<AppEnv>()
   })
   .get("/Users/:id", async (c) => json(c, resource(c.env, await load(q(c), c.get("orgId"), c.req.param("id")))))
   .post("/Users", async (c) => {
-    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a SCIM User", "invalidSyntax");
     const userName = userNameOf(body.userName);
     const f = fieldsOf(body);
@@ -318,9 +338,10 @@ export const scimApi = new Hono<AppEnv>()
     );
     if (!row) throw new ScimError(409, "A user with this userName already exists", "uniqueness");
     try {
-      await apply(q(c), c.env, orgId, row);
+      // created inactive: a current member with the address is deprovisioned (the owner is refused)
+      if (!row.active) await deprovision(q(c), orgId, row);
+      else await clearRemoval(q(c), orgId, row.user_name);
     } catch (e) {
-      // the owner cannot be created as inactive: nothing is kept
       await q(c)(`DELETE FROM scim_user WHERE id = $1::uuid`, [row.id]);
       throw e;
     }
@@ -329,7 +350,7 @@ export const scimApi = new Hono<AppEnv>()
   })
   .put("/Users/:id", async (c) => {
     const row = await load(q(c), c.get("orgId"), c.req.param("id"));
-    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a SCIM User", "invalidSyntax");
     if (body.userName !== undefined && userNameOf(body.userName) !== row.user_name) throw new ScimError(400, "userName cannot be changed; delete the user and create the new address", "mutability");
     // a replace: attributes left out are cleared, `active` defaults to true
@@ -338,14 +359,15 @@ export const scimApi = new Hono<AppEnv>()
   })
   .patch("/Users/:id", async (c) => {
     const row = await load(q(c), c.get("orgId"), c.req.param("id"));
-    const body = (await c.req.json().catch(() => null)) as Record<string, unknown> | null;
+    const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a PatchOp", "invalidSyntax");
     return json(c, resource(c.env, await save(c, row, patchFields(body, row))));
   })
   .delete("/Users/:id", async (c) => {
     const row = await load(q(c), c.get("orgId"), c.req.param("id"));
     // ends the membership first (refused for the owner, then nothing is deleted)
-    if (row.active) await apply(q(c), c.env, row.organization_id, { ...row, active: false });
+    // ends the membership whatever the record's state (the owner is refused, then nothing is deleted)
+    await deprovision(q(c), row.organization_id, row);
     await q(c)(`DELETE FROM scim_user WHERE id = $1::uuid`, [row.id]);
     await audit(c, "scim.user_delete", row, { status: "deleted" });
     return c.body(null, 204);
@@ -353,10 +375,11 @@ export const scimApi = new Hono<AppEnv>()
   .all("*", (c) => json(c, { schemas: [SCIM_ERROR], status: "404", detail: "Not supported" }, 404));
 
 async function save(c: Context<AppEnv>, row: Row, f: Fields): Promise<Row> {
-  // deactivating the owner is refused before anything is written
-  if (f.active === false && row.active) await apply(q(c), c.env, row.organization_id, { ...row, active: false });
+  // only a change of `active` touches the membership (routine attribute updates never re-add anyone); deactivating the
+  // owner is refused before anything is written, and so is reactivating an address outside the verified domains
+  if (f.active === false && row.active) await deprovision(q(c), row.organization_id, row);
+  if (f.active === true && !row.active) await reactivate(q(c), c.env, row.organization_id, (await load(q(c), row.organization_id, row.id)));
   const { row: saved, activeChanged } = await update(q(c), row, f);
-  if (saved.active) await apply(q(c), c.env, saved.organization_id, saved);
   if (activeChanged) await audit(c, saved.active ? "scim.user_reactivate" : "scim.user_deactivate", saved, { status: saved.active ? "active" : "inactive" });
   return (await q(c)<Row>(`SELECT * FROM scim_user WHERE id = $1::uuid`, [row.id]))[0];
 }

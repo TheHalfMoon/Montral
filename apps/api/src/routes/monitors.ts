@@ -255,8 +255,11 @@ async function refuseTarget(c: Context<AppEnv>, type: string, target: string) {
 }
 
 /** Request headers and bodies (often tokens) are shown to owners and admins only. */
+/** Scheduler bookkeeping of run coalescing (beginRuns): never part of the API (it would add ~150 bytes per monitor to every list). */
+const SCHEDULER_ONLY = new Set(["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt"]);
+const withoutSchedulerFields = <T,>(m: T): T => Object.fromEntries(Object.entries(m as object).filter(([k]) => !SCHEDULER_ONLY.has(k))) as T;
 const shown = async <T extends { headers?: Record<string, string> | null; requestBody?: string | null }>(c: Context<AppEnv>, rows: T[]): Promise<T[]> =>
-  (await isManager(c)) ? rows : rows.map((m) => ({ ...m, ...(m.headers ? { headers: maskHeaders(m.headers) } : {}), ...(m.requestBody ? { requestBody: MASK } : {}) }));
+  (await isManager(c)) ? rows.map(withoutSchedulerFields) : rows.map((m) => withoutSchedulerFields({ ...m, ...(m.headers ? { headers: maskHeaders(m.headers) } : {}), ...(m.requestBody ? { requestBody: MASK } : {}) }));
 
 /** Source fields that look like credentials: a record carrying one is refused rather than imported without its authentication. */
 const CREDENTIAL_KEY = /auth|user|pass|secret|token|cred|bearer|oauth/i;

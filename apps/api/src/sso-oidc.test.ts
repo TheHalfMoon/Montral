@@ -1,8 +1,8 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { SyntheticIdp } from "../test/synthetic-idp";
+import { SyntheticIdp, type Tweak } from "../test/synthetic-idp";
 import { safeReturnTo } from "./sso-auth";
 import { addressAlwaysForbidden } from "./netguard";
-import { authorizationUrl, configureSso, discover, exchangeCode, idpUrl, normalizeIssuer, publicSigningKeys, randomToken, setSsoOptionsForTests, sha256b64url, SsoError, verifyIdToken, type Discovery } from "./sso-oidc";
+import { authorizationUrl, configureSso, discover, exchangeCode, withUserinfo, idpUrl, normalizeIssuer, publicSigningKeys, randomToken, setSsoOptionsForTests, sha256b64url, SsoError, verifyIdToken, type Discovery } from "./sso-oidc";
 import { decryptSecret, encryptSecret, SecretUnreadable } from "./sso-secret";
 import { instanceConnection } from "./sso-store";
 
@@ -145,7 +145,8 @@ describe("authorization request and token exchange", () => {
     expect(Object.fromEntries(params)).toMatchObject({ response_type: "code", scope: "openid email profile", state, nonce, code_challenge_method: "S256", redirect_uri: "https://montral.test/api/auth/sso/callback" });
     const back = new URL(callback);
     expect(back.searchParams.get("state")).toBe(state);
-    const token = await exchangeCode(d, { clientId: idp.clientId, clientSecret: idp.clientSecret, code: back.searchParams.get("code")!, redirectUri: "https://montral.test/api/auth/sso/callback", codeVerifier: verifier });
+    const { idToken: token, accessToken } = await exchangeCode(d, { clientId: idp.clientId, clientSecret: idp.clientSecret, code: back.searchParams.get("code")!, redirectUri: "https://montral.test/api/auth/sso/callback", codeVerifier: verifier });
+    expect(accessToken).toMatch(/^[A-Za-z0-9_-]+$/);
     const id = await verifyIdToken(token, { discovery: d, clientId: idp.clientId, nonce });
     expect(id).toEqual({ issuer: idp.issuer, subject: "u1", email: "u1@corp.test", emailVerified: true, name: null });
   });
@@ -159,7 +160,7 @@ describe("authorization request and token exchange", () => {
       const c = new URL(callback).searchParams.get("code")!;
       const go = () => exchangeCode(opts.d ?? d, { clientId: idp.clientId, clientSecret: opts.secret ?? idp.clientSecret, code: c, redirectUri: "https://m.test/cb", codeVerifier: opts.verifier ?? verifier });
       if (opts.reuse) await go();
-      return go().then((t) => t, (e: Error) => e.message);
+      return go().then((t) => t.idToken, (e: Error) => e.message);
     };
     expect(await run({ verifier: randomToken() })).toContain("invalid_grant");
     expect(await run({ secret: "wrong" })).toContain("invalid_client");
@@ -172,6 +173,56 @@ describe("authorization request and token exchange", () => {
     const d = await discover(idp.issuer, { fresh: true });
     idp.oversize = "token";
     expect(await code(exchangeCode(d, { clientId: idp.clientId, clientSecret: idp.clientSecret, code: "c", redirectUri: "https://m.test/cb", codeVerifier: "v" }))).toBe("response_too_large");
+  });
+});
+
+describe("userinfo fallback for a missing verified email", () => {
+  const base = { subject: "", email: null as string | null, emailVerified: false, name: "From id_token" };
+  const run = async (userinfo: Tweak["userinfo"], identity: Partial<typeof base> = {}, accessToken: string | null = "at-1") => {
+    optIn();
+    const d = await discover(idp.issuer, { fresh: true });
+    idp.userinfo.set("at-1", userinfo);
+    return withUserinfo(d, accessToken, { issuer: idp.issuer, ...base, subject: "sub-1", ...identity });
+  };
+  afterEach(() => idp.userinfo.clear());
+
+  it("adds the provider-verified email of the same subject; issuer, subject and name stay the id_token's", async () => {
+    expect(await run({ body: { sub: "sub-1", email: "Bob@Corp.test", email_verified: true, name: "Other" } }))
+      .toEqual({ issuer: idp.issuer, subject: "sub-1", email: "bob@corp.test", emailVerified: true, name: "From id_token" });
+    expect(idp.lastUserinfoAuth).toBe("Bearer at-1");
+  });
+
+  it("upgrades an unverified id_token email only to the same address", async () => {
+    expect((await run({ body: { sub: "sub-1", email: "bob@corp.test", email_verified: true } }, { email: "bob@corp.test" })).emailVerified).toBe(true);
+    const other = await run({ body: { sub: "sub-1", email: "mallory@corp.test", email_verified: true } }, { email: "bob@corp.test" });
+    expect(other).toMatchObject({ email: "bob@corp.test", emailVerified: false });
+  });
+
+  it("ignores another subject, a non-literal email_verified, an error, a missing token and a non-JSON answer", async () => {
+    for (const userinfo of [
+      { body: { sub: "sub-2", email: "bob@corp.test", email_verified: true } },
+      { body: { sub: "sub-1", email: "bob@corp.test", email_verified: "true" } },
+      { body: { sub: "sub-1", email: "bob@corp.test" } },
+      { body: { sub: "sub-1", email: "not-an-email", email_verified: true } },
+      { status: 401, body: { error: "invalid_token" } },
+      { raw: "eyJhbGciOiJSUzI1NiJ9.e30.sig" },
+    ] as Tweak["userinfo"][]) {
+      expect(await run(userinfo), JSON.stringify(userinfo)).toMatchObject({ email: null, emailVerified: false });
+    }
+    expect(await run({ body: { sub: "sub-1", email: "bob@corp.test", email_verified: true } }, {}, null)).toMatchObject({ email: null, emailVerified: false });
+  });
+
+  it("never asks userinfo when the id_token already has a verified email", async () => {
+    idp.lastUserinfoAuth = "";
+    expect(await run({ body: { sub: "sub-1", email: "x@corp.test", email_verified: true } }, { email: "bob@corp.test", emailVerified: true })).toMatchObject({ email: "bob@corp.test" });
+    expect(idp.lastUserinfoAuth).toBe("");
+  });
+
+  it("never sends the access token to a link-local/metadata userinfo address, even with the private opt-in", async () => {
+    optIn();
+    const d = { ...(await discover(idp.issuer, { fresh: true })), userinfoEndpoint: "https://169.254.169.254/userinfo" };
+    idp.userinfo.set("at-1", { body: { sub: "sub-1", email: "bob@corp.test", email_verified: true } });
+    expect(await withUserinfo(d, "at-1", { issuer: idp.issuer, ...base, subject: "sub-1" })).toMatchObject({ email: null, emailVerified: false });
   });
 });
 

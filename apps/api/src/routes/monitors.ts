@@ -651,13 +651,14 @@ export const monitors = new Hono<AppEnv>()
       }
       const cost = region !== undefined ? 1 : creditCost(m);
       // a manual check is a request like any other: it takes a credit
+      const spentAt = new Date();
       if ((await c.get("entitlements").spendCredits(m.organizationId, cost)) < cost) {
         return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
       }
       if (region === undefined) {
         const result = await checkOne(repo, m, c.get("entitlements"));
         // a browser check that did not happen (deferred for capacity, runtime failure) gives its credits back
-        if (result === "deferred" || result === "error") await refundCredits(m.organizationId, cost, c.get("entitlements"));
+        if (result === "deferred" || result === "error") await refundCredits(m.organizationId, cost, c.get("entitlements"), spentAt);
         return c.json({ ok: true });
       }
       const run = await runInRegion(region, m, repo);

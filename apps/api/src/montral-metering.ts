@@ -197,10 +197,10 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     );
     return Math.max(0, Math.min(count, Number(rows[0]?.granted ?? 0)));
   };
-  /** Credits given back for work that did not happen, in the current period (never below zero). */
-  const refund = async (org: string, count: number) => {
+  /** Credits given back for work that did not happen, in the period they were taken in (never below zero). */
+  const refund = async (org: string, count: number, spentAt?: Date) => {
     if (!Number.isSafeInteger(count) || count <= 0) return;
-    const { start } = calendarMonthUtc();
+    const { start } = calendarMonthUtc(spentAt && !Number.isNaN(spentAt.getTime()) ? spentAt : new Date());
     await database.query(
       "UPDATE montral_usage SET used = GREATEST(0, used - $3::integer) WHERE organization_id = $1::text AND period_start = $2::timestamptz AND kind = 'credits'",
       [org, start.toISOString(), count],
@@ -257,7 +257,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   return {
     ...unmetered,
     spendCredits: (org, count) => spend(org, count, "credits"),
-    refundCredits: (org, count) => refund(org, count),
+    refundCredits: (org, count, spentAt) => refund(org, count, spentAt),
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
     reserveEmailQuotaOnce,

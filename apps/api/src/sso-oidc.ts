@@ -149,6 +149,8 @@ export type Discovery = {
   tokenEndpoint: string;
   jwksUri: string;
   endSessionEndpoint: string | null;
+  /** OpenID Connect Core §5.3, used only when the id_token carries no verified email */
+  userinfoEndpoint: string | null;
   /** id_token algorithms both sides accept */
   algorithms: string[];
   tokenAuth: "client_secret_basic" | "client_secret_post";
@@ -193,12 +195,17 @@ export async function discover(issuerRaw: string, { fresh = false }: { fresh?: b
   if (typeof d.end_session_endpoint === "string") {
     try { endSessionEndpoint = idpUrl(d.end_session_endpoint, "end_session_endpoint").toString(); } catch { /* optional: ignored when unusable */ }
   }
+  let userinfoEndpoint: string | null = null;
+  if (typeof d.userinfo_endpoint === "string") {
+    try { userinfoEndpoint = idpUrl(d.userinfo_endpoint, "userinfo_endpoint").toString(); } catch { /* optional: ignored when unusable */ }
+  }
   const value: Discovery = {
     issuer,
     authorizationEndpoint: d.authorization_endpoint as string,
     tokenEndpoint: d.token_endpoint as string,
     jwksUri: d.jwks_uri as string,
     endSessionEndpoint,
+    userinfoEndpoint,
     algorithms,
     tokenAuth,
   };
@@ -259,8 +266,11 @@ export function authorizationUrl(d: Discovery, p: { clientId: string; redirectUr
 /** application/x-www-form-urlencoded, as RFC 6749 §2.3.1 asks for the client id and secret in HTTP Basic. */
 const formEncode = (s: string) => encodeURIComponent(s).replace(/%20/g, "+");
 
-/** Exchanges the authorization code (with the PKCE verifier) for tokens; returns the id_token. Tokens are not stored. */
-export async function exchangeCode(d: Discovery, p: { clientId: string; clientSecret: string; code: string; redirectUri: string; codeVerifier: string }): Promise<string> {
+/**
+ * Exchanges the authorization code (with the PKCE verifier) for tokens; returns the id_token and, when the provider sent
+ * one, the access token (used only for one userinfo request during this sign-in). Tokens are not stored.
+ */
+export async function exchangeCode(d: Discovery, p: { clientId: string; clientSecret: string; code: string; redirectUri: string; codeVerifier: string }): Promise<{ idToken: string; accessToken: string | null }> {
   const form = new URLSearchParams({ grant_type: "authorization_code", code: p.code, redirect_uri: p.redirectUri, code_verifier: p.codeVerifier });
   const headers: Record<string, string> = { "content-type": "application/x-www-form-urlencoded" };
   if (d.tokenAuth === "client_secret_basic") headers.authorization = `Basic ${btoa(`${formEncode(p.clientId)}:${formEncode(p.clientSecret)}`)}`;
@@ -275,7 +285,40 @@ export async function exchangeCode(d: Discovery, p: { clientId: string; clientSe
     throw new SsoError("token_exchange_failed", `Token endpoint answered HTTP ${status}${code}`);
   }
   if (typeof body.id_token !== "string") throw new SsoError("token_exchange_failed", "Token endpoint returned no id_token");
-  return body.id_token;
+  const bearer = typeof body.token_type !== "string" || body.token_type.toLowerCase() === "bearer";
+  const accessToken = bearer && typeof body.access_token === "string" && body.access_token.length > 0 && body.access_token.length <= 8192 && /^[!-~]+$/.test(body.access_token) ? body.access_token : null;
+  return { idToken: body.id_token, accessToken };
+}
+
+const emailOf = (v: unknown) => {
+  const raw = typeof v === "string" ? v.trim().toLowerCase() : "";
+  return raw.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw) ? raw : null;
+};
+
+/**
+ * Some providers leave `email` / `email_verified` out of the id_token and return them from the userinfo endpoint only
+ * (OpenID Connect Core §5.4 lets them). When the verified id_token has no verified email, ask the userinfo endpoint once
+ * with this sign-in's access token. Its answer counts only if its `sub` is exactly the id_token's (§5.3.4: otherwise it
+ * may describe someone else and must not be used), `email_verified` is literally true, and, when the id_token named an
+ * email, the userinfo email is the same address. Anything else, including an unreachable endpoint or a signed (JWT)
+ * answer, leaves the identity as it was: the caller then refuses the unverified email as before. The subject, issuer and
+ * name always come from the id_token.
+ */
+export async function withUserinfo(d: Discovery, accessToken: string | null, identity: VerifiedIdentity): Promise<VerifiedIdentity> {
+  if (identity.email && identity.emailVerified) return identity;
+  if (!d.userinfoEndpoint || !accessToken) return identity;
+  let answer: { status: number; body: Record<string, unknown> };
+  try {
+    answer = await idpJson(d.userinfoEndpoint, "Userinfo endpoint", { headers: { authorization: `Bearer ${accessToken}` } });
+  } catch {
+    return identity;
+  }
+  const { status, body } = answer;
+  if (status !== 200 || typeof body.sub !== "string" || !sameString(body.sub, identity.subject)) return identity;
+  const email = emailOf(body.email);
+  if (!email || body.email_verified !== true) return identity;
+  if (identity.email && identity.email !== email) return identity;
+  return { ...identity, email, emailVerified: true };
 }
 
 export type VerifiedIdentity = { issuer: string; subject: string; email: string | null; emailVerified: boolean; name: string | null };
@@ -342,8 +385,7 @@ export async function verifyIdToken(token: string, p: { discovery: Discovery; cl
   if (payload.azp !== undefined && payload.azp !== p.clientId) throw bad("issued to another client (azp)");
   if (typeof payload.nonce !== "string" || !sameString(payload.nonce, p.nonce)) throw bad("nonce does not match this sign-in");
   if (typeof payload.sub !== "string" || !payload.sub || payload.sub.length > 255) throw bad("missing subject");
-  const rawEmail = typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
-  const email = rawEmail.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail) ? rawEmail : null;
+  const email = emailOf(payload.email);
   const name = typeof payload.name === "string" && payload.name.trim() ? payload.name.trim().slice(0, 100) : null;
   return { issuer: p.discovery.issuer, subject: payload.sub, email, emailVerified: payload.email_verified === true, name };
 }

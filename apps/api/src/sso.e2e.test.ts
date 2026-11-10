@@ -385,6 +385,24 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect(await q("SELECT 1 FROM sso_removal WHERE organization_id = $1 AND email = $2", [ownerA.orgId, email])).not.toHaveLength(0);
   });
 
+  it("takes a verified email from userinfo when the id_token has none, only for the same subject", async () => {
+    const email = `userinfo-${rand}@${domainA}`;
+    // the id_token carries no email at all; the provider's userinfo answers it, verified, for this subject
+    const ok = await sso(idpA, new Jar(), { email }, { sub: "ui-sub" }, { userinfo: { body: { sub: "ui-sub", email, email_verified: true } } });
+    expect(failure(ok.location)).toBeNull();
+    expect(await userIdOf(email)).not.toBeNull();
+    // userinfo describing another subject is ignored: the sign-in is refused as unverified, nobody is provisioned
+    const other = `userinfo-other-${rand}@${domainA}`;
+    const refused = await sso(idpA, new Jar(), { email: other }, { sub: "ui-sub-2" }, { userinfo: { body: { sub: "someone-else", email: other, email_verified: true } } });
+    expect(failure(refused.location)).toBe("email_not_verified");
+    expect(await userIdOf(other)).toBeNull();
+    // and an unverified id_token email is not swapped for a different verified userinfo address
+    const named = `userinfo-named-${rand}@${domainA}`;
+    const swapped = await sso(idpA, new Jar(), { email: named }, { sub: "ui-sub-3", email: named, email_verified: false }, { userinfo: { body: { sub: "ui-sub-3", email: `boss-${rand}@${domainA}`, email_verified: true } } });
+    expect(failure(swapped.location)).toBe("email_not_verified");
+    expect(await userIdOf(`boss-${rand}@${domainA}`)).toBeNull();
+  });
+
   it("refuses an email the provider did not verify, and a domain the connection may not use", async () => {
     for (const email_verified of [false, "true", undefined]) {
       const email = `unverified-${String(email_verified)}@${domainA}`;

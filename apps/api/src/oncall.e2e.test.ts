@@ -349,6 +349,54 @@ describe.skipIf(!url)("on-call schedules and escalation (PostgreSQL)", () => {
     expect(await deliveries(inc.id)).toHaveLength(1);
   });
 
+  it("a project-limited key never learns monitor names from other projects through a workspace-wide policy", async () => {
+    const { owner, orgId, projectId } = await team();
+    const policy = (await call(owner.cookie, "POST", "/escalation-policies", { name: "Shared", steps: [{ timeoutMin: 5, userIds: [owner.id] }] })).body;
+    expect(policy.id).toBeTruthy();
+    const other = await call(owner.cookie, "POST", "/projects", { name: `Other ${crypto.randomUUID().slice(0, 6)}` });
+    expect(other.status, JSON.stringify(other.body)).toBe(201);
+    const inA = await call(owner.cookie, "POST", "/monitors", { name: "Visible in A", type: "heartbeat", intervalSec: 3600, escalationPolicyId: policy.id });
+    expect(inA.status, JSON.stringify(inA.body)).toBe(201);
+    const inB = await call(`${owner.cookie}; montral_project=${other.body.id}`, "POST", "/monitors", { name: "Secret in B", type: "heartbeat", intervalSec: 3600, escalationPolicyId: policy.id });
+    expect(inB.status, JSON.stringify(inB.body)).toBe(201);
+    const limited = await call(owner.cookie, "POST", "/auth/api-key/create", { name: "limited", metadata: { organizationId: orgId, projectIds: [projectId] } });
+    expect(limited.status).toBe(200);
+    const seen = await viaKey(limited.body.key, "GET", `/escalation-policies/${policy.id}`);
+    expect(seen.status).toBe(200);
+    expect(seen.body.monitors.map((m: { name: string }) => m.name)).toEqual(["Visible in A"]);
+    expect(JSON.stringify(seen.body)).not.toContain("Secret in B");
+    // the owner's session sees both
+    expect((await call(owner.cookie, "GET", `/escalation-policies/${policy.id}`)).body.monitors.map((m: { name: string }) => m.name).sort()).toEqual(["Secret in B", "Visible in A"]);
+  });
+
+  it("records the project of deleted schedules and policies in the audit log", async () => {
+    const { owner, orgId, projectId } = await team();
+    const s = (await call(owner.cookie, "POST", "/oncall/schedules", { name: "Project schedule", timeZone: "UTC", projectId, layers: [layer([owner.id])] })).body;
+    const p = (await call(owner.cookie, "POST", "/escalation-policies", { name: "Project policy", projectId, steps: [{ timeoutMin: 5, userIds: [owner.id] }] })).body;
+    expect(s.projectId).toBe(projectId);
+    expect(p.projectId).toBe(projectId);
+    expect((await call(owner.cookie, "DELETE", `/escalation-policies/${p.id}`)).status).toBe(204);
+    expect((await call(owner.cookie, "DELETE", `/oncall/schedules/${s.id}`)).status).toBe(204);
+    const rows = await db.query<{ action: string; project_id: string | null }>(
+      `select action, project_id from audit_event where organization_id = $1 and action in ('oncall_schedule.delete', 'escalation_policy.delete') and target_id in ($2, $3)`, [orgId, s.id, p.id]);
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.project_id === projectId)).toBe(true);
+  });
+
+  it("calendar feed without a trusted proxy: random tokens cannot lock real feeds out", async () => {
+    const { member } = await team();
+    const created = await call(member.cookie, "POST", "/oncall/calendar");
+    const path = new URL(created.body.url).pathname;
+    await db.query(`delete from rate_limit where key = 'oncall-ics:unknown'`);
+    for (let i = 0; i < 25; i++) {
+      const bogus = await raw(`/api/public/oncall/${crypto.randomUUID().replace(/-/g, "").repeat(2)}.ics`);
+      expect(bogus.status).toBe(404);
+    }
+    // unknown tokens leave no limiter state behind, so nothing shared can fill up
+    expect(await db.query(`select 1 from rate_limit where key = 'oncall-ics:unknown' or key like 'oncall-ics:token:%' and count > 0 and key not in (select 'oncall-ics:token:' || token_hash from oncall_calendar_token)`)).toHaveLength(0);
+    expect((await raw(path)).status).toBe(200);
+  });
+
   it("calendar feed: token-protected, revocable, and only the person's own shifts", async () => {
     const { owner, member } = await team();
     await call(owner.cookie, "POST", "/oncall/schedules", { name: "Nights; EU", timeZone: "UTC", layers: [layer([member.id, owner.id])] });

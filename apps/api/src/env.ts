@@ -159,6 +159,10 @@ export type Variables = {
   ssoProof?: { kind: "session" | "api-key" | "oauth"; id: string | null };
   /** A streamed response still reading from the request's database: it is closed once this settles, not before. */
   databaseHeldUntil?: Promise<void>;
+  /** The request gave its database back early (releaseDatabase): nothing may query it afterwards. */
+  databaseReleased?: boolean;
+  /** false when an edition's request middleware may still query after the route (then nothing is released early) */
+  earlyDatabaseRelease?: boolean;
 };
 
 export type AppEnv = { Bindings: Bindings; Variables: Variables };

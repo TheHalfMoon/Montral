@@ -20,6 +20,8 @@ export interface Edition {
    * Optional request middleware, registered after per-request database/auth setup and CORS, and before every route.
    * Await next() to observe the final response and authenticated context when the route establishes one.
    * Await all database work before returning: request cleanup closes the connection after this middleware unwinds.
+   * With a request middleware registered, no route gives the database back early (db-lifetime.ts releaseDatabase), so
+   * it is usable after next() on every route.
    * Runs for public/auth routes and nested MCP REST calls too. No authentication is implied at entry.
    * This is an extension seam, not an audit store or an atomic mutation/audit transaction.
    */

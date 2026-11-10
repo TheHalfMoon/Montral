@@ -203,7 +203,7 @@ export const oncall = new Hono<AppEnv>()
     if (r.status === "not_found") return c.json({ error: "Not found" }, 404);
     if (r.status === "in_use") return c.json({ error: `The schedule is still used by ${r.usedBy!.join(", ")}. Remove it there first.`, code: "schedule_in_use", usedBy: r.usedBy }, 409);
     if (r.status === "conflict") return conflict(c, await currentVersion(repo.getOncallSchedule(c.get("orgId"), c.req.param("id"), c.get("projectScope"))));
-    await audit(c, "oncall_schedule.delete", { type: "oncall_schedule", id: c.req.param("id"), projectId: null });
+    await audit(c, "oncall_schedule.delete", { type: "oncall_schedule", id: c.req.param("id"), projectId: r.projectId ?? null });
     return c.body(null, 204);
   })
 
@@ -362,7 +362,7 @@ export const escalationPolicies = new Hono<AppEnv>()
     const repo = repoOf(c);
     const p = await repo.getEscalationPolicy(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!p) return c.json({ error: "Not found" }, 404);
-    return c.json({ ...p, monitors: await repo.monitorsUsingPolicy(c.get("orgId"), p.id) });
+    return c.json({ ...p, monitors: await repo.monitorsUsingPolicy(c.get("orgId"), p.id, c.get("projectScope")) });
   })
   .patch("/:id", uuidParams, requireManager, zValidator("json", policyPatch), async (c) => {
     const repo = repoOf(c);
@@ -389,6 +389,6 @@ export const escalationPolicies = new Hono<AppEnv>()
     const r = await repo.deleteEscalationPolicy(c.get("orgId"), c.req.param("id"), c.get("projectScope"), expected);
     if (r.status === "not_found") return c.json({ error: "Not found" }, 404);
     if (r.status === "conflict") return conflict(c, await currentVersion(repo.getEscalationPolicy(c.get("orgId"), c.req.param("id"), c.get("projectScope"))));
-    await audit(c, "escalation_policy.delete", { type: "escalation_policy", id: c.req.param("id"), projectId: null }, auditChanges({}, { count: r.monitors ?? 0 }));
+    await audit(c, "escalation_policy.delete", { type: "escalation_policy", id: c.req.param("id"), projectId: r.projectId ?? null }, auditChanges({}, { count: r.monitors ?? 0 }));
     return c.body(null, 204);
   });

@@ -856,7 +856,8 @@ export interface Repo {
   /** Applies the patch only when the stored version is still `version`, then bumps it; layers are replaced in the same transaction. */
   updateOncallSchedule(orgId: string, id: string, scope: Scope, version: number, patch: OncallSchedulePatch): Promise<VersionedWrite<OncallSchedule>>;
   /** "in_use" (with the names of what uses it) when an escalation policy or a project's levels still name the schedule. */
-  deleteOncallSchedule(orgId: string, id: string, scope: Scope, version?: number): Promise<{ status: "deleted" | "conflict" | "in_use" | "not_found"; usedBy?: string[] }>;
+  /** `usedBy` names only what `scope` may read; the rest is counted ("N in other projects"). `projectId` of a deleted row is for the audit log. */
+  deleteOncallSchedule(orgId: string, id: string, scope: Scope, version?: number): Promise<{ status: "deleted" | "conflict" | "in_use" | "not_found"; usedBy?: string[]; projectId?: string | null }>;
   /** Overrides of these schedules (of the workspace) that overlap [from, to). */
   listOncallOverrides(orgId: string, scheduleIds: string[], from: Date, to: Date): Promise<OncallOverride[]>;
   /**
@@ -871,9 +872,10 @@ export interface Repo {
   createEscalationPolicy(orgId: string, p: NewEscalationPolicy): Promise<EscalationPolicy>;
   updateEscalationPolicy(orgId: string, id: string, scope: Scope, version: number, patch: EscalationPolicyPatch): Promise<VersionedWrite<EscalationPolicy>>;
   /** Monitors that used the policy fall back to their project's levels. */
-  deleteEscalationPolicy(orgId: string, id: string, scope: Scope, version?: number): Promise<{ status: "deleted" | "conflict" | "not_found"; monitors?: number }>;
+  deleteEscalationPolicy(orgId: string, id: string, scope: Scope, version?: number): Promise<{ status: "deleted" | "conflict" | "not_found"; monitors?: number; projectId?: string | null }>;
   /** Monitors of the workspace that use the policy. */
-  monitorsUsingPolicy(orgId: string, policyId: string): Promise<{ id: string; name: string }[]>;
+  /** Monitors using the policy that `scope` may read (a project-limited key never learns other projects' monitor names). */
+  monitorsUsingPolicy(orgId: string, policyId: string, scope?: Scope): Promise<{ id: string; name: string }[]>;
   /** Stores a new calendar feed token hash for the person, revoking their previous ones in this workspace. */
   createOncallCalendarToken(orgId: string, userId: string, tokenHash: string): Promise<{ id: string; createdAt: Date }>;
   /** Revokes the person's feed tokens in this workspace; returns how many were active. */

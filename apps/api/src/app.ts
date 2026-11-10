@@ -52,20 +52,25 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const database = openDatabase(connectionString(c.env), { max: 1 });
     c.set("repo", database.repo);
     c.set("database", database);
+    // an edition's request middleware may query after the route has answered (edition.ts): never release early then
+    c.set("earlyDatabaseRelease", !edition.requestMiddleware);
     c.set("auth", createAuth(database, c.env));
     c.set("entitlements", edition.entitlements({ database, env: c.env }));
     try {
       await next();
     } finally {
-      // a streamed response (the audit export) still reads after the handler returned: close once it is done
-      const held = c.get("databaseHeldUntil");
-      const close = held ? held.then(() => database.close(1), () => database.close(1)) : database.close(1);
-      try {
-        c.executionCtx.waitUntil(close); // Workers
-      } catch {
-        // Node has no ExecutionContext. Awaiting a held database here would wait for a stream nobody can read yet.
-        if (held) close.catch(() => console.error("database close failed; private diagnostics suppressed"));
-        else await close;
+      // a handler that gave the database back early (releaseDatabase) has closed it already
+      if (!c.get("databaseReleased")) {
+        // a streamed response (the audit export) still reads after the handler returned: close once it is done
+        const held = c.get("databaseHeldUntil");
+        const close = held ? held.then(() => database.close(1), () => database.close(1)) : database.close(1);
+        try {
+          c.executionCtx.waitUntil(close); // Workers
+        } catch {
+          // Node has no ExecutionContext. Awaiting a held database here would wait for a stream nobody can read yet.
+          if (held) close.catch(() => console.error("database close failed; private diagnostics suppressed"));
+          else await close;
+        }
       }
     }
   });
@@ -208,9 +213,14 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     if (!m) return c.json({ error: "Not found" }, 404);
     const repo = c.get("repo");
     const ip = clientIp(c);
-    if (!(await allow(repo, ip ? `oncall-ics:ip:${ip}` : "oncall-ics:unknown", ip ? 120 : 1200, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
-    const owner = await repo.oncallCalendarByToken(await tokenHash(m[1]));
+    const hash = await tokenHash(m[1]);
+    // With a known client address it is limited per address. Without one (no trusted proxy) a shared bucket would let
+    // anyone lock every feed out with random tokens, so the token is looked up first and only a real feed is limited,
+    // per token; guessing a 256-bit token is not a concern.
+    if (ip && !(await allow(repo, `oncall-ics:ip:${ip}`, 120, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const owner = await repo.oncallCalendarByToken(hash);
     if (!owner) return c.json({ error: "Not found" }, 404);
+    if (!ip && !(await allow(repo, `oncall-ics:token:${hash}`, 120, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
     return new Response(icsFeed(await personalShifts(repo, owner.organizationId, owner.userId)), {
       headers: { "content-type": "text/calendar; charset=utf-8", "cache-control": "private, no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" },
     });

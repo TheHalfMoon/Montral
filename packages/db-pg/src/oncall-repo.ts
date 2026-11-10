@@ -106,16 +106,22 @@ export function oncallRepo(db: Db) {
     },
     async deleteOncallSchedule(orgId, id, scope, version) {
       const t = schema.oncallSchedule;
-      const [found] = await db.select({ id: t.id }).from(t).where(and(eq(t.id, id), eq(t.organizationId, orgId), writable(scope, t.projectId)));
+      const [found] = await db.select({ id: t.id, projectId: t.projectId }).from(t).where(and(eq(t.id, id), eq(t.organizationId, orgId), writable(scope, t.projectId)));
       if (!found) return { status: "not_found" as const };
       const needle = JSON.stringify([{ scheduleIds: [id] }]);
-      const policies = await db.select({ name: schema.escalationPolicy.name }).from(schema.escalationPolicy)
+      const policies = await db.select({ name: schema.escalationPolicy.name, projectId: schema.escalationPolicy.projectId }).from(schema.escalationPolicy)
         .where(and(eq(schema.escalationPolicy.organizationId, orgId), sql`${schema.escalationPolicy.steps} @> ${needle}::jsonb`));
-      const projects = await db.select({ name: schema.project.name }).from(schema.project)
+      const projects = await db.select({ id: schema.project.id, name: schema.project.name }).from(schema.project)
         .where(and(eq(schema.project.organizationId, orgId), sql`${schema.project.escalation} @> ${needle}::jsonb`));
-      if (policies.length || projects.length) return { status: "in_use" as const, usedBy: [...policies.map((p) => `escalation policy ${p.name}`), ...projects.map((p) => `project ${p.name} escalation`)] };
+      if (policies.length || projects.length) {
+        // a project-limited key learns only the names it could read anyway; the rest is a count
+        const visible = (projectId: string | null) => !scope || projectId === null || scope.includes(projectId);
+        const named = [...policies.filter((p) => visible(p.projectId)).map((p) => `escalation policy ${p.name}`), ...projects.filter((p) => visible(p.id)).map((p) => `project ${p.name} escalation`)];
+        const hidden = policies.length + projects.length - named.length;
+        return { status: "in_use" as const, usedBy: hidden ? [...named, `${hidden} in other projects`] : named };
+      }
       const gone = await db.delete(t).where(and(eq(t.id, id), eq(t.organizationId, orgId), writable(scope, t.projectId), version === undefined ? undefined : eq(t.version, version))).returning({ id: t.id });
-      return { status: gone.length ? ("deleted" as const) : ("conflict" as const) };
+      return gone.length ? { status: "deleted" as const, projectId: found.projectId } : { status: "conflict" as const };
     },
 
     async listOncallOverrides(orgId, scheduleIds, from, to) {
@@ -194,7 +200,7 @@ export function oncallRepo(db: Db) {
       if (!found) return { status: "not_found" as const };
       return db.transaction(async (tx) => {
         // the row lock decides between concurrent deletes and edits; a stale version changes nothing
-        const [locked] = await tx.select({ id: t.id, name: t.name }).from(t)
+        const [locked] = await tx.select({ id: t.id, name: t.name, projectId: t.projectId }).from(t)
           .where(and(eq(t.id, id), eq(t.organizationId, orgId), writable(scope, t.projectId), version === undefined ? undefined : eq(t.version, version)))
           .for("update");
         if (!locked) return { status: "conflict" as const };
@@ -211,12 +217,12 @@ export function oncallRepo(db: Db) {
             select i.id, i.status, ${`Escalation stopped: the escalation policy ${locked.name} was deleted.`}, 'internal', false from incident i where i.id = ${r.id}`);
         }
         await tx.delete(t).where(and(eq(t.id, id), eq(t.organizationId, orgId)));
-        return { status: "deleted" as const, monitors: n };
+        return { status: "deleted" as const, monitors: n, projectId: locked.projectId };
       });
     },
-    async monitorsUsingPolicy(orgId, policyId) {
+    async monitorsUsingPolicy(orgId, policyId, scope = null) {
       return db.select({ id: schema.monitor.id, name: schema.monitor.name }).from(schema.monitor)
-        .where(and(eq(schema.monitor.organizationId, orgId), eq(schema.monitor.escalationPolicyId, policyId))).orderBy(asc(schema.monitor.name));
+        .where(and(eq(schema.monitor.organizationId, orgId), eq(schema.monitor.escalationPolicyId, policyId), scope ? inArray(schema.monitor.projectId, scope) : undefined)).orderBy(asc(schema.monitor.name));
     },
 
     async createOncallCalendarToken(orgId, userId, tokenHash) {

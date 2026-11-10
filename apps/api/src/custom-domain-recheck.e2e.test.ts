@@ -71,7 +71,7 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
   it("verification stamps a check; the next re-check is due only after the healthy interval and a match keeps the domain", async () => {
     const p = await verifiedPage();
     expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs - 60_000)).toMatchObject({ checked: 0 });
-    expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000)).toEqual({ checked: 1, matched: 1, failed: 0, withdrawn: 0 });
+    expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000)).toEqual({ checked: 1, matched: 1, failed: 0, withdrawn: 0, notices: 0 });
     const s = await state(p.id);
     expect(s).toMatchObject({ failures: 0, error: null, since: null });
     expect(new Date(s.checked!).getTime()).toBe(p.t0 + DOMAIN_RECHECK.healthyMs + 1000);

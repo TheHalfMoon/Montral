@@ -88,6 +88,18 @@ export const monitor = pgTable(
     coverageGeneration: integer("coverage_generation").notNull().default(0),
     coverageHeartbeatVersion: integer("coverage_heartbeat_version").notNull().default(0),
     lastRunGeneration: integer("last_run_generation").notNull().default(0),
+    /**
+     * Run coalescing: `run_generation` as it stood when the check behind the latest recorded result STARTED. Every run up
+     * to this generation was claimed before that check began, so one of them that starts later would only repeat it
+     * and is skipped (beginRuns). A check that started before a claim never supersedes it, however late it finishes.
+     */
+    checkedThroughGeneration: integer("checked_through_generation").notNull().default(0),
+    /** when that check started; it supersedes a claimed run only for half an interval (a backlog, not a late schedule) */
+    checkedStartedAt: timestamp("checked_started_at", { withTimezone: true }),
+    /** `run_generation` when the latest scheduled run started (beginRuns); recordObservation copies it to the above */
+    runStartedThroughGeneration: integer("run_started_through_generation").notNull().default(0),
+    /** when the latest scheduled run started (beginRuns); a run started this recently that has not recorded is in flight */
+    runStartedAt: timestamp("run_started_at", { withTimezone: true }),
     paused: boolean("paused").notNull().default(false),
     heartbeatToken: text("heartbeat_token"),
     /** http: response body must contain (or, with keywordMode "absent", must not contain) this text; websocket: the first message back */
@@ -303,9 +315,14 @@ export const alertDelivery = pgTable(
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }),
     /** a person notified directly (on call, or named in an escalation step) rather than through a channel; no foreign key, like channel_id */
     targetUserId: text("target_user_id"),
+    /** domain.* notices: the status page they are about (no foreign key: the log outlives a removed page) */
+    statusPageId: uuid("status_page_id"),
+    /** one row per event and recipient: a second insert with the same key is ignored (custom-domain notices) */
+    dedupeKey: text("dedupe_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("alert_delivery_org_time_idx").on(t.organizationId, t.createdAt), index("alert_delivery_retry_idx").on(t.nextAttemptAt), index("alert_delivery_status_idx").on(t.status, t.claimedAt), index("alert_delivery_incident_idx").on(t.incidentId)],
+  (t) => [index("alert_delivery_org_time_idx").on(t.organizationId, t.createdAt), index("alert_delivery_retry_idx").on(t.nextAttemptAt), index("alert_delivery_status_idx").on(t.status, t.claimedAt), index("alert_delivery_incident_idx").on(t.incidentId),
+    uniqueIndex("alert_delivery_dedupe_idx").on(t.dedupeKey).where(sql`${t.dedupeKey} is not null`)],
 );
 
 /** Per-workspace preferences; a missing row means defaults. */
@@ -421,6 +438,12 @@ export const statusPage = pgTable(
     customDomainFailures: integer("custom_domain_failures").notNull().default(0),
     /** outcome of the last failed re-check ("missing" | "mismatch" | "lookup_failed"); kept after a withdrawal */
     customDomainCheckError: text("custom_domain_check_error", { enum: ["missing", "mismatch", "lookup_failed"] }),
+    /**
+     * Outbox for owner/admin emails about this domain: set by the re-check in the same UPDATE that withdraws the domain
+     * ("domain.withdrawn") or records the second failure of a streak ("domain.failing"); cleared in the statement that
+     * queues the emails. A crash between the two cannot lose a notice: the next re-check round queues it.
+     */
+    customDomainNotice: text("custom_domain_notice", { enum: ["domain.withdrawn", "domain.failing"] }),
     theme: text("theme").notNull().default("light"),
     showLatency: boolean("show_latency").notNull().default(true),
     externalUrl: text("external_url"),

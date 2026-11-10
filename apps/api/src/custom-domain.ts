@@ -1,4 +1,5 @@
 import { auditChanges, recordAuditEvent } from "./audit";
+import { deliverDomainNotices, enqueueDomainNotices } from "./domain-notice";
 import { ttlCache } from "./ttlcache";
 
 /**
@@ -211,7 +212,7 @@ export const DOMAIN_RECHECK = {
   budgetMs: 60_000,
 } as const;
 
-export type RecheckSummary = { checked: number; matched: number; failed: number; withdrawn: number };
+export type RecheckSummary = { checked: number; matched: number; failed: number; withdrawn: number; /** owner/admin notices queued (domain-notice.ts) */ notices: number };
 
 /**
  * Re-checks the verified domains that are due (Node scheduler). Each due row is claimed first by stamping
@@ -219,6 +220,11 @@ export type RecheckSummary = { checked: number; matched: number; failed: number;
  * one round. Every write is bound to the page, domain and token it looked up: a domain that was set again, removed,
  * re-verified or taken over by another page in the meantime is left alone. Withdrawal is decided inside the same
  * UPDATE from the stored streak, so two racing writers cannot withdraw on a stale count.
+ *
+ * The workspace's owners and admins are emailed (domain-notice.ts) when a domain is withdrawn, and once per failing
+ * streak when it reaches its second failed check. The withdrawing UPDATE itself records the notice in the page's
+ * outbox column, so it survives a crash; queuing and sending happen afterwards, are idempotent, and a failure there is
+ * logged and never undoes, delays or fails the withdrawal.
  */
 export async function recheckCustomDomains(
   query: Query,
@@ -230,12 +236,15 @@ export async function recheckCustomDomains(
     shouldContinue?: () => boolean;
     /** tests: only these pages */
     pageIds?: string[];
+    /** false: queue no owner/admin emails (default true) */
+    notify?: boolean;
   } = {},
 ): Promise<RecheckSummary> {
   const p = { ...DOMAIN_RECHECK, ...options.policy };
   const now = options.now ?? new Date();
   const startedAt = Date.now();
-  const summary: RecheckSummary = { checked: 0, matched: 0, failed: 0, withdrawn: 0 };
+  const notify = options.notify ?? true;
+  const summary: RecheckSummary = { checked: 0, matched: 0, failed: 0, withdrawn: 0, notices: 0 };
   const one = async (row: { id: string; domain: string; token: string }) => {
     const outcome = await verifyDomainToken(row.domain, row.token, options.resolver ?? txtResolver);
     if (outcome.ok) {
@@ -250,16 +259,20 @@ export async function recheckCustomDomains(
     summary.failed++;
     // Right-hand sides read the row as it was before this UPDATE: the streak start, count and kind are the stored ones.
     // `fresh` = this failure starts a new streak (none yet, or the kind switched between unresolvable and definitive).
+    // The owner/admin email goes into the page's outbox column in this same UPDATE (domain-notice.ts), so a crash after
+    // the withdrawal commits cannot lose it, and nothing about the email can fail or delay the withdrawal.
+    const withdraws = `NOT s.fresh AND (
+             ($4::text <> 'lookup_failed' AND sp.custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $6::double precision)
+               AND sp.custom_domain_failures + 1 >= $7::int)
+             OR ($4::text = 'lookup_failed' AND sp.custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $8::double precision)))`;
     const rows = await query<{ withdrawn: boolean; organization_id: string; project_id: string | null }>(
       `UPDATE status_page AS sp SET
          custom_domain_failures = CASE WHEN s.fresh THEN 1 ELSE sp.custom_domain_failures + 1 END,
          custom_domain_failing_since = CASE WHEN s.fresh THEN $5::timestamptz ELSE sp.custom_domain_failing_since END,
          custom_domain_check_error = $4::text,
-         custom_domain_verified_at = CASE WHEN NOT s.fresh AND (
-             ($4::text <> 'lookup_failed' AND sp.custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $6::double precision)
-               AND sp.custom_domain_failures + 1 >= $7::int)
-             OR ($4::text = 'lookup_failed' AND sp.custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $8::double precision)))
-           THEN NULL ELSE sp.custom_domain_verified_at END
+         custom_domain_verified_at = CASE WHEN ${withdraws} THEN NULL ELSE sp.custom_domain_verified_at END,
+         custom_domain_notice = CASE WHEN ${withdraws} THEN 'domain.withdrawn'
+           WHEN NOT s.fresh AND sp.custom_domain_failures + 1 = 2 THEN 'domain.failing' ELSE sp.custom_domain_notice END
        FROM (SELECT id, (custom_domain_failing_since IS NULL OR custom_domain_check_error IS NULL
                          OR (custom_domain_check_error = 'lookup_failed') <> ($4::text = 'lookup_failed')) AS fresh
              FROM status_page WHERE id = $1) AS s
@@ -304,6 +317,13 @@ export async function recheckCustomDomains(
   }
   // This process stops routing a withdrawn domain at once; other servers within CUSTOM_DOMAIN_TTL_MS.
   if (summary.withdrawn) purgeCustomDomains();
+  // Queue the outbox (this round's notices, and any a crashed round left behind), then send what is due, retries
+  // included. Neither can fail the re-check (deliverDomainNotices never throws).
+  if (notify) {
+    try { summary.notices = await enqueueDomainNotices(query, { pageIds: options.pageIds }); }
+    catch { console.error("custom domain notices could not be queued; they stay in the outbox; private diagnostics suppressed"); }
+    await deliverDomainNotices(query, { pageIds: options.pageIds });
+  }
   return summary;
 }
 

@@ -215,6 +215,19 @@ try {
   // Every claimed run is started at most once (SKIP LOCKED claims plus
   // generation-guarded starts), so recorded results must equal started runs
   // and the outage must still produce exactly one incident.
+  // Test-only instrumentation in this disposable database: log every run start (beginRuns moves
+  // last_run_generation), so a run that began and lost its result is told from one coalesced before it began.
+  await sql.unsafe(`
+    create table if not exists crash_run_start (monitor_id uuid not null, generation integer not null, at timestamptz not null default clock_timestamp());
+    create or replace function crash_run_start_fn() returns trigger language plpgsql as $f$
+    begin
+      insert into crash_run_start (monitor_id, generation)
+      select n.id, n.last_run_generation from new_rows n join old_rows o on o.id = n.id where n.last_run_generation > o.last_run_generation;
+      return null;
+    end $f$;
+    drop trigger if exists crash_run_start_trg on monitor;
+    create trigger crash_run_start_trg after update on monitor referencing old table as old_rows new table as new_rows
+      for each statement execute function crash_run_start_fn();`);
   second = await spawnServer(await freePort());
   const gen0 = (await monitor()).last_run_generation;
   const res0 = (await results()).length;
@@ -222,9 +235,19 @@ try {
   setMode("down");
   await until("outage incident with two workers", async () => (await incidents()).some((i) => !i.resolved_at), CHECK_WINDOW_MS);
   await sleep(65_000); // at least two more ticks of each process
-  await until("every started run recorded exactly one result", async () =>
-    (await results()).length - res0 === (await monitor()).last_run_generation - gen0, 15_000);
-  const startedRuns = (await monitor()).last_run_generation - gen0;
+  // Coalesced runs are skipped before they start, so the generation delta overcounts started runs. Every logged start
+  // (any generation, not only the latest) must have recorded exactly one observation and one check result: a started
+  // run that lost its result is still detected.
+  const started = () => sql`select s.generation,
+      (select count(*) from monitor_observation o where o.monitor_id = s.monitor_id and o.generation = s.generation)::int as n
+    from crash_run_start s where s.monitor_id = ${monitorId} and s.generation > ${gen0}`;
+  let lostRuns = [];
+  await until("every started run recorded exactly one result", async () => {
+    const runs = await started();
+    lostRuns = runs.filter((r) => r.n !== 1).map((r) => `${r.generation}:${r.n}`);
+    return runs.length > 0 && lostRuns.length === 0 && (await results()).length - res0 === runs.length;
+  }, 15_000).catch((e) => { throw new Error(`${e.message}; started runs without exactly one result: ${lostRuns.join(", ")}`); });
+  const startedRuns = (await started()).length;
   if (startedRuns < 2) throw new Error("too few runs with two workers: " + startedRuns);
   const openD = (await incidents()).filter((i) => !i.resolved_at);
   // An outage soon after a resolution reopens that incident (flap handling)

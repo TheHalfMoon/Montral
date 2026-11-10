@@ -253,7 +253,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li><strong>Grant</strong>: authorization code, with PKCE (S256). <strong>Scopes</strong>: <code>openid email profile</code>.</li>
       <li><strong>Client authentication</strong>: client secret (HTTP Basic or POST body).</li>
       <li><strong>id_token signing</strong>: an asymmetric algorithm (RS256, PS256, ES256, EdDSA…). HMAC (HS256) and <code>none</code> are refused.</li>
-      <li>The id_token must carry <code>email</code> and <code>email_verified: true</code> (the boolean). Sign-ins without it are refused, and there is deliberately no setting to trust an email without it: an unverified address would let an identity provider claim any account.</li>
+      <li>The provider must vouch for the email: <code>email</code> and <code>email_verified: true</code> (the boolean) in the id_token, or, when the id_token does not vouch for the email, from the provider's userinfo endpoint for the same subject (<code>sub</code>) and, if the id_token named an address, the same address. Sign-ins without it are refused, and there is deliberately no setting to trust an email without it: an unverified address would let an identity provider claim any account.</li>
     </ul>
     <h3>2. Configure the connection</h3>
     <ul>
@@ -628,7 +628,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li><strong>授权方式</strong>：授权码，带 PKCE（S256）。<strong>Scope</strong>：<code>openid email profile</code>。</li>
       <li><strong>客户端认证</strong>：客户端密钥（HTTP Basic 或 POST 正文）。</li>
       <li><strong>id_token 签名</strong>：非对称算法（RS256、PS256、ES256、EdDSA 等）。HMAC（HS256）和 <code>none</code> 会被拒绝。</li>
-      <li>id_token 必须包含 <code>email</code> 和 <code>email_verified: true</code>（布尔值）。缺少它的登录一律拒绝，且有意不提供“无此声明也信任邮箱”的设置：未验证的地址会让身份提供商冒认任何账号。</li>
+      <li>提供商必须担保邮箱：id_token 中包含 <code>email</code> 和 <code>email_verified: true</code>（布尔值），或在 id_token 未担保该邮箱时，由提供商的 userinfo 端点针对同一主体（<code>sub</code>）返回（若 id_token 已给出地址，则必须是同一地址）。缺少它的登录一律拒绝，且有意不提供“无此声明也信任邮箱”的设置：未验证的地址会让身份提供商冒认任何账号。</li>
     </ul>
     <h3>2. 配置连接</h3>
     <ul>

@@ -82,7 +82,8 @@ async function appendObservation(db: Db, snapshot: Monitor, result: { ok: boolea
     const latestStarted = generation !== undefined && generation === current.lastRunGeneration;
     const startedThrough = Math.min(current.runGeneration, generation === undefined ? (snapshot.runGeneration ?? 0)
       : latestStarted ? current.runStartedThroughGeneration : generation);
-    // a manual check's start is not stored: the database clock now (its completion) is a later, so stricter, stand-in;
+    // a manual check's start is not stored: the database clock now (its completion) stands in for it. It is later than
+    // the real start by at most the check's worst-case duration, so the stand-in is slightly looser, not stricter;
     // the database clock, like run_started_at, because beginRuns compares it with now()
     const startedAt = generation === undefined ? sql`now()` : latestStarted ? current.runStartedAt : null;
     const covers = startedThrough > current.checkedThroughGeneration && startedAt !== null;

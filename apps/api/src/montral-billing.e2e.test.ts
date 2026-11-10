@@ -87,6 +87,27 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(period.end.toISOString()).toBe("2024-03-01T00:00:00.000Z");
   });
 
+  it("refunds credits to the month they were spent in, never to the new month", async () => {
+    const { org } = await signup();
+    const limits = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });
+    const current = calendarMonthUtc();
+    const previous = calendarMonthUtc(new Date(current.start.getTime() - 1));
+    await db!.query("INSERT INTO montral_usage(organization_id,period_start,kind,used) VALUES($1,$2::timestamptz,'credits',40)", [org, previous.start.toISOString()]);
+    expect(await limits.spendCredits(org, 30)).toBe(30);
+    // a check charged just before midnight on the last day of the month whose refund lands after the boundary
+    await limits.refundCredits!(org, 10, new Date(current.start.getTime() - 1_000));
+    const used = async (start: Date) => Number((await db!.query<{ used: number }>(
+      "SELECT used FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind='credits'", [org, start.toISOString()]))[0]?.used);
+    expect(await used(previous.start)).toBe(30);
+    expect(await used(current.start)).toBe(30);
+    // without a time, a refund goes to the current month (as before)
+    await limits.refundCredits!(org, 5);
+    expect(await used(current.start)).toBe(25);
+    // an invalid time falls back to the current month rather than throwing
+    await limits.refundCredits!(org, 5, new Date(Number.NaN));
+    expect(await used(current.start)).toBe(20);
+  });
+
   it("enforces monthly credits and email budgets with concurrent PostgreSQL spending", async () => {
     const { org } = await signup();
     const limits = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });

@@ -244,12 +244,13 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
       }
       // credits are taken before the journey is launched; without them it does not run (nothing recorded, like any other
       // monitor out of credits: the lease keeps its next due time)
+      const spentAt = new Date();
       const charged = await reserveCredits(workspace, m, entitlements);
       if (charged === null) continue;
       let result: CheckResultKind = "done";
       try { result = await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
       // a check that did not happen (deferred for capacity, or the runtime could not run it) gets its credits back
-      if ((result === "deferred" || result === "error") && charged > 0) await refundCredits(workspace, charged, entitlements);
+      if ((result === "deferred" || result === "error") && charged > 0) await refundCredits(workspace, charged, entitlements, spentAt);
     }
   } finally {
     browserTasksRunning.delete(workspace);
@@ -265,19 +266,21 @@ export async function reserveCredits(workspace: string, m: Monitor, entitlements
   const cost = creditCost(m);
   if (cost === 0) return 0;
   let granted: number;
-  try { granted = await entitlements.spendCredits(workspace, cost); } catch { console.error("credits unavailable"); return 0; }
+  const spentAt = new Date();
+  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return 0; }
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
   if (granted < cost) {
-    if (granted > 0) await refundCredits(workspace, granted, entitlements);
+    if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);
     console.warn("credits exhausted: skipped 1 browser check");
     return null;
   }
   return granted;
 }
 
-export async function refundCredits(workspace: string, credits: number, entitlements: Entitlements) {
+/** Give back credits taken at `spentAt` (default now) to that period's allowance. */
+export async function refundCredits(workspace: string, credits: number, entitlements: Entitlements, spentAt?: Date) {
   if (!entitlements.refundCredits) return;
-  await entitlements.refundCredits(workspace, credits).catch(() => console.error("credit refund failed"));
+  await entitlements.refundCredits(workspace, credits, spentAt).catch(() => console.error("credit refund failed"));
 }
 
 export type CheckResultKind = "done" | "deferred" | "error" | "skipped";

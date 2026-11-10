@@ -23,6 +23,8 @@ export type Tweak = {
   idToken?: string;
   /** the token endpoint answers with this status and body instead */
   tokenResponse?: { status: number; body: unknown };
+  /** what the userinfo endpoint answers for this authorization's access token (default: only `sub`) */
+  userinfo?: { status?: number; body?: unknown; raw?: string };
 };
 type Grant = { clientId: string; redirectUri: string; challenge: string; nonce: string | null; user: IdpUser; tweak: Tweak };
 
@@ -52,6 +54,10 @@ export class SyntheticIdp {
   /** the authorization requests received, parsed */
   readonly authorizations: URLSearchParams[] = [];
   private grants = new Map<string, Grant>();
+  /** userinfo answers by access token; set directly in tests or through `Tweak.userinfo` */
+  readonly userinfo = new Map<string, Tweak["userinfo"]>();
+  /** the Authorization header of the last userinfo request */
+  lastUserinfoAuth = "";
   private server!: Server;
 
   static async start(name: string): Promise<SyntheticIdp> {
@@ -115,6 +121,7 @@ export class SyntheticIdp {
       authorization_endpoint: `${this.issuer}/authorize`,
       token_endpoint: `${this.issuer}/token`,
       jwks_uri: `${this.issuer}/jwks`,
+      userinfo_endpoint: `${this.issuer}/userinfo`,
       response_types_supported: ["code"],
       subject_types_supported: ["public"],
       code_challenge_methods_supported: ["S256"],
@@ -138,6 +145,17 @@ export class SyntheticIdp {
     const huge = () => json(200, { padding: "x".repeat(200 * 1024) });
     if (req.method === "GET" && path === "/.well-known/openid-configuration") return this.oversize === "discovery" ? huge() : json(200, this.discoveryDocument());
     if (req.method === "GET" && path === "/jwks") return this.oversize === "jwks" ? huge() : json(200, { keys: this.keys.map((k) => k.publicJwk) });
+    if (req.method === "GET" && path === "/userinfo") {
+      this.lastUserinfoAuth = req.headers.authorization ?? "";
+      const token = /^Bearer (.+)$/.exec(this.lastUserinfoAuth)?.[1] ?? "";
+      if (!this.userinfo.has(token)) return json(401, { error: "invalid_token" });
+      const answer = this.userinfo.get(token) ?? {};
+      if (answer.raw !== undefined) {
+        res.writeHead(answer.status ?? 200, { "content-type": "application/jwt" });
+        return void res.end(answer.raw);
+      }
+      return json(answer.status ?? 200, answer.body ?? {});
+    }
     if (req.method === "POST" && path === "/token") {
       if (this.oversize === "token") return huge();
       const form = new URLSearchParams(body);
@@ -160,7 +178,9 @@ export class SyntheticIdp {
       if (grant.tweak.tokenResponse) return json(grant.tweak.tokenResponse.status, grant.tweak.tokenResponse.body);
       const idToken = grant.tweak.idToken ?? (await this.mint(grant.user, grant.nonce, grant.tweak));
       this.issued.push(idToken);
-      return json(200, { access_token: b64url(randomBytes(16)), token_type: "Bearer", expires_in: 300, id_token: idToken });
+      const accessToken = b64url(randomBytes(16));
+      this.userinfo.set(accessToken, grant.tweak.userinfo ?? { body: { sub: grant.user.sub } });
+      return json(200, { access_token: accessToken, token_type: "Bearer", expires_in: 300, id_token: idToken });
     }
     json(404, { error: "not_found" });
   }

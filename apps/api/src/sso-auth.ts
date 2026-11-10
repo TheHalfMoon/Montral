@@ -5,7 +5,7 @@ import * as z from "zod";
 import { auditChanges, recordAuditEvent, type Query } from "./audit";
 import type { Bindings } from "./env";
 import { clientIpFromHeaders } from "./ratelimit";
-import { authorizationUrl, discover, emailDomain, exchangeCode, randomToken, sha256b64url, SsoError, verifyIdToken, type VerifiedIdentity } from "./sso-oidc";
+import { authorizationUrl, discover, emailDomain, exchangeCode, randomToken, sha256b64url, SsoError, verifyIdToken, withUserinfo, type VerifiedIdentity } from "./sso-oidc";
 import { SecretUnreadable } from "./sso-secret";
 import {
   accountIdOf, connectionById, connectionForStart, consumeFlow, createFlow, linkIdentity, removedFrom, markSsoSession, provisionUser,
@@ -146,8 +146,9 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             if (iss !== undefined && iss !== discovery.issuer) throw new SsoError("invalid_id_token", "issuer mix-up");
             // the client secret only goes to the token endpoint it was entered for; a moved endpoint needs the owner
             if (conn.orgId && discovery.tokenEndpoint !== conn.tokenEndpoint) throw new TokenEndpointMoved();
-            const idToken = await exchangeCode(discovery, { clientId: conn.clientId, clientSecret: await conn.secret(), code, redirectUri: ssoCallbackUrl(env), codeVerifier: flow.code_verifier });
-            identity = await verifyIdToken(idToken, { discovery, clientId: conn.clientId, nonce: flow.nonce });
+            const { idToken, accessToken } = await exchangeCode(discovery, { clientId: conn.clientId, clientSecret: await conn.secret(), code, redirectUri: ssoCallbackUrl(env), codeVerifier: flow.code_verifier });
+            // the id_token is verified first; userinfo can only add a verified email for the same subject
+            identity = await withUserinfo(discovery, accessToken, await verifyIdToken(idToken, { discovery, clientId: conn.clientId, nonce: flow.nonce }));
           } catch (e) {
             const why = e instanceof SsoError ? e.code : e instanceof SecretUnreadable ? "secret_unreadable" : e instanceof TokenEndpointMoved ? "token_endpoint_moved" : "unknown";
             console.error(`SSO sign-in refused (${why}); private diagnostics suppressed`);

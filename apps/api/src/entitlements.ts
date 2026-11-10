@@ -21,13 +21,17 @@ export interface Entitlements {
   /**
    * Take `credits` for work that is about to run. Resolves with how many were granted, between 0 and `credits`:
    * fewer than asked means the allowance for the current period is used up and the rest must not run.
+   *
+   * `at` (default now) picks the period, so a caller that may refund later can name the same instant.
    */
-  spendCredits(workspaceId: string, credits: number): Promise<number>;
+  spendCredits(workspaceId: string, credits: number, at?: Date): Promise<number>;
   /**
    * Give back credits taken with `spendCredits` for work that then did not happen (a browser check deferred for capacity,
-   * or one the browser runtime could not run). Missing means credits are never given back.
+   * or one the browser runtime could not run). `spentAt` is when they were taken: they go back to that period's
+   * allowance, so a check that straddles a period boundary never inflates the new period. Missing means credits are
+   * never given back.
    */
-  refundCredits?(workspaceId: string, credits: number): Promise<void>;
+  refundCredits?(workspaceId: string, credits: number, spentAt?: Date): Promise<void>;
   /** The allowance and what is used of it, for display. null when the workspace is not metered. */
   creditBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** Like `spendCredits`, for notification emails (alerts and status-page subscriber mails). System mails are never counted. */

@@ -6,7 +6,7 @@ Nothing is released, deployed, packaged, published or tagged; that requires the 
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
 published to any registry.
 
-**Candidate revision:** `main` at `678c363` (2026-11-10). Every claim below points to a merged pull request, a CI run on
+**Candidate revision:** `main` at `375e867` (2026-11-11). Every claim below points to a merged pull request, a CI run on
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
@@ -14,14 +14,16 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from the previous candidate, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
+| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision (`375e867`) on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from the previous candidate, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed PITR, no third-party penetration test. |
 
 ## 2. Work merged in this round (since `17f55c1`)
 
 Each pull request passed independent review with every finding fixed and every CI check green on its exact head before
-merging. Security-critical PRs (#49, #52) went through repeated rounds until a reviewer cleared them; for #47 and #48 the
-fixes were verified by CI (and, for #48, by measurement) but not by a second reviewer — noted as a residual risk.
+merging (reviews are agent reviews run in the engineering sessions; most are not posted on GitHub). Security-critical PRs
+(#49, #52) went through repeated rounds until a reviewer cleared them. The previously open gaps — fixes of #47 and #48
+not re-reviewed, the security review requested on #53 — were closed on 2026-11-10 by independent security re-reviews
+of the current code (ledger row 33); their findings were fixed in #64, whose fix was reviewed again.
 
 | PR | Commit | Change | Independent reviews (agent reviewers in this programme) |
 |---|---|---|---|
@@ -36,6 +38,13 @@ fixes were verified by CI (and, for #48, by measurement) but not by a second rev
 | #54 | `c1b7928` | Custom-domain withdrawal notices (transactional outbox); coalescing of stale queued checks after a backlog | 2 (1 medium fixed) |
 | #52 | `0b93696` | Synthetic browser monitoring in a separate hardened browser-runner | 6 (1 high, 11 medium fixed; cleared) |
 | #58 | `678c363` | Fail-closed Docker backup/restore transfer in the upgrade/DR harness: await exit and the full stream, never overwrite, remove partial files; truncated-dump negative control | 1 agent review in the session, not posted to GitHub (no correctness defect; 2 low fixed); recorded in `docs/evidence/2026-11-10-upgrade-rollback-dr.md` |
+| #61 | `9d96ba6` | Regression test: 60/hour on-call override limit counts rejected attempts (by the parallel assistant) | 1 (this programme; the test fails without the limiter) |
+| #62 | `fa275ec` | Physical Mac: native Safari 26.6.2 public landing 8/8 (WebDriver, not Playwright); stdlib harness (by the parallel assistant) | 1 (this programme); exact-head CI 13/13 |
+| #63 | `b465ed3` | Credit refunds to the month they were spent in; OIDC userinfo fallback (same `sub`, literal `email_verified`); coverage comment | 1 (no medium+; 6 low fixed) |
+| #64 | `f3165c4` | Security re-review follow-ups for #47, #48, #53: DB released before webhook delays on Workers; project-scoped on-call names; calendar-feed lockout; audit detail; keys pinned to a workspace revoked with the membership | 3 re-reviews (1 medium) + 1 review of the fix (1 medium, lows) — all fixed |
+| #65 | `25c8c65` | Two replicas behind nginx: overlay, CI qualification (sessions, client attribution, webhooks once, rolling restart, no duplicate checks, single incident) | 1 (1 high, 4 medium fixed) |
+| #66 | `3c1c67a` | Scripted browser-check step (`evaluate`, page context, returns `true`; owners/admins only; never with secrets) | 1 (1 medium, lows fixed) |
+| #67 | `375e867` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes (no medium+; lows fixed or recorded) |
 
 The previous round (#12–#43) is summarised in the git history and the earlier version of this report.
 
@@ -43,7 +52,8 @@ The previous round (#12–#43) is summarised in the git history and the earlier 
 
 **Monitoring:** HTTP(S) with keyword and JSON assertions; TCP; DNS; ICMP ping; TLS certificate and domain expiry;
 heartbeat/cron; WebSocket; PostgreSQL/MySQL/Redis; multi-region edge probes; declarative browser journeys (goto, click,
-fill with write-only secrets, waitFor, assertions) run in an isolated browser-runner.
+fill with write-only secrets, waitFor, assertions, and a page script step for owners and admins) run in an isolated
+browser-runner.
 
 **Incidents and on-call:** automatic and manual incidents with timeline, acknowledgement (assigns if unassigned),
 reminders, postmortems; on-call schedules with layers, restriction windows and overrides; escalation policies with
@@ -55,27 +65,32 @@ periodic re-verification and owner notices; subscribers; maintenance windows; ba
 **Webhooks:** capture, search, paging, delete, SSRF-guarded replay, configurable responses.
 
 **Platform:** REST API, OAuth MCP server, API keys with project scopes, Terraform provider (unpublished), audit log
-with export, OIDC SSO, 2FA, roles, Docker self-hosting, upgrade/rollback/DR procedures.
+with export, OIDC SSO (with userinfo fallback), SCIM 2.0 user provisioning and deprovisioning, 2FA, roles, Docker
+self-hosting with several replicas behind a load balancer, upgrade/rollback/DR procedures.
 
-**Not implemented (ranked in the ledger):** SAML and SCIM, SMS/voice (paid provider — needs approval), scripted
-(code) browser checks, custom monitor regions for browser checks.
+**Not implemented (ranked in the ledger):** SAML (deferred with reasons: every identity provider targeted supports
+OIDC, and SAML's XML-signature handling would add a large attack surface; ledger row 37), SCIM groups and bulk
+operations, SMS/voice (paid provider — needs approval), custom monitor regions for browser checks.
 
 ## 4. Test results at the candidate revision
 
-GitHub Actions on `678c363` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All ten workflows ran on that exact commit (push to `main`):
+GitHub Actions on `375e867` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All ten workflows ran on that exact commit (push to `main`):
 
 | Workflow | Result |
 |---|---|
-| App CI — PostgreSQL 17 and 18.6-alpine ([run 42837467149](https://github.com/TheHalfMoon/Montral/actions/runs/42837467149)) | Pass on both: API + real-PostgreSQL E2E 1,406 passed, 22 skipped (1,428) per leg (20 real-Chromium browser-check tests and 2 browser e2e skipped here by design; they run required in the browser-checks job), 0 failed, probe 22/22, web 129/129; restore drill 60 tables with catalog negative control; pg_dump 17.11 / 18.6; Chromium journey, crash recovery, SMTP, CSP and branding markers |
-| macOS 15 ARM64, PostgreSQL 18 ([run 42837467312](https://github.com/TheHalfMoon/Montral/actions/runs/42837467312)) | Pass: same counts (1,406 / 22 skipped, 22, 129); restore drill 60 tables |
-| Browser checks — Chromium, egress policy, API, hardened runner stack ([run 42837467073](https://github.com/TheHalfMoon/Montral/actions/runs/42837467073)) | Pass: 118/118, BROWSER_RUNNER_PASS (default image has no browser; runner has no app secrets and cannot reach PostgreSQL) |
-| Cross-browser and accessibility ([run 42837467227](https://github.com/TheHalfMoon/Montral/actions/runs/42837467227)) | Pass: 55/55 across Chromium, Firefox, WebKit, Pixel 7, iPhone 14, light and dark themes; 0 axe violations of any impact |
-| Terraform provider ([run 42837467074](https://github.com/TheHalfMoon/Montral/actions/runs/42837467074)) | Pass: 22/22 acceptance tests against a real server, 0 skipped |
-| Upgrade, rollback, disaster recovery ([run 42837467329](https://github.com/TheHalfMoon/Montral/actions/runs/42837467329)) | Pass: transfer integrity tests 11/11; half-length dump refused by restore; every seeded entity kept from `17f55c1` to HEAD (projects 2, monitors 8, channels 2, incidents 3, updates 8, status pages 3, share links 1, inboxes 2, webhook events 4, maintenance windows 10, API keys 1); exact rollback restore; RTO 2.1 s on the synthetic dataset |
-| Load qualification ([run 42837467035](https://github.com/TheHalfMoon/Montral/actions/runs/42837467035)) | Pass: 4,000 monitors at 4,003 checks/min, lag p95 61.8 s, 66,079 results == target requests, backlog drained in 131 s, 232 webhooks/s, no 5xx |
-| Docker Compose ([run 42837467231](https://github.com/TheHalfMoon/Montral/actions/runs/42837467231)) | Pass: health, ping monitor up inside the image, persistence, PostgreSQL 17 refuses the 18 volume |
-| Failover on PostgreSQL 17 and 18.6 ([run 42837467413](https://github.com/TheHalfMoon/Montral/actions/runs/42837467413)) | Pass |
-| Source integrity ([run 42837467498](https://github.com/TheHalfMoon/Montral/actions/runs/42837467498)) | Pass |
+| App CI — PostgreSQL 17 and 18.6-alpine ([run 42910056815](https://github.com/TheHalfMoon/Montral/actions/runs/42910056815)) | Pass on both: API + real-PostgreSQL E2E 1,423 passed, 23 skipped (1,446) per leg (21 real-Chromium browser-check tests and 2 browser e2e that need Chromium; they run required in the browser-checks job), 0 failed; probe 22/22; web 129/129; restore drill 62 tables with catalog negative control; pg_dump 17.11 / 18.6 |
+| macOS 15 ARM64, PostgreSQL 18 ([run 42910057066](https://github.com/TheHalfMoon/Montral/actions/runs/42910057066)) | Pass: same counts (1,423 / 23 skipped, 22, 129); restore drill 62 tables |
+| Browser checks — Chromium, egress policy, API, hardened runner stack ([run 42910056538](https://github.com/TheHalfMoon/Montral/actions/runs/42910056538)) | Pass: 120/120 (incl. the script step: pass on `true`, fixed failures, script fetches to loopback and metadata blocked), BROWSER_RUNNER_PASS |
+| Cross-browser and accessibility ([run 42910057003](https://github.com/TheHalfMoon/Montral/actions/runs/42910057003)) | Pass: 55/55 across Chromium, Firefox, WebKit, Pixel 7, iPhone 14, light and dark; 95 axe scans, 0 violations of any impact |
+| Terraform provider ([run 42910056828](https://github.com/TheHalfMoon/Montral/actions/runs/42910056828)) | Pass: 22/22 acceptance tests against a real server, 0 skipped |
+| Upgrade, rollback, disaster recovery ([run 42910056898](https://github.com/TheHalfMoon/Montral/actions/runs/42910056898)) | Pass: transfer integrity tests 11/11; truncated dump refused; every seeded entity kept from `17f55c1` to HEAD (now including migration 0057); exact rollback restore; RTO 2.1 s on the synthetic dataset |
+| Load qualification ([run 42910056932](https://github.com/TheHalfMoon/Montral/actions/runs/42910056932)) | Pass: 4,000 monitors at 3,999 checks/min, lag p95 62.1 s, 62,479 results == target requests, backlog drained in 132 s, 166 webhooks/s, no 5xx |
+| Docker Compose and replicas ([run 42910056761](https://github.com/TheHalfMoon/Montral/actions/runs/42910056761)) | Pass: DOCKER_COMPOSE_PASS; REPLICAS_PASS — 2 replicas behind nginx, one session, client address attributed, 60/60 concurrent webhooks stored once, rolling restart lost 0 of 204 reads and 0 of 46 webhook posts (each stored once), 5–6 runs per 60 s monitor in 330 s with a minimum gap of 30 s, 1 incident from 6 failed runs |
+| Failover on PostgreSQL 17 and 18.6 ([run 42910056872](https://github.com/TheHalfMoon/Montral/actions/runs/42910056872)) | Pass: FAILOVER_PASS on both |
+| Source integrity ([run 42910056760](https://github.com/TheHalfMoon/Montral/actions/runs/42910056760)) | Pass |
+
+Physical hardware outside CI: native Safari 26.6.2 on an Apple Silicon Mac (macOS 26.6.2), public landing 8/8 at
+`dc02d02` (#62, `docs/evidence/2026-11-10-physical-macos-native-safari-landing.md`).
 
 ## 5. Reliability and recovery
 
@@ -84,10 +99,13 @@ outage recovery; network partition; primary promotion with no committed row lost
 duplicated checks; bounded backpressure and pool exhaustion; coalescing of stale queued checks (at most 2 results per
 monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the previous candidate; a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
 restoring the pre-upgrade backup; disaster recovery into a new database (RTO 2.1 s — a floor on a tiny dataset, not a
-capacity figure); a newer schema refused at startup with a clear message.
+capacity figure); a newer schema refused at startup with a clear message; two app replicas behind nginx on one
+PostgreSQL (#65): one session across replicas, the client's address attributed, concurrent webhooks stored once, a
+rolling restart under continuous reads and webhook posts with no failed request, scheduled checks run once per
+interval in total (no run claimed twice), a failing monitor opening exactly one incident.
 
-**Not demonstrated:** several app nodes behind a load balancer under real traffic; hosted or cross-region failover;
-managed PITR; capacity beyond one 4-vCPU node; real network latency in the load test.
+**Not demonstrated:** replicas on different hosts; a rolling upgrade with old and new versions side by side; hosted or
+cross-region failover; managed PITR; capacity beyond one 4-vCPU node; real network latency in the load test.
 
 ## 6. Security assessment
 
@@ -96,12 +114,17 @@ Every control below has a regression test in CI. This round added:
 | Area | Control | Evidence |
 |---|---|---|
 | Single sign-on | OIDC code flow with PKCE, state and nonce single-use; id_token validated with jose (asymmetric algorithms only); `email_verified` required; email never auto-links an existing account; verified domains re-checked; require-SSO enforced for sessions, API keys, agent tokens bound to the authorizing session, and auth-library endpoints, with the owner exempt as break-glass; removed members blocked from re-provisioning | #49, `sso.e2e.test.ts`, `sso-oidc.test.ts` |
-| Browser checks | No user code; Chromium only in a separate runner with no database credentials or app secrets, off the database network, signed and replay-protected channel, sealed secrets, `cap_drop: ALL`, read-only root, custom seccomp; every request through an egress proxy that pins validated addresses; WebRTC and WebTransport proven not to leave the host; per-workspace fairness, time budget, credits reserved before launch; screenshots of secret-using runs restricted to managers | #52, browser-checks workflow |
+| Browser checks | Chromium only in a separate runner with no database credentials or app secrets, off the database network, signed and replay-protected channel, sealed secrets, `cap_drop: ALL`, read-only root, custom seccomp; every request through an egress proxy that pins validated addresses; WebRTC and WebTransport proven not to leave the host; per-workspace fairness, time budget, credits reserved before launch; screenshots of secret-using runs restricted to managers | #52, browser-checks workflow |
 | Webhook responses | Header allow-list, text bodies only, XML/CSV as attachments with sandbox CSP, privacy headers non-overridable, delay never refuses capture | #47 |
 | On-call | Override limits and a single-sweep engine (paging cost under a millisecond), calendar links session-only and `no-store`, no member emails to API keys or agents | #48 |
 | Session workspace | Deterministic active workspace (previously a request could switch workspace) | #53 |
+| Re-review of #47/#48/#53 | Workers: a delayed webhook response no longer holds a PostgreSQL connection (could exhaust `max_connections`); project-limited keys never see other projects' monitor or policy names; calendar feeds cannot be locked out with random tokens; deletes audited with their project; per-method response status and redirect host audited; API keys pinned to a workspace revoked with the membership, and pinning requires membership | #64, `montral-hooks.test.ts`, `oncall.e2e.test.ts`, `membership.e2e.test.ts` |
+| OIDC userinfo | Used only when the verified id_token has no verified email; same `sub` (constant-time), literal `email_verified: true`, never swaps an unverified address; SSRF-guarded like every provider request | #63, `sso-oidc.test.ts`, `sso.e2e.test.ts` |
+| SCIM | Per-workspace token (owner session only, SHA-256 stored, one active, revoked with the SSO connection); verified domains only; JIT admits only assigned people; deactivation ends the membership, sessions and pinned keys (owner refused); SCIM never adds an existing account; 64 KiB bodies; cross-workspace 404 | #67, `sso.e2e.test.ts` |
+| Browser script step | Runs in the page (renderer) of the isolated runner behind the same egress policy, never in Node; only `true` crosses back; fixed error strings; owners and admins only; never in a journey with secrets | #66, `browser-check.integration.test.ts` |
+| Replicas | Load balancer at a fixed, exactly trusted address (client addresses for rate limits and audit); only unsent connections are retried (nothing sent twice) | #65, `qualify-replicas.sh` |
 
-**Open security findings: none critical, high or medium.** Low-severity follow-ups in ledger rows 26–29. Residual: no third-party penetration
+**Open security findings: none critical, high or medium** (self-assessed by independent agent reviews; see ledger rows 33–40 for accepted lows). Residual: no third-party penetration
 test; GitHub Actions pinned by tag; reverse-proxy logs must redact bearer tokens in URLs (documented); OAuth dynamic
 client registration is unauthenticated (pre-existing; clients get nothing without user consent).
 
@@ -111,9 +134,9 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 |---|---|
 | Linux x86-64 | Qualified on every PR: PostgreSQL 17 and 18.6 (Alpine, as shipped) |
 | macOS 15 ARM64 (GitHub-hosted) | Qualified on every PR at the candidate revision |
-| Docker / Docker Compose | Qualified on every PR, including the optional browser-runner stack |
+| Docker / Docker Compose | Qualified on every PR, including the optional browser-runner stack and two replicas behind nginx |
 | Browsers | Chromium, Firefox, WebKit (Playwright's Linux build), Pixel 7 and iPhone 14 emulation, light and dark themes |
-| Native Safari on physical Apple hardware | **Blocked:** needs the owner to enable Safari "Allow remote automation" (system authorization); investigated in draft #45 by the Mac assistant |
+| Native Safari on physical Apple hardware | **Public landing qualified** (#62): Safari 26.6.2 on macOS 26.6.2 (Apple Silicon), real WebDriver session, 8/8 (four languages, light/dark, 390 px). **Not qualified:** the signed-in app with a database, VoiceOver, physical iOS Safari — the Mac has ~3.8 GiB free and incompatible Node/pnpm, so no app build was attempted there (ledger row 36) |
 | Windows | **Not supported as a native server platform.** Docker Desktop (WSL 2) runs the same Linux image but was not tested: Docker/WSL was unavailable on the development machine |
 
 ## 8. Known limitations for a self-hosted release
@@ -121,19 +144,22 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 1. TLS certificate monitors, ping, custom domains and browser checks need the Node/Docker server; the Cloudflare
    Workers build refuses them with 400. Browser checks also need the optional browser-runner stack.
 2. Members-only status pages are not served on custom domains; share links point at the main address.
-3. SSO: no SAML, no SCIM deprovisioning, no userinfo fallback, one connection per workspace.
+3. SSO: OIDC only (no SAML), one connection per workspace; SCIM covers users, not groups or bulk operations.
 4. External email deliverability, live APNs push and live payments are not qualified; billing is off.
-5. Low-severity follow-ups in ledger rows 26–29.
+5. Several replicas: qualified on one host; per-process limits (delayed webhook responses, manual checks,
+   `MAX_BROWSER_CHECKS`) multiply with replicas; rolling upgrades are not qualified (restarts are).
+6. Low-severity follow-ups and accepted risks in ledger rows 26–40.
 
 ## 9. Install and operations documentation
 
 - `/docs/self-host` (served by every instance, en + zh): install, environment, reverse proxy and TLS, custom domains,
-  ping in Docker, browser-runner stack and sizing, SSO configuration, on-call, PostgreSQL version policy, upgrade and
-  rollback, APNs, GitHub sign-in.
+  ping in Docker, browser-runner stack and sizing, several replicas behind a load balancer, SSO configuration, SCIM
+  provisioning, on-call, PostgreSQL version policy, upgrade and rollback, APNs, GitHub sign-in.
 - `/docs/backup`, `/docs/api` (incl. audit log, on-call, SSO, webhook responses, Terraform), `/docs/mcp`.
 - `terraform-provider-montral/README.md` for building the provider from source.
-- Reproducible qualification scripts: `scripts/qualify-docker.sh`, `qualify-upgrade.mjs`, `qualify-load.mjs`,
-  `qualify-failover.mjs`, `qualify-crash-recovery.mjs`, `qualify-backup.mjs`.
+- Reproducible qualification scripts: `scripts/qualify-docker.sh`, `qualify-replicas.sh`, `qualify-upgrade.mjs`,
+  `qualify-load.mjs`, `qualify-failover.mjs`, `qualify-crash-recovery.mjs`, `qualify-backup.mjs`, and
+  `qualify-native-safari-landing.py` (physical Mac only).
 - Per-change evidence in `docs/evidence/`.
 
 ## 10. External approvals needed for a public launch
@@ -143,10 +169,13 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 3. Email provider, APNs credentials and a live payment provider account, if those features are offered; an SMS/voice
    provider if wanted.
 4. Commercial terms, privacy policy and legal review of the bundled `/terms` and `/privacy`.
-5. Safari remote-automation authorization on the physical Mac for native Safari qualification.
-6. Optional: a third-party penetration test.
+5. A provisioned host (or more free space and pinned Node/pnpm on the Mac) for the signed-in native Safari journeys and
+   VoiceOver, and a physical iPhone for iOS Safari, if those must be qualified.
+6. Starting Docker Desktop on the Windows development machine (it is installed but not running) to qualify the
+   Windows Docker Desktop / WSL 2 path.
+7. Optional: a third-party penetration test.
 
 ## 11. Open pull requests not from this programme
 
-Only #45 is open (draft by the Mac assistant: physical Mac/Safari evidence — keep; not touched by this programme). #46
-was closed on 2026-11-10; #51 and #57 were closed when #54 merged; #58 was reviewed, fixed and merged as `678c363`.
+None. #45 (blocked Safari preflight) was closed as superseded by #62 after its remaining checklist was moved to ledger
+row 36; #61 and #62 from the parallel assistant were reviewed and merged; #46, #51 and #57 were closed earlier.

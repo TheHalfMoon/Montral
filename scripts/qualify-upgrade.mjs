@@ -1,5 +1,5 @@
-import { dockerFileTransfer } from "./docker-file-transfer.mjs";
 #!/usr/bin/env node
+import { dockerFileTransfer } from "./docker-file-transfer.mjs";
 // Upgrade, rollback and disaster-recovery qualification of the self-hosted Node build against a real, disposable
 // local PostgreSQL. Everything is synthetic and local: the monitoring target, alert webhook and webhook senders are
 // this script; nothing leaves the runner.

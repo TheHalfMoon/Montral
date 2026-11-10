@@ -1,4 +1,40 @@
-# Montral production release gates — no public deployment without passing all
+# Montral release gates
+
+Publication of any kind (tag, GitHub release, Docker image, npm package, Terraform provider, deployment) requires the
+owner's explicit `GREEN LIGHT MONTRAL`. This file has two parts: the **current self-hosted release-candidate gates**,
+each verified at the candidate revision, and the **historical production/SaaS gate log** below, kept for traceability.
+
+## A. Self-hosted Docker release candidate — mandatory gates at `678c363` (2026-11-10)
+
+Every gate below passed on GitHub Actions at `678c363` (`main` after #58). Run ids are links on
+`https://github.com/TheHalfMoon/Montral/actions/runs/<id>`.
+
+| # | Gate | Status | Evidence at `678c363` |
+|---|---|---|---|
+| G1 | Typecheck, unit and real-PostgreSQL E2E on PostgreSQL 17 and the shipped 18.6-alpine image | PASS | app CI 42837467149: API 1,406 passed / 22 skipped per leg (20 browser-check integration + 2 browser e2e tests that need Chromium, run required in G6), probe 22/22, web 129/129 |
+| G2 | macOS ARM64 qualification (PostgreSQL 18) | PASS | 42837467312: same counts; restore drill, crash recovery, Chromium journey |
+| G3 | Backup and full restore with content verification; no silent truncation | PASS | 42837467149: RESTORE_DRILL_PASS 60 tables + catalog negative control; 42837467329: transfer integrity tests 11/11, truncated dump refused by the documented restore |
+| G4 | Upgrade from the previous candidate (`17f55c1`), rollback, disaster recovery | PASS | 42837467329: every seeded entity kept; exact rollback restore; the old build fails safely against the upgraded schema (migration check refuses; started, it exits after ~59 s with a generic message and changes nothing); RTO 2.1 s on the synthetic dataset |
+| G5 | Docker image and compose: health, persistence, container recreation, PostgreSQL major-downgrade refusal | PASS | 42837467231: DOCKER_COMPOSE_PASS |
+| G6 | Browser-monitoring isolation (separate hardened runner, egress policy) | PASS | 42837467073: 118/118, BROWSER_RUNNER_PASS (runner has no app secrets and no database access) |
+| G7 | Cross-browser and WCAG 2.1 AA (Chromium, Firefox, WebKit, Pixel 7, iPhone 14; light and dark) | PASS | 42837467227: 55/55, 0 axe violations |
+| G8 | Sustained load, backpressure, pool exhaustion | PASS | 42837467035: 4,000 monitors at 4,003 checks/min, 66,079 results == target requests, backlog drained in 131 s, no 5xx |
+| G9 | Network partition and primary promotion (PostgreSQL 17 and 18.6-alpine) | PASS | 42837467413: FAILOVER_PASS on both |
+| G10 | Terraform provider acceptance (unpublished) | PASS | 42837467074: 22 TestAcc passed, 0 skipped, 0 failed |
+| G11 | Vendored source integrity | PASS | 42837467498 |
+| G12 | Review of every merged change, all findings fixed or recorded | PASS, with recorded gaps | `docs/FINAL-REPORT.md` §2 (agent reviewers in the programme, mostly not posted to GitHub): fixes in #47 and #48 not re-reviewed; a separate security review requested on #53 not done; open low-severity follow-ups in `docs/TASK-LEDGER.md` rows 26–29 |
+| G13 | No open critical, high or medium security finding | PASS (self-assessed) | `docs/FINAL-REPORT.md` §6; no third-party penetration test |
+
+**Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari on
+physical Apple hardware (blocked on Safari remote-automation authorization); Windows Docker Desktop / WSL 2 (not
+tested; Windows is not a native server platform); ARM64 Linux hosts for the Docker image; PostgreSQL versions other
+than 17 and 18.6; several app replicas behind a load balancer; real external SMTP/APNs delivery.
+
+## B. Historical production and SaaS gate log
+
+The items below were written for a hosted service. Open items remain **open** and are reasons the public SaaS is NO-GO.
+The repository is public with the owner's approval; that is not release authorization.
+
 
 ## Completed and locally verified
 - [x] Three exact source snapshots and original license notices preserved (638 hashed files)
@@ -127,7 +163,7 @@
 - [ ] Domain, **configured** customer email deliverability (without a provider, signup preview cannot deliver verification and alert ledger correctly reports failure), cost budgets and capacity plan
 - [x] **Subscriber contact-list authorization (local):** `GET /status-pages/:id/subscribers` now requires current owner/admin role, like subscriber removal. Real PostgreSQL RED (member 200) → GREEN (403) with owner 200, other-tenant 404, anonymous 401 and live role promotion/revocation; ordinary non-contact status reads still work. Hosted/privacy assessment remains OPEN. [Evidence](evidence/2026-11-01-status-subscriber-contact-access.md).
 - [ ] Privacy, terms, accessibility and commercial/legal readiness review
-- [ ] Explicit user decision to publish the SaaS. Until then, keep repo private and **do not deploy**
+- [ ] Explicit user decision to publish the SaaS (`GREEN LIGHT MONTRAL`). Until then **do not deploy**. (The repository itself is public with the owner's approval.)
 
 Latest local evidence: [Billing/scope qualification](evidence/2026-10-30-billing-scope-qualification.md) and [earlier baseline](evidence/2026-10-30-local-postgres-qualification.md).
 

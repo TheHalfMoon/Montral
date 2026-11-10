@@ -55,8 +55,8 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 28 | SSO: no SCIM deprovisioning; no userinfo fallback for `email`/`email_verified`; one connection per workspace; members of two require-SSO workspaces with different IdPs cannot authorize agents | P3 | Open (documented) |
 | 29 | Coalescing: comment in `coverage.ts` calls the completion-time stand-in "stricter" (it is looser by ≤ 30 s) | P3 | Open |
 | 30 | Windows: Docker Desktop (WSL 2) path not tested — Docker/WSL unavailable on the development machine; Windows is not supported as a native server platform | P2 | Blocked (hardware/environment) |
-| 31 | Draft PRs from the parallel assistant: #46 (on-call resolver, superseded by #48) | P3 | Owner decision: recommend closing #46 (#51 and #57 were closed when #54 merged) |
-| 32 | Upgrade/DR qualification harness: `scripts/qualify-upgrade.mjs` can read a truncated backup (Docker stream not awaited before restore); reported on #55 after merge | P2 | Open: fix in draft #58 (parallel assistant), needs review and green exact-head CI |
+| 31 | Draft PRs from the parallel assistant: #46 (on-call resolver, superseded by #48) | P3 | Closed: #46 closed 2026-11-10 (#51 and #57 were closed when #54 merged). #45 (physical Mac/Safari evidence) stays open with the Mac assistant |
+| 32 | Upgrade/DR qualification harness: `scripts/qualify-upgrade.mjs` can read a truncated backup (Docker stream not awaited before restore); found after #55 merged | P2 | Done (#58, `678c363`): `scripts/docker-file-transfer.mjs` resolves only after exit 0 and the full stream; refuses an existing destination, removes a partial file it created; 11 negative/positive transfer tests (5 fail on the previous implementation: local run, commit `25287d2`); the qualification proves a half-length dump is refused by the documented restore; one agent review in the session (not on GitHub), 2 low findings fixed; all ten workflows green at `678c363` |
 
 ## External dependencies (cannot be closed in engineering)
 

@@ -6,7 +6,7 @@ Nothing is released, deployed, packaged, published or tagged; that requires the 
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
 published to any registry.
 
-**Candidate revision:** `main` at `0b93696` (2026-11-10). Every claim below points to a merged pull request, a CI run on
+**Candidate revision:** `main` at `678c363` (2026-11-10). Every claim below points to a merged pull request, a CI run on
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
@@ -14,7 +14,7 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence. All ten CI workflows pass at the candidate revision on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from the previous candidate, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
+| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from the previous candidate, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed PITR, no third-party penetration test. |
 
 ## 2. Work merged in this round (since `17f55c1`)
@@ -32,9 +32,10 @@ fixes were verified by CI (and, for #48, by measurement) but not by a second rev
 | #53 | `8c34eb7` | Product bug behind an e2e flake: a session's workspace could switch between requests | 1 (correctness; a GitHub comment from the parallel assistant asked for a separate security review, not done) |
 | #56 | `cdc92ed` | Mobile tap targets on segmented controls (found as an intermittent browser-test failure) | 1 (correctness) |
 | #49 | `cd40984` | OIDC single sign-on: per-workspace and instance-wide, verified and re-checked domains, require-SSO for every credential type (the workspace owner is exempt as break-glass) | 4 (1 high, 6 medium fixed; cleared) |
-| #55 | `52bb319` | Upgrade from `17f55c1`, rollback and disaster recovery in CI; refusal of a newer schema with a clear message | 2 (1 medium fixed). **A later harness finding is unfixed:** the backup written by `scripts/qualify-upgrade.mjs` can be truncated (stream not awaited before restore); fix in draft #58 by the parallel assistant, not merged yet |
+| #55 | `52bb319` | Upgrade from `17f55c1`, rollback and disaster recovery in CI; refusal of a newer schema with a clear message | 2 (1 medium fixed). A later harness finding (backup stream not awaited before restore) was fixed by #58 |
 | #54 | `c1b7928` | Custom-domain withdrawal notices (transactional outbox); coalescing of stale queued checks after a backlog | 2 (1 medium fixed) |
 | #52 | `0b93696` | Synthetic browser monitoring in a separate hardened browser-runner | 6 (1 high, 11 medium fixed; cleared) |
+| #58 | `678c363` | Fail-closed Docker backup/restore transfer in the upgrade/DR harness: await exit and the full stream, never overwrite, remove partial files; truncated-dump negative control | 1 agent review in the session, not posted to GitHub (no correctness defect; 2 low fixed); recorded in `docs/evidence/2026-11-10-upgrade-rollback-dr.md` |
 
 The previous round (#12–#43) is summarised in the git history and the earlier version of this report.
 
@@ -61,28 +62,28 @@ with export, OIDC SSO, 2FA, roles, Docker self-hosting, upgrade/rollback/DR proc
 
 ## 4. Test results at the candidate revision
 
-GitHub Actions on `0b93696` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB):
+GitHub Actions on `678c363` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All ten workflows ran on that exact commit (push to `main`):
 
 | Workflow | Result |
 |---|---|
-| App CI — PostgreSQL 17 and 18.6-alpine ([run 42787353318](https://github.com/TheHalfMoon/Montral/actions/runs/42787353318)) | Pass on both: API + real-PostgreSQL E2E 1,406 passed (22 real-Chromium browser-check tests skipped here by design; they run required in the browser-checks job), probe 22/22, web 129/129; restore drill 60 tables; Chromium journey, crash recovery, SMTP, CSP and branding markers |
-| macOS 15 ARM64, PostgreSQL 18 ([run 42787353452](https://github.com/TheHalfMoon/Montral/actions/runs/42787353452)) | Pass: same suites |
-| Browser checks — Chromium, egress policy, API, hardened runner stack ([run 42787353525](https://github.com/TheHalfMoon/Montral/actions/runs/42787353525)) | Pass: 118/118, BROWSER_RUNNER_PASS (default image has no browser; runner has no app secrets and cannot reach PostgreSQL) |
-| Cross-browser and accessibility ([run 42787353400](https://github.com/TheHalfMoon/Montral/actions/runs/42787353400)) | Pass: 55/55 across Chromium, Firefox, WebKit, Pixel 7, iPhone 14, light and dark themes; 0 axe violations of any impact |
-| Terraform provider ([run 42787353302](https://github.com/TheHalfMoon/Montral/actions/runs/42787353302)) | Pass: 22/22 acceptance tests against a real server |
-| Upgrade, rollback, disaster recovery ([run 42787353428](https://github.com/TheHalfMoon/Montral/actions/runs/42787353428)) | Pass: every seeded entity kept from `17f55c1` to HEAD; exact rollback restore; RTO 1.9 s on the synthetic dataset |
-| Load qualification ([run 42787353316](https://github.com/TheHalfMoon/Montral/actions/runs/42787353316)) | Pass: 4,000 monitors at 4,003 checks/min, lag p95 61.7 s, 63,327 results == target requests, backlog drained in 132 s, no 5xx |
-| Docker Compose ([run 42787353295](https://github.com/TheHalfMoon/Montral/actions/runs/42787353295)) | Pass: health, ping monitor up inside the image, persistence, PostgreSQL 17 refuses the 18 volume |
-| Failover on PostgreSQL 17 and 18.6 ([run 42787353304](https://github.com/TheHalfMoon/Montral/actions/runs/42787353304)) | Pass |
-| Source integrity ([run 42787353707](https://github.com/TheHalfMoon/Montral/actions/runs/42787353707)) | Pass |
+| App CI — PostgreSQL 17 and 18.6-alpine ([run 42837467149](https://github.com/TheHalfMoon/Montral/actions/runs/42837467149)) | Pass on both: API + real-PostgreSQL E2E 1,406 passed, 22 skipped (1,428) per leg (20 real-Chromium browser-check tests and 2 browser e2e skipped here by design; they run required in the browser-checks job), 0 failed, probe 22/22, web 129/129; restore drill 60 tables with catalog negative control; pg_dump 17.11 / 18.6; Chromium journey, crash recovery, SMTP, CSP and branding markers |
+| macOS 15 ARM64, PostgreSQL 18 ([run 42837467312](https://github.com/TheHalfMoon/Montral/actions/runs/42837467312)) | Pass: same counts (1,406 / 22 skipped, 22, 129); restore drill 60 tables |
+| Browser checks — Chromium, egress policy, API, hardened runner stack ([run 42837467073](https://github.com/TheHalfMoon/Montral/actions/runs/42837467073)) | Pass: 118/118, BROWSER_RUNNER_PASS (default image has no browser; runner has no app secrets and cannot reach PostgreSQL) |
+| Cross-browser and accessibility ([run 42837467227](https://github.com/TheHalfMoon/Montral/actions/runs/42837467227)) | Pass: 55/55 across Chromium, Firefox, WebKit, Pixel 7, iPhone 14, light and dark themes; 0 axe violations of any impact |
+| Terraform provider ([run 42837467074](https://github.com/TheHalfMoon/Montral/actions/runs/42837467074)) | Pass: 22/22 acceptance tests against a real server, 0 skipped |
+| Upgrade, rollback, disaster recovery ([run 42837467329](https://github.com/TheHalfMoon/Montral/actions/runs/42837467329)) | Pass: transfer integrity tests 11/11; half-length dump refused by restore; every seeded entity kept from `17f55c1` to HEAD (projects 2, monitors 8, channels 2, incidents 3, updates 8, status pages 3, share links 1, inboxes 2, webhook events 4, maintenance windows 10, API keys 1); exact rollback restore; RTO 2.1 s on the synthetic dataset |
+| Load qualification ([run 42837467035](https://github.com/TheHalfMoon/Montral/actions/runs/42837467035)) | Pass: 4,000 monitors at 4,003 checks/min, lag p95 61.8 s, 66,079 results == target requests, backlog drained in 131 s, 232 webhooks/s, no 5xx |
+| Docker Compose ([run 42837467231](https://github.com/TheHalfMoon/Montral/actions/runs/42837467231)) | Pass: health, ping monitor up inside the image, persistence, PostgreSQL 17 refuses the 18 volume |
+| Failover on PostgreSQL 17 and 18.6 ([run 42837467413](https://github.com/TheHalfMoon/Montral/actions/runs/42837467413)) | Pass |
+| Source integrity ([run 42837467498](https://github.com/TheHalfMoon/Montral/actions/runs/42837467498)) | Pass |
 
 ## 5. Reliability and recovery
 
 Demonstrated on real processes and real PostgreSQL: graceful SIGTERM; SIGKILL mid-retry with no duplicates; database
 outage recovery; network partition; primary promotion with no committed row lost; sustained load with 0 lost or
 duplicated checks; bounded backpressure and pool exhaustion; coalescing of stale queued checks (at most 2 results per
-monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the previous candidate; rollback by
-restoring the pre-upgrade backup; disaster recovery into a new database (RTO 1.9 s — a floor on a tiny dataset, not a
+monitor per minute after recovery, down from 6 per 2 minutes); upgrade from the previous candidate; a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
+restoring the pre-upgrade backup; disaster recovery into a new database (RTO 2.1 s — a floor on a tiny dataset, not a
 capacity figure); a newer schema refused at startup with a clear message.
 
 **Not demonstrated:** several app nodes behind a load balancer under real traffic; hosted or cross-region failover;
@@ -100,7 +101,7 @@ Every control below has a regression test in CI. This round added:
 | On-call | Override limits and a single-sweep engine (paging cost under a millisecond), calendar links session-only and `no-store`, no member emails to API keys or agents | #48 |
 | Session workspace | Deterministic active workspace (previously a request could switch workspace) | #53 |
 
-**Open security findings: none critical, high or medium.** Low-severity follow-ups in ledger rows 26–29. Separately (not a product security issue), the upgrade/DR qualification harness can truncate its backup file — ledger row 32, fix in draft #58; no third-party penetration
+**Open security findings: none critical, high or medium.** Low-severity follow-ups in ledger rows 26–29. Residual: no third-party penetration
 test; GitHub Actions pinned by tag; reverse-proxy logs must redact bearer tokens in URLs (documented); OAuth dynamic
 client registration is unauthenticated (pre-existing; clients get nothing without user consent).
 
@@ -147,7 +148,5 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 
 ## 11. Open pull requests not from this programme
 
-Open drafts from the parallel assistant: #45 (physical Mac/Safari evidence — keep), #46 (on-call resolver, superseded by
-#48 — recommend closing), #58 (fixes the upgrade-harness backup truncation; its one failing check is the cross-browser
-job's Playwright install step, unrelated to the change — needs its own review and green CI before merge). #51 and #57
-were closed when #54 merged. This programme did not push to or close any of them.
+Only #45 is open (draft by the Mac assistant: physical Mac/Safari evidence — keep; not touched by this programme). #46
+was closed on 2026-11-10; #51 and #57 were closed when #54 merged; #58 was reviewed, fixed and merged as `678c363`.

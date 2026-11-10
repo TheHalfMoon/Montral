@@ -158,3 +158,15 @@ In the real qualification each documented backup is opened with `pg_restore --li
 header and table of contents only). Completeness is proven by restoring: the rollback restore of the pre-upgrade backup
 and the disaster-recovery restore are compared table by table with exact SHA-256 fingerprints, and a truncated copy
 (half of a real `pg_dump -Fc` archive) must be refused by the documented `pg_restore --exit-on-error` restore.
+
+**Review of #58 (record).** One independent agent review was run in the engineering session on the final change; it
+was not posted to GitHub (the owner's comment on the earlier head `4b7779b` noted that a review was still missing; this
+is the review that followed). It found no correctness defect and two low-severity issues, both fixed before merge:
+the harness comment and this document overstated what `pg_restore --list` proves (corrected above), and a destination
+file opened only after the bounded post-failure wait could have been left behind (now removed as soon as it opens).
+Exact-head CI on `d8854bd`: all 13 check runs succeeded. The statement that 5 of the 11 transfer tests fail on the
+previous implementation is from a local run recorded in commit `25287d2`; it was not run in CI.
+
+**Coverage boundary.** End to end against real `pg_dump`/`pg_restore`, only the truncated-archive case is proven. Partial
+writes, non-zero exit, termination by signal, a broken stream and an existing destination are proven by the unit tests
+in `scripts/docker-file-transfer.test.mjs` with real files and a simulated Docker process.

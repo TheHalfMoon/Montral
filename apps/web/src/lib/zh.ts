@@ -798,10 +798,8 @@ export const zh: Record<string, string> = {
   "Require single sign-on for this workspace": "要求此工作区使用单点登录",
   "Members can then reach this workspace only through this provider: their other sessions are signed out, and API keys and agent authorizations they made without SSO stop working here. You, the owner, keep password sign-in as the break-glass account: protect it with two-step verification.": "开启后，成员只能通过此身份提供商访问该工作区：他们的其他会话会被退出，未通过 SSO 创建的 API 密钥和智能体授权在此工作区失效。你作为所有者保留密码登录，作为应急账号：请为它开启两步验证。",
   "This server also has an instance-wide provider configured by its operator.": "此服务器还配置了由运维者设置的全实例身份提供商。",
-<<<<<<< HEAD
   "Run script": "运行脚本",
   "Script (returns true to pass)": "脚本（返回 true 即通过）",
-=======
   "Turn off SCIM provisioning? Your identity provider will no longer be able to add or remove people.": "要关闭 SCIM 预配吗？你的身份提供商将无法再添加或移除人员。",
   "SCIM provisioning": "SCIM 预配",
   "Lets your identity provider add, deactivate and remove people. Once it is on, single sign-on admits only people the provider assigned; deactivating someone ends their membership, signs them out and revokes their API keys for this workspace.": "允许你的身份提供商添加、停用和移除人员。开启后，单点登录只接纳提供商已分配的人员；停用某人会结束其成员身份、使其退出登录，并吊销其针对此工作区的 API 密钥。",
@@ -812,7 +810,6 @@ export const zh: Record<string, string> = {
   "Replace token": "更换令牌",
   "Turn on SCIM": "开启 SCIM",
   "On": "开启",
->>>>>>> 46760c4 (feat(sso): SCIM 2.0 user provisioning and deprovisioning)
   "Test connection": "测试连接",
   "The single sign-on attempt expired or was started in another browser. Try again.": "单点登录尝试已过期，或是在另一个浏览器中发起的。请重试。",
   "Your identity provider did not complete the sign-in. Try again.": "你的身份提供商未完成登录。请重试。",

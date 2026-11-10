@@ -26,28 +26,39 @@ export const DOMAIN_NOTICE_ATTEMPTS = 3;
 const RETRY_SEC = [60, 300];
 
 /**
- * Queue one notice per current owner and admin of the page's workspace (members get none). Idempotent: a notice that
- * was queued before for this streak and person is not queued again. Returns the ids of the rows it created.
+ * Turn the notices the re-check left in its outbox (status_page.custom_domain_notice, written in the same UPDATE as the
+ * withdrawal or the streak's second failure) into one delivery row per current owner and admin of the page's workspace
+ * (members get none), and clear the outbox, in one statement. Idempotent: a notice that was queued before for this
+ * streak and person is not queued again. Returns how many rows it created. Throws on database errors (the outbox stays
+ * set, so the next round tries again).
  */
-export async function queueDomainNotices(
-  query: Query,
-  n: { pageId: string; kind: DomainNoticeKind; domain: string; streakSince: Date | string },
-): Promise<string[]> {
-  const since = new Date(n.streakSince).toISOString();
-  const rows = await query<{ id: string }>(
-    `INSERT INTO alert_delivery (organization_id, project_id, channel_id, channel_name, channel_type, kind, monitor_name,
-                                 ok, status, attempts, target_user_id, status_page_id, dedupe_key)
-     SELECT sp.organization_id, sp.project_id, NULL, COALESCE(NULLIF(btrim(u.name), ''), u.email), 'email', $2::text, $3::text,
-            false, 'pending', 0, u.id, sp.id, $2::text || ':' || sp.id::text || ':' || $4::text || ':' || u.id
-     FROM status_page sp
-     JOIN member m ON m.organization_id = sp.organization_id AND m.role IN ('owner', 'admin')
-     JOIN "user" u ON u.id = m.user_id
-     WHERE sp.id = $1::uuid
-     ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
-     RETURNING id`,
-    [n.pageId, n.kind, n.domain, since],
+export async function enqueueDomainNotices(query: Query, options: { pageIds?: string[]; limit?: number } = {}): Promise<number> {
+  const [r] = await query<{ queued: number }>(
+    `WITH due AS (
+       SELECT id, custom_domain_notice AS kind FROM status_page
+       WHERE custom_domain_notice IS NOT NULL AND ($1::text IS NULL OR id::text = ANY(string_to_array($1::text, ',')))
+       ORDER BY id LIMIT $2 FOR UPDATE SKIP LOCKED),
+     ins AS (
+       INSERT INTO alert_delivery (organization_id, project_id, channel_id, channel_name, channel_type, kind, monitor_name,
+                                   ok, status, attempts, target_user_id, status_page_id, dedupe_key)
+       SELECT sp.organization_id, sp.project_id, NULL, COALESCE(NULLIF(btrim(u.name), ''), u.email), 'email', due.kind, sp.custom_domain,
+              false, 'pending', 0, u.id, sp.id,
+              due.kind || ':' || sp.id::text || ':' || to_char(sp.custom_domain_failing_since AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') || ':' || u.id
+       FROM due
+       JOIN status_page sp ON sp.id = due.id
+       JOIN member m ON m.organization_id = sp.organization_id AND m.role IN ('owner', 'admin')
+       JOIN "user" u ON u.id = m.user_id
+       WHERE sp.custom_domain IS NOT NULL AND sp.custom_domain_failing_since IS NOT NULL
+       ON CONFLICT (dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
+       RETURNING id),
+     cleared AS (
+       UPDATE status_page SET custom_domain_notice = NULL FROM due
+       WHERE status_page.id = due.id AND status_page.custom_domain_notice = due.kind
+       RETURNING status_page.id)
+     SELECT (SELECT count(*) FROM ins)::int AS queued, (SELECT count(*) FROM cleared)::int AS cleared`,
+    [options.pageIds?.length ? options.pageIds.join(",") : null, options.limit ?? 100],
   );
-  return rows.map((r) => r.id);
+  return r?.queued ?? 0;
 }
 
 type Claimed = { id: string; kind: DomainNoticeKind; organization_id: string; target_user_id: string | null; status_page_id: string | null; monitor_name: string | null; attempts: number };

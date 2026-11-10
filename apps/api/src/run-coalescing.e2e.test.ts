@@ -167,9 +167,9 @@ describe.skipIf(!url)("stale run coalescing (PostgreSQL)", () => {
   it("an earlier run that died without a result holds a newer one back only for its timeout plus the margin", async () => {
     const id = await monitor();
     await claim(id, 1);
-    // run 1 started (beginRuns stamps it) and its worker died: no result is ever recorded
-    await db.query("UPDATE monitor SET last_run_generation = 1, run_started_at = now() WHERE id = $1", [id]);
     const next = await claim(id, 2);
+    // run 1 started after run 2 was claimed (a backlog: it is checking run 2's interval) and its worker died
+    await db.query("UPDATE monitor SET last_run_generation = 1, run_started_through_generation = 2, run_started_at = now() WHERE id = $1", [id]);
     await run(next);
     expect(requests).toBe(0); // still within run 1's lease: it may yet record
     await db.query("UPDATE monitor SET run_started_at = now() - interval '1 minute' WHERE id = $1", [id]);
@@ -177,5 +177,29 @@ describe.skipIf(!url)("stale run coalescing (PostgreSQL)", () => {
     expect(requests).toBe(1); // the lease passed: no permanent block, no lost interval
     await run(next);
     expect(requests).toBe(1); // and that run is still started at most once
+  });
+
+  it("a run that started before this run was claimed never holds it back, even within its lease (60 s monitor, starts 20 s apart)", async () => {
+    const id = await monitor();
+    await db.query("UPDATE monitor SET interval_sec = 60 WHERE id = $1", [id]);
+    await claim(id, 1);
+    // run 1 started 20 s ago, before run 2 was claimed, and has not recorded (slow, or its worker died)
+    await db.query("UPDATE monitor SET last_run_generation = 1, run_started_through_generation = 1, run_started_at = now() - interval '20 seconds' WHERE id = $1", [id]);
+    await run(await claim(id, 2));
+    expect(requests).toBe(1); // run 2 is checked: no skipped interval
+    expect(credits).toBe(1);
+  });
+
+  it("a worker that dies in a backlog costs at most the one interval it was checking", async () => {
+    const id = await monitor();
+    await claim(id, 1);
+    const second = await claim(id, 2);
+    // run 1 started with run 2 already claimed, then its worker died without a result
+    await db.query("UPDATE monitor SET last_run_generation = 1, run_started_through_generation = 2, run_started_at = now() WHERE id = $1", [id]);
+    await run(second);
+    expect(requests).toBe(0); // run 2's interval was being checked by run 1
+    // the next interval: run 3 is claimed after run 1 started, so run 1's lease does not hold it back
+    await run(await claim(id, 3));
+    expect(requests).toBe(1);
   });
 });

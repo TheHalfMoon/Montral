@@ -1,5 +1,5 @@
 {
-  "id": "9cd5e7c8-bff6-4a50-a188-cf217eebca6c",
+  "id": "10260667-a0fe-45f9-848a-d6cd03c72e10",
   "prevId": "a5259cd9-f48a-4db0-8c7b-a0fe39b798f1",
   "version": "7",
   "dialect": "postgresql",
@@ -5967,6 +5967,12 @@
         },
         "custom_domain_check_error": {
           "name": "custom_domain_check_error",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "custom_domain_notice": {
+          "name": "custom_domain_notice",
           "type": "text",
           "primaryKey": false,
           "notNull": false

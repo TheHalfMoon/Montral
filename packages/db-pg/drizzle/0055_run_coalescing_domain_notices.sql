@@ -4,4 +4,5 @@ ALTER TABLE "monitor" ADD COLUMN "checked_through_generation" integer DEFAULT 0 
 ALTER TABLE "monitor" ADD COLUMN "checked_started_at" timestamp with time zone;--> statement-breakpoint
 ALTER TABLE "monitor" ADD COLUMN "run_started_through_generation" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
 ALTER TABLE "monitor" ADD COLUMN "run_started_at" timestamp with time zone;--> statement-breakpoint
+ALTER TABLE "status_page" ADD COLUMN "custom_domain_notice" text;--> statement-breakpoint
 CREATE UNIQUE INDEX "alert_delivery_dedupe_idx" ON "alert_delivery" USING btree ("dedupe_key") WHERE "alert_delivery"."dedupe_key" is not null;

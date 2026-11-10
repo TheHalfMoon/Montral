@@ -25,9 +25,13 @@ workspace audit log, but nobody was told (task ledger item 19).
   queues one row per person whatever the retries or racing servers do. The withdrawal itself can only be observed
   once anyway: the `UPDATE` that withdraws requires `custom_domain_verified_at IS NOT NULL`, and a withdrawn domain is
   no longer claimed by later re-checks.
-- **Never blocks the withdrawal:** notices are queued in a separate statement after the withdrawing `UPDATE` (and
-  after the audit event, which is kept unchanged); a failure to queue or send is logged with a fixed message and the
-  re-check continues. Provider errors never reach the log or the delivery row.
+- **Crash-safe, never blocks the withdrawal:** the withdrawing `UPDATE` (or the one recording a streak's second
+  failure) also writes the notice into the page's outbox column `status_page.custom_domain_notice`. The withdrawal
+  and its notice commit together. The rest happens in one statement at the end of each re-check round
+  (`enqueueDomainNotices`): queue one row per owner and admin, then clear the outbox. A crash in between, or a
+  failed queue, leaves the outbox set, and the next round (every 5 minutes) queues it. Nothing about the email can
+  fail or delay the withdrawal itself. The audit event is unchanged. Provider errors never reach the log or the
+  delivery row.
 - A notice that no longer applies when it is sent is skipped with a reason: the person is no longer an owner/admin,
   the page or its domain changed, the domain was verified again (withdrawn notice), or the record matched again or the
   domain was withdrawn in the meantime (failing notice).
@@ -40,7 +44,9 @@ workspace audit log, but nobody was told (task ledger item 19).
 - Three servers re-checking at the same moment withdraw once and email each admin once.
 - A refused email is recorded as `failed ... (attempt 1 of 3, trying again in 60 s)` without provider detail, is
   not resent before it is due, and is then delivered by the retry; a recipient demoted in the meantime is skipped.
-- A queue failure (INSERT into `alert_delivery` rejected) still withdraws the domain.
+- A queue failure (INSERT into `alert_delivery` rejected, standing in for a crash between the withdrawal and
+  queuing) still withdraws the domain and leaves the notice in the outbox. The next round queues and sends one email
+  per owner/admin and clears the outbox.
 - `domain-notice.test.ts` (unit): every kind and reason renders in English with domain, page, record and link, and
   in Chinese with no untranslated sentence.
 

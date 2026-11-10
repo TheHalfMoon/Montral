@@ -4,7 +4,7 @@ import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
 import { migrateMontralSchema } from "./schema-migrate";
 import { DOMAIN_RECHECK, purgeCustomDomains, recheckCustomDomains, setTxtResolver, type TxtResolver } from "./custom-domain";
-import { deliverDomainNotices, queueDomainNotices } from "./domain-notice";
+import { deliverDomainNotices, enqueueDomainNotices } from "./domain-notice";
 import { configureEmail, setMailTransport } from "./email";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -121,8 +121,9 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
 
     // re-checking an already withdrawn domain: not claimed, no email; queuing the same withdrawal again inserts nothing
     expect(await recheck(w.id, t1 + 48 * H)).toMatchObject({ checked: 0, notices: 0 });
-    const [{ since }] = await q<{ since: Date }>("SELECT custom_domain_failing_since AS since FROM status_page WHERE id = $1", [w.id]);
-    expect(await queueDomainNotices(q, { pageId: w.id, kind: "domain.withdrawn", domain: w.domain, streakSince: since })).toEqual([]);
+    expect((await q<{ notice: string | null }>("SELECT custom_domain_notice AS notice FROM status_page WHERE id = $1", [w.id]))[0].notice).toBeNull();
+    await q("UPDATE status_page SET custom_domain_notice = 'domain.withdrawn' WHERE id = $1", [w.id]); // as if a crashed round left it
+    expect(await enqueueDomainNotices(q, { pageIds: [w.id] })).toBe(0);
     expect(await deliverDomainNotices(q, { pageIds: [w.id] })).toEqual({ sent: 0, failed: 0, skipped: 0 });
     expect(mails).toHaveLength(0);
     expect(await rows(w.id, "domain.withdrawn")).toHaveLength(3);
@@ -165,7 +166,7 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
     expect(failing.filter((r) => r.status === "sent").every((r) => r.attempts === 2)).toBe(true);
   });
 
-  it("a failure to queue notices never blocks or undoes the withdrawal", async () => {
+  it("a failure to queue notices never blocks or undoes the withdrawal, and the outbox keeps the notice for the next round", async () => {
     const w = await workspace();
     txt.delete(w.rec.name);
     const t1 = w.t0 + 7 * H;
@@ -175,5 +176,12 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
     expect(await recheck(w.id, t1 + 24 * H, broken)).toMatchObject({ withdrawn: 1, notices: 0 });
     expect((await q<{ verified: Date | null }>("SELECT custom_domain_verified_at AS verified FROM status_page WHERE id = $1", [w.id]))[0].verified).toBeNull();
     expect(await rows(w.id, "domain.withdrawn")).toHaveLength(0);
+    // the withdrawal's own UPDATE recorded the notice: like a crash between commit and queuing, nothing is lost
+    expect((await q<{ notice: string | null }>("SELECT custom_domain_notice AS notice FROM status_page WHERE id = $1", [w.id]))[0].notice).toBe("domain.withdrawn");
+    mails.length = 0;
+    // the next round (nothing left to re-check) queues and sends it: one email per owner/admin, none for the member
+    expect(await recheck(w.id, t1 + 25 * H)).toMatchObject({ checked: 0, notices: 3 });
+    expect(sent(mails.filter((m) => m.subject.startsWith("Custom domain withdrawn") || m.subject.startsWith("自定义域名已撤销")))).toEqual(to(w.owner, w.admin, w.adminZh));
+    expect((await q<{ notice: string | null }>("SELECT custom_domain_notice AS notice FROM status_page WHERE id = $1", [w.id]))[0].notice).toBeNull();
   });
 });

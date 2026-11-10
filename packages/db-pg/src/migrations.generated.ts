@@ -277,7 +277,7 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
   },
   {
     "tag": "0055_run_coalescing_domain_notices",
-    "when": 1794285233462,
-    "sql": "ALTER TABLE \"alert_delivery\" ADD COLUMN \"status_page_id\" uuid;--> statement-breakpoint\nALTER TABLE \"alert_delivery\" ADD COLUMN \"dedupe_key\" text;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"checked_through_generation\" integer DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"checked_started_at\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"run_started_through_generation\" integer DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"run_started_at\" timestamp with time zone;--> statement-breakpoint\nCREATE UNIQUE INDEX \"alert_delivery_dedupe_idx\" ON \"alert_delivery\" USING btree (\"dedupe_key\") WHERE \"alert_delivery\".\"dedupe_key\" is not null;"
+    "when": 1794289049524,
+    "sql": "ALTER TABLE \"alert_delivery\" ADD COLUMN \"status_page_id\" uuid;--> statement-breakpoint\nALTER TABLE \"alert_delivery\" ADD COLUMN \"dedupe_key\" text;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"checked_through_generation\" integer DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"checked_started_at\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"run_started_through_generation\" integer DEFAULT 0 NOT NULL;--> statement-breakpoint\nALTER TABLE \"monitor\" ADD COLUMN \"run_started_at\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"status_page\" ADD COLUMN \"custom_domain_notice\" text;--> statement-breakpoint\nCREATE UNIQUE INDEX \"alert_delivery_dedupe_idx\" ON \"alert_delivery\" USING btree (\"dedupe_key\") WHERE \"alert_delivery\".\"dedupe_key\" is not null;"
   }
 ];

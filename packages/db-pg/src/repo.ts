@@ -38,16 +38,18 @@ export const STALE_RUN_SLACK_SEC = 70;
  *    plus the slot delay ago. Then this run would only repeat that check: a backlog draining. A monitor that is merely
  *    late on every run (each starting a little after the next claim) is not thinned out: its runs start about an
  *    interval apart and none is that stale, so none is skipped; or
- *  - an earlier run started less than its timeout + RUN_IN_FLIGHT_MARGIN_SEC ago and has not recorded yet.
- * That lease (at most 45 s) is shorter than the 60 s minimum interval, so a steady schedule never skips, and a run that
- * died without a result blocks nothing once it has passed. A run claimed after the latest check began always starts.
+ *  - an earlier run that started AFTER this run was claimed (run_started_through_generation >= this generation) did so
+ *    less than its timeout + RUN_IN_FLIGHT_MARGIN_SEC ago and has not recorded yet: it is checking this interval now.
+ *    A run that started before this claim never holds it back, however recently it started. The lease (at most 45 s)
+ *    only applies to such a newer check, and a run that died without a result blocks nothing once it has passed. A run claimed after the latest check began always starts.
  */
 const coalesced = (generation: number, token: Date): SQL => {
   const m = schema.monitor;
   return sql`not (${m.checkedThroughGeneration} >= ${generation} and ${m.checkedStartedAt} is not null
       and (${m.checkedStartedAt} > now() - make_interval(secs => (${m.intervalSec} / 2.0)::double precision)
         or ${token.toISOString()}::timestamptz < now() - make_interval(secs => ${STALE_RUN_SLACK_SEC}::double precision)))
-    and not (${m.lastRunGeneration} > ${m.coverageGeneration} and ${m.runStartedAt} is not null
+    and not (${m.lastRunGeneration} > ${m.coverageGeneration} and ${m.runStartedThroughGeneration} >= ${generation}
+      and ${m.runStartedAt} is not null
       and ${m.runStartedAt} > now() - make_interval(secs => (${m.timeoutMs} / 1000.0 + ${RUN_IN_FLIGHT_MARGIN_SEC}::double precision)::double precision))`;
 };
 

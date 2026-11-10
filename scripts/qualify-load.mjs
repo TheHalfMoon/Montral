@@ -76,6 +76,10 @@ const T = {
   // lag p95 under 5 minutes (the watchdog's stall horizon) while every monitor is still checked.
   pool2LagP95Sec: 300,
   recoveryMaxSec: 600,
+  // No starvation at normal load and after recovery: a monitor goes at most two intervals plus one tick without a
+  // result (one run may be coalesced into a check that started up to half an interval earlier, and dispatch adds up to
+  // a tick). Only the DB_POOL_MAX=2 overload phase uses the looser interval + 300 s bound below (pool2LagP95Sec).
+  maxGapNormalSec: 2 * INTERVAL_SEC + TICK_S,
   // Run coalescing (beginRuns): a queued run is skipped when a check of its monitor started after it was claimed and
   // either that check is under half an interval old or the run is stale (its lease deadline passed more than a tick +
   // slot delay ago). A drained backlog therefore collapses into the first stale check, while every run claimed after
@@ -343,6 +347,21 @@ async function windowStats(from, to) {
     completionLagSec: { n: lag.n, p50: round(lag.p50), p95: round(lag.p95), p99: round(lag.p99), max: round(lag.max) },
   };
 }
+/** Longest stretch without a result per monitor in [from, to], window edges included (seconds). */
+async function maxGap(from, to) {
+  const rows = await sql`
+    with o as (
+      select m.id, extract(epoch from x.observed_at)::float8 as t from monitor m
+      left join monitor_observation x on x.monitor_id = m.id and x.observed_at >= ${from} and x.observed_at < ${to}
+      where m.organization_id = ${orgId}),
+    g as (
+      select id, coalesce(max(gap), ${(to - from) / 1000}::float8) as gap from (
+        select id, t - coalesce(lag(t) over (partition by id order by t), ${from.getTime() / 1000}::float8) as gap from o where t is not null
+        union all select id, ${to.getTime() / 1000}::float8 - max(t) from o where t is not null group by id
+        union all select id, null from o group by id having count(t) = 0) z group by id)
+    select max(gap)::float8 as max, count(*)::int as monitors from g`;
+  return { maxSec: round(rows[0].max), monitors: rows[0].monitors };
+}
 async function perMonitorCounts(from, to) {
   const rows = await sql`
     select m.id, count(o.id)::int as n from monitor m
@@ -388,6 +407,11 @@ try {
       from new_rows n join old_rows o on o.id = n.id
       where n.run_generation = o.run_generation + 1
          or (n.run_generation = o.run_generation and n.next_check_at < o.next_check_at and n.type <> 'heartbeat');
+      -- a run that started (beginRuns): tells a coalesced run (never began) from one that began and lost its result
+      insert into load_claim_log (monitor_id, generation, kind)
+      select n.id, n.last_run_generation, 'start'
+      from new_rows n join old_rows o on o.id = n.id
+      where n.last_run_generation > o.last_run_generation;
       return null;
     end $f$;
     drop trigger if exists load_claim_log_trg on monitor;
@@ -431,6 +455,7 @@ try {
   await sleep(15_000); // let checks completed before w1To finish their writes
   const p1 = await windowStats(w1From, w1To);
   p1.perMonitor = await perMonitorCounts(w1From, w1To);
+  p1.maxGapWithoutResult = await maxGap(w1From, w1To);
   const [rows1] = await sql`select (select count(*) from check_result)::int as check_results, (select count(*) from monitor_observation)::int as observations`;
   p1.rowsTotal = rows1;
   p1.releases = await releasesSince(new Date(p1Start));
@@ -441,6 +466,7 @@ try {
   check(p1.perMonitor.monitors === N, "phase 1: every seeded monitor counted");
   check(ge(p1.perMonitor.min, T.perMonitorMin), `phase 1: no lost checks (min results per monitor ${p1.perMonitor.min} >= ${T.perMonitorMin})`);
   check(le(p1.perMonitor.max, T.perMonitorMax), `phase 1: no duplicate checks (max results per monitor ${p1.perMonitor.max} <= ${T.perMonitorMax})`);
+  check(p1.maxGapWithoutResult.monitors === N && le(p1.maxGapWithoutResult.maxSec, T.maxGapNormalSec), `phase 1: no starvation, every monitor checked at least every ${T.maxGapNormalSec} s (two intervals + one tick; longest gap ${p1.maxGapWithoutResult.maxSec} s)`);
   check(le(p1.completionLagSec.p95, T.lagP95Sec), `phase 1: completion lag p95 ${p1.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
   check(p1.releases === 0, `phase 1: no backpressure releases at nominal load (got ${p1.releases})`);
   check(le(p1.resources.dbConnections.max, T.maxDbConnections), `phase 1: server DB connections ${p1.resources.dbConnections.max} <= pool max ${T.maxDbConnections}`);
@@ -505,6 +531,7 @@ try {
   await sleep(15_000);
   p2.afterRecovery = await windowStats(w2From, w2To);
   p2.afterRecovery.perMonitor = await perMonitorCounts(w2From, w2To);
+  p2.afterRecovery.maxGapWithoutResult = await maxGap(new Date(recoveredAt ?? w2From.getTime()), w2To);
   // Catch-up: runs queued while the target was slow execute late once it recovers.
   const [catchUp] = await sql`
     select max(n)::int as max_per_monitor from (
@@ -542,6 +569,7 @@ try {
   summary.phases.backpressure = p2;
   log("phase 2", JSON.stringify(p2));
   check(p2.afterRecovery.perMonitor.monitors === N && ge(p2.afterRecovery.perMonitor.min, 1), `phase 2: every one of ${N} monitors checked again after recovery (no starvation; counted ${p2.afterRecovery.perMonitor.monitors}, min ${p2.afterRecovery.perMonitor.min})`);
+  check(p2.afterRecovery.maxGapWithoutResult.monitors === N && le(p2.afterRecovery.maxGapWithoutResult.maxSec, T.maxGapNormalSec), `phase 2: after recovery every monitor checked at least every ${T.maxGapNormalSec} s (longest gap ${p2.afterRecovery.maxGapWithoutResult.maxSec} s)`);
   check(le(p2.afterRecovery.completionLagSec.p95, T.lagP95Sec), `phase 2: post-recovery lag p95 ${p2.afterRecovery.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
   check(p2.coalescing.results > 0 && le(p2.coalescing.perInterval.max, T.coalesceMaxPerInterval), `phase 2: stale runs coalesced, at most ${T.coalesceMaxPerInterval} results per monitor within any ${INTERVAL_SEC} s after recovery (max ${p2.coalescing.perInterval.max}, ${JSON.stringify(p2.coalescing.perInterval.histogram)})`);
   check(p2.coalescing.results > 0 && le(p2.coalescing.perTick.max, T.coalesceMaxPerTick), `phase 2: at most ${T.coalesceMaxPerTick} results per monitor within any ${T.coalesceTickWindowSec} s after recovery (max ${p2.coalescing.perTick.max}, ${JSON.stringify(p2.coalescing.perTick.histogram)})`);
@@ -633,6 +661,8 @@ try {
     check(le(s.dbConnections.max, T.maxDbConnections), `${name}: server DB connections ${s.dbConnections.max} <= ${T.maxDbConnections}`);
   }
   phase = "stopping";
+  const stopWindows = [];
+  stopWindows.push(Date.now());
   summary.firstServerStop = await stopServer("server (pool 10)");
 
   // ── 5. DB connection exhaustion: DB_POOL_MAX=2 under mixed load ────────────
@@ -705,6 +735,7 @@ try {
   check(p5.resources.health.failures === 0 && le(p5.resources.health.max, T.maxHealthMs), `phase 5: /health within ${T.maxHealthMs} ms (max ${p5.resources.health.max})`);
   check(le(p5.resources.rssMb.max, T.maxRssMb), `phase 5: RSS ${p5.resources.rssMb.max} MB <= ${T.maxRssMb} MB`);
   phase = "stopping";
+  stopWindows.push(Date.now());
   summary.secondServerStop = await stopServer("server (pool 2)");
 
   // ── final integrity, on a quiescent database ───────────────────────────────
@@ -731,23 +762,32 @@ try {
   const [claims] = await sql`select (count(*) filter (where kind = 'claim'))::int as claims, (count(*) filter (where kind = 'release'))::int as releases from load_claim_log`;
   // Claimed, not released and never recorded: coalesced (a later check covered them, never checked or billed) or cut
   // off by a server stop. Counted explicitly, so a skipped run is visible rather than absorbed by the totals.
+  // Claimed, not released and never recorded, classified by whether the run began (logged starts):
+  //  - skipped before start: coalesced by beginRuns (or older than a started run); never checked, never billed;
+  //  - started without a result: began and lost its result (crash, inconclusive probe, rejected write). Outside the
+  //    two graceful stops (30 s around each) this must be zero: nothing is crashed on purpose in this qualification.
+  const stopMarks = stopWindows.map((t) => new Date(t).toISOString());
   const [unrecorded] = await sql`
-    select (count(*) filter (where c.generation <= greatest(m.checked_through_generation, m.last_run_generation)))::int as coalesced,
-           (count(*) filter (where c.generation > greatest(m.checked_through_generation, m.last_run_generation)))::int as unfinished
-    from load_claim_log c join monitor m on m.id = c.monitor_id
-    where c.kind = 'claim'
-      and not exists (select 1 from load_claim_log r where r.kind = 'release' and r.monitor_id = c.monitor_id and r.generation = c.generation)
-      and not exists (select 1 from monitor_observation o where o.monitor_id = c.monitor_id and o.generation = c.generation)`;
+    with lost as (
+      select c.monitor_id, c.generation, exists (select 1 from load_claim_log s where s.kind = 'start' and s.monitor_id = c.monitor_id and s.generation = c.generation) as started,
+             (select min(s.at) from load_claim_log s where s.kind = 'start' and s.monitor_id = c.monitor_id and s.generation = c.generation) as started_at
+      from load_claim_log c
+      where c.kind = 'claim'
+        and not exists (select 1 from load_claim_log r where r.kind = 'release' and r.monitor_id = c.monitor_id and r.generation = c.generation)
+        and not exists (select 1 from monitor_observation o where o.monitor_id = c.monitor_id and o.generation = c.generation))
+    select (count(*) filter (where not started))::int as coalesced,
+           (count(*) filter (where started))::int as started_without_result,
+           (count(*) filter (where started and not exists (
+              select 1 from unnest(${stopMarks}::timestamptz[]) w(at) where lost.started_at between w.at - interval '30 seconds' and w.at + interval '30 seconds')))::int as started_without_result_outside_stops
+    from lost`;
   summary.integrity = {
     monitors: perMonitor.length, totalCheckResults: totalResults, totalTargetRequests: totalHits,
     duplicateRunGenerations: dup.n, resultObservationMismatches: mismatchObs, resultRollupMismatches: mismatchRollup,
     resultTargetRequestMismatches: mismatchHits, resultsWithoutTargetRequest: phantom, generationOrderViolations: genOrder,
     claimsLogged: claims.claims, releasesLogged: claims.releases,
-    // claimed, not released, and no result: coalesced (superseded) runs, plus runs cut off when a server stopped
     claimedRunsWithoutResult: claims.claims - claims.releases - totalResults,
-    // skipped: older than the latest started run or covered by a later check (coalesced); unfinished: newest claims
-    // left when the servers stopped
-    skippedRuns: unrecorded.coalesced, unfinishedRuns: unrecorded.unfinished, serverLogCounts: logCounts,
+    skippedBeforeStart: unrecorded.coalesced, startedWithoutResult: unrecorded.started_without_result,
+    startedWithoutResultOutsideStops: unrecorded.started_without_result_outside_stops, serverLogCounts: logCounts,
   };
   log("integrity", JSON.stringify(summary.integrity));
   summary.integrity.samplerErrors = samplerErrors;
@@ -756,7 +796,8 @@ try {
   check(mismatchObs === 0, `integrity: check results == observations for every monitor (${mismatchObs} mismatches)`);
   check(mismatchRollup === 0, `integrity: rollup totals == check results for every monitor (${mismatchRollup} mismatches)`);
   check(mismatchHits === 0, `integrity: every target request produced exactly one result, none lost (${mismatchHits} monitors differ, ${totalHits} requests vs ${totalResults} results)`);
-  check(unrecorded.coalesced + unrecorded.unfinished === claims.claims - claims.releases - totalResults, `integrity: every claimed run is a result, a release, a skipped (coalesced) run or unfinished at stop (${unrecorded.coalesced} skipped, ${unrecorded.unfinished} unfinished)`);
+  check(unrecorded.coalesced + unrecorded.started_without_result === claims.claims - claims.releases - totalResults, `integrity: every claimed run is a result, a release, skipped before start (coalesced) or started without a result (${unrecorded.coalesced} skipped, ${unrecorded.started_without_result} started without result)`);
+  check(unrecorded.started_without_result_outside_stops === 0, `integrity: no run that started lost its result outside the graceful stops (${unrecorded.started_without_result_outside_stops}; ${unrecorded.started_without_result} within 30 s of a stop)`);
   check(genOrder === 0, `integrity: run generations ordered (${genOrder} violations)`);
   check(logCounts.watchdogExit === 0, "integrity: no watchdog exit logged");
   check(logCounts.schedulerFailed === 0 && logCounts.checkBatchFailed === 0, `integrity: no scheduler tick or check batch failures logged (${JSON.stringify(logCounts)})`);

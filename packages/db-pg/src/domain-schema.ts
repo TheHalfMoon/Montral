@@ -438,6 +438,12 @@ export const statusPage = pgTable(
     customDomainFailures: integer("custom_domain_failures").notNull().default(0),
     /** outcome of the last failed re-check ("missing" | "mismatch" | "lookup_failed"); kept after a withdrawal */
     customDomainCheckError: text("custom_domain_check_error", { enum: ["missing", "mismatch", "lookup_failed"] }),
+    /**
+     * Outbox for owner/admin emails about this domain: set by the re-check in the same UPDATE that withdraws the domain
+     * ("domain.withdrawn") or records the second failure of a streak ("domain.failing"); cleared in the statement that
+     * queues the emails. A crash between the two cannot lose a notice: the next re-check round queues it.
+     */
+    customDomainNotice: text("custom_domain_notice", { enum: ["domain.withdrawn", "domain.failing"] }),
     theme: text("theme").notNull().default("light"),
     showLatency: boolean("show_latency").notNull().default(true),
     externalUrl: text("external_url"),

@@ -159,13 +159,15 @@ recorded as a failure.
   OOM, which fails the run. In all three later runs the process stayed up and
   RSS levelled off at 446-469 MB under the same load. The 1,024 MB bound was
   not loosened.
-- **What the phase-5 RSS bound does and does not prove.** With the heap capped
-  at 512 MB, the 1,024 MB RSS bound is close to meaningless as a memory test:
-  the cap keeps the heap far below it. The real phase-5 evidence is that the
-  process did not die (no heap OOM, so no unbounded retention), together with
-  the correctness floor above (connections at most 2, no errors, every monitor
-  checked, lag p95 bounded). Phases 1-4 run uncapped, so their RSS figures are
-  real.
+- **What the RSS bound proves (updated 2026-11-11, #73).** Both servers now
+  run with the old space capped at 512 MB, which is also the default that
+  `docker-compose.yml` ships (`NODE_OPTIONS`), so the qualified configuration
+  is the shipped one. Heap retention ends the process with a heap OOM, which
+  fails the run; the RSS bound (now 850 MB, from the earlier uncapped 1,024 MB)
+  covers off-heap memory (young generation, code, Buffers, sockets). Observed
+  with the cap: 579-705 MB in phases 1-4 and 488-500 MB in phase 5. An uncapped
+  server on a large host can still show over 1 GB of collectable garbage; that
+  configuration is no longer the default and is not qualified.
 - **Advice for self-hosters.** Under sustained load, Node may hold over 1 GB of
   RSS that is collectable garbage unless the heap is bounded. Node takes the
   host's memory, and in containers usually the cgroup memory limit, into
@@ -265,7 +267,7 @@ range of main.
 - **3 results for one monitor within 10 s after recovery** (run 42921692743,
   1 of 4,000 monitors). Three runs that start after recovery cannot do this
   (their starts are more than 30 s apart under the rules above), so one was a
-  check already in flight when the target recovered: a queued run claimed
+  check already in flight when the target recovered (deduced from the documented rules and the counts; the failed run's database no longer exists, so the timeline was not observed — the qualification now records timelines for such cases): a queued run claimed
   after it started is not covered by it ("a run that started before the claim
   never holds it back"), and the run claimed after that one started always
   starts. The per-10 s bound of 2 is now asserted on runs that start after

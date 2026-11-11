@@ -26,6 +26,8 @@ const SYSTEM = ["PATH", "Path", "SystemRoot", "windir"];
 const BINDINGS_ONLY = ["CHECK_QUEUE", "EMAIL", "HYPERDRIVE"];
 /** Read from the environment but wired through compose itself (`ports`, the DATABASE_URL built from the Postgres password). */
 const COMPOSE_WIRED = ["DATABASE_URL", "PORT"];
+/** Read by the Node runtime itself, not by Montral's code; compose passes it (the qualified heap limit). */
+const NODE_RUNTIME = ["NODE_OPTIONS"];
 
 function codeVars(): string[] {
   const found = new Set<string>();
@@ -73,7 +75,7 @@ describe("environment variables", () => {
   });
 
   it("docker-compose.yml passes no variable the code does not read", () => {
-    expect(minus(composeEnvironment(), code)).toEqual([]);
+    expect(minus(composeEnvironment(), code, NODE_RUNTIME)).toEqual([]);
   });
 
   it(".env.docker.example documents every variable compose takes from .env", () => {

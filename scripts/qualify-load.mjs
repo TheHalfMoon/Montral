@@ -58,8 +58,8 @@ const P5_LOAD_MS = 240_000;
 // 4,000-monitor lists peaked at 700-1180 MB RSS uncapped, from run to run of identical work, and at 600-690 MB with the
 // cap, without a heap OOM. With the cap,
 // retention still fails the run (a heap OOM kills the server); reclaimable garbage is collected instead of counted.
-// 512 MB is what V8 itself picks on a 2 GB host (a quarter of RAM), leaving the rest of the 1024 MB RSS bound to
-// young generation, code, Buffers and native memory.
+// 512 MB is what V8 itself picks on a 2 GB host (a quarter of RAM). It is also the default docker-compose.yml ships
+// (NODE_OPTIONS), so the qualified configuration is the shipped one; the RSS bound (maxRssMb) covers the rest.
 const SERVER_OLD_SPACE_MB = 512;
 const cappedHeap = () => ({ NODE_OPTIONS: [process.env.NODE_OPTIONS, `--max-old-space-size=${SERVER_OLD_SPACE_MB}`].filter(Boolean).join(" ") });
 const SUMMARY_PATH = resolve(process.env.LOAD_SUMMARY_PATH ?? "load-summary.json");
@@ -82,7 +82,11 @@ const T = {
   perMonitorMax: P1_WINDOW_MS / 1000 / INTERVAL_SEC + 1,
   // Claimed-but-unstarted runs can never exceed the queue's reservations plus one unsent claim round.
   maxOutstandingRuns: QUEUE_CAPACITY * MESSAGE_SIZE + CLAIM_ROUND,
-  maxRssMb: 1024,
+  // Both servers run with the old space capped at SERVER_OLD_SPACE_MB (the configuration docker-compose.yml ships), so
+  // RSS is heap (at most 512 MB, or a heap OOM fails the run) plus young generation, code, Buffers and native memory.
+  // Observed with the cap: 579-705 MB (phases 1-4) and 488-500 MB (phase 5) in runs 42932678633 attempts 1-2. The
+  // bound is tighter than the earlier uncapped 1024 MB, so off-heap growth (Buffers, sockets) still fails the run.
+  maxRssMb: 850,
   maxBackpressureRssGrowthMb: 256,
   maxHealthMs: 5000,
   // DB_POOL_MAX=2 cannot keep up with N monitors at 60 s; the floor is "bounded", not "fast":
@@ -632,6 +636,8 @@ try {
   check(le(p2.afterRecovery.completionLagSec.p95, T.lagP95Sec), `phase 2: post-recovery lag p95 ${p2.afterRecovery.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
   check(p2.coalescing.results > 0 && le(p2.coalescing.perInterval.max, T.coalesceMaxPerInterval), `phase 2: stale runs coalesced, at most ${T.coalesceMaxPerInterval} results per monitor within any ${INTERVAL_SEC} s after recovery (max ${p2.coalescing.perInterval.max}, ${JSON.stringify(p2.coalescing.perInterval.histogram)})`);
   check(p2.coalescing.resultsOfRunsStartedAfterRecovery > 0 && le(p2.coalescing.perTick.max, T.coalesceMaxPerTick), `phase 2: at most ${T.coalesceMaxPerTick} results per monitor within any ${T.coalesceTickWindowSec} s from runs started after recovery (max ${p2.coalescing.perTick.max}, ${JSON.stringify(p2.coalescing.perTick.histogram)}; with the ${p2.coalescing.inFlightAtRecovery.results} results of runs in flight at recovery: max ${p2.coalescing.perTickAllResults.max})`);
+  // at most one result per monitor can come from a run that was already in flight when the target recovered
+  check(le(p2.coalescing.inFlightAtRecovery.results, p2.coalescing.inFlightAtRecovery.monitors), `phase 2: at most one in-flight-at-recovery result per monitor (${p2.coalescing.inFlightAtRecovery.results} results, ${p2.coalescing.inFlightAtRecovery.monitors} monitors)`);
   check(le(p2.coalescing.inFlightAtRecovery.results, T.maxRunsInFlight), `phase 2: results of runs in flight when the target recovered ${p2.coalescing.inFlightAtRecovery.results} <= ${T.maxRunsInFlight} (running messages x ${MESSAGE_SIZE})`);
 
   // ── 3 + 4. webhooks and API reads (monitoring keeps running underneath) ────

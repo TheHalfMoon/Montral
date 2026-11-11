@@ -72,6 +72,10 @@ services:
       PRODUCT_URL: ${PRODUCT_URL:-https://montral.invalid}
       # max connections of the shared Postgres pool (default 10)
       DB_POOL_MAX: ${DB_POOL_MAX:-}
+      # Node heap limit. 512 MB old space is the qualified configuration (scripts/qualify-load.mjs, 4,000 monitors);
+      # without a limit Node sizes the heap from host RAM and may hold over 1 GB of collectable garbage. Raise it for
+      # larger installations, keeping it at about 75% of the container's memory limit.
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=512}
       BIND_HOST: ${BIND_HOST:-}
       # Explicitly opt in to provider TEST-MODE only; leave blank for the default OFF.
       MONTRAL_METERING_ENABLED: ${MONTRAL_METERING_ENABLED:-}

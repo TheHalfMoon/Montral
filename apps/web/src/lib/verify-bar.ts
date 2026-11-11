@@ -15,7 +15,7 @@ export function verifyBarStorage(store: Store | null = safeSession()): VerifyBar
   const get = (k: string) => { try { return store?.getItem(k) === "1"; } catch { return false; } };
   return {
     read: () => ({ pending: get(PENDING), dismissed: get(DISMISSED) }),
-    setPending: (pending) => { try { if (pending) store?.setItem(PENDING, "1"); else store?.removeItem(PENDING); } catch {} },
+    setPending: (pending) => { try { if (pending) store?.setItem(PENDING, "1"); else { store?.removeItem(PENDING); store?.removeItem(DISMISSED); } } catch {} },
     dismiss: () => { try { store?.setItem(DISMISSED, "1"); } catch {} },
   };
 }

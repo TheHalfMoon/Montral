@@ -4,31 +4,34 @@ Publication of any kind (tag, GitHub release, Docker image, npm package, Terrafo
 owner's explicit `GREEN LIGHT MONTRAL`. This file has two parts: the **current self-hosted release-candidate gates**,
 each verified at the candidate revision, and the **historical production/SaaS gate log** below, kept for traceability.
 
-## A. Self-hosted Docker release candidate — mandatory gates at `678c363` (2026-11-10)
+## A. Self-hosted Docker release candidate — mandatory gates at `b01e28e` (2026-11-11)
 
-Every gate below passed on GitHub Actions at `678c363` (`main` after #58). Run ids are links on
+Every CI gate below passed on GitHub Actions at `b01e28e` (`main` after #73). Run ids are links on
 `https://github.com/TheHalfMoon/Montral/actions/runs/<id>`.
 
-| # | Gate | Status | Evidence at `678c363` |
+| # | Gate | Status | Evidence at `b01e28e` |
 |---|---|---|---|
-| G1 | Typecheck, unit and real-PostgreSQL E2E on PostgreSQL 17 and the shipped 18.6-alpine image | PASS | app CI 42837467149: API 1,406 passed / 22 skipped per leg (20 browser-check integration + 2 browser e2e tests that need Chromium, run required in G6), probe 22/22, web 129/129 |
-| G2 | macOS ARM64 qualification (PostgreSQL 18) | PASS | 42837467312: same counts; restore drill, crash recovery, Chromium journey |
-| G3 | Backup and full restore with content verification; no silent truncation | PASS | 42837467149: RESTORE_DRILL_PASS 60 tables + catalog negative control; 42837467329: transfer integrity tests 11/11, truncated dump refused by the documented restore |
-| G4 | Upgrade from the previous candidate (`17f55c1`), rollback, disaster recovery | PASS | 42837467329: every seeded entity kept; exact rollback restore; the old build fails safely against the upgraded schema (migration check refuses; started, it exits after ~59 s with a generic message and changes nothing); RTO 2.1 s on the synthetic dataset |
-| G5 | Docker image and compose: health, persistence, container recreation, PostgreSQL major-downgrade refusal | PASS | 42837467231: DOCKER_COMPOSE_PASS |
-| G6 | Browser-monitoring isolation (separate hardened runner, egress policy) | PASS | 42837467073: 118/118, BROWSER_RUNNER_PASS (runner has no app secrets and no database access) |
-| G7 | Cross-browser and WCAG 2.1 AA (Chromium, Firefox, WebKit, Pixel 7, iPhone 14; light and dark) | PASS | 42837467227: 55/55, 0 axe violations |
-| G8 | Sustained load, backpressure, pool exhaustion | PASS | 42837467035: 4,000 monitors at 4,003 checks/min, 66,079 results == target requests, backlog drained in 131 s, no 5xx |
-| G9 | Network partition and primary promotion (PostgreSQL 17 and 18.6-alpine) | PASS | 42837467413: FAILOVER_PASS on both |
-| G10 | Terraform provider acceptance (unpublished) | PASS | 42837467074: 22 TestAcc passed, 0 skipped, 0 failed |
-| G11 | Vendored source integrity | PASS | 42837467498 |
-| G12 | Review of every merged change, all findings fixed or recorded | PASS, with recorded gaps | `docs/FINAL-REPORT.md` §2 (agent reviewers in the programme, mostly not posted to GitHub): fixes in #47 and #48 not re-reviewed; a separate security review requested on #53 not done; open low-severity follow-ups in `docs/TASK-LEDGER.md` rows 26–29 |
+| G1 | Typecheck, unit and real-PostgreSQL E2E on PostgreSQL 17 and the shipped 18.6-alpine image | PASS | app CI 42950068476: API 1,427 passed / 23 skipped per leg (21 browser-check integration + 2 browser e2e tests that need Chromium, run required in G6), probe 22/22, web 129/129 |
+| G2 | macOS ARM64 qualification (PostgreSQL 18) | PASS | 42950068343: same counts; restore drill, crash recovery, Chromium journey |
+| G3 | Backup and full restore with content verification; no silent truncation | PASS | 42950068476: RESTORE_DRILL_PASS 62 tables + catalog negative control; 42950068346: transfer integrity tests 11/11, truncated dump refused |
+| G4 | Upgrade from the previous candidate (`17f55c1`), rollback, disaster recovery | PASS | 42950068346: every seeded entity kept; exact rollback restore; the old build fails safely against the upgraded schema; RTO 2.2 s on the synthetic dataset |
+| G5 | Docker image and compose: health, persistence, container recreation, PostgreSQL major-downgrade refusal | PASS | 42950068358: DOCKER_COMPOSE_PASS |
+| G6 | Browser-monitoring isolation (separate hardened runner, egress policy), incl. script steps | PASS | 42950068702: 122/122, BROWSER_RUNNER_PASS |
+| G7 | Cross-browser and WCAG 2.1 AA (Chromium, Firefox, WebKit, Pixel 7, iPhone 14; light and dark) | PASS | 42950068348: 55/55, 0 axe violations |
+| G8 | Sustained load, backpressure, pool exhaustion | PASS (intermittent failures on main before #73 recorded in ledger row 41) | 42950068456: 4,000 monitors at 4,000 checks/min, 64,419 results == target requests, drained in 133 s, no 5xx, RSS within 850 MB (heap limit as shipped); passed 3/3 runs on #73's head before merge |
+| G9 | Network partition and primary promotion (PostgreSQL 17 and 18.6-alpine) | PASS | 42950068372: FAILOVER_PASS on both |
+| G10 | Terraform provider acceptance (unpublished) | PASS | 42950068326: 22 TestAcc passed, 0 skipped, 0 failed |
+| G11 | Vendored source integrity | PASS | 42950068583 |
+| G12 | Review of every merged change, all findings fixed or recorded | PASS, with a recorded process gap | `docs/FINAL-REPORT.md` §2 (agent reviews in the engineering sessions, mostly not posted to GitHub). The former gaps (#47/#48 fixes not re-reviewed, #53 security review) were closed by re-reviews on 2026-11-10 (ledger 33); accepted lows in ledger 26–41. Two GitHub review comments (#63, #67) were missed before merge and fixed by #71 and #70; the agent re-reviews are session records, not GitHub reviews |
 | G13 | No open critical, high or medium security finding | PASS (self-assessed) | `docs/FINAL-REPORT.md` §6; no third-party penetration test |
+| G14 | Several replicas behind a load balancer (one host) | PASS | 42950068358: REPLICAS_PASS (one session, client attribution, webhooks once, rolling restart 0 failures, no run executed by both replicas, one incident) |
+| G15 | Native Safari on physical Apple hardware — public landing | PASS (scoped) | #62: Safari 26.6.2 / macOS 26.6.2, real WebDriver session, 8/8 at `dc02d02`; the signed-in app is not covered (see below) |
 
-**Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari authenticated app and VoiceOver on
-physical Apple hardware (the native Safari public landing passed 8/8 on a real Mac in #62; the full app and VoiceOver are still unverified); Windows Docker Desktop / WSL 2 (not
-tested; Windows is not a native server platform); ARM64 Linux hosts for the Docker image; PostgreSQL versions other
-than 17 and 18.6; several app replicas behind a load balancer; real external SMTP/APNs delivery.
+**Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari for
+the signed-in app, VoiceOver, and physical iOS Safari (ledger 36); Windows Docker Desktop / WSL 2 (installed on the
+development machine but not running; owner action, ledger 30); ARM64 Linux hosts for the Docker image; PostgreSQL
+versions other than 17 and 18.6; replicas on different hosts and rolling upgrades; real external SMTP/APNs delivery;
+SAML (not implemented, ledger 37).
 
 ## B. Historical production and SaaS gate log
 

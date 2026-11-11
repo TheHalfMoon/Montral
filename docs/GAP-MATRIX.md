@@ -3,7 +3,7 @@
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list
 at the end. **Y** yes, **N** no, **P** partial, **$** paid tier/add-on only,
-**?** not verified. Montral's column reflects `main` at `678c363` (2026-11-10), with the
+**?** not verified. Montral's column reflects `main` at `b01e28e` (2026-11-11), with the
 merging pull request in brackets, verified against the code, not marketing copy.
 
 ## Matrix
@@ -21,7 +21,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Heartbeat / cron | Y | Y | Y | ? | Y | Y | N |
 | WebSocket | Y | Y | ? | ? | ? | Y | N |
 | Database (Postgres/MySQL/Redis) | Y | Y | N | N | N | N | N |
-| Browser / multi-step | Y on Node/Docker with the browser-runner (#52): declarative journeys (goto, click, fill, press, waitFor, assertText/Url/Status) in isolated headless Chromium in a separate hardened browser-runner service (no app secrets, no database network, signed channel); secrets encrypted, egress policy; no user scripts; refused on Workers | N | $ | N | N | P | N |
+| Browser / multi-step | Y on Node/Docker with the browser-runner (#52): declarative journeys (goto, click, fill, press, waitFor, assertText/Url/Status) and a page script step (#66) in isolated headless Chromium in a separate hardened browser-runner service (no app secrets, no database network, signed channel); secrets encrypted, egress policy; refused on Workers | N | $ | N | N | P | N |
 | Multi-region | Y (edge probes) | N | ? | Y | Y | P | n/a |
 | Alert channels | 14, 4 added in #28 (email, Slack, Telegram, Lark, Discord, Teams, Google Chat, Mattermost, ntfy, Gotify, Pushover, webhook, PagerDuty, push) | 90+ | several | several | 21 | 43 | P |
 | SMS / voice | N | via providers | Y | ? | Y | via providers | N |
@@ -48,7 +48,7 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Terraform / config-as-code | Y, unpublished: build from source (`terraform-provider-montral/`) | N | Y | Y | ? | Y (YAML) | N |
 | Self-hosting | Y (Docker/Node + Postgres; also Workers) | Y (MIT) | N | Y (AGPL) | N | Y (Apache) | P |
 | 2FA | Y | Y | ? | ? | Y | n/a | ? |
-| SSO (OIDC/SAML) | P (#49: OIDC per workspace + instance-wide, JIT, require-SSO incl. API keys/agents; no SAML, no SCIM) | N | $ | ? | $ | Y | ? |
+| SSO (OIDC/SAML) | P (#49, #63, #67: OIDC per workspace + instance-wide, JIT, require-SSO incl. API keys/agents, userinfo fallback, SCIM 2.0 users; no SAML, no SCIM groups) | N | $ | ? | $ | Y | ? |
 | Roles | P (owner/admin/member) | N | Y | ? | Y | N | $ |
 | Audit log | Y (#39; append-only, API/CSV/JSONL export, MCP, retention) | N | $ | ? | ? | N | N |
 | Mobile app | P (iOS push app) | N | Y | ? | Y | N | N |
@@ -90,7 +90,7 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 
 1. ~~**SSO (OIDC; SAML if justified)**~~: OIDC done in #49; SAML deferred (XML-signature risk, no safe library on both runtimes; bridge through Keycloak/Authentik).
 2. **Terraform provider / config-as-code**: implemented in `terraform-provider-montral/` (#50; unpublished, build from source).
-3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). Still missing against Better Stack / Checkly-style products: scripted checks with user code, multiple browsers, regions other than `auto`.
+3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). A page script step was added in #66 (owners and admins, in the page of the isolated runner, never with secrets). Still missing against Checkly-style products: full Playwright test scripts running outside the page.
 4. **Custom webhook responses** (webhook.site parity): implemented in #47 (`docs/evidence/2026-11-10-webhook-responses.md`).
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
 

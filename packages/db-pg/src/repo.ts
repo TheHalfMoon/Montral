@@ -78,6 +78,9 @@ const resolvedByPerson = (incidentId: Parameters<typeof inArray>[0]): SQL =>
   sql`coalesce((select u.by_person from incident_update u where u.incident_id = ${incidentId} and u.status = 'resolved' order by u.created_at desc limit 1), false)`;
 
 /** Postgres implementation of the storage contract, on drizzle + postgres.js. */
+/** Half the scheduler's 30 s tick: a claim never leaves the monitor due again within the tick it was claimed in. */
+export const NEXT_RUN_MARGIN_SEC = 15;
+
 export function createRepo(db: Db): Repo {
   const rows = async <T>(q: PromiseLike<unknown>) => (await q) as unknown as T[];
 
@@ -672,11 +675,15 @@ export function createRepo(db: Db): Repo {
     claimDue: (limit) =>
       db
         .update(schema.monitor)
-        // advance from the scheduled time, so finishing a check late never pushes the next one past a whole cron tick;
-        // a monitor that is far behind (paused, outage of the scheduler) restarts from now instead of catching up in a burst
+        // Advance from the scheduled time, so finishing a check late never pushes the next one past a whole cron tick. When
+        // that would leave the next run due within NEXT_RUN_MARGIN_SEC of now (a monitor almost a whole interval behind:
+        // a scheduler outage, a claim released under backpressure), it restarts from now instead: otherwise a later claim
+        // round of the same tick would claim it again (three results within 10 s after a backlog, load run 42956388081).
+        // The margin is half a scheduler tick (30 s), not half an interval: a claim never makes the monitor due again within
+        // the current tick, and ordinary lateness (up to a tick) still catches up on schedule instead of skipping a run.
         .set({
           runGeneration: sql`${schema.monitor.runGeneration} + 1`,
-          nextCheckAt: sql`case when ${schema.monitor.nextCheckAt} + make_interval(secs => ${schema.monitor.intervalSec}) > now()
+          nextCheckAt: sql`case when ${schema.monitor.nextCheckAt} + make_interval(secs => ${schema.monitor.intervalSec}) > now() + make_interval(secs => ${NEXT_RUN_MARGIN_SEC})
             then ${schema.monitor.nextCheckAt} + make_interval(secs => ${schema.monitor.intervalSec})
             else now() + make_interval(secs => ${schema.monitor.intervalSec}) end`,
         })

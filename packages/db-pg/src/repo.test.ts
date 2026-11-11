@@ -119,6 +119,27 @@ describe.skipIf(!url)("monitors and maintenance", () => {
     expect(late.nextCheckAt.getTime()).toBeGreaterThan(Date.now() + 50_000);
   });
 
+  it("never leaves the next run due within the claim's tick (15 s), however late the claim was", async () => {
+    const [m] = await seed(1);
+    // from almost a whole interval late to one interval late: advancing from the schedule would land within 15 s of now
+    for (const lateMs of [46_000, 50_000, 59_000, 59_990, 60_000]) {
+      await db.update(schema.monitor).set({ nextCheckAt: new Date(Date.now() - lateMs) }).where(eq(schema.monitor.id, m.id));
+      const claimedAt = Date.now();
+      const [leased] = (await repo.claimDue(1000)).filter((x) => x.id === m.id);
+      expect(leased, `late ${lateMs} ms`).toBeTruthy();
+      expect(leased.nextCheckAt.getTime() - claimedAt, `late ${lateMs} ms`).toBeGreaterThanOrEqual(15_000 - 1_000);
+      // and an immediate second claim round finds nothing to claim for it
+      expect((await repo.claimDue(1000)).filter((x) => x.id === m.id), `late ${lateMs} ms`).toHaveLength(0);
+    }
+    // ordinary lateness, up to a whole tick (30 s) and beyond, keeps the cadence (anchored to the schedule): no run skipped
+    for (const lateMs of [20_000, 30_000, 40_000]) {
+      const due = new Date(Date.now() - lateMs);
+      await db.update(schema.monitor).set({ nextCheckAt: due }).where(eq(schema.monitor.id, m.id));
+      const [onCadence] = (await repo.claimDue(1000)).filter((x) => x.id === m.id);
+      expect(onCadence.nextCheckAt.getTime(), `late ${lateMs} ms`).toBe(due.getTime() + 60_000);
+    }
+  });
+
   it("starts a claimed run once, and hands unqueued claims back", async () => {
     const [m] = await seed(1);
     await db.update(schema.monitor).set({ nextCheckAt: new Date(Date.now() - 5_000) }).where(eq(schema.monitor.id, m.id));

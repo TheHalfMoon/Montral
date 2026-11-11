@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
+import { unmetered, type Entitlements } from "./entitlements";
 import { capturedHeaders, fingerprint, hookDelaySlots, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
-function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean) {
+type FixtureOptions = { entitlements?: Entitlements; capture?: () => "inbox_gone" | "db_error" | undefined };
+function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean, opts: FixtureOptions = {}) {
   const inboxes: Array<{ id: string; organization_id: string; project_id: string; name: string; token_hash: string; response?: any }> = [];
   const events: Array<{ id: string; inbox_id: string; organization_id: string; project_id: string; body: string; headers: unknown; response_status?: number | null }> = [];
   const audits: Array<{ action: string; changes: unknown }> = [];
@@ -35,6 +37,10 @@ function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean) {
       }
       if (sql.includes("INSERT INTO audit_event")) { audits.push({ action: String(args[8]), changes: args[11] ? JSON.parse(String(args[11])) : null }); return []; }
       if (sql.includes("montral_capture_hook_event_v2")) {
+        // the inbox deleted while the body streamed (the function's row lock finds nothing), or the database failing
+        const outcome = opts.capture?.();
+        if (outcome === "inbox_gone") return [{ result: null }];
+        if (outcome === "db_error") throw new Error("synthetic insert failure");
         const inbox = inboxes.find(i => i.id === args[0] && i.token_hash === args[1]);
         if (!inbox) return [{ result: null }];
         const status = (inbox.response?.methods?.[String(args[3])] ?? inbox.response)?.status ?? 202;
@@ -69,6 +75,8 @@ function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean) {
   app.use("*", async (c, next) => {
     c.set("repo", repo as never);
     c.set("database", db as never);
+    // createApp always sets the deployment's entitlements; this harness is the self-hosted (unmetered) edition
+    c.set("entitlements", opts.entitlements ?? unmetered);
     if (earlyDatabaseRelease !== undefined) c.set("earlyDatabaseRelease", earlyDatabaseRelease);
     c.set("orgId", "org-a");
     c.set("projectId", projectId);
@@ -210,6 +218,35 @@ describe("Montral webhook security", () => {
       expect(res.headers.get("content-type")).toContain("application/json");
     }
     expect(f.events).toHaveLength(0);
+  });
+
+  it("gives a charged webhook event back when nothing is stored (inbox deleted meanwhile, insert failure)", async () => {
+    const ledger: { op: string; n: number; at?: Date }[] = [];
+    const entitlements: Entitlements = {
+      ...unmetered, failClosed: true,
+      spendMeter: async (_w, _m, n, at) => { ledger.push({ op: "spend", n, at }); return n; },
+      refundMeter: async (_w, _m, n, at) => { ledger.push({ op: "refund", n, at }); },
+    };
+    let mode: "inbox_gone" | "db_error" | undefined = "inbox_gone";
+    const f = fixture(true, undefined, { entitlements, capture: () => mode });
+    const create = await f.app.request("/api/hooks/inboxes", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "Meter" }) });
+    const { path } = await create.json() as { path: string };
+    // deleted while the body streamed: 404, nothing stored, the event refunded at the instant it was charged
+    expect((await f.app.request(path, { method: "POST", body: "{}" })).status).toBe(404);
+    expect(f.events).toHaveLength(0);
+    expect(ledger.map((e) => e.op)).toEqual(["spend", "refund"]);
+    expect(ledger[1].at).toBe(ledger[0].at);
+    // the insert fails: the error surfaces (500), nothing stored, the event refunded
+    mode = "db_error";
+    expect((await f.app.request(path, { method: "POST", body: "{}" })).status).toBe(500);
+    expect(f.events).toHaveLength(0);
+    expect(ledger.map((e) => e.op)).toEqual(["spend", "refund", "spend", "refund"]);
+    expect(ledger[3].at).toBe(ledger[2].at);
+    // a stored capture keeps its charge
+    mode = undefined;
+    expect((await f.app.request(path, { method: "POST", body: "{}" })).status).toBe(202);
+    expect(f.events).toHaveLength(1);
+    expect(ledger.map((e) => e.op)).toEqual(["spend", "refund", "spend", "refund", "spend"]);
   });
 
   it("creates a scoped inbox, captures a signed event, and denies other project access", async () => {

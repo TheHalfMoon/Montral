@@ -257,12 +257,34 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
       // credits are taken before the journey is launched; without them it does not run (nothing recorded, like any other
       // monitor out of credits: the lease keeps its next due time)
       const spentAt = new Date();
-      const charged = await reserveCredits(workspace, m, entitlements, spentAt);
-      if (charged === null) continue;
+      const credit = await reserveCreditsFor(workspace, m, entitlements, spentAt);
+      if (!credit.ok) {
+        // A metered ledger or catalog that cannot answer: not run and never recorded as a result, but counted on the
+        // monitor's deferral streak, so a long metering outage marks it unchecked (and tells its managers) instead of
+        // leaving it silently "healthy". Out of credits stays as before: nothing recorded, the lease keeps its due time.
+        if (credit.reason === "unavailable") await step("browser deferral", () => noteMeteringDeferral(repo, m, BROWSER_METERING_UNAVAILABLE));
+        continue;
+      }
+      const charged = credit.charged;
+      // browser seconds are reserved at the same instant, for the journey's whole configured timeout
+      const seconds = await reserveBrowserSeconds(workspace, m, entitlements, spentAt);
+      if (!seconds.ok) {
+        if (charged > 0) await refundCredits(workspace, charged, entitlements, spentAt);
+        // out of browser time, or the meter could not answer: not run and never recorded as a result; it counts on the
+        // monitor's deferral streak (and so marks it unchecked after BROWSER_UNCHECKED_AFTER intervals), keeping its
+        // next due time
+        await step("browser deferral", () => noteMeteringDeferral(repo, m, seconds.reason === "exhausted" ? BROWSER_QUOTA_EXHAUSTED : BROWSER_METERING_UNAVAILABLE));
+        continue;
+      }
+      const runStarted = now();
       let result: CheckResultKind = "done";
-      try { result = await checkOne(repo, m, entitlements, true); } catch { console.error(`check failed for ${m.id}`); }
+      let threw = false;
+      try { result = await checkOne(repo, m, entitlements, true); } catch { threw = true; console.error(`check failed for ${m.id}`); }
       // a check that did not happen (deferred for capacity, or the runtime could not run it) gets its credits back
       if ((result === "deferred" || result === "error") && charged > 0) await refundCredits(workspace, charged, entitlements, spentAt);
+      // and the browser seconds it did not use: all of them when it did not happen or failed unexpectedly (as on the
+      // manual route); credits of a check that threw stay charged, as before, since it may have run
+      await refundBrowserSeconds(workspace, unusedBrowserSeconds(seconds.seconds, now() - runStarted, threw ? "error" : result), entitlements, spentAt);
     }
   } finally {
     browserTasksRunning.delete(workspace);
@@ -276,18 +298,28 @@ async function browserTask(repo: Repo, workspace: string, list: Monitor[], entit
  * booked at (the caller keeps it for its refund).
  */
 export async function reserveCredits(workspace: string, m: Monitor, entitlements: Entitlements, spentAt: Date = new Date()): Promise<number | null> {
+  const r = await reserveCreditsFor(workspace, m, entitlements, spentAt);
+  return r.ok ? r.charged : null;
+}
+
+export type CreditReservation = { ok: true; charged: number } | { ok: false; reason: "exhausted" | "unavailable" };
+/** `reserveCredits`, telling a used-up allowance from a ledger that could not answer (or answered nonsense). */
+export async function reserveCreditsFor(workspace: string, m: Monitor, entitlements: Entitlements, spentAt: Date = new Date()): Promise<CreditReservation> {
   const cost = creditCost(m);
-  if (cost === 0) return 0;
+  if (cost === 0) return { ok: true, charged: 0 };
   let granted: number;
   // a failing ledger: unmetered deployments run the check uncharged; a metered one does not run it (failClosed)
-  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return entitlements.failClosed ? null : 0; }
-  if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
+  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch {
+    console.error("credits unavailable");
+    return entitlements.failClosed ? { ok: false, reason: "unavailable" } : { ok: true, charged: 0 };
+  }
+  if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return { ok: false, reason: "unavailable" }; }
   if (granted < cost) {
     if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);
     console.warn("credits exhausted: skipped 1 browser check");
-    return null;
+    return { ok: false, reason: "exhausted" };
   }
-  return granted;
+  return { ok: true, charged: granted };
 }
 
 /**
@@ -299,6 +331,70 @@ export async function spendAllOrNothing(workspace: string, cost: number, entitle
   if (granted >= cost) return true;
   if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);
   return false;
+}
+
+/** The default journey timeout (browser-steps.ts) when a stored configuration has none. */
+const DEFAULT_JOURNEY_TIMEOUT_MS = 30_000;
+export const BROWSER_QUOTA_EXHAUSTED = "Browser check time allowance used up for this period; check not run";
+export const BROWSER_METERING_UNAVAILABLE = "Usage metering unavailable; check not run";
+
+/** Browser seconds a check reserves: its configured total journey timeout, rounded up to whole seconds. */
+export function browserSecondsFor(m: Pick<Monitor, "browser">): number {
+  const ms = (m.browser as { timeoutMs?: number } | null)?.timeoutMs;
+  return Math.ceil((typeof ms === "number" && Number.isFinite(ms) && ms > 0 ? ms : DEFAULT_JOURNEY_TIMEOUT_MS) / 1000);
+}
+
+/**
+ * Seconds to give back after a reserved run: everything when the check did not happen (deferred, runtime error),
+ * otherwise what the run did not use (reserved minus its wall time rounded up), never negative and never more than
+ * was reserved.
+ */
+export function unusedBrowserSeconds(reserved: number, wallMs: number, result: CheckResultKind): number {
+  if (!Number.isSafeInteger(reserved) || reserved <= 0) return 0;
+  if (result === "deferred" || result === "error") return reserved;
+  const used = Number.isFinite(wallMs) && wallMs > 0 ? Math.ceil(wallMs / 1000) : 0;
+  return Math.max(0, Math.min(reserved, reserved - used));
+}
+
+export type BrowserSecondsReservation = { ok: true; seconds: number } | { ok: false; reason: "exhausted" | "unavailable" };
+
+/**
+ * Reserve a browser check's seconds at `spentAt` (the instant its credits were taken), all or nothing: a partial grant
+ * is given back. Self-hosted (no `spendMeter`): nothing is counted (0 reserved). A ledger failure: a metered deployment
+ * (failClosed) does not run the check; otherwise it runs uncounted. A malformed grant never authorizes a run.
+ */
+export async function reserveBrowserSeconds(workspace: string, m: Pick<Monitor, "browser">, entitlements: Entitlements, spentAt: Date): Promise<BrowserSecondsReservation> {
+  if (!entitlements.spendMeter) return { ok: true, seconds: 0 };
+  const wanted = browserSecondsFor(m);
+  let granted: number;
+  try { granted = await entitlements.spendMeter(workspace, "browserSeconds", wanted, spentAt); } catch {
+    console.error("browser seconds unavailable");
+    return entitlements.failClosed ? { ok: false, reason: "unavailable" } : { ok: true, seconds: 0 };
+  }
+  if (!Number.isSafeInteger(granted) || granted < 0 || granted > wanted) { console.error("browser seconds allowance invalid"); return { ok: false, reason: "unavailable" }; }
+  if (granted < wanted) {
+    if (granted > 0) await refundBrowserSeconds(workspace, granted, entitlements, spentAt);
+    console.warn("browser seconds exhausted: skipped 1 browser check");
+    return { ok: false, reason: "exhausted" };
+  }
+  return { ok: true, seconds: granted };
+}
+
+/** Give back browser seconds reserved at `spentAt` to that period's allowance. */
+export async function refundBrowserSeconds(workspace: string, seconds: number, entitlements: Entitlements, spentAt: Date) {
+  if (!entitlements.refundMeter || !Number.isSafeInteger(seconds) || seconds <= 0) return;
+  await entitlements.refundMeter(workspace, "browserSeconds", seconds, spentAt).catch(() => console.error("browser seconds refund failed"));
+}
+
+/**
+ * A browser check refused by metering (its period's browser time is used up, or the metered ledger could not answer):
+ * counted on the deferral streak like a capacity deferral (so a long refusal marks the monitor unchecked and its
+ * managers are told), but not retried within a minute: it keeps the due time its lease gave it.
+ */
+async function noteMeteringDeferral(repo: Repo, m: Monitor, reason: string, now = Date.now()) {
+  if (!repo.noteBrowserDeferral) return;
+  const { deferredSince } = await repo.noteBrowserDeferral(m.id, m.intervalSec, reason);
+  if (deferredTooLong(deferredSince, m.intervalSec, now) && repo.markUnchecked) await repo.markUnchecked(m.id);
 }
 
 /** Give back credits taken at `spentAt` (default now) to that period's allowance. */

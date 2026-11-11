@@ -1,19 +1,61 @@
 import type { Database } from "@montral/repo";
 import type { Bindings } from "./env";
-import type { Entitlements, Plan, CreditBalance } from "./entitlements";
+import type { Entitlements, Plan, CreditBalance, Meter } from "./entitlements";
 import { unmetered } from "./entitlements";
 import { billingGraceDays, billingReady, entitledPlanId, ENV_FALLBACK_PLAN_IDS, envVariantsValid, type SubscriptionEntitlementRow } from "./montral-billing";
 import { cachedPlanCatalog, PlanCatalogError, type PlanLimits } from "./plan-catalog";
+import { constraintExists } from "./schema-catalog";
 
 export const meteringEnabled = (env: Bindings) => env.MONTRAL_METERING_ENABLED === "true";
+
+/** The ledger kinds: one row per workspace, calendar month and kind. */
+export const USAGE_KINDS = ["credits", "emails", "webhook_events", "browser_seconds"] as const;
+export type UsageKind = typeof USAGE_KINDS[number];
+/** The ledger kind of each resource meter. */
+export const METER_KIND: Readonly<Record<Meter, UsageKind>> = Object.freeze({ webhookEvents: "webhook_events", browserSeconds: "browser_seconds" });
+/** The plan limit that bounds each ledger kind. */
+const KIND_LIMIT: Readonly<Record<UsageKind, keyof PlanLimits>> = Object.freeze({ credits: "credits", emails: "emails", webhook_events: "webhookEvents", browser_seconds: "browserSeconds" });
+const KIND_LIST = USAGE_KINDS.map((k) => `'${k}'`).join(",");
+const KIND_CHECK = "montral_usage_kind_v2";
+
+/**
+ * The CHECK constraints on montral_usage.kind written before the resource meters (an unnamed column check, so its name
+ * is whatever PostgreSQL chose): found in pg_constraint by what they say, never by a guessed name.
+ */
+async function legacyUsageKindChecks(db: Database): Promise<string[]> {
+  const rows = await db.query<{ conname: string }>(
+    `SELECT conname FROM pg_constraint
+      WHERE conrelid = to_regclass('montral_usage') AND contype = 'c' AND conname <> '${KIND_CHECK}'
+        AND pg_get_constraintdef(oid) LIKE '%kind%' AND pg_get_constraintdef(oid) LIKE '%''credits''%'`,
+  );
+  return rows.map((r) => r.conname);
+}
+const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 export async function migrateMontralMetering(db: Database): Promise<string[]> {
   await db.query(`CREATE TABLE IF NOT EXISTS montral_usage (
     organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
-    period_start timestamptz NOT NULL, kind text NOT NULL CHECK (kind IN ('credits', 'emails')),
+    period_start timestamptz NOT NULL, kind text NOT NULL CONSTRAINT ${KIND_CHECK} CHECK (kind IN (${KIND_LIST})),
     used integer NOT NULL DEFAULT 0 CHECK (used >= 0),
     PRIMARY KEY (organization_id,period_start,kind)
   )`);
+  // Decided from the catalog (no lock): an up-to-date or freshly created table takes no table-locking DDL on restart.
+  if (!await constraintExists(db, "montral_usage", KIND_CHECK)) {
+    // A genuine upgrade of a table created with the two original kinds: its kind check is replaced by the wider named
+    // one. Previous-release replicas only write 'credits'/'emails', which the new check admits.
+    await db.query("LOCK TABLE montral_usage IN ACCESS EXCLUSIVE MODE");
+    for (const name of await legacyUsageKindChecks(db)) {
+      await db.query(`ALTER TABLE montral_usage DROP CONSTRAINT IF EXISTS ${quoteIdent(name)}`);
+    }
+    // NOT VALID then VALIDATE: the new check is in force for every write at once, and existing rows are checked in a
+    // separate step (all rows hold 'credits' or 'emails', which it admits).
+    await db.query(`ALTER TABLE montral_usage ADD CONSTRAINT ${KIND_CHECK} CHECK (kind IN (${KIND_LIST})) NOT VALID`);
+    await db.query(`ALTER TABLE montral_usage VALIDATE CONSTRAINT ${KIND_CHECK}`);
+  }
+  // Rolling upgrades and rollbacks: previous-release replicas keep running (and restarting) while this one migrates,
+  // and each restart re-creates their montral_spend_usage. This release therefore leaves that function exactly as the
+  // previous release defines it (two kinds) and calls only montral_spend_usage_v2 below. Both take the same advisory
+  // lock key per (workspace, period, kind), so old and new replicas spending the same kind serialize with each other.
   await db.query(`
     CREATE OR REPLACE FUNCTION montral_spend_usage(
       p_org text, p_start timestamptz, p_kind text, p_count integer, p_limit integer
@@ -21,6 +63,31 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     DECLARE previous integer := 0; granted integer := 0;
     BEGIN
       IF p_count < 0 OR p_limit < 0 OR p_kind NOT IN ('credits','emails')
+        THEN RAISE EXCEPTION 'invalid usage request';
+      END IF;
+      IF p_count = 0 THEN RETURN 0; END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':' || p_kind,0));
+      SELECT used INTO previous FROM montral_usage
+        WHERE organization_id=p_org AND period_start=p_start AND kind=p_kind FOR UPDATE;
+      granted := GREATEST(0,LEAST(p_count,p_limit-COALESCE(previous,0)));
+      IF granted > 0 THEN
+        INSERT INTO montral_usage(organization_id,period_start,kind,used)
+          VALUES(p_org,p_start,p_kind,granted)
+        ON CONFLICT (organization_id,period_start,kind)
+          DO UPDATE SET used=montral_usage.used + EXCLUDED.used;
+      END IF;
+      RETURN granted;
+    END;
+    $montral$
+  `);
+  // The current spend function: every ledger kind, including the resource meters. Same body otherwise.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_spend_usage_v2(
+      p_org text, p_start timestamptz, p_kind text, p_count integer, p_limit integer
+    ) RETURNS integer LANGUAGE plpgsql AS $montral$
+    DECLARE previous integer := 0; granted integer := 0;
+    BEGIN
+      IF p_count IS NULL OR p_limit IS NULL OR p_count < 0 OR p_limit < 0 OR p_kind IS NULL OR p_kind NOT IN (${KIND_LIST})
         THEN RAISE EXCEPTION 'invalid usage request';
       END IF;
       IF p_count = 0 THEN RETURN 0; END IF;
@@ -148,8 +215,17 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_usage_meter_v1", "montral_usage_reservation_v1", "montral_monthly_outbox_quota_claim_v1"];
+  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_monthly_outbox_quota_claim_v1"];
 }
+
+/** The ledger kind of a meter; anything else is refused, so a caller can never write an arbitrary kind. */
+function meterKind(meter: Meter): UsageKind {
+  if (!Object.hasOwn(METER_KIND, meter)) throw new Error("Unknown usage meter");
+  return METER_KIND[meter];
+}
+
+/** Seconds until `end` (at least 1): the Retry-After of a refusal that lasts until the next period. */
+export const secondsUntil = (end: Date, now: Date = new Date()) => Math.max(1, Math.ceil((end.getTime() - now.getTime()) / 1000));
 
 export function calendarMonthUtc(now: Date = new Date()): { start: Date; end: Date } {
   return {
@@ -196,27 +272,27 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     }
     return r;
   }
-  const limitOf = (limits: PlanLimits, kind: "credits" | "emails") => limits[kind];
+  const limitOf = (limits: PlanLimits, kind: UsageKind) => limits[KIND_LIMIT[kind]];
   const validAt = (at?: Date) => (at && !Number.isNaN(at.getTime()) ? at : new Date());
-  const spend = async (org: string, count: number, kind: "credits" | "emails", at?: Date) => {
+  const spend = async (org: string, count: number, kind: UsageKind, at?: Date) => {
     if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid usage amount");
     if (count === 0) return 0;
     // the period is fixed before the plan lookup, so a refund naming the same instant hits the same month
     const { start } = calendarMonthUtc(validAt(at));
     const { limits } = await effective(org);
     const rows = await database.query<{ granted: number }>(
-      "SELECT montral_spend_usage($1::text,$2::timestamptz,$3::text,$4::integer,$5::integer) AS granted",
+      "SELECT montral_spend_usage_v2($1::text,$2::timestamptz,$3::text,$4::integer,$5::integer) AS granted",
       [org, start.toISOString(), kind, count, limitOf(limits, kind)],
     );
     return Math.max(0, Math.min(count, Number(rows[0]?.granted ?? 0)));
   };
-  /** Credits given back for work that did not happen, in the period they were taken in (never below zero). */
-  const refund = async (org: string, count: number, spentAt?: Date) => {
+  /** Units given back for work that did not happen (or used less), in the period they were taken in (never below zero). */
+  const refund = async (org: string, count: number, kind: UsageKind, spentAt?: Date) => {
     if (!Number.isSafeInteger(count) || count <= 0) return;
     const { start } = calendarMonthUtc(validAt(spentAt));
     await database.query(
-      "UPDATE montral_usage SET used = GREATEST(0, used - $3::integer) WHERE organization_id = $1::text AND period_start = $2::timestamptz AND kind = 'credits'",
-      [org, start.toISOString(), count],
+      "UPDATE montral_usage SET used = GREATEST(0, used - $3::integer) WHERE organization_id = $1::text AND period_start = $2::timestamptz AND kind = $4::text",
+      [org, start.toISOString(), count, kind],
     );
   };
   const reserveEmailQuotaOnce = async (org: string, key: string): Promise<{ granted: boolean; newlyReserved: boolean }> => {
@@ -249,14 +325,14 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
       throw new Error("Invalid monthly outbox claim result");
     return status;
   };
-  const balance = async (org: string, kind: "credits" | "emails"): Promise<CreditBalance> => {
+  const balance = async (org: string, kind: UsageKind): Promise<CreditBalance> => {
     const { limits } = await effective(org);
     const { start, end } = calendarMonthUtc();
     const rows = await database.query<{ used: number }>(
       "SELECT used FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind=$3",
       [org, start.toISOString(), kind],
     );
-    return { limit: limits[kind], used: Number(rows[0]?.used ?? 0), periodStart: start, periodEnd: end };
+    return { limit: limitOf(limits, kind), used: Number(rows[0]?.used ?? 0), periodStart: start, periodEnd: end };
   };
   const plan = async (org: string): Promise<Plan> => {
     const { plan: p, limits } = await effective(org);
@@ -271,12 +347,15 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     ...unmetered,
     failClosed: true,
     spendCredits: (org, count, at) => spend(org, count, "credits", at),
-    refundCredits: (org, count, spentAt) => refund(org, count, spentAt),
+    refundCredits: (org, count, spentAt) => refund(org, count, "credits", spentAt),
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
     reserveEmailQuotaOnce,
     claimMonthlyOutboxAttempt,
     emailBalance: org => balance(org, "emails"),
+    spendMeter: (org, meter, count, at) => spend(org, count, meterKind(meter), at),
+    refundMeter: (org, meter, count, spentAt) => refund(org, count, meterKind(meter), spentAt),
+    meterBalance: (org, meter) => balance(org, meterKind(meter)),
     plan,
   };
 }

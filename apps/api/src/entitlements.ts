@@ -60,7 +60,20 @@ export interface Entitlements {
   emailBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** The plan the workspace is on, with its hard limits. null when this deployment has no plans. */
   plan(workspaceId: string): Promise<Plan | null>;
+  /**
+   * Take `count` units of a resource meter (captured webhook requests, browser-check seconds) for work about to happen.
+   * Resolves with how many were granted, between 0 and `count`; `at` picks the period like `spendCredits`. Missing
+   * (self-hosted): the meter is not counted and nothing is refused.
+   */
+  spendMeter?(workspaceId: string, meter: Meter, count: number, at?: Date): Promise<number>;
+  /** Give back units taken with `spendMeter` at `spentAt`, to that period's allowance (never below zero). */
+  refundMeter?(workspaceId: string, meter: Meter, count: number, spentAt?: Date): Promise<void>;
+  /** A meter's allowance and use, for display. Missing or null when it is not metered. */
+  meterBalance?(workspaceId: string, meter: Meter): Promise<CreditBalance | null>;
 }
+
+/** Resource meters beyond credits and emails: captured webhook requests and browser-check runtime seconds. */
+export type Meter = "webhookEvents" | "browserSeconds";
 
 export type Plan = {
   id: string;

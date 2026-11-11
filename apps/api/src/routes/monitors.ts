@@ -15,7 +15,7 @@ import { BROWSER_MIN_INTERVAL_SEC, browserCreationProblem, browserRuntimeHealth,
 import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secretRefs, type BrowserConfig } from "../browser-steps";
 import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
-import { checkOne, nextAfter, refundCredits, spendAllOrNothing } from "../scheduler";
+import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID } from "../regions";
 
@@ -677,9 +677,31 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
       }
       if (region === undefined) {
-        const result = await checkOne(repo, m, c.get("entitlements"));
+        const entitlements = c.get("entitlements");
+        // a browser check also reserves its configured timeout in browser seconds, at the instant its credits were taken
+        let reserved = 0;
+        if (m.type === "browser") {
+          const seconds = await reserveBrowserSeconds(m.organizationId, m, entitlements, spentAt);
+          if (!seconds.ok) {
+            await refundCredits(m.organizationId, cost, entitlements, spentAt);
+            if (seconds.reason === "exhausted") return c.json({ error: "No browser check time left this period", code: "browser_quota_exhausted" }, 402);
+            c.header("retry-after", "30");
+            return c.json({ error: "Usage metering is unavailable; the check did not run. Try again shortly.", code: "metering_unavailable" }, 503);
+          }
+          reserved = seconds.seconds;
+        }
+        const started = Date.now();
+        let result: Awaited<ReturnType<typeof checkOne>>;
+        try {
+          result = await checkOne(repo, m, entitlements);
+        } catch (error) {
+          await refundBrowserSeconds(m.organizationId, unusedBrowserSeconds(reserved, Date.now() - started, "error"), entitlements, spentAt);
+          throw error;
+        }
         // a browser check that did not happen (deferred for capacity, runtime failure) gives its credits back
-        if (result === "deferred" || result === "error") await refundCredits(m.organizationId, cost, c.get("entitlements"), spentAt);
+        if (result === "deferred" || result === "error") await refundCredits(m.organizationId, cost, entitlements, spentAt);
+        // and the browser seconds it did not use (all of them when it did not happen)
+        await refundBrowserSeconds(m.organizationId, unusedBrowserSeconds(reserved, Date.now() - started, result), entitlements, spentAt);
         return c.json({ ok: true });
       }
       const run = await runInRegion(region, m, repo);

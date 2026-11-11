@@ -27,11 +27,13 @@ This is a Montral-owned integration; it is NOT part of the historical OpenUptime
 
 These are engineering quota candidates, **not confirmed merchant prices, product offers or a public pricing promise**. All monitoring is unmetered unless the operator explicitly sets `MONTRAL_METERING_ENABLED=true`. When enabled, each check/notification consumes atomic credits in PostgreSQL. Billing and metering are separate opt-ins.
 
-| Plan | Active monitors | Minimum interval | Regions/check | Monthly outbound-check credits | Monthly emails |
-|---|---:|---:|---:|---:|---:|
-| Free | 1 | 600 sec | 1 | 4,500 | 20 |
-| Pro | 5 | 300 sec | 2 | 50,000 | 200 |
-| Business | 20 | 60 sec | 3 | 250,000 | 1,000 |
+| Plan | Active monitors | Minimum interval | Regions/check | Monthly outbound-check credits | Monthly emails | Monthly webhook events | Monthly browser seconds |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Free | 1 | 600 sec | 1 | 4,500 | 20 | 500 | 1,800 |
+| Pro | 5 | 300 sec | 2 | 50,000 | 200 | 5,000 | 18,000 |
+| Business | 20 | 60 sec | 3 | 250,000 | 1,000 | 25,000 | 72,000 |
+
+Webhook events count requests the inbox receiver captures; browser seconds count browser-check runtime (each check reserves its journey timeout and gets the unused seconds back). The Free values are also what an operator catalog plan gets when it omits either meter (`METER_DEFAULTS`; never unlimited). See [PLAN-CATALOG.md](PLAN-CATALOG.md#schema-version-1) for when each is charged and what an exhausted or unreachable ledger does.
 
 Each monitor can run only while credits remain; a workspace running **all** Business monitors every minute will exhaust its 250,000 credits before the month ends. These are intentionally hard budgets to avoid unexpected hosting costs. Usage periods start at 00:00 UTC on the first of each calendar month in this preview; renewal-aligned accounting and proration remain future work.
 
@@ -69,7 +71,7 @@ Invoice events carry `subscription_id` but **no variant**, so they never change 
 
 ## Rolling upgrade and rollback
 
-Replicas of the previous release may keep running, and restarting, while this release migrates. This release therefore never drops, replaces or redefines a database function the previous release uses. `montral_reserve_billing_intent` and the eight-argument `montral_apply_billing_event` stay exactly as that release defines them, and a restarting old replica re-creates only its own versions. New code calls only `montral_reserve_billing_intent_v2` and `montral_billing_apply`. Against the new schema, old replicas are merely less capable: they sell only `pro`/`business`, ignore payment state and refuse variant changes. They never conflict. The fixed plan CHECK on `montral_billing_intent` is found by its definition, not its name, and dropped, which old replicas, inserting only `pro`/`business`, cannot notice. The old functions are removed in a later release, once no replica of the previous release can run.
+Replicas of the previous release may keep running, and restarting, while this release migrates. This release therefore never drops, replaces or redefines a database function the previous release uses. `montral_reserve_billing_intent` and the eight-argument `montral_apply_billing_event` stay exactly as that release defines them, and a restarting old replica re-creates only its own versions. New code calls only `montral_reserve_billing_intent_v2` and `montral_billing_apply`. Against the new schema, old replicas are merely less capable: they sell only `pro`/`business`, ignore payment state and refuse variant changes. They never conflict. The fixed plan CHECK on `montral_billing_intent` is found by its definition, not its name, and dropped, which old replicas, inserting only `pro`/`business`, cannot notice. Likewise the usage ledger's original two-kind CHECK on `montral_usage.kind` is found by its definition and replaced by `montral_usage_kind_v2` (adding `webhook_events` and `browser_seconds`; added `NOT VALID`, then validated), which old replicas, writing only `credits`/`emails`, cannot notice. `montral_spend_usage` stays exactly as the previous release defines it (two kinds); new code spends every kind through `montral_spend_usage_v2`, so an old replica restarting mid-rollout or after a rollback cannot break the resource meters. Both functions take the same advisory lock per workspace, period and kind, so old and new replicas spending credits or emails share one serialized ledger. The old functions are removed in a later release, once no replica of the previous release can run.
 
 ## API surface
 

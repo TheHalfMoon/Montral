@@ -23,7 +23,9 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
   limit.
 - **A metering call fails at run time** (catalog or ledger unavailable). A metered deployment grants nothing:
   - scheduled checks are skipped and come due again;
-  - browser checks do not run;
+  - browser checks do not run (a manual one answers 503 `metering_unavailable` when its browser seconds cannot be
+    reserved);
+  - the webhook receiver captures nothing and answers 503 `metering_unavailable`;
   - status-report and digest emails are not sent. Incident alert emails are still sent, because they are the product's
     core promise, and they remain bounded by incident deduplication.
 
@@ -51,7 +53,9 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
         "minIntervalSec": 840,           // fastest interval, 10–86400
         "regions": 1,                    // regions per monitor, 1–64
         "credits": 1000,                 // monthly outbound-check credits (one per regional check attempt)
-        "emails": 10                     // monthly notification emails
+        "emails": 10,                    // monthly notification emails
+        "webhookEvents": 300,            // optional: monthly webhook requests the inbox receiver captures
+        "browserSeconds": 1200           // optional: monthly browser-check runtime, in seconds
       },
       "features": []                     // only features Montral enforces: "hideBranding"
     },
@@ -77,6 +81,42 @@ never implies unlimited checks, regions or notifications. Unknown fields are ref
 `defaultPlan` and override plans must exist. Overrides replace the listed limits only, and those limits keep applying
 when the workspace's subscription changes (an override without `plan` caps every plan the workspace moves to).
 Overrides may also raise limits; record why in `note`.
+
+**Resource meters (`webhookEvents`, `browserSeconds`).** Both are optional, so a catalog written before they existed
+stays valid without edits. An absent meter is **never unlimited**: it gets the built-in conservative default
+(`METER_DEFAULTS` in `apps/api/src/plan-catalog.ts`, the built-in Free plan's values: 500 webhook events and 1,800
+browser seconds a month), whatever the plan. Write the number to give a plan more, or `0` to give it none. An override
+may name either meter on its own.
+
+- **`webhookEvents`**: one per request the public receiver (`/api/hooks/receive/…`) accepts, charged *before* the
+  event is stored. When the allowance is used up the receiver answers **429** with code `webhook_quota_exhausted` and
+  `Retry-After` set to the seconds until the next period (00:00 UTC on the 1st), and stores nothing. A capture that
+  then stores nothing (the inbox was deleted meanwhile, or the database failed) gives its event back. The per-inbox
+  rate limit still applies first, and a rate-limited request costs nothing.
+- **`browserSeconds`**: each browser check reserves its journey's configured total timeout (`browser.timeoutMs`,
+  rounded up to whole seconds), at the same instant its credits are taken. After the run the unused seconds (the
+  reservation minus the run's wall time, rounded up, never negative) are refunded to the month of that instant, so a
+  check that straddles midnight on the 1st never inflates the new month. A deferred check, or one the browser runtime
+  could not run, refunds everything. A check the remaining seconds cannot cover does not run: its credits and any
+  partial grant are given back, and the attempt counts on the monitor's deferral streak (a visible `deferred` run at
+  most once per interval; after 3 intervals the monitor is shown as unchecked and its owners and admins are told).
+  It is never recorded as a check result. A manual check answers **402** `browser_quota_exhausted`.
+
+Both meters show on the Usage page and in `GET /api/usage` (`webhookEvents`, `browserSeconds`).
+
+**Release note (upgrading).** An existing operator catalog without `webhookEvents`/`browserSeconds` keeps loading, but
+from this release **every plan in it, paid plans included, gets the Free defaults above for both meters** until the
+operator adds the fields. Add them to each plan before (or right after) upgrading a metered deployment.
+
+**Known accounting gaps (bounded).**
+- A process killed between a browser check's reservation and its refund (crash, deploy, OOM) keeps that check's
+  reservation charged: at most one journey timeout's worth of seconds per check in flight. Nothing reconciles it later.
+- A webhook capture is charged before it is stored. If the process dies after the charge and before the insert (or the
+  refund after a failed insert fails too), the event stays charged although nothing was stored: at most one event per
+  request in flight.
+- A metering outage refuses browser checks without recording a result, but each refusal counts on the monitor's
+  deferral streak (reason "Usage metering unavailable"), so after 3 intervals the monitor is shown as unchecked and its
+  owners and admins are told.
 
 **Billing: provider variants.** `providerVariants` lists the billing provider's variant ids (Lemon Squeezy variant
 ids, written as decimal strings) that subscribe a workspace to the plan. Rules: each id is a positive decimal number of

@@ -36,7 +36,7 @@ export default function Usage() {
       </>
     );
   }
-  const { plan, credits, emails, activeMonitors } = u;
+  const { plan, credits, emails, webhookEvents, browserSeconds, activeMonitors } = u;
   // the checks each monitor makes in a month at its interval: where the allowance goes
   const perMonth = (m: Monitor) => (m.type === "heartbeat" || m.status === "paused" ? 0 : Math.round((30 * 86400) / Math.max(1, m.intervalSec)));
   const top = [...monitors].map((m) => ({ m, n: perMonth(m) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 5);
@@ -70,6 +70,8 @@ export default function Usage() {
             </div>
           )}
           {emails && <Meter label={t("Email notifications")} q={emails} note={t("Alert emails and status page subscriber emails.")} />}
+          {webhookEvents && <Meter label={t("Webhook events")} q={webhookEvents} note={t("Requests captured by webhook inboxes.")} />}
+          {browserSeconds && <Meter label={t("Browser check time")} q={browserSeconds} note={t("Seconds. Each check reserves its journey timeout; unused seconds are returned.")} />}
         </div>
         {top.length > 0 && (
           <section className="card sect">

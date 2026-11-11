@@ -32,6 +32,17 @@ const limitsSchema = z.object({
   credits: count,
   /** monthly notification emails (alerts and status-page subscriber mails) */
   emails: count,
+  /**
+   * monthly webhook requests the public receiver captures (one per stored event). Optional for compatibility with
+   * catalogs written before it existed: absent means METER_DEFAULTS.webhookEvents (the built-in Free value), never
+   * unlimited.
+   */
+  webhookEvents: count.optional(),
+  /**
+   * monthly browser-check runtime in seconds (reserved at each journey's configured timeout, unused seconds given back).
+   * Optional like webhookEvents: absent means METER_DEFAULTS.browserSeconds, never unlimited.
+   */
+  browserSeconds: count.optional(),
 }).strict();
 
 const priceSchema = z.object({
@@ -98,7 +109,10 @@ const catalogSchema = z.object({
   });
 });
 
-export type PlanLimits = z.infer<typeof limitsSchema>;
+/** Limits as written in a catalog (the optional meters may be absent). */
+export type PlanLimitsInput = z.infer<typeof limitsSchema>;
+/** Limits as enforced: every meter has a number (absent optional meters filled from METER_DEFAULTS). */
+export type PlanLimits = Required<PlanLimitsInput>;
 export type PlanFeature = z.infer<typeof planSchema>["features"][number];
 export type CatalogPlan = z.infer<typeof planSchema>;
 export type PlanCatalogDocument = z.infer<typeof catalogSchema>;
@@ -124,15 +138,22 @@ export class PlanCatalogError extends Error {
   }
 }
 
+/**
+ * What a plan gets for a meter its catalog entry does not name (catalogs written before the meter existed): the
+ * built-in Free plan's value below, the most conservative one. An omitted meter is therefore never unlimited; an
+ * operator who wants more writes the number. Synthetic, not a commercial offer.
+ */
+export const METER_DEFAULTS = Object.freeze({ webhookEvents: 500, browserSeconds: 1800 });
+
 /** The preview limits of the sandbox edition (docs/BILLING-SANDBOX.md). Synthetic, not a commercial offer. */
 export const BUILTIN_SANDBOX_CATALOG: PlanCatalogDocument = {
   schemaVersion: PLAN_CATALOG_SCHEMA_VERSION,
   version: "builtin-sandbox",
   defaultPlan: "free",
   plans: [
-    { id: "free", name: "Free", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 4500, emails: 20 }, features: [] },
-    { id: "pro", name: "Pro", limits: { activeMonitors: 5, minIntervalSec: 300, regions: 2, credits: 50000, emails: 200 }, features: [] },
-    { id: "business", name: "Business", limits: { activeMonitors: 20, minIntervalSec: 60, regions: 3, credits: 250000, emails: 1000 }, features: ["hideBranding"] },
+    { id: "free", name: "Free", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 4500, emails: 20, ...METER_DEFAULTS }, features: [] },
+    { id: "pro", name: "Pro", limits: { activeMonitors: 5, minIntervalSec: 300, regions: 2, credits: 50000, emails: 200, webhookEvents: 5000, browserSeconds: 18000 }, features: [] },
+    { id: "business", name: "Business", limits: { activeMonitors: 20, minIntervalSec: 60, regions: 3, credits: 250000, emails: 1000, webhookEvents: 25000, browserSeconds: 72000 }, features: ["hideBranding"] },
   ],
   overrides: [],
 };
@@ -185,7 +206,8 @@ export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCat
       // a subscription naming a plan the catalog no longer has gets the default (least) plan, never a guess
       const unknownPlan = planId !== null && named === null;
       const plan = (override?.plan ? plans.get(override.plan) : undefined) ?? named ?? defaultPlan;
-      const limits = { ...plan.limits, ...(override?.limits ?? {}) };
+      // an override's absent field keeps the plan's value; a plan's absent meter takes the conservative default
+      const limits: PlanLimits = { ...METER_DEFAULTS, ...plan.limits, ...(override?.limits ?? {}) };
       return { plan, limits, unknownPlan };
     },
   };

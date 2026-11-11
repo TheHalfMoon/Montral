@@ -166,6 +166,13 @@ describe("suspension gate for Better Auth endpoints", () => {
     expect(await authCallWorkspaces(q, { path: "/organization/invite-member", body: { email: "x@example.com", organizationSlug: "acme" }, query: {}, activeOrgId: "active" })).toEqual(["active", "slug:acme"]);
     expect(await authCallWorkspaces(q, { path: "/organization/update", body: { data: {} }, query: { invitationId: "i" }, activeOrgId: "active" })).toEqual(["active", "inv-org"]);
     expect(await authCallWorkspaces(q, { path: "/organization/accept-invitation", body: { invitationId: "i" }, query: {}, activeOrgId: "active" })).toEqual(["active", "inv-org"]);
+    // POST routes read the id from the body only: one in the query string is checked too but never replaces the active one
+    expect(await authCallWorkspaces(q, { path: "/organization/update", method: "POST", body: { data: {} }, query: { organizationId: "elsewhere" }, activeOrgId: "active" })).toEqual(["active", "elsewhere"]);
+    expect(await authCallWorkspaces(q, { path: "/organization/invite-member", method: "POST", body: { email: "x@example.com" }, query: { organizationId: "nonexistent" }, activeOrgId: "active" })).toEqual(["active", "nonexistent"]);
+    expect(await authCallWorkspaces(q, { path: "/organization/update", method: "POST", body: { organizationId: "named" }, query: { organizationId: "elsewhere" }, activeOrgId: "active" })).toEqual(["named", "elsewhere"]);
+    // GET routes read it from the query string; a body id is checked too
+    expect(await authCallWorkspaces(q, { path: "/organization/list-invitations", method: "GET", body: undefined, query: { organizationId: "named" }, activeOrgId: "active" })).toEqual(["named"]);
+    expect(await authCallWorkspaces(q, { path: "/organization/list-invitations", method: "GET", body: undefined, query: {}, activeOrgId: "active" })).toEqual(["active"]);
     // a slug or invitation that does not exist is refused, not ignored
     expect(await authCallWorkspaces(q, { path: "/organization/invite-member", body: { organizationSlug: "nope" }, query: {}, activeOrgId: "active" })).toBe("unresolved");
     expect(await authCallWorkspaces(q, { path: "/organization/update", body: {}, query: { invitationId: "missing" }, activeOrgId: "active" })).toBe("unresolved");

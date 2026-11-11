@@ -76,9 +76,9 @@ function keyOrg(raw: unknown): string | null {
  *
  * Better Auth acts on `body.organizationId || session.activeOrganizationId` and drops unknown fields after this hook
  * runs, so a decoy field must never stand in for the active workspace: the active workspace is always included unless
- * an explicit organizationId is given. An invitation or slug named in the call adds its workspace on top.
+ * an explicit organizationId is given where Better Auth reads it (the body of a POST, the query string of a GET). An invitation or slug named in the call adds its workspace on top.
  */
-export async function authCallWorkspaces(query: Query, call: { path: string; body: unknown; query: unknown; activeOrgId: string | null }): Promise<string[] | "unresolved"> {
+export async function authCallWorkspaces(query: Query, call: { path: string; method?: string; body: unknown; query: unknown; activeOrgId: string | null }): Promise<string[] | "unresolved"> {
   const body = obj(call.body) ?? {};
   const args = obj(call.query) ?? {};
   const out: (string | null)[] = [];
@@ -92,8 +92,12 @@ export async function authCallWorkspaces(query: Query, call: { path: string; bod
     }
     out.push(str(obj(body.metadata)?.organizationId), call.activeOrgId);
   } else {
-    const byId = str(body.organizationId) ?? str(args.organizationId);
-    out.push(byId ?? call.activeOrgId);
+    // Better Auth reads the explicit id from the body on POST routes and from the query string on GET routes; the
+    // other place is ignored by it, so an id there is checked too but never stands in for the active workspace
+    const read = (call.method ?? "POST").toUpperCase() === "GET" || (call.method ?? "").toUpperCase() === "HEAD";
+    const explicit = read ? str(args.organizationId) : str(body.organizationId);
+    const elsewhere = read ? str(body.organizationId) : str(args.organizationId);
+    out.push(explicit ?? call.activeOrgId, elsewhere);
     const invitationId = str(body.invitationId) ?? str(args.invitationId);
     if (invitationId) {
       const [inv] = await query<{ organization_id: string }>(`SELECT organization_id FROM invitation WHERE id = $1::text`, [invitationId]);

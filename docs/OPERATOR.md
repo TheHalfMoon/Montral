@@ -69,8 +69,10 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
   removed by deleting the workspace. **Deleting a suspended workspace, or the account of its owner, requires an operator
   to unsuspend it first.** An account deletion removes all of the owner's sole-member workspaces in one statement, so a
   suspension written at the same moment makes the whole deletion fail rather than leave it half done.
-  The workspace a call is checked against follows Better Auth's own rule: the `organizationId` it names, else the
-  session's active workspace, plus any workspace an invitation or slug in the call points to; an invitation or slug that
+  The workspace a call is checked against follows Better Auth's own rule: the `organizationId` where Better Auth reads
+  it (the body of a POST, the query string of a GET), else the session's active workspace; an `organizationId` in the
+  other place, and any workspace an invitation or slug in the call points to, are checked as well. If the session cannot
+  be read the call is refused; an invitation or slug that
   does not exist gets `400`.
 - **On-call calendar feeds** of the workspace's members answer 404.
 - **Alerts and mail**: alert deliveries and their retries, incident reminders, escalations, maintenance reminders to

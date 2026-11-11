@@ -237,6 +237,12 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     await refusedAuth("/organization/update", { data: { name: "Renamed via decoy invitation" }, invitationId: otherInvite.body.id });
     await refusedAuth("/organization/update", { data: { name: "Renamed via unknown slug" }, organizationSlug: `nope-${crypto.randomUUID()}` }, 400);
     await refusedAuth("/organization/update?invitationId=missing", { data: { name: "Renamed via unknown invitation" } }, 400);
+    // an organizationId in the query string of a POST is ignored by Better Auth (it acts on the active workspace): it never
+    // replaces the active workspace in the check, whether it names another real workspace or nothing at all
+    await refusedAuth(`/organization/update?organizationId=${encodeURIComponent(other.orgId)}`, { data: { name: "Renamed via query id" } });
+    await refusedAuth(`/organization/update?organizationId=nonexistent-${crypto.randomUUID()}`, { data: { name: "Renamed via unknown query id" } });
+    await refusedAuth(`/organization/invite-member?organizationId=${encodeURIComponent(other.orgId)}`, { email: invitee(), role: "member" });
+    await refusedAuth(`/organization/invite-member?organizationId=nonexistent-${crypto.randomUUID()}`, { email: invitee(), role: "member" });
     expect(await invitations()).toBe(0);
     expect(await name()).toBe(nameBefore);
     await refusedAuth("/organization/delete", { organizationId: owner.orgId });

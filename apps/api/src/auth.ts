@@ -284,9 +284,13 @@ export function createAuth(database: Database, env: Bindings) {
         // a workspace suspended by a platform operator (docs/OPERATOR.md): no invitations, renames, role changes, removals,
         // deletion or new or changed API keys; reading it, leaving it and switching away stay possible
         if (suspensionGuardsAuthPath(ctx.path)) {
-          const session = await getSessionFromCtx(ctx).catch(() => null);
+          // a session that cannot be read is refused, not treated as "no active workspace" (fail closed)
+          const session = await getSessionFromCtx(ctx).catch(() => {
+            throw new APIError("SERVICE_UNAVAILABLE", { message: "Try again" });
+          });
           const active = session ? text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId) : null;
-          const targets = await authCallWorkspaces(query, { path: ctx.path, body: ctx.body, query: ctx.query, activeOrgId: active });
+          const method = ctx.request?.method ?? (ctx.body === undefined ? "GET" : "POST");
+          const targets = await authCallWorkspaces(query, { path: ctx.path, method, body: ctx.body, query: ctx.query, activeOrgId: active });
           // an invitation or workspace named in the call that does not exist: refused rather than guessed (fail closed)
           if (targets === "unresolved") throw new APIError("BAD_REQUEST", { message: "Workspace or invitation not found", code: "NOT_FOUND" });
           if (await anySuspended(query, targets)) {

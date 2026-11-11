@@ -6,7 +6,7 @@ Nothing is released, deployed, packaged, published or tagged; that requires the 
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
 published to any registry.
 
-**Candidate revision:** `main` at `375e867` (2026-11-11). Every claim below points to a merged pull request, a CI run on
+**Candidate revision:** `main` at `b01e28e` (2026-11-11). Every claim below points to a merged pull request, a CI run on
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
@@ -14,7 +14,7 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision (`375e867`) on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from `17f55c1`, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
+| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision (`b01e28e`) on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from `17f55c1`, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed PITR, no third-party penetration test. |
 
 ## 2. Work merged in this round (since `17f55c1`)
@@ -46,7 +46,10 @@ of the current code (ledger row 33); their findings were fixed in #64, whose fix
 | #64 | `f3165c4` | Security re-review follow-ups for #47, #48, #53: DB released before webhook delays on Workers; project-scoped on-call names; calendar-feed lockout; audit detail; keys pinned to a workspace revoked with the membership | 3 re-reviews (1 medium) + 1 review of the fix (1 medium, lows) — all fixed |
 | #65 | `25c8c65` | Two replicas behind nginx: overlay, CI qualification (sessions, client attribution, webhooks once, rolling restart, no duplicate checks, single incident) | 1 (1 high, 4 medium fixed) |
 | #66 | `3c1c67a` | Scripted browser-check step (`evaluate`, page context, returns `true`; owners/admins only; never with secrets) | 1 (1 medium, lows fixed) |
-| #67 | `375e867` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes. **A blocking review posted on GitHub before the merge (transitions not atomic) was missed; fixed afterwards in #70, closing issue #68** |
+| #67 | `b01e28e` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes. **A blocking review posted on GitHub before the merge (transitions not atomic) was missed; fixed afterwards in #70, closing issue #68** |
+| #71 | `3e93722` | Charge and refund of a browser check booked at one instant (the missed #63 comment); a manual check that cannot be paid in full gives its partial grant back | 1 (1 medium pre-existing on main, fixed here) |
+| #70 | `65dd117` | Atomic SCIM transitions (closes issue #68): one transaction per change with the record locked, audit inside; SSO first sign-in re-checks the gate under the record lock; retryable 503 on deadlock | 2 (no medium+ in the diff; 1 medium on the SSO side and 1 deadlock found in the follow-up, both fixed); real-PostgreSQL failure-injection and lock tests |
+| #73 | `b01e28e` | Root causes of two intermittent load-qualification failures on main: memory overshoot was uncollected garbage (both servers now run with the 512 MB heap limit `docker-compose.yml` ships; RSS bound tightened 1024 → 850 MB; `/api/monitors` allocates about 40 % less); the post-recovery coalescing bound now applies to runs started after recovery, with in-flight results bounded separately (cause deduced, not observed) | 1 (1 high, 2 medium fixed); load passed 3/3 on the exact head |
 
 The previous round (#12–#43) is summarised in the git history and the earlier version of this report.
 
@@ -76,20 +79,20 @@ operations, SMS/voice (paid provider — needs approval), custom monitor regions
 
 ## 4. Test results at the candidate revision
 
-GitHub Actions on `375e867` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All ten workflows ran on that exact commit (push to `main`):
+GitHub Actions on `b01e28e` (Linux: `ubuntu-latest` image, 4 vCPU / 16 GB). All ten workflows ran on that exact commit (push to `main`):
 
 | Workflow | Result |
 |---|---|
-| App CI — PostgreSQL 17 and 18.6-alpine ([run 42910056815](https://github.com/TheHalfMoon/Montral/actions/runs/42910056815)) | Pass on both: API + real-PostgreSQL E2E 1,423 passed, 23 skipped (1,446) per leg (21 real-Chromium browser-check tests and 2 browser e2e that need Chromium; they run required in the browser-checks job), 0 failed; probe 22/22; web 129/129; restore drill 62 tables with catalog negative control; pg_dump 17.11 / 18.6 |
-| macOS 15 ARM64, PostgreSQL 18 ([run 42910057066](https://github.com/TheHalfMoon/Montral/actions/runs/42910057066)) | Pass: same counts (1,423 / 23 skipped, 22, 129); restore drill 62 tables |
-| Browser checks — Chromium, egress policy, API, hardened runner stack ([run 42910056538](https://github.com/TheHalfMoon/Montral/actions/runs/42910056538)) | Pass: 120/120 (incl. the script step: pass on `true`, fixed failures, script fetches to loopback and metadata blocked), BROWSER_RUNNER_PASS |
-| Cross-browser and accessibility ([run 42910057003](https://github.com/TheHalfMoon/Montral/actions/runs/42910057003)) | Pass: 55/55 across Chromium, Firefox, WebKit, Pixel 7, iPhone 14, light and dark; 95 axe scans, 0 violations of any impact |
-| Terraform provider ([run 42910056828](https://github.com/TheHalfMoon/Montral/actions/runs/42910056828)) | Pass: 22/22 acceptance tests against a real server, 0 skipped |
-| Upgrade, rollback, disaster recovery ([run 42910056898](https://github.com/TheHalfMoon/Montral/actions/runs/42910056898)) | Pass: transfer integrity tests 11/11; truncated dump refused; every seeded entity kept from `17f55c1` to HEAD (now including migration 0057); exact rollback restore; RTO 2.1 s on the synthetic dataset |
-| Load qualification ([run 42910056932](https://github.com/TheHalfMoon/Montral/actions/runs/42910056932)) | Pass: 4,000 monitors at 3,999 checks/min, lag p95 62.1 s, 62,479 results == target requests, backlog drained in 132 s, 166 webhooks/s, no 5xx |
-| Docker Compose and replicas ([run 42910056761](https://github.com/TheHalfMoon/Montral/actions/runs/42910056761)) | Pass: DOCKER_COMPOSE_PASS; REPLICAS_PASS — 2 replicas behind nginx, one session, client address attributed, 60/60 concurrent webhooks stored once, rolling restart lost 0 of 204 reads and 0 of 46 webhook posts (each stored once), 5–6 runs per 60 s monitor in 330 s with a minimum gap of 30 s, 1 incident from 6 failed runs |
-| Failover on PostgreSQL 17 and 18.6 ([run 42910056872](https://github.com/TheHalfMoon/Montral/actions/runs/42910056872)) | Pass: FAILOVER_PASS on both |
-| Source integrity ([run 42910056760](https://github.com/TheHalfMoon/Montral/actions/runs/42910056760)) | Pass |
+| App CI — PostgreSQL 17 and 18.6-alpine ([run 42950068476](https://github.com/TheHalfMoon/Montral/actions/runs/42950068476)) | Pass on both: API + real-PostgreSQL E2E 1,427 passed, 23 skipped (1,450) per leg (21 real-Chromium browser-check tests and 2 browser e2e that need Chromium; they run required in the browser-checks job), 0 failed; probe 22/22; web 129/129; restore drill 62 tables with catalog negative control; pg_dump 17.11 / 18.6 |
+| macOS 15 ARM64, PostgreSQL 18 ([run 42950068343](https://github.com/TheHalfMoon/Montral/actions/runs/42950068343)) | Pass: same counts (1,427 / 23 skipped, 22, 129); restore drill 62 tables |
+| Browser checks — Chromium, egress policy, API, hardened runner stack ([run 42950068702](https://github.com/TheHalfMoon/Montral/actions/runs/42950068702)) | Pass: 122/122 (incl. the script step: pass on `true`, fixed failures, script fetches to loopback and metadata blocked), BROWSER_RUNNER_PASS |
+| Cross-browser and accessibility ([run 42950068348](https://github.com/TheHalfMoon/Montral/actions/runs/42950068348)) | Pass: 55/55 across Chromium, Firefox, WebKit, Pixel 7, iPhone 14, light and dark; 95 axe scans, 0 violations of any impact |
+| Terraform provider ([run 42950068326](https://github.com/TheHalfMoon/Montral/actions/runs/42950068326)) | Pass: 22/22 acceptance tests against a real server, 0 skipped |
+| Upgrade, rollback, disaster recovery ([run 42950068346](https://github.com/TheHalfMoon/Montral/actions/runs/42950068346)) | Pass: transfer integrity tests 11/11; truncated dump refused; every seeded entity kept from `17f55c1` to HEAD (now including migration 0057); exact rollback restore; RTO 2.2 s on the synthetic dataset |
+| Load qualification ([run 42950068456](https://github.com/TheHalfMoon/Montral/actions/runs/42950068456)) | Pass: 4,000 monitors at 4,000 checks/min, lag p95 61.2 s, 64,419 results == target requests, backlog drained in 133 s, 164 webhooks/s, no 5xx; memory bound 850 MB with the shipped 512 MB heap limit; post-recovery coalescing bounds held |
+| Docker Compose and replicas ([run 42950068358](https://github.com/TheHalfMoon/Montral/actions/runs/42950068358)) | Pass: DOCKER_COMPOSE_PASS; REPLICAS_PASS — 2 replicas behind nginx, one session, client address attributed, 60/60 concurrent webhooks stored once, rolling restart lost 0 of 219 reads and 0 of 46 webhook posts (each stored once), 5–6 runs per 60 s monitor in 330 s with a minimum gap of 30 s, 1 incident from 6 failed runs |
+| Failover on PostgreSQL 17 and 18.6 ([run 42950068372](https://github.com/TheHalfMoon/Montral/actions/runs/42950068372)) | Pass: FAILOVER_PASS on both |
+| Source integrity ([run 42950068583](https://github.com/TheHalfMoon/Montral/actions/runs/42950068583)) | Pass |
 
 Physical hardware outside CI (not at the candidate revision): native Safari 26.6.2 on an Apple Silicon Mac (macOS 26.6.2), public landing 8/8 at
 `dc02d02` (#62, `docs/evidence/2026-11-10-physical-macos-native-safari-landing.md`).
@@ -98,8 +101,7 @@ Physical hardware outside CI (not at the candidate revision): native Safari 26.6
 
 Demonstrated on real processes and real PostgreSQL: graceful SIGTERM; SIGKILL mid-retry with no duplicates; database
 outage recovery; network partition; primary promotion with no committed row lost; sustained load with 0 lost or
-duplicated checks; bounded backpressure and pool exhaustion; coalescing of stale queued checks (at most 2 results per
-monitor per minute after recovery, down from 6 per 2 minutes); upgrade from `17f55c1` (the previous release-candidate baseline); a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
+duplicated checks; bounded backpressure and pool exhaustion; coalescing of stale queued checks after a backlog (asserted: at most 3 results per monitor per interval, and at most 2 within any 10 s from runs started after recovery; previously 6 per 2 minutes); upgrade from `17f55c1` (the previous release-candidate baseline); a truncated backup is refused by the documented restore (end to end), and partial writes, failed or killed `pg_dump` and broken streams are rejected by the harness (unit tests with a simulated Docker process); rollback by
 restoring the pre-upgrade backup; disaster recovery into a new database (RTO 2.1 s — a floor on a tiny dataset, not a
 capacity figure); a newer schema refused at startup with a clear message; two app replicas behind nginx on one
 PostgreSQL (#65): one session across replicas, the client's address attributed, concurrent webhooks stored once, a
@@ -127,7 +129,7 @@ Every control below has a regression test in CI. This round added:
 | Browser script step | Runs in the page (renderer) of the isolated runner behind the same egress policy, never in Node; only `true` crosses back; fixed error strings; owners and admins only; never in a journey with secrets | #66, `browser-check.integration.test.ts` |
 | Replicas | Load balancer at a fixed, exactly trusted address (client addresses for rate limits and audit); only unsent connections are retried (nothing sent twice) | #65, `qualify-replicas.sh` |
 
-**Open security findings: none critical, high or medium** (self-assessed by independent agent reviews; see ledger rows 33–40 for accepted lows). Residual: no third-party penetration
+**Open security findings: none critical, high or medium** (self-assessed by independent agent reviews; see ledger rows 33–41 for accepted lows). Residual: no third-party penetration
 test; GitHub Actions pinned by tag; reverse-proxy logs must redact bearer tokens in URLs (documented); OAuth dynamic
 client registration is unauthenticated (pre-existing; clients get nothing without user consent).
 
@@ -151,7 +153,7 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 4. External email deliverability, live APNs push and live payments are not qualified; billing is off.
 5. Several replicas: qualified on one host; per-process limits (delayed webhook responses, manual checks,
    `MAX_BROWSER_CHECKS`) multiply with replicas; rolling upgrades are not qualified (restarts are).
-6. Low-severity follow-ups and accepted risks in ledger rows 26–40.
+6. Low-severity follow-ups and accepted risks in ledger rows 26–41.
 
 ## 9. Install and operations documentation
 

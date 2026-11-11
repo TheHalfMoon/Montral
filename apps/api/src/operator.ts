@@ -1,10 +1,10 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { auditChanges, recordAuditEvent } from "./audit";
-import { currentSession } from "./auth";
 import type { AppEnv, Bindings } from "./env";
 import { limitedJsonBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
+import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
 
@@ -49,7 +49,12 @@ const deny = (c: Context) => {
 
 /**
  * Admits platform operators only. Order matters: credentials other than a session are refused before anything is
- * looked up, and the per-address limit runs before the session lookup so the endpoint cannot be used to hammer auth.
+ * looked up; a known client address is limited before the session lookup, and every session is limited after it (a
+ * deployment without a trusted proxy cannot tell addresses apart, and one shared bucket would let anyone lock
+ * operators out).
+ *
+ * The session is read from the database, never from the 5-minute cookie cache, so a revoked session or a disabled
+ * second factor ends operator access at once. It must have been created by a second-factor sign-in (operator-mfa.ts).
  */
 export const requireOperator = createMiddleware<AppEnv>(async (c, next) => {
   c.header("cache-control", "no-store");
@@ -57,17 +62,19 @@ export const requireOperator = createMiddleware<AppEnv>(async (c, next) => {
   c.header("referrer-policy", "no-referrer");
   const repo = c.get("repo");
   const ip = clientIp(c);
-  if (!(await allow(repo, ip ? `operator:ip:${ip}` : "operator:ip:unknown", ip ? 120 : 600, 60))) return c.json({ error: "Too many requests, try again later" }, 429);
+  if (ip && !(await allow(repo, `operator:ip:${ip}`, 120, 60))) return c.json({ error: "Too many requests, try again later" }, 429);
   // API keys and OAuth/MCP agent tokens travel in these headers: an operator request is a browser session or nothing
   if (c.req.header("authorization") !== undefined || c.req.header("x-api-key") !== undefined) return deny(c);
   const operators = operatorIds(c.env);
   if (!operators.size) return deny(c);
-  const session = await currentSession(c.get("auth"), c.req.raw.headers);
-  if (!session || !operators.has(session.user.id)) return deny(c);
+  const session = (await c.get("auth").api.getSession({ headers: c.req.raw.headers, query: { disableCookieCache: true } }).catch(() => null)) as
+    { user: { id: string }; session: { id: string } } | null;
+  if (!session?.user?.id || !session.session?.id) return deny(c);
+  if (!(await allow(repo, `operator:session:${session.session.id}`, 120, 60))) return c.json({ error: "Too many requests, try again later" }, 429);
+  if (!operators.has(session.user.id)) return deny(c);
   if (crossOriginSessionWrite(c)) return deny(c);
-  // read fresh, not from the session's cookie cache: turning two-factor off ends operator access at once
-  const [u] = await c.get("database").query<{ two_factor_enabled: boolean | null }>(`SELECT two_factor_enabled FROM "user" WHERE id = $1::text`, [session.user.id]);
-  if (!u?.two_factor_enabled) return deny(c);
+  const database = c.get("database");
+  if (!(await operatorMfaSatisfied((sql, params) => database.query(sql, params), session.user.id, session.session.id))) return deny(c);
   if (!(await allow(repo, `operator:user:${session.user.id}`, 120, 60))) return c.json({ error: "Too many requests, try again later" }, 429);
   c.set("operatorId", session.user.id);
   await next();
@@ -114,23 +121,30 @@ function logAction(operatorId: string, action: "suspend" | "unsuspend", orgId: s
   console.log(`operator action: ${action} workspace=${orgId} operator=${operatorId}${reason ? ` reason=${reason}` : ""}`);
 }
 
-async function recordOperatorAudit(c: Context<AppEnv>, orgId: string, action: string, reason: string | null) {
+type Query = <T>(sql: string, params?: unknown[]) => Promise<T[]>;
+
+/**
+ * Runs a suspension change and its audit event together: in one transaction when the backend has them, so a failed
+ * audit write rolls the change back; otherwise the callers write the audit event before the change.
+ */
+async function atomically<T>(c: Context<AppEnv>, work: (query: Query) => Promise<T>): Promise<T> {
   const database = c.get("database");
-  try {
-    // the customer reads this in their audit log; it names the operator role, not the person
-    await recordAuditEvent((sql, params) => database.query(sql, params), {
-      orgId,
-      projectId: null,
-      actor: { type: "system", id: null, label: "Montral operator" },
-      action,
-      targetType: "workspace",
-      targetId: orgId,
-      changes: reason ? auditChanges({ reason }) : null,
-      ip: null,
-    });
-  } catch {
-    console.error("operator audit event could not be recorded; private diagnostics suppressed");
-  }
+  if (database.transaction) return database.transaction((scoped) => work((sql, params) => scoped.query(sql, params)));
+  return work((sql, params) => database.query(sql, params));
+}
+
+/** The customer reads this in their own audit log; it names the operator role, not the person. Throws on failure. */
+function recordOperatorAudit(query: Query, orgId: string, action: string, reason: string) {
+  return recordAuditEvent(query, {
+    orgId,
+    projectId: null,
+    actor: { type: "system", id: null, label: "Montral operator" },
+    action,
+    targetType: "workspace",
+    targetId: orgId,
+    changes: auditChanges({ reason }),
+    ip: null,
+  });
 }
 
 export const operatorApi = new Hono<AppEnv>()
@@ -196,16 +210,20 @@ export const operatorApi = new Hono<AppEnv>()
     if (note !== null && (typeof note !== "string" || note.length > SUSPENSION_NOTE_MAX)) return c.json({ error: `note must be text of at most ${SUSPENSION_NOTE_MAX} characters` }, 400);
     const trimmed = note?.trim() || null;
     const reason = body.reason;
-    const done = await c.get("database").query<{ organization_id: string }>(
-      `INSERT INTO workspace_suspension (organization_id, reason, note, suspended_by)
-       SELECT o.id, $2::text, $3::text, $4::text FROM organization o WHERE o.id = $1::text
-       ON CONFLICT (organization_id) DO UPDATE SET reason = EXCLUDED.reason, note = EXCLUDED.note, suspended_by = EXCLUDED.suspended_by
-       RETURNING organization_id`,
-      [id, reason, trimmed, operatorId],
-    );
-    if (!done.length) return c.json({ error: "Not found" }, 404);
+    // the audit event and the suspension commit together (or not at all)
+    const done = await atomically(c, async (query) => {
+      const [org] = await query<{ id: string }>(`SELECT id FROM organization WHERE id = $1::text FOR UPDATE`, [id]);
+      if (!org) return false;
+      await recordOperatorAudit(query, id, "workspace.suspend", reason);
+      await query(
+        `INSERT INTO workspace_suspension (organization_id, reason, note, suspended_by) VALUES ($1::text, $2::text, $3::text, $4::text)
+         ON CONFLICT (organization_id) DO UPDATE SET reason = EXCLUDED.reason, note = EXCLUDED.note, suspended_by = EXCLUDED.suspended_by`,
+        [id, reason, trimmed, operatorId],
+      );
+      return true;
+    });
+    if (!done) return c.json({ error: "Not found" }, 404);
     logAction(operatorId, "suspend", id, reason);
-    await recordOperatorAudit(c, id, "workspace.suspend", reason);
     return c.json({ id, suspended: true, reason });
   })
   .post("/workspaces/:id/unsuspend", async (c) => {
@@ -213,14 +231,17 @@ export const operatorApi = new Hono<AppEnv>()
     if (!ORG_ID.test(id)) return c.json({ error: "Not found" }, 404);
     const operatorId = c.get("operatorId")!;
     if (!(await allow(c.get("repo"), `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
-    const database = c.get("database");
-    const [org] = await database.query<{ id: string }>(`SELECT id FROM organization WHERE id = $1::text`, [id]);
-    if (!org) return c.json({ error: "Not found" }, 404);
-    const removed = await database.query<{ reason: string }>(`DELETE FROM workspace_suspension WHERE organization_id = $1::text RETURNING reason`, [id]);
-    // unsuspending a workspace that is not suspended changes nothing and records nothing
-    if (removed.length) {
-      logAction(operatorId, "unsuspend", id, null);
-      await recordOperatorAudit(c, id, "workspace.unsuspend", removed[0].reason);
-    }
+    const outcome = await atomically(c, async (query) => {
+      const [org] = await query<{ id: string }>(`SELECT id FROM organization WHERE id = $1::text`, [id]);
+      if (!org) return "missing" as const;
+      const [current] = await query<{ reason: string }>(`SELECT reason FROM workspace_suspension WHERE organization_id = $1::text FOR UPDATE`, [id]);
+      // unsuspending a workspace that is not suspended changes nothing and records nothing
+      if (!current) return "unchanged" as const;
+      await recordOperatorAudit(query, id, "workspace.unsuspend", current.reason);
+      await query(`DELETE FROM workspace_suspension WHERE organization_id = $1::text`, [id]);
+      return "lifted" as const;
+    });
+    if (outcome === "missing") return c.json({ error: "Not found" }, 404);
+    if (outcome === "lifted") logAction(operatorId, "unsuspend", id, null);
     return c.json({ id, suspended: false });
   });

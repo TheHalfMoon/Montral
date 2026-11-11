@@ -1,5 +1,5 @@
 {
-  "id": "90e5ebf9-e246-4a09-b06e-3062b7e6a06e",
+  "id": "062d017d-a222-4e96-8649-c238876230eb",
   "prevId": "d99db44b-b611-49ff-a70a-124b0489117f",
   "version": "7",
   "dialect": "postgresql",
@@ -5203,6 +5203,46 @@
       },
       "isRLSEnabled": false
     },
+    "public.operator_mfa_session": {
+      "name": "operator_mfa_session",
+      "schema": "",
+      "columns": {
+        "session_id": {
+          "name": "session_id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "verified_at": {
+          "name": "verified_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "operator_mfa_session_session_id_session_id_fk": {
+          "name": "operator_mfa_session_session_id_session_id_fk",
+          "tableFrom": "operator_mfa_session",
+          "tableTo": "session",
+          "columnsFrom": [
+            "session_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.project": {
       "name": "project",
       "schema": "",
@@ -7021,7 +7061,7 @@
           "columnsTo": [
             "id"
           ],
-          "onDelete": "cascade",
+          "onDelete": "restrict",
           "onUpdate": "no action"
         }
       },

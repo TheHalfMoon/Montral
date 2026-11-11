@@ -228,6 +228,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     if (ip && !(await allow(repo, `oncall-ics:ip:${ip}`, 120, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
     const owner = await repo.oncallCalendarByToken(hash);
     if (!owner) return c.json({ error: "Not found" }, 404);
+    // the shifts of a suspended workspace are not served (docs/OPERATOR.md)
+    const database = c.get("database");
+    if (await workspaceSuspended((sql, params) => database.query(sql, params), owner.organizationId)) return c.json({ error: "Not found" }, 404);
     if (!ip && !(await allow(repo, `oncall-ics:token:${hash}`, 120, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
     return new Response(icsFeed(await personalShifts(repo, owner.organizationId, owner.userId)), {
       headers: { "content-type": "text/calendar; charset=utf-8", "cache-control": "private, no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" },

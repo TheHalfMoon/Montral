@@ -30,3 +30,74 @@ export function suspendedResponse(c: Context<AppEnv>) {
 export function isSuspensionReason(v: unknown): v is SuspensionReason {
   return typeof v === "string" && (SUSPENSION_REASONS as readonly string[]).includes(v);
 }
+
+/** Whether any of these workspaces is suspended (ids as one comma-separated parameter; no array parameters). */
+export async function anySuspended(query: Query, orgIds: (string | null | undefined)[]): Promise<boolean> {
+  const ids = [...new Set(orgIds.filter((id): id is string => typeof id === "string" && id.length > 0 && !id.includes(",")))];
+  if (!ids.length) return false;
+  const rows = await query<{ one: number }>(
+    `SELECT 1 AS one FROM workspace_suspension WHERE organization_id = ANY (string_to_array($1::text, ',')) LIMIT 1`, [ids.join(",")],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * Better Auth endpoints a member may still call while their workspace is suspended: reading it, leaving it, switching
+ * away from it, and creating or joining-refusing other workspaces. Every other /organization/* call (invitations, renames,
+ * roles, removal, deletion) and creating or changing API keys is refused for a suspended workspace (auth.ts before-hook).
+ */
+export const SUSPENSION_EXEMPT_AUTH_PATHS: ReadonlySet<string> = new Set([
+  "/organization/leave", "/organization/set-active", "/organization/list", "/organization/get-full-organization",
+  "/organization/get-active-member", "/organization/get-active-member-role", "/organization/list-members",
+  "/organization/check-slug", "/organization/create", "/organization/reject-invitation", "/organization/list-user-invitations",
+  "/organization/get-invitation", "/organization/list-invitations", "/organization/has-permission",
+]);
+export const SUSPENSION_GUARDED_KEY_PATHS: ReadonlySet<string> = new Set(["/api-key/create", "/api-key/update"]);
+
+export function suspensionGuardsAuthPath(path: string): boolean {
+  return (path.startsWith("/organization/") && !SUSPENSION_EXEMPT_AUTH_PATHS.has(path)) || SUSPENSION_GUARDED_KEY_PATHS.has(path);
+}
+
+const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
+
+/** The organization id inside an API key's stored metadata (a JSON object, possibly stored as JSON text twice). */
+function keyOrg(raw: unknown): string | null {
+  let v: unknown = raw;
+  for (let i = 0; i < 3 && typeof v === "string"; i++) {
+    try { v = JSON.parse(v); } catch { return null; }
+  }
+  return str(obj(v)?.organizationId);
+}
+
+/**
+ * The workspaces a guarded Better Auth call acts on: the one named by id or slug, the invitation's, the API key's, or
+ * else the session's active workspace.
+ */
+export async function authCallWorkspaces(query: Query, call: { path: string; body: unknown; query: unknown; activeOrgId: string | null }): Promise<string[]> {
+  const body = obj(call.body) ?? {};
+  const args = obj(call.query) ?? {};
+  const out: (string | null)[] = [];
+  if (call.path === "/api-key/create") {
+    out.push(str(obj(body.metadata)?.organizationId) ?? call.activeOrgId);
+  } else if (call.path === "/api-key/update") {
+    const keyId = str(body.keyId);
+    if (keyId) {
+      const [k] = await query<{ metadata: unknown }>(`SELECT metadata FROM apikey WHERE id = $1::text`, [keyId]);
+      out.push(keyOrg(k?.metadata));
+    }
+    out.push(str(obj(body.metadata)?.organizationId), call.activeOrgId);
+  } else {
+    const invitationId = str(body.invitationId) ?? str(args.invitationId);
+    if (invitationId) {
+      const [inv] = await query<{ organization_id: string }>(`SELECT organization_id FROM invitation WHERE id = $1::text`, [invitationId]);
+      out.push(inv?.organization_id ?? null);
+    }
+    const slug = str(body.organizationSlug) ?? str(args.organizationSlug);
+    if (slug) out.push((await query<{ id: string }>(`SELECT id FROM organization WHERE slug = $1::text`, [slug]))[0]?.id ?? null);
+    const byId = str(body.organizationId) ?? str(args.organizationId);
+    if (byId) out.push(byId);
+    if (!invitationId && !slug && !byId) out.push(call.activeOrgId);
+  }
+  return [...new Set(out.filter((x): x is string => !!x))];
+}

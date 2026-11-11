@@ -13,15 +13,24 @@ A request is an operator request only when **all** of these hold:
 2. The request is authenticated by a signed-in **browser session** (the Better Auth session cookie). A request that
    carries an `Authorization` or `x-api-key` header is refused, even with a valid operator session cookie next to it.
    API keys and OAuth/MCP agent tokens can never act as an operator.
-3. The user has two-factor authentication enabled (`user.two_factor_enabled`). This is read from the database on every
-   request, so turning two-factor off ends operator access immediately.
-4. Writes (`POST`) come from the web app's own origin (the same cross-site request check as the workspace API).
+3. The user has two-factor authentication enabled (`user.two_factor_enabled`), **and this session was created by a
+   second-factor sign-in** within the last 12 hours: password sign-in followed by Better Auth's
+   `/two-factor/verify-totp`, `/verify-backup-code` or `/verify-otp`. Better Auth only asks for the second factor on
+   the password sign-in endpoints; a GitHub sign-in, an SSO callback or the native one-time-token handoff create full
+   sessions without it, so "two-factor is enabled" alone proves nothing about the session. The auth after-hook records
+   sessions created by a two-factor verify call during sign-in in `operator_mfa_session` (`apps/api/src/operator-mfa.ts`;
+   the row goes with the session). The session that enables two-factor is not recorded: after enrolling, sign out and
+   sign in again. A "trusted device" sign-in that skips the second factor is not recorded either.
+4. The session is read from the database on every request (never from Better Auth's 5-minute cookie cache), so a
+   revoked session, an expired second-factor sign-in or two-factor turned off ends operator access immediately.
+5. Writes (`POST`) come from the web app's own origin (the same cross-site request check as the workspace API).
 
 Anyone else, signed in or not, gets the same `403 {"error":"Forbidden"}`. The response does not say whether operators
 exist or which check failed.
 
-Operator routes are rate limited per client address (before the session is looked up) and per operator; suspend and
-unsuspend have a tighter per-operator limit. Every operator response is `cache-control: no-store`.
+Operator routes are rate limited per client address when the deployment can tell it (before the session is looked
+up), per session, and per operator; suspend and unsuspend have a tighter per-operator limit. Without a trusted proxy
+there is no shared "unknown address" bucket, so nobody can lock operators out by exhausting it. Every operator response is `cache-control: no-store`.
 
 ## What operators can see
 
@@ -40,7 +49,8 @@ delete anything.
 `POST /api/operator/workspaces/:id/suspend` with `{"reason": "abuse" | "payment" | "legal" | "operator", "note"?: string}`
 (note at most 500 characters, visible only to operators). Suspending an already suspended workspace replaces its reason
 and note. `POST /api/operator/workspaces/:id/unsuspend` lifts it; unsuspending a workspace that is not suspended
-changes and records nothing.
+changes and records nothing. A suspension or unsuspension and its audit event are written in one database
+transaction: if the audit event cannot be written, nothing changes and the call fails.
 
 The suspension is one row in `workspace_suspension` (migration `0058_workspace_suspension`). While it exists:
 
@@ -50,9 +60,17 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
 - **Checks**: the scheduler does not claim the workspace's monitors (`claimDue`), so no checks run and no credits are
   used.
 - **Heartbeats**: pings to the workspace's heartbeat URLs get the same 403 and record nothing.
-- **Alerts**: alert deliveries and their retries, incident reminders, escalations, maintenance reminders to status page
-  subscribers, unchecked-browser-monitor digests and monthly reports of the workspace are not claimed, so nothing is
-  sent.
+- **Workspace changes through Better Auth** (`/api/auth/*`, which does not pass `requireOrg`): inviting or accepting
+  invitations, renaming, changing roles, removing members, deleting the workspace, and creating or changing API keys
+  for it get `403` with code `workspace_suspended` (`apps/api/src/auth.ts` before-hook). Reading the workspace, listing
+  workspaces, switching the active workspace, leaving it, creating a new workspace and deleting API keys still work.
+  Deleting the account of an owner of a suspended workspace is refused, and the database refuses to delete a suspended
+  workspace at all (`workspace_suspension` references it with `ON DELETE RESTRICT`), so the suspension cannot be
+  removed by deleting the workspace.
+- **On-call calendar feeds** of the workspace's members answer 404.
+- **Alerts and mail**: alert deliveries and their retries, incident reminders, escalations, maintenance reminders to
+  status page subscribers, unchecked-browser-monitor digests, custom-domain notices and monthly reports of the workspace
+  are not claimed, so nothing is sent.
 - **Webhook inboxes** (hosted edition): the public receiver answers 403 for the workspace's inboxes after verifying the
   secret URL and before reading or storing the request body. A wrong secret still gets the ordinary 404.
 - **Public status pages**: the page, its summary, incident history, maintenance list, RSS, iCalendar and `llms.txt`
@@ -79,15 +97,18 @@ without the note.
 
 - API only; there is no operator UI, and the web app shows suspended members a generic error rather than a dedicated
   "suspended" screen. Members can still switch to another workspace through the auth API.
-- A session created before the user enabled two-factor counts once two-factor is on; operators should sign in again
-  after enrolling.
 - Checks already queued when the suspension is written still run (at most one per monitor). Public status responses
   may be served from the 30-second public cache for that long after suspending. A webhook body that was being read when
   the suspension was written is still stored.
-- Better Auth's own endpoints under `/api/auth/*` (organization membership, invitations, API key management) do not
-  pass `requireOrg` and are not blocked; a key created there is still refused by the workspace API.
+- Operators must sign in with email and password plus a second factor; operator accounts that only have GitHub or SSO
+  sign-in cannot act as operators.
 - SCIM provisioning (`/api/scim/v2`) of the workspace keeps working, so the customer's identity provider can still
   deprovision users during a suspension.
-- Custom-domain notices (`domain.*`) and other mails not listed above are not suspended.
+- Custom-domain verification rechecks still run for the workspace's status pages (their notices are queued but not
+  sent until unsuspension). Account mails (password reset, verification) are not affected.
+- A `payment` suspension blocks the whole workspace API, including the billing pages and checkout routes the hosted
+  edition mounts behind `requireOrg`: the customer cannot settle the bill themselves while suspended. An operator has to
+  unsuspend the workspace (for example after payment is arranged out of band). The payment provider's webhook
+  (`/api/billing/lemon`) is not behind `requireOrg` and keeps being processed.
 - Operator actions are not written to a separate platform-level audit trail; the record is the customer's audit log
   plus the server log line.

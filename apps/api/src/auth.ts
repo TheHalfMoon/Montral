@@ -9,6 +9,8 @@ import { userLang, tr } from "./mail-i18n";
 import type { Bindings } from "./env";
 import { AUDITED_AUTH_PATHS, auditAuthCall, MEMBERSHIP_ENDING_PATHS, noteKeyBeforeDelete, noteMembershipBefore, type KeyNote, type MemberNote } from "./audit-auth";
 import { ssoPlugin, type SsoSignIn } from "./sso-auth";
+import { MFA_VERIFY_PATHS, recordMfaSignIn } from "./operator-mfa";
+import { anySuspended, authCallWorkspaces, suspensionGuardsAuthPath, WORKSPACE_SUSPENDED } from "./suspension";
 import { clearRemoval, dropSsoLinksOfFormerMember, recordRemoval, recordSsoCredential, sessionConnection, ssoAllows, ssoProtected, ssoRequiredFor, ssoSatisfiesAll } from "./sso-store";
 
 /** Better Auth endpoints that act on a workspace without passing requireOrg: held to the workspace's "require SSO". */
@@ -177,6 +179,8 @@ export function createAuth(database: Database, env: Bindings) {
   let picked: string | undefined;
   // the API key a delete request is about, read before Better Auth removes its row (audit log)
   let keyNote: KeyNote | null = null;
+  // whether a two-factor verify call came with a session already (then it is not a second-factor sign-in: operator-mfa.ts)
+  let mfaHadSession = true;
   // the acting user's membership, confirmed before a call that may end it (audit log)
   let memberNote: MemberNote | null = null;
   // the SSO removal recorded before a removal or leave runs (deleted again if the call fails)
@@ -220,6 +224,10 @@ export function createAuth(database: Database, env: Bindings) {
         // a workspace nobody else belongs to goes with its owner; one with other members must be handed over first
         beforeDelete: async (u) => {
           const owned = await repo.ownedWorkspaces(u.id);
+          // a suspended workspace stays until a platform operator lifts the suspension (docs/OPERATOR.md)
+          if (await anySuspended(query, owned.map((o) => o.id))) {
+            throw new APIError("FORBIDDEN", { message: "A workspace of yours is suspended. Contact support.", code: WORKSPACE_SUSPENDED });
+          }
           const shared = owned.find((o) => o.members > 1);
           if (shared) throw new APIError("BAD_REQUEST", { message: `Remove the other members of "${shared.name}" (or delete it) before deleting your account` });
           await repo.deleteWorkspaces(owned.map((o) => o.id));
@@ -271,6 +279,17 @@ export function createAuth(database: Database, env: Bindings) {
       // OIDC default ("web") would refuse those, so such clients are treated as the native apps they are.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path === "/api-key/delete") keyNote = await noteKeyBeforeDelete(query, ctx.body).catch(() => null);
+        if (MFA_VERIFY_PATHS.has(ctx.path)) mfaHadSession = !!(await getSessionFromCtx(ctx).catch(() => null));
+        // a workspace suspended by a platform operator (docs/OPERATOR.md): no invitations, renames, role changes, removals,
+        // deletion or new or changed API keys; reading it, leaving it and switching away stay possible
+        if (suspensionGuardsAuthPath(ctx.path)) {
+          const session = await getSessionFromCtx(ctx).catch(() => null);
+          const active = session ? text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId) : null;
+          const targets = await authCallWorkspaces(query, { path: ctx.path, body: ctx.body, query: ctx.query, activeOrgId: active });
+          if (await anySuspended(query, targets)) {
+            throw new APIError("FORBIDDEN", { message: "This workspace is suspended. Contact support.", code: WORKSPACE_SUSPENDED });
+          }
+        }
         if (MEMBERSHIP_ENDING_PATHS.has(ctx.path)) {
           const session = await getSessionFromCtx(ctx).catch(() => null);
           memberNote = await noteMembershipBefore(query, session as never, ctx.body).catch(() => null);
@@ -385,6 +404,10 @@ export function createAuth(database: Database, env: Bindings) {
       }),
       // workspace audit log for the member, invitation, workspace and API-key endpoints (audit-auth.ts); never fails the call
       after: createAuthMiddleware(async (ctx) => {
+        // a session created by passing a second factor during sign-in: the only kind an operator may use (operator-mfa.ts)
+        if (MFA_VERIFY_PATHS.has(ctx.path)) {
+          await recordMfaSignIn(query, { path: ctx.path, hadSession: mfaHadSession, newSessionId: ctx.context.newSession?.session.id });
+        }
         const returned = plain(ctx.context.returned);
         // an API key made from an SSO session keeps working in a require-SSO workspace of that connection (agent tokens
         // need no record: they carry the session that authorized them)

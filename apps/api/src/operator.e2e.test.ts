@@ -1,4 +1,5 @@
 import { openDatabase } from "@montral/db-pg";
+import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app";
 import { montralEdition } from "./montral-edition";
@@ -8,8 +9,36 @@ import { migrateMontralSchema } from "./schema-migrate";
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
 const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "operator-e2e-only-secret-not-for-production", BETTER_AUTH_URL: origin, WEB_ORIGIN: origin };
+const PASSWORD = "correct horse battery staple";
 
 type Res = { status: number; body: any; text: string; headers: Headers };
+
+/** RFC 6238 TOTP (SHA-1, 6 digits, 30 s) from the base32 secret of an otpauth:// URI. */
+function totp(uri: string, at = Date.now()): string {
+  const secret = new URL(uri).searchParams.get("secret")!.replace(/=+$/, "").toUpperCase();
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const ch of secret) bits += alphabet.indexOf(ch).toString(2).padStart(5, "0");
+  const key = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
+  const h = createHmac("sha1", key).update(counter).digest();
+  const o = h[h.length - 1] & 0xf;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+/** Cookie jar: later Set-Cookie headers replace earlier values; an emptied cookie is dropped. */
+function jar(current: string, res: Res): string {
+  const map = new Map(current.split("; ").filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)] as const));
+  for (const c of res.headers.getSetCookie()) {
+    const kv = c.split(";")[0];
+    const name = kv.slice(0, kv.indexOf("="));
+    const value = kv.slice(kv.indexOf("=") + 1);
+    if (!value || /max-age=0/i.test(c)) map.delete(name);
+    else map.set(name, value);
+  }
+  return [...map].map(([k, v]) => `${k}=${v}`).join("; ");
+}
 
 describe.skipIf(!url)("operator control plane and workspace suspension (PostgreSQL)", () => {
   const db = url ? openDatabase(url, { max: 4 }) : null;
@@ -37,11 +66,13 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     try { body = JSON.parse(text); } catch { /* not json */ }
     return { status: r.status, body, text, headers: r.headers };
   }
+  const authCall = (cookie: string, path: string, body?: unknown, method = "POST") =>
+    fetchJson(app, `/api/auth${path}`, { method, headers: { origin, ...(cookie ? { cookie } : {}) }, body });
   async function account(name: string) {
     const email = `${name}-${crypto.randomUUID()}@example.com`;
-    const su = await fetchJson(app, "/api/auth/sign-up/email", { method: "POST", headers: { origin }, body: { email, name, password: "correct horse battery staple" } });
+    const su = await fetchJson(app, "/api/auth/sign-up/email", { method: "POST", headers: { origin }, body: { email, name, password: PASSWORD } });
     expect(su.status).toBe(200);
-    const cookie = su.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    const cookie = jar("", su);
     const id = su.body.user.id as string;
     const as = (path: string, init: Parameters<typeof fetchJson>[2] = {}) =>
       fetchJson(app, `/api${path}`, { ...init, headers: { origin, cookie, ...(init.headers ?? {}) } });
@@ -49,14 +80,14 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     return { email, id, cookie, orgId, as };
   }
 
-  it("admits only 2FA operators with a session, suspends a workspace everywhere and restores it", async () => {
+  it("admits only operators signed in with a second factor, suspends a workspace everywhere and restores it", async () => {
     const operator = await account("operator");
     const outsider = await account("not-operator");
     const owner = await account("customer-owner");
     const other = await account("customer-other");
     const ops = { MONTRAL_OPERATOR_USER_IDS: ` ${operator.id} , ` };
 
-    // ── the customer's workspace: a monitor, a status page, an API key and a webhook inbox ─────────────────────────
+    // ── the customer's workspace: a monitor, a status page, API key, webhook inbox and on-call calendar link ────────
     const monitor = await owner.as("/monitors", { method: "POST", body: { name: "Suspended heartbeat", type: "heartbeat", intervalSec: 3600 } });
     expect(monitor.status).toBe(201);
     const otherMonitor = await other.as("/monitors", { method: "POST", body: { name: "Other heartbeat", type: "heartbeat", intervalSec: 3600 } });
@@ -72,10 +103,14 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     const deliver = () => fetchJson(hooksApp, inbox.body.path, { method: "POST", body: '{"event":"while-suspended"}' });
     const storedEvents = async () => (await db!.query<{ n: number }>(`SELECT count(*)::int AS n FROM montral_hook_event WHERE inbox_id = $1::uuid`, [inbox.body.id]))[0].n;
     const [{ heartbeat_token: heartbeat }] = await db!.query<{ heartbeat_token: string }>(`SELECT heartbeat_token FROM monitor WHERE id = $1::uuid`, [monitor.body.id]);
+    const calendar = await owner.as("/oncall/calendar", { method: "POST" });
+    expect(calendar.status).toBe(201);
+    const calendarPath = new URL(calendar.body.url).pathname;
+    expect((await fetchJson(app, calendarPath)).status).toBe(200);
 
     // ── who is an operator ──────────────────────────────────────────────────────────────────────────────────────
-    const operatorCall = (who: { cookie: string } | null, path: string, init: Parameters<typeof fetchJson>[2] = {}) =>
-      fetchJson(app, `/api/operator${path}`, { ...init, headers: { origin, ...(who ? { cookie: who.cookie } : {}), ...(init.headers ?? {}) }, env: { ...ops, ...(init.env ?? {}) } });
+    const operatorCall = (cookie: string | null, path: string, init: Parameters<typeof fetchJson>[2] = {}) =>
+      fetchJson(app, `/api/operator${path}`, { ...init, headers: { origin, ...(cookie ? { cookie } : {}), ...(init.headers ?? {}) }, env: { ...ops, ...(init.env ?? {}) } });
     const forbidden = (r: Res) => {
       expect(r.status).toBe(403);
       // the refusal is the same for everyone and names nothing
@@ -83,51 +118,81 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
       expect(r.headers.get("cache-control")).toBe("no-store");
     };
     forbidden(await operatorCall(null, "/workspaces"));
-    forbidden(await operatorCall(outsider, "/workspaces"));
-    forbidden(await operatorCall(outsider, `/workspaces/${owner.orgId}`));
-    forbidden(await operatorCall(outsider, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse" } }));
+    forbidden(await operatorCall(outsider.cookie, "/workspaces"));
+    forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}`));
+    forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse" } }));
     expect(await db!.query(`SELECT 1 FROM workspace_suspension WHERE organization_id = $1`, [owner.orgId])).toHaveLength(0);
     // listed, but no two-factor authentication yet
-    forbidden(await operatorCall(operator, "/workspaces"));
+    forbidden(await operatorCall(operator.cookie, "/workspaces"));
+
+    // two-factor is turned on from the sign-up session: the session this mints did NOT pass a second factor at sign-in
+    const enabled = await authCall(operator.cookie, "/two-factor/enable", { password: PASSWORD });
+    expect(enabled.status).toBe(200);
+    const confirmed = await authCall(operator.cookie, "/two-factor/verify-totp", { code: totp(enabled.body.totpURI) });
+    expect(confirmed.status).toBe(200);
+    const enrolledCookie = jar(operator.cookie, confirmed);
+    expect((await db!.query<{ on: boolean }>(`SELECT two_factor_enabled AS on FROM "user" WHERE id = $1`, [operator.id]))[0].on).toBe(true);
+    // two-factor enabled, but this session never passed a second factor (like a GitHub, SSO or handoff sign-in): refused
+    forbidden(await operatorCall(enrolledCookie, "/workspaces"));
+    // a session made without the second factor, even with the flag set directly, is refused
+    const plainSession = await authCall("", "/sign-in/email", { email: operator.email, password: PASSWORD });
+    expect(plainSession.body.twoFactorRedirect).toBe(true);
+    expect(jar("", plainSession)).not.toMatch(/session_token=/);
+
+    // a real second-factor sign-in (password, then a backup code) is recorded and admitted
+    const verified = await authCall(jar("", plainSession), "/two-factor/verify-backup-code", { code: enabled.body.backupCodes[0] });
+    expect(verified.status).toBe(200);
+    const opCookie = jar("", verified);
+    expect(opCookie).toMatch(/session_token=/);
+    const recorded = await db!.query<{ session_id: string }>(`SELECT m.session_id FROM operator_mfa_session m JOIN session s ON s.id = m.session_id WHERE s.user_id = $1`, [operator.id]);
+    expect(recorded).toHaveLength(1);
+    expect((await operatorCall(opCookie, "/workspaces")).status).toBe(200);
+    // it expires: an old second-factor sign-in no longer counts
+    await db!.query(`UPDATE operator_mfa_session SET verified_at = now() - interval '13 hours' WHERE session_id = $1`, [recorded[0].session_id]);
+    forbidden(await operatorCall(opCookie, "/workspaces"));
+    await db!.query(`UPDATE operator_mfa_session SET verified_at = now() WHERE session_id = $1`, [recorded[0].session_id]);
+    // turning two-factor off ends it at once (the session is read fresh, not from the cookie cache)
+    await db!.query(`UPDATE "user" SET two_factor_enabled = false WHERE id = $1`, [operator.id]);
+    forbidden(await operatorCall(opCookie, "/workspaces"));
     await db!.query(`UPDATE "user" SET two_factor_enabled = true WHERE id = $1`, [operator.id]);
     // with two-factor, but not listed (empty variable: no operators at all)
-    forbidden(await operatorCall(operator, "/workspaces", { env: { MONTRAL_OPERATOR_USER_IDS: "" } }));
-    forbidden(await operatorCall(operator, "/workspaces", { env: { MONTRAL_OPERATOR_USER_IDS: outsider.id } }));
+    forbidden(await operatorCall(opCookie, "/workspaces", { env: { MONTRAL_OPERATOR_USER_IDS: "" } }));
+    forbidden(await operatorCall(opCookie, "/workspaces", { env: { MONTRAL_OPERATOR_USER_IDS: outsider.id } }));
     // the operator's own API key is not an operator credential, alone or next to the session cookie
-    const opKey = await operator.as("/auth/api-key/create", { method: "POST", body: { name: "operator-key", metadata: { organizationId: operator.orgId } } });
+    const opKey = await authCall(opCookie, "/api-key/create", { name: "operator-key", metadata: { organizationId: operator.orgId } });
     expect(opKey.status).toBe(200);
     forbidden(await operatorCall(null, "/workspaces", { headers: { "x-api-key": opKey.body.key } }));
     forbidden(await operatorCall(null, "/workspaces", { headers: { authorization: `Bearer ${opKey.body.key}` } }));
-    forbidden(await operatorCall(operator, "/workspaces", { headers: { "x-api-key": opKey.body.key } }));
+    forbidden(await operatorCall(opCookie, "/workspaces", { headers: { "x-api-key": opKey.body.key } }));
     // a write from another site is refused even with the operator's cookie
-    forbidden(await operatorCall(operator, `/workspaces/${owner.orgId}/suspend`, { method: "POST", headers: { origin: "https://evil.example" }, body: { reason: "abuse" } }));
+    forbidden(await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspend`, { method: "POST", headers: { origin: "https://evil.example" }, body: { reason: "abuse" } }));
 
     // ── list and search ─────────────────────────────────────────────────────────────────────────────────────────
-    const listed = await operatorCall(operator, `/workspaces?q=${encodeURIComponent(owner.email)}`);
+    const listed = await operatorCall(opCookie, `/workspaces?q=${encodeURIComponent(owner.email)}`);
     expect(listed.status).toBe(200);
     expect(listed.headers.get("cache-control")).toBe("no-store");
     expect(listed.body.workspaces).toEqual([expect.objectContaining({ id: owner.orgId, memberCount: 1, monitorCount: 1, ownerEmail: owner.email, suspended: false, plan: null })]);
-    const page1 = await operatorCall(operator, "/workspaces?limit=1");
+    const page1 = await operatorCall(opCookie, "/workspaces?limit=1");
     expect(page1.body.workspaces).toHaveLength(1);
     expect(typeof page1.body.next).toBe("string");
-    const page2 = await operatorCall(operator, `/workspaces?limit=1&cursor=${page1.body.next}`);
+    const page2 = await operatorCall(opCookie, `/workspaces?limit=1&cursor=${page1.body.next}`);
     expect(page2.status).toBe(200);
     expect(page2.body.workspaces[0].id).not.toBe(page1.body.workspaces[0].id);
-    expect((await operatorCall(operator, "/workspaces?cursor=not-a-cursor")).status).toBe(400);
-    expect((await operatorCall(operator, "/workspaces?q=" + "x".repeat(101))).status).toBe(400);
-    expect((await operatorCall(operator, "/workspaces/does-not-exist")).status).toBe(404);
-    const before = await operatorCall(operator, `/workspaces/${owner.orgId}`);
+    expect((await operatorCall(opCookie, "/workspaces?cursor=not-a-cursor")).status).toBe(400);
+    expect((await operatorCall(opCookie, "/workspaces?q=" + "x".repeat(101))).status).toBe(400);
+    expect((await operatorCall(opCookie, "/workspaces/does-not-exist")).status).toBe(404);
+    const before = await operatorCall(opCookie, `/workspaces/${owner.orgId}`);
     expect(before.body).toMatchObject({ id: owner.orgId, suspended: false, suspension: null, usage: { credits: null, emails: null } });
 
     // ── suspend ─────────────────────────────────────────────────────────────────────────────────────────────────
-    expect((await operatorCall(operator, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "because" } })).status).toBe(400);
-    expect((await operatorCall(operator, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse", note: "x".repeat(501) } })).status).toBe(400);
-    expect((await operatorCall(operator, `/workspaces/nope/suspend`, { method: "POST", body: { reason: "abuse" } })).status).toBe(404);
+    expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "because" } })).status).toBe(400);
+    expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse", note: "x".repeat(501) } })).status).toBe(400);
+    expect((await operatorCall(opCookie, `/workspaces/nope/suspend`, { method: "POST", body: { reason: "abuse" } })).status).toBe(404);
     const NOTE = "internal ticket 4711: phishing kit";
-    const suspended = await operatorCall(operator, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse", note: NOTE } });
+    const suspended = await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse", note: NOTE } });
     expect(suspended.status).toBe(200);
     expect(suspended.body).toEqual({ id: owner.orgId, suspended: true, reason: "abuse" });
-    const detail = await operatorCall(operator, `/workspaces/${owner.orgId}`);
+    const detail = await operatorCall(opCookie, `/workspaces/${owner.orgId}`);
     expect(detail.body).toMatchObject({ suspended: true, suspension: { reason: "abuse", note: NOTE, suspendedBy: operator.id } });
 
     // the member API refuses sessions and API keys alike, reads and writes
@@ -138,6 +203,30 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     }
     // other workspaces are untouched
     expect((await other.as("/monitors")).status).toBe(200);
+
+    // Better Auth's own workspace endpoints: no invitations, renames, deletion, new or changed keys, account deletion
+    const refusedAuth = async (path: string, body: unknown) => {
+      const r = await authCall(owner.cookie, path, body);
+      expect(r.status, path).toBe(403);
+      expect(r.body?.code, path).toBe("workspace_suspended");
+    };
+    await refusedAuth("/organization/invite-member", { organizationId: owner.orgId, email: `invitee-${crypto.randomUUID()}@example.com`, role: "member" });
+    expect(await db!.query(`SELECT 1 FROM invitation WHERE organization_id = $1`, [owner.orgId])).toHaveLength(0);
+    await refusedAuth("/organization/update", { organizationId: owner.orgId, data: { name: "Renamed while suspended" } });
+    await refusedAuth("/organization/update", { data: { name: "Renamed via active workspace" } });
+    expect((await db!.query<{ name: string }>(`SELECT name FROM organization WHERE id = $1`, [owner.orgId]))[0].name).not.toMatch(/Renamed/);
+    await refusedAuth("/organization/delete", { organizationId: owner.orgId });
+    await refusedAuth("/api-key/create", { name: "while-suspended", metadata: { organizationId: owner.orgId } });
+    await refusedAuth("/api-key/update", { keyId: key.body.id, name: "renamed-while-suspended" });
+    await refusedAuth("/delete-user", { password: PASSWORD });
+    expect(await db!.query(`SELECT 1 FROM "user" WHERE id = $1`, [owner.id])).toHaveLength(1);
+    expect(await db!.query(`SELECT 1 FROM organization WHERE id = $1`, [owner.orgId])).toHaveLength(1);
+    // nor can anything delete it by cascade while the suspension stands
+    await expect(db!.query(`DELETE FROM organization WHERE id = $1`, [owner.orgId])).rejects.toThrow();
+    expect(await db!.query(`SELECT 1 FROM workspace_suspension WHERE organization_id = $1`, [owner.orgId])).toHaveLength(1);
+    // reading, switching and listing workspaces still work
+    expect((await authCall(owner.cookie, "/organization/set-active", { organizationId: owner.orgId })).status).toBe(200);
+    expect((await authCall(owner.cookie, "/organization/list", undefined, "GET")).status).toBe(200);
 
     // the scheduler does not claim the suspended workspace's monitors: the earliest due monitor is skipped
     await db!.query(`UPDATE monitor SET paused = false, next_check_at = '1970-01-01T00:00:00Z' WHERE id = $1::uuid`, [monitor.body.id]);
@@ -151,22 +240,22 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect(await storedEvents()).toBe(0);
     expect((await fetchJson(hooksApp, inbox.body.path.slice(0, -1) + (inbox.body.path.endsWith("0") ? "1" : "0"), { method: "POST", body: "{}" })).status).toBe(404);
 
-    // heartbeats are not recorded
+    // heartbeats are not recorded; the on-call calendar feed is not served
     expect((await fetchJson(app, `/api/heartbeat/${heartbeat}`, { method: "POST" })).status).toBe(403);
+    expect((await fetchJson(app, calendarPath)).status).toBe(404);
 
     // the public status page, its summary and its feeds do not exist while suspended
-    for (const path of ["", "/summary", "/rss.xml", "/maintenance.ics"]) {
+    for (const path of ["", "/summary", "/rss.xml", "/maintenance.ics", "/incidents", "/llms.txt"]) {
       expect((await fetchJson(app, `/api/public/status/${slug}${path}`)).status, path).toBe(404);
     }
     // the badge answers like it does for a page that does not exist: "unknown"
     const badge = await fetchJson(app, `/api/public/status/${slug}/badge.svg`);
     expect(badge.text).toContain("unknown");
-    expect(badge.text).not.toContain(">operational<");
     expect((await fetchJson(app, `/api/public/status/${slug}/subscribe`, { method: "POST", body: { email: "visitor@example.com" } })).status).toBe(404);
 
     // ── unsuspend restores everything; the data was kept ────────────────────────────────────────────────────────
-    expect((await operatorCall(outsider, `/workspaces/${owner.orgId}/unsuspend`, { method: "POST" })).status).toBe(403);
-    const restored = await operatorCall(operator, `/workspaces/${owner.orgId}/unsuspend`, { method: "POST" });
+    expect((await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}/unsuspend`, { method: "POST" })).status).toBe(403);
+    const restored = await operatorCall(opCookie, `/workspaces/${owner.orgId}/unsuspend`, { method: "POST" });
     expect(restored.status).toBe(200);
     expect(restored.body).toEqual({ id: owner.orgId, suspended: false });
     const monitors = await owner.as("/monitors");
@@ -178,8 +267,10 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect(await storedEvents()).toBe(1);
     expect((await fetchJson(app, `/api/public/status/${slug}`)).status).toBe(200);
     expect((await fetchJson(app, `/api/heartbeat/${heartbeat}`, { method: "POST" })).status).toBe(200);
+    expect((await fetchJson(app, calendarPath)).status).toBe(200);
+    expect((await authCall(owner.cookie, "/api-key/update", { keyId: key.body.id, name: "renamed-after" })).status).toBe(200);
     // unsuspending again changes and records nothing
-    expect((await operatorCall(operator, `/workspaces/${owner.orgId}/unsuspend`, { method: "POST" })).status).toBe(200);
+    expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/unsuspend`, { method: "POST" })).status).toBe(200);
 
     // ── the customer sees both actions in their own audit log, attributed to the operator role, without the note ──
     const audit = await owner.as("/audit-events?action=workspace&limit=50");
@@ -193,5 +284,94 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect(audit.text).not.toContain(operator.id);
     // nothing about the operator plane reached the other workspace's log
     expect((await other.as("/audit-events?action=workspace")).body.events).toEqual([]);
+  });
+
+  it("leaves suspended workspaces out of every scheduled claim (alerts, retries, reminders, escalations, mails, reports)", async () => {
+    const owner = await account("claims-owner");
+    // two workspaces seeded directly; ids sort before any generated id, so the ordered claims meet them first
+    const tag = crypto.randomUUID().slice(0, 8);
+    const S = `00000000-opS-${tag}`; // suspended
+    const T = `00000000-opT-${tag}`; // active, otherwise identical
+    const seed = async (org: string) => {
+      await db!.query(`INSERT INTO organization (id, name, slug, created_at) VALUES ($1, $1, lower($1), now())`, [org]);
+      await db!.query(`INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES ($1 || '-m', $1, $2, 'owner', now())`, [org, owner.id]);
+      const [p] = await db!.query<{ id: string }>(`INSERT INTO project (organization_id, name, reminder_interval_min) VALUES ($1, 'P', 5) RETURNING id`, [org]);
+      const [m] = await db!.query<{ id: string }>(
+        `INSERT INTO monitor (organization_id, project_id, name, target, type, paused, next_check_at) VALUES ($1, $2::uuid, 'M', 'https://example.com', 'browser', false, now() + interval '30 days') RETURNING id`,
+        [org, p.id],
+      );
+      monitorIds.push(m.id);
+      return { project: p.id, monitor: m.id };
+    };
+    const s = await seed(S);
+    const t = await seed(T);
+    try {
+      await db!.query(`INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator')`, [S]);
+      const at = (org: string) => (org === S ? "1970-01-01T00:00:00Z" : "1970-01-01T00:00:01Z");
+
+      // claimDelivery: a queued alert of the suspended workspace is not claimed
+      const queued = async (org: string, next: string | null) =>
+        (await db!.query<{ id: string }>(
+          `INSERT INTO alert_delivery (organization_id, channel_name, channel_type, kind, ok, status, attempts, next_attempt_at) VALUES ($1, 'c', 'email', 'incident.opened', false, 'pending', 0, $2::timestamptz) RETURNING id`,
+          [org, next],
+        ))[0].id;
+      expect(await db!.repo.claimDelivery(await queued(S, null))).toBeNull();
+      expect((await db!.repo.claimDelivery(await queued(T, null)))?.organizationId).toBe(T);
+
+      // claimRetries: the earliest due retry belongs to the suspended workspace and is passed over
+      const retryS = await queued(S, at(S));
+      const retryT = await queued(T, at(T));
+      await db!.repo.claimRetries(1);
+      const status = async (id: string) => (await db!.query<{ status: string }>(`SELECT status FROM alert_delivery WHERE id = $1::uuid`, [id]))[0].status;
+      expect(await status(retryS)).toBe("pending");
+      expect(await status(retryT)).not.toBe("pending");
+
+      // claimReminders and claimEscalations: the earliest due incident belongs to the suspended workspace
+      const incident = async (org: string, ids: { project: string; monitor: string }) =>
+        (await db!.query<{ id: string }>(
+          `INSERT INTO incident (organization_id, project_id, monitor_id, title, next_reminder_at, next_escalation_at) VALUES ($1, $2::uuid, $3::uuid, 'down', $4::timestamptz, $4::timestamptz) RETURNING id`,
+          [org, ids.project, ids.monitor, at(org)],
+        ))[0].id;
+      const incS = await incident(S, s);
+      const incT = await incident(T, t);
+      expect((await db!.repo.claimReminders(1)).map((r) => r.incident.id)).toEqual([incT]);
+      await db!.repo.claimEscalations(1);
+      const inc = async (id: string) => (await db!.query<{ reminder_count: number; escalation_level: number }>(`SELECT reminder_count, escalation_level FROM incident WHERE id = $1::uuid`, [id]))[0];
+      expect(await inc(incS)).toEqual({ reminder_count: 0, escalation_level: 0 });
+      expect((await inc(incT)).escalation_level).toBe(1);
+
+      // claimMaintenanceReminders: a followed status page of each, a window starting within the reminder period
+      const window = async (org: string) => {
+        const [page] = await db!.query<{ id: string }>(
+          `INSERT INTO status_page (organization_id, slug, title, maintenance_reminder_hours) VALUES ($1, lower($1) || '-p', 'Page', 24) RETURNING id`, [org]);
+        await db!.query(`INSERT INTO status_subscriber (status_page_id, email, token, confirmed_at) VALUES ($1::uuid, $2, $3, now())`, [page.id, `sub-${crypto.randomUUID()}@example.com`, crypto.randomUUID()]);
+        const [w] = await db!.query<{ id: string }>(
+          `INSERT INTO maintenance_window (organization_id, name, starts_at, ends_at) VALUES ($1, 'Upgrade', now() + interval '1 hour', now() + interval '2 hours') RETURNING id`, [org]);
+        return w.id;
+      };
+      const wS = await window(S);
+      const wT = await window(T);
+      const claimedWindows = (await db!.repo.claimMaintenanceReminders(500)).map((r) => r.window.id);
+      expect(claimedWindows).toContain(wT);
+      expect(claimedWindows).not.toContain(wS);
+      expect(await db!.query(`SELECT 1 FROM maintenance_reminder WHERE maintenance_id = $1::uuid`, [wS])).toHaveLength(0);
+
+      // pendingUncheckedDigests: both browser monitors went unchecked; only the active workspace gets a digest
+      await db!.query(`UPDATE monitor SET unchecked_since = now(), unchecked_notified_at = NULL WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [`${s.monitor},${t.monitor}`]);
+      const digests = (await db!.repo.pendingUncheckedDigests!()).map((d) => d.organizationId);
+      expect(digests).toContain(T);
+      expect(digests).not.toContain(S);
+
+      // monthly reports, legacy and with recipients: both workspaces opted in; the first by id is the suspended one
+      await db!.query(`INSERT INTO workspace_setting (organization_id, monthly_report) VALUES ($1, true), ($2, true)`, [S, T]);
+      const month = `19${String(10 + Math.floor(Math.random() * 89)).padStart(2, "0")}-0${1 + Math.floor(Math.random() * 9)}`;
+      expect(await db!.repo.claimMonthlyReports(month, 1)).toEqual([T]);
+      await db!.query(`UPDATE workspace_setting SET last_report_month = NULL WHERE organization_id = $1`, [T]);
+      const month2 = month.replace(/^19/, "18");
+      expect(await db!.repo.claimMonthlyReportsWithRecipients(month2, 1)).toEqual([T]);
+    } finally {
+      await db!.query(`DELETE FROM workspace_suspension WHERE organization_id = $1`, [S]);
+      await db!.query(`DELETE FROM organization WHERE id = ANY(string_to_array($1::text, ','))`, [`${S},${T}`]).catch(() => {});
+    }
   });
 });

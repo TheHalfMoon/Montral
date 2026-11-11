@@ -12,8 +12,8 @@
 #   BETTER_AUTH_SECRET=<openssl rand -hex 32>
 #   PUBLIC_URL=https://montral.internal.example                                    the origin users open
 #   POSTGRES_PASSWORD=unused   still required by docker-compose.yml's variable interpolation; not used by this overlay
-#                              unless you start the bundled database (--profile bundled-postgres) and point
-#                              DATABASE_URL at it
+#                              unless you start the bundled database (--profile bundled-postgres), and then it
+#                              must be a real secret set before that database's first start
 services:
   montral:
     # publish on the host's loopback only: put your own reverse proxy / load balancer in front (TLS terminates there)
@@ -45,7 +45,8 @@ services:
     security_opt:
       - no-new-privileges:true
 
-  # The bundled database stays available for evaluation only: `--profile bundled-postgres` starts it, and then
-  # DATABASE_URL=postgres://montral:<POSTGRES_PASSWORD>@postgres:5432/montral uses it.
+  # The bundled database stays available for evaluation only: set a real POSTGRES_PASSWORD (openssl rand -hex 24, not
+  # "unused") BEFORE its first start, since it becomes the database password; then `--profile bundled-postgres` starts it
+  # and DATABASE_URL=postgres://montral:<POSTGRES_PASSWORD>@postgres:5432/montral uses it.
   postgres:
     profiles: [bundled-postgres]

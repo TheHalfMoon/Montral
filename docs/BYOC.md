@@ -8,7 +8,7 @@ fails if a cited file or line no longer exists). Where something is documented b
 Everything here is the self-hosted Docker build. Hosting, its cost and its operation are the customer's. There is no
 license server, no license key and no product-side license enforcement: the repository is MIT-licensed (`LICENSE`), and
 a deployment without a hosted edition reports itself as the community edition with unmetered allowances
-(`apps/api/src/edition.ts:12`).
+(`apps/api/src/edition.ts:12`, `apps/api/src/edition.ts:41-42`).
 
 ## 1. Deployment modes
 
@@ -84,8 +84,11 @@ email recipients). Those go where the user configures them, from the app contain
 and internal addresses are refused unless `ALLOW_PRIVATE_TARGETS=true`.
 
 The Montral server, browser-runner and probe contain **no telemetry, no usage reporting, no update check and no
-phone-home**: a search of `apps/` and `packages/` for vendor or third-party hosts finds only the entries below, and the
-BYOC CI job proves that a running instance contacts nothing but its database (section 9).
+phone-home**: a search of `apps/` and `packages/` for vendor or third-party hosts finds only the entries below. The
+BYOC CI job (section 9) records every connection attempt of the server process through startup, the job's own
+requests, a scheduler tick that checks a monitor failing at network level (the path that would call the self-check)
+and the first maintenance run, and finds none but the database, loopback and that monitor's own target. It does not
+cover the 5-minute domain re-check timer, a running browser-runner or child processes (section 9 lists the limits).
 
 ### Server (app container)
 
@@ -94,12 +97,12 @@ BYOC CI job proves that a running instance contacts nothing but its database (se
 | `www.cloudflare.com`, `www.gstatic.com`, `www.apple.com` (`apps/api/src/selfcheck.ts:8-12`) | "Is it the target or us?" self-check: before a network-level check failure is recorded, the prober fetches these to tell an outage from its own lost connection | Only after a monitor check fails at the network level (DNS, connect, timeout), at most once per 5 s (`apps/api/src/selfcheck.ts:33-35`, `apps/api/src/selfcheck.ts:55-58`). Never at startup. | `SELFCHECK_URLS=` (empty) turns it off (`apps/api/src/selfcheck.ts:19-27`); the BYOC overlay does this by default. Set internal reference URLs instead to keep the feature inside the network. |
 | `cloudflare-dns.com` (DNS over HTTPS) (`apps/api/src/dns.ts:40-44`) | Resolver for **DNS monitors** (a fixed public resolver so a record change never redirects the connection) | Only for DNS-type monitors a user creates | No setting; do not create DNS monitors, or use HTTP/TCP monitors. The name looked up is the user's target. |
 | `data.iana.org` and the registry's RDAP server it names (`apps/api/src/domain-expiry.ts:7`) | Domain registration expiry | Only for domain-expiry monitors a user creates | No setting; do not create domain monitors. |
-| The system DNS resolver, TXT queries (`apps/api/src/custom-domain.ts:65-70`) | Re-verifying status page custom domains and verified SSO email domains, every 6 hours (`apps/api/src/server.ts:244-252`) | Only when such domains exist | Do not configure custom domains / SSO domain verification. Uses the container's resolver, i.e. the customer's DNS. (`cloudflare-dns.com` in `apps/api/src/sso-domains.ts:17` is the Workers edition only, `apps/api/src/routes/sso.ts:200`.) |
+| The system DNS resolver, TXT queries (`apps/api/src/custom-domain.ts:65-70`) | Re-verifying status page custom domains and verified SSO email domains: a timer every 5 minutes (`apps/api/src/server.ts:244-255`) re-checks each domain every 6 hours, every 30 minutes while failing (`apps/api/src/custom-domain.ts:205-208`) | Only when such domains exist | Do not configure custom domains / SSO domain verification. Uses the container's resolver, i.e. the customer's DNS. (`cloudflare-dns.com` in `apps/api/src/sso-domains.ts:17` is the Workers edition only, `apps/api/src/routes/sso.ts:200`.) |
 | SMTP server from `SMTP_URL` / `SMTP_HOST`, or `smtp.resend.com:465` with `RESEND_API_KEY` (`apps/api/src/server.ts:74-84`) | Invitations, password reset, alert emails; a connection test at startup (`apps/api/src/server.ts:93`) | Only when SMTP or Resend and `EMAIL_FROM` are set | Leave unset: emails are written to the log instead. Point `SMTP_HOST` at an internal relay. |
 | `github.com` / `api.github.com` (`apps/api/src/auth.ts:273-275`) | GitHub sign-in | Only with `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`, during a GitHub sign-in | Leave unset. |
 | The OIDC issuer (discovery, token, JWKS) (`apps/api/src/sso-oidc.ts:108-114`) | Single sign-on | Only with `OIDC_*` set or a workspace SSO connection, during sign-in | Leave unset; use an IdP inside the network with `SSO_ALLOW_PRIVATE_IDP=true`. |
 | `challenges.cloudflare.com` (Turnstile verification, `apps/api/src/auth.ts:545`) | Bot check on email sign-up | Only with both `TURNSTILE_*` keys | Leave unset. |
-| `api.push.apple.com` (`apps/api/src/apns.ts:68`) | iOS push notifications | Only with all four `APNS_*` set and a registered device | Leave unset. |
+| `api.push.apple.com`, or `api.development.push.apple.com` for sandbox device tokens (`apps/api/src/apns.ts:68`) | iOS push notifications | Only with all four `APNS_*` set and a registered device | Leave unset. |
 | URLs in `PROBE_REGIONS` (`apps/api/src/probes.ts:155-174`) | Remote regional probes | Only with `PROBE_REGIONS` set and a monitor assigned to a region | Leave unset (the default): checks run from the app container only. |
 | `api.lemonsqueezy.com` (`apps/api/src/montral-billing.ts:731-733`) | Checkout for the hosted billing edition | Only with billing configured | Leave every billing variable unset (BYOC never needs them). |
 | `BROWSER_RUNNER_URL` | Signed jobs to the browser-runner | Only with browser checks enabled | Internal network of `docker-compose.browser.yml`. |
@@ -175,12 +178,25 @@ invitation, and removing the member is a manual step.
   filesystem, `cap_drop: [ALL]`, `no-new-privileges`, user `node`), and requires it to migrate and turn healthy;
 - signs up, creates a heartbeat monitor and pings it (status `up`), creates a webhook inbox and stores a posted event,
   runs a loopback ping monitor, exports the audit log as CSV, recreates the app container and reads everything back;
+- creates a TCP monitor whose target is a public name that cannot resolve on that network: a network-level failure that
+  is neither prober-side nor a private target, which is exactly when the checker would call the self-check. It waits
+  until the scheduler's own tick (every 30 s, the first 30 s after start) has recorded a failed check for it in the
+  database; that tick also runs the first maintenance pass;
 - preloads `scripts/byoc-egress-log.cjs` (test-only) into the server process, which records every TCP/TLS connect, UDP
-  send and DNS query; the job fails if anything other than the customer database and loopback was attempted, and a
-  canary proves the recorder sees `fetch` and resolver calls.
+  send or connect and DNS lookup, resolve or reverse query. Over both container lifetimes (startup, the job's requests,
+  container recreation and that scheduler tick) the job fails if anything other than the customer database, loopback
+  and the failing monitor's own target was attempted, and requires at least one attempt for that target (proving the
+  scheduled check ran inside the recorded process). A canary proves the recorder sees `fetch` and resolver calls;
+- negative control: it then sets `SELFCHECK_URLS` to the base file's default URLs, recreates the app, runs the same
+  failing check, and requires the recorder to see an attempt to a self-check host. So the empty `SELFCHECK_URLS` of the
+  overlay is verified at runtime, not only in the compose configuration.
 
-It prints `BYOC_PASS` with these facts. **Documented only, not verified by that job**: the browser-runner's own
-behaviour, the end-user-browser requests (it only reports whether the HTML references Google Fonts), the replicas and
+The recorder's blind spots: child processes are separate programs it does not see (`/bin/ping` of ping monitors, the
+browser worker and Chromium); a connect without a host is logged as `localhost` (Node's default); it sees attempts by
+the Node process only, so the internal network (no route out) is the second, independent control.
+
+It prints `BYOC_PASS` with these facts. **Documented only, not verified by that job**: the custom-domain and SSO
+domain re-check timer (5 minutes; the run is shorter and has no such domains), the browser-runner's own behaviour, the end-user-browser requests (it only reports whether the HTML references Google Fonts), the replicas and
 browser overlays combined with BYOC, a real managed PostgreSQL service, and every feature that is off in the run
 (SMTP, SSO, GitHub, APNs, probes, DNS and domain monitors).
 

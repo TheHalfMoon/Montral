@@ -20,7 +20,7 @@ net="${project}-internal"
 db="${project}-customer-db"
 client="${project}-client"
 image="${MONTRAL_BYOC_IMAGE:-montral:byoc-qualify}"
-client_image="curlimages/curl:8.11.1"
+client_image="curlimages/curl:8.11.1@sha256:c1fe1679c34d9784c1b0d1e5f62ac0a79fca01fb6377cdd33e90473c6f9f9a69"
 db_image="postgres:18.6-alpine"
 base="http://montral:8080"
 work="$(mktemp -d)"
@@ -46,6 +46,7 @@ for k in sys.argv[1].split("."): v=v.get(k) if isinstance(v,dict) else None
 print("" if v is None else v)' "$1"; }
 
 db_password="byoc-$(openssl rand -hex 12)"
+selfcheck_target="byoc-selfcheck-target.example.net"
 cp scripts/byoc-egress-log.cjs "$work/byoc-egress-log.cjs"
 chmod a+r "$work/byoc-egress-log.cjs"
 # POSTGRES_PASSWORD is only there because docker-compose.yml interpolates it; the bundled database is not started.
@@ -182,6 +183,25 @@ api POST /api/auth/sign-in/email "{\"email\":\"$email\",\"password\":\"$password
 monitors="$(api GET /api/monitors)"
 grep -q "BYOC nightly job" <<<"$monitors" && grep -q "BYOC loopback ping" <<<"$monitors" || fail "monitors did not survive recreating the app container"
 api GET "/api/hooks/inboxes/$inbox_id/events" | grep "$nonce" >/dev/null || fail "webhook event did not survive recreating the app container"
+
+echo "== scheduler: a monitor failing at network level, checked by the scheduler's own tick (the self-check path)"
+# A public name that cannot resolve here is a network-level failure that is neither prober-side nor a private target,
+# so the checker asks proberOnline() (proberFault in apps/api/src/checker.ts): with the self-check on, that fetches the
+# reference URLs. Nothing runs this check but the scheduler, whose first tick comes 30 s after the process starts.
+psql_db() { docker exec "$db" psql -U montral -d montral -tAc "$1"; }
+tcp="$(api POST /api/monitors "{\"name\":\"BYOC unreachable public name\",\"type\":\"tcp\",\"target\":\"${selfcheck_target}:443\",\"intervalSec\":60}")"
+tcp_id="$(json id <<<"$tcp")"
+[[ -n "$tcp_id" ]] || fail "tcp monitor create failed: $tcp"
+deadline=$((SECONDS + 150))
+until [[ "$(psql_db "SELECT count(*) FROM check_result WHERE monitor_id = '$tcp_id'")" -ge 1 ]]; do
+  (( SECONDS > deadline )) && fail "the scheduler recorded no check for the failing monitor within 150 s"
+  sleep 3
+done
+tcp_result="$(psql_db "SELECT ok::text || ' ' || coalesce(error, '') FROM check_result WHERE monitor_id = '$tcp_id' ORDER BY checked_at DESC LIMIT 1")"
+[[ "$tcp_result" == false* ]] || fail "the failing monitor's scheduled check did not record a failure: $tcp_result"
+uptime_s=$(( $(date +%s) - $(date -d "$(docker inspect -f '{{.State.StartedAt}}' "$cid")" +%s) ))
+(( uptime_s >= 30 )) || fail "the app has only been up ${uptime_s} s; no scheduler tick can have run"
+echo "scheduled check recorded after ${uptime_s} s of uptime: ${tcp_result}"
 docker logs "$cid" > "$work/egress-2.log" 2>&1
 
 echo "== the recorder sees fetch, TLS, net and resolver calls (canary inside the app container)"
@@ -195,13 +215,14 @@ for want in '"host":"byoc-canary-fetch.example.net"' '"name":"byoc-canary-txt.ex
 done
 
 echo "== every connection the server attempted, over both container lifetimes"
-facts="$(python3 - "$work/egress-1.log" "$work/egress-2.log" <<'PY'
+facts="$(python3 - "$selfcheck_target" "$work/egress-1.log" "$work/egress-2.log" <<'PY'
 import json, sys
-allowed_hosts = {"customer-db", "127.0.0.1", "::1", "localhost"}
+target = sys.argv[1]  # the failing monitor's own, user-configured target
+allowed_hosts = {"customer-db", "127.0.0.1", "::1", "localhost", target}
 # server.listen(port, BIND_HOST) passes the bind address through dns.lookup; an IP literal resolves locally, no query
-allowed_names = {"customer-db", "localhost", "0.0.0.0", "::", "127.0.0.1", "::1"}
+allowed_names = {"customer-db", "localhost", "0.0.0.0", "::", "127.0.0.1", "::1", target}
 events, bad = [], []
-for path in sys.argv[1:]:
+for path in sys.argv[2:]:
     for line in open(path, encoding="utf-8", errors="replace"):
         if not line.startswith("BYOC_EGRESS "):
             continue
@@ -214,15 +235,34 @@ for path in sys.argv[1:]:
 db = sum(1 for e in events if e["kind"] == "connect" and e["host"] == "customer-db")
 loop = sum(1 for e in events if e["kind"] == "connect" and e["host"] in ("127.0.0.1", "::1", "localhost"))
 dns = sum(1 for e in events if e["kind"] == "dns")
+tgt = sum(1 for e in events if e.get("host") == target or e.get("name") == target)
+if not tgt:
+    print("the recorder saw no attempt for the failing monitor's target: its scheduled check did not run in the server", file=sys.stderr); sys.exit(1)
 if not db:
     print("the recorder logged no database connection: it was not loaded into the server", file=sys.stderr); sys.exit(1)
 if bad:
     print("connections outside the customer network:", file=sys.stderr)
     for e in bad[:20]: print("  " + json.dumps(e), file=sys.stderr)
     sys.exit(1)
-print(f"{len(events)} recorded attempts: {db} to customer-db:5432, {loop} loopback, {dns} DNS lookups (customer-db, or the local bind address literal), 0 elsewhere")
+print(f"{len(events)} recorded attempts: {db} to customer-db:5432, {loop} loopback, {dns} DNS lookups ({tgt} for the failing monitor's own target, the rest customer-db or the bind address literal), 0 elsewhere (no self-check URL)")
 PY
 )" || fail "outbound connection check failed"
 echo "$facts"
 
-echo "BYOC_PASS: internal-only network (no route to public names or IPs); app healthy on the BYOC overlay with the customer's own PostgreSQL via DATABASE_URL (bundled postgres off), self-check off, operators none, read-only root filesystem, cap_drop ALL, no-new-privileges, user node; sign-up, heartbeat monitor pinged and up, webhook inbox event stored, loopback ping monitor up, audit CSV export (${audit_rows} rows) with monitor.create and hook_inbox.create; data survived app container recreation; egress recorder: ${facts}; served HTML references Google Fonts for the end user's browser: ${browser_fonts} (browser-side, see docs/BYOC.md)"
+echo "== negative control: with the base file's default SELFCHECK_URLS the same failure makes the server try the public reference URLs"
+echo "SELFCHECK_URLS=https://www.cloudflare.com/cdn-cgi/trace,https://www.gstatic.com/generate_204,https://www.apple.com/library/test/success.html" >> "$work/.env"
+"${compose[@]}" up -d --force-recreate montral
+wait_healthy
+cid="$(app)"
+docker exec "$client" rm -f /tmp/jar
+api POST /api/auth/sign-in/email "{\"email\":\"$email\",\"password\":\"$password\"}" >/dev/null
+api POST "/api/monitors/$tcp_id/check" '{}' >/dev/null 2>&1 || true
+deadline=$((SECONDS + 60))
+until docker logs "$cid" 2>&1 | grep -E 'BYOC_EGRESS [{]"kind":"connect","host":"www[.](cloudflare|gstatic|apple)[.]com"' >/dev/null; do
+  (( SECONDS > deadline )) && fail "negative control: the recorder saw no attempt to a self-check URL with the default SELFCHECK_URLS"
+  sleep 2
+done
+control="$(docker logs "$cid" 2>&1 | grep -oE '"host":"www[.](cloudflare|gstatic|apple)[.]com"' | sort -u | sed 's/"host"://; s/"//g' | tr '\n' ' ')"
+echo "negative control: the default self-check attempted ${control}(unreachable on the internal network)"
+
+echo "BYOC_PASS: internal-only network (no route to public names or IPs); app healthy on the BYOC overlay with the customer's own PostgreSQL via DATABASE_URL (bundled postgres off), self-check off, operators none, read-only root filesystem, cap_drop ALL, no-new-privileges, user node; sign-up, heartbeat monitor pinged and up, webhook inbox event stored, loopback ping monitor up, audit CSV export (${audit_rows} rows) with monitor.create and hook_inbox.create; data survived app container recreation; a scheduler tick checked a monitor failing at network level; egress recorder: ${facts}; negative control with the default SELFCHECK_URLS: recorder saw ${control}(so it would catch the self-check); served HTML references Google Fonts for the end user's browser: ${browser_fonts} (browser-side, see docs/BYOC.md)"

@@ -6,6 +6,8 @@
 //   BYOC_EGRESS {"kind":"connect","host":"customer-db","port":5432}
 // so the qualification can assert that nothing but the configured database (and loopback) was contacted. It changes
 // no behaviour: every wrapped function is called with its original arguments and its result is returned unchanged.
+// Blind spots (named in docs/BYOC.md): child processes (ping monitors' /bin/ping, the browser worker and Chromium) are
+// separate programs and are not recorded; a connect with no host is recorded as "localhost", which is Node's default.
 const fs = require("node:fs");
 const net = require("node:net");
 const dgram = require("node:dgram");
@@ -32,6 +34,13 @@ net.Socket.prototype.connect = function (...args) {
   return connect.apply(this, args);
 };
 
+// a connected UDP socket sends without an address: record the peer when it is connected
+const udpConnect = dgram.Socket.prototype.connect;
+dgram.Socket.prototype.connect = function (port, address, ...rest) {
+  record("udp", { host: typeof address === "string" ? address : "localhost", port: Number(port) });
+  return udpConnect.call(this, port, address, ...rest);
+};
+
 const send = dgram.Socket.prototype.send;
 dgram.Socket.prototype.send = function (...args) {
   // send(msg[, offset, length][, port][, address][, cb]): the address is the first string after the port
@@ -43,7 +52,7 @@ dgram.Socket.prototype.send = function (...args) {
 
 function wrapDns(target, label) {
   for (const key of Object.getOwnPropertyNames(target)) {
-    if (!/^(lookup|resolve)/.test(key)) continue;
+    if (!/^(lookup|resolve|reverse)/.test(key)) continue;
     const descriptor = Object.getOwnPropertyDescriptor(target, key);
     if (!descriptor || typeof descriptor.value !== "function" || !descriptor.writable) continue;
     const original = descriptor.value;

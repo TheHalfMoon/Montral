@@ -1,0 +1,52 @@
+# Enterprise BYOC (bring your own cloud) reference overlay: the customer runs Montral in its own network, against its
+# own PostgreSQL, with no outbound connection the customer did not configure. See docs/BYOC.md.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.byoc.yml up -d --build
+#
+# Needs Docker Compose v2.24.4 or later (`!reset` / `!override`). Every setting below is one the code honours (each
+# environment variable is read in apps/api/src/env.ts or apps/api/src/server.ts; apps/api/src/guards/byoc-overlay.test.ts
+# keeps it that way). Qualified in CI on an internal-only Docker network by scripts/qualify-byoc.sh.
+#
+# Required in .env:
+#   DATABASE_URL=postgres://montral:<password>@db.internal.example:5432/montral   your own (managed) PostgreSQL
+#   BETTER_AUTH_SECRET=<openssl rand -hex 32>
+#   PUBLIC_URL=https://montral.internal.example                                    the origin users open
+#   POSTGRES_PASSWORD=unused   still required by docker-compose.yml's variable interpolation; not used by this overlay
+#                              unless you start the bundled database (--profile bundled-postgres), and then it
+#                              must be a real secret set before that database's first start
+services:
+  montral:
+    # publish on the host's loopback only: put your own reverse proxy / load balancer in front (TLS terminates there)
+    ports: !override ["${PUBLISH_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"]
+    # the customer's database is outside this compose project: do not wait for (or start) the bundled one
+    depends_on: !reset {}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?set DATABASE_URL in .env to your own PostgreSQL (postgres://user:pass@host:5432/db)}
+      # No reference-URL self-check by default: a failed network-level check no longer asks cloudflare.com, gstatic.com
+      # and apple.com whether this host is online (apps/api/src/selfcheck.ts). Set your own internal reference URLs
+      # (comma-separated) to get the self-check back without leaving your network.
+      SELFCHECK_URLS: ${SELFCHECK_URLS-}
+      # Listen address inside the container (apps/api/src/server.ts). 0.0.0.0 is required for the published port above;
+      # the host-side exposure is limited by PUBLISH_ADDRESS instead.
+      BIND_HOST: ${BIND_HOST:-0.0.0.0}
+      # Behind exactly one reverse proxy that APPENDS the peer address to X-Forwarded-For, set TRUST_PROXY=true and
+      # TRUST_PROXY_PEER_IPS to that proxy's exact address as seen by this container (never a CIDR). Unset here so the
+      # base file's empty default (no proxy trusted) applies until you do.
+      # No platform operators: nobody, including the vendor, can use /api/operator unless you list user ids here
+      # (docs/OPERATOR.md). Pinned empty so a stray value in .env cannot enable it.
+      MONTRAL_OPERATOR_USER_IDS: ""
+    # The image writes nothing to its own filesystem at runtime; /tmp stays writable for libraries that want it.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    # The app runs as the unprivileged `node` user and needs no Linux capability (ping monitors use unprivileged ICMP
+    # sockets, see docker-compose.yml); never gain privileges through setuid binaries.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
+  # The bundled database stays available for evaluation only: set a real POSTGRES_PASSWORD (openssl rand -hex 24, not
+  # "unused") BEFORE its first start, since it becomes the database password; then `--profile bundled-postgres` starts it
+  # and DATABASE_URL=postgres://montral:<POSTGRES_PASSWORD>@postgres:5432/montral uses it.
+  postgres:
+    profiles: [bundled-postgres]

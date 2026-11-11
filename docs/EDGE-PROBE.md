@@ -21,6 +21,35 @@ The existing backend already supports remote regions through `PROBE_REGIONS` and
 
 No Cloudflare credentials have been requested or changed and no Worker has been deployed.
 
+## Multi-region confirmation and probe failures
+
+How a monitor that checks from several regions (`regions`, `minRegionsFailing`) decides a run, in `apps/api/src/probes.ts`:
+
+1. Every listed region is asked at once. A region that cannot be asked (probe down, timing out, answering nonsense or
+   over 16 KiB, not configured, or drained by an operator) does not vote. It is never counted as a failed check.
+2. The run fails when at least `minRegionsFailing` of the regions that answered failed, or a strict majority of them
+   when it is 0. The bar is capped by the regions that answered, so a broken probe cannot hide a real outage.
+3. **New:** when that capped verdict rests on a single failing region only because the other regions could not vote,
+   and the monitor asked for more than one region to agree, the deployment checks the target itself as one more vote.
+   If it passes, the run passes (the failing region and the local result are both recorded, and the note says "not
+   confirmed from this location"); if it fails, the run fails ("confirmed from this location"); if the deployment
+   cannot check either, the region's verdict stands. A monitor that lists `auto` already has that vote. Two or more
+   agreeing regions still alert as before.
+4. If no region answered at all, the check runs from the deployment itself.
+
+The local check costs no extra credit: it stands in for a region that was charged but could not vote. `failureThreshold`
+(consecutive failed runs) applies on top of the run's verdict, so a flapping probe has to fail several runs in a row.
+
+The hosted plan's `regions` limit is enforced when a monitor is created, changed or imported, and also at run time: a
+monitor saved under a larger plan (before a downgrade) is checked, and charged, only from the first regions its current
+plan allows; its stored list is kept for an upgrade. A metered deployment that cannot read the plan skips multi-region
+checks for that round (fail closed); single-region monitors and heartbeats still run. Each skip counts on the monitor's
+deferral streak: a single blip marks nothing, but after the same number of intervals as a deferred browser check the
+monitor is marked unchecked (shown on the monitor page); its next recorded run clears it. Self-hosted Community has no plan
+and is unaffected.
+
+Operators see each region's last answer and can drain a region: [OPERATOR.md, "Probe regions"](OPERATOR.md#probe-regions).
+
 ## Workerd qualification (local, not deployed)
 
 The Montral Worker handler and the existing scheduler regional-probe client passed **5 new tests inside real local Cloudflare `workerd`** via Miniflare. These tests use a fake outbound fetch to avoid external traffic. The complete evidence, security restrictions, compatibility-date pin, and limitations are in [2026-10-30 workerd qualification](evidence/2026-10-30-edge-workerd-qualification.md).

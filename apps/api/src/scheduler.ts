@@ -4,6 +4,7 @@ import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminde
 import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
 import { measure, type Measured } from "./probes";
+import { withinPlanRegions } from "./regions";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
 import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, browserAvailable, browserCheckWorstCaseMs, browserProbeDue } from "./browser-check";
@@ -167,11 +168,12 @@ function meteringFailed(e: unknown) {
   console.error(`metering unavailable: ${e instanceof PlanCatalogError ? "the plan catalog is invalid" : "the usage ledger could not be reached"}; metered checks are being skipped`);
 }
 
-export async function withinCredits(monitors: Monitor[], entitlements: Entitlements): Promise<Monitor[]> {
+export async function withinCredits(monitors: Monitor[], entitlements: Entitlements, onPlanSkipped?: (skipped: Monitor[]) => Promise<unknown>): Promise<Monitor[]> {
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of monitors) byWorkspace.set(m.organizationId, [...(byWorkspace.get(m.organizationId) ?? []), m]);
-  const allowed = new Set<string>();
-  await Promise.all([...byWorkspace].map(async ([workspaceId, list]) => {
+  const allowed = new Map<string, Monitor>();
+  await Promise.all([...byWorkspace].map(async ([workspaceId, due]) => {
+    const list = await withinPlanRegions(due, workspaceId, entitlements, onPlanSkipped);
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
     // A failing ledger: self-hosted (unmetered) runs the checks and logs the gap, so monitoring is never silenced; a
     // metered deployment grants nothing (failClosed), so a ledger or catalog failure never runs unmetered checks. The
@@ -187,11 +189,11 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
       const cost = creditCost(m);
       if (cost <= left) {
         left -= cost;
-        allowed.add(m.id);
+        allowed.set(m.id, m);
       }
     }
   }));
-  return monitors.filter((m) => allowed.has(m.id));
+  return monitors.flatMap((m) => (allowed.has(m.id) ? [allowed.get(m.id)!] : []));
 }
 
 /** Wall time one queue task may spend on a workspace's browser checks (well under the 5-minute stall watchdog). */
@@ -209,7 +211,8 @@ export type CheckManyOptions = { browserBudgetMs?: number; now?: () => number };
 export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements, opts: CheckManyOptions = {}) {
   // Browser monitors are charged one by one just before their journey is launched (browserTask), the rest up front.
   const browser = due.filter((m) => m.type === "browser");
-  const others = await withinCredits(due.filter((m) => m.type !== "browser"), entitlements);
+  // a multi-region monitor skipped because a metered plan could not be read counts on its deferral streak
+  const others = await withinCredits(due.filter((m) => m.type !== "browser"), entitlements, (skipped) => Promise.all(skipped.map((m) => step("plan deferral", () => notePlanDeferral(repo, m)))));
   if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
   // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and
   // third due browser monitors would wait at that gate and be deferred every cycle; instead each workspace's browser
@@ -397,6 +400,18 @@ async function noteMeteringDeferral(repo: Repo, m: Monitor, reason: string, now 
   if (deferredTooLong(deferredSince, m.intervalSec, now) && repo.markUnchecked) await repo.markUnchecked(m.id);
 }
 
+/**
+ * A multi-region check that did not run because a metered deployment could not read the workspace's plan: it starts or
+ * continues the monitor's deferral streak (no run row: the check never happened), and once the streak has lasted
+ * BROWSER_UNCHECKED_AFTER intervals the monitor is marked unchecked, like a browser check deferred for metering. A
+ * single blip marks nothing; the next recorded run ends the streak (`checkOne`).
+ */
+export async function notePlanDeferral(repo: Repo, m: Monitor, now = Date.now()) {
+  if (!repo.noteCheckDeferral) return;
+  const { deferredSince } = await repo.noteCheckDeferral(m.id);
+  if (deferredTooLong(deferredSince, m.intervalSec, now) && repo.markUnchecked) await repo.markUnchecked(m.id);
+}
+
 /** Give back credits taken at `spentAt` (default now) to that period's allowance. */
 export async function refundCredits(workspace: string, credits: number, entitlements: Entitlements, spentAt?: Date) {
   if (!entitlements.refundCredits) return;
@@ -462,6 +477,11 @@ export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlement
   // one region is one row; several are rows per region that count as a single run in the rollup
   if (results.length === 1) await repo.recordCheck({ monitorId: m.id, region: results[0].region, ok: out.ok, statusCode: out.statusCode, latencyMs: out.latencyMs, error: out.error });
   else await repo.recordRegionResults(m.id, results, { ok: out.ok, latencyMs: out.latencyMs });
+  // a recorded run ends a deferral streak (plan unavailable) and an unchecked mark; browser runs clear theirs below
+  if (!out.browser && (m.deferredSince || m.uncheckedSince)) {
+    if (repo.clearUnchecked) await step("unchecked clear", () => repo.clearUnchecked!(m.id));
+    if (repo.clearBrowserDeferral) await step("deferral clear", () => repo.clearBrowserDeferral!(m.id));
+  }
   // a browser check also keeps its run: step timings, the failing step, what it measured and (if asked) a screenshot
   const run = out.browser;
   if (run && repo.recordBrowserRun) {

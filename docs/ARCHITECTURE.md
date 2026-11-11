@@ -15,6 +15,7 @@ A customer signs up once, creates an organization/workspace and projects, sets H
 - `ProbeRequest` -> adapter -> `ProbeResult` with target, method, timeout, region, status, latency, timestamp, error category, trace ID.
 - Reuse portable Cloudflare Workers / D1 probe patterns from the second source behind that adapter, only for checks where they genuinely improve cost/coverage.
 - Do not start a second scheduling loop against the same monitor; account for probe quotas/credits and external Cloudflare limits.
+- Multi-region verdicts (implemented): unreachable or drained probes never vote; a verdict that rests on one region because the others are missing is confirmed from the scheduler's own location; plan region caps apply at run time. See EDGE-PROBE.md and OPERATOR.md.
 - Explicit SSRF protection: deny private/loopback/link-local/metadata targets by default; cap redirects, response size, headers, time, concurrency and user-supplied body.
 
 ## Webhook plane

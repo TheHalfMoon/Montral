@@ -26,6 +26,15 @@ export interface ChangelogEntry {
 
 /** Community entries, newest first within a day. Cloud-only entries are added by changelog-cloud.ts. */
 export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
+  { id: "multi-region-confirmation", date: "2026-11-11", edition: "community",
+    title: { en: "Safer multi-region alerts and probe drains", zh: "更可靠的多区域告警与探针下线" },
+    summary: { en: "An unreachable probe region can no longer let one region's view open an incident on its own.", zh: "某个探针区域无法访问时，不再仅凭单个区域的结果创建事件。" },
+    points: [
+      { en: "When a multi-region monitor's other regions cannot be reached, a single failing region is confirmed from the deployment itself before an incident opens; both results are kept.", zh: "多区域监控的其他区域无法访问时，单个区域的失败会先由部署本身确认，然后才会创建事件；两边的结果都会保留。" },
+      { en: "Operators can see each probe region's last answer and drain a region for maintenance; drained regions are skipped without false alarms.", zh: "运维人员可以查看每个探针区域最近一次应答，并可在维护时将区域下线；已下线的区域会被跳过，不会产生误报。" },
+    ],
+    cloud: { en: "A monitor saved under a larger plan is checked, and charged, only from the regions its current plan allows.", zh: "在更高套餐下保存的监控，只会从当前套餐允许的区域检查并计费。" },
+  },
   { id: "oidc-single-sign-on", date: "2026-11-10", edition: "community",
     title: { en: "Single sign-on with OpenID Connect", zh: "OpenID Connect 单点登录" },
     summary: { en: "Workspace owners can let their team sign in through their own identity provider.", zh: "工作区所有者可以让团队通过自己的身份提供商登录。" },

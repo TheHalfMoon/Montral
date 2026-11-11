@@ -812,6 +812,11 @@ export function createRepo(db: Db): Repo {
         return { deferredSince: m.deferredSince };
       });
     },
+    async noteCheckDeferral(monitorId) {
+      const [m] = await db.update(schema.monitor).set({ deferredSince: sql`coalesce(${schema.monitor.deferredSince}, now())` })
+        .where(eq(schema.monitor.id, monitorId)).returning({ deferredSince: schema.monitor.deferredSince });
+      return { deferredSince: m?.deferredSince ?? new Date() };
+    },
     async clearBrowserDeferral(monitorId) {
       await db.update(schema.monitor).set({ deferredSince: null, lastDeferredRunAt: null }).where(and(eq(schema.monitor.id, monitorId), isNotNull(schema.monitor.deferredSince)));
     },
@@ -840,6 +845,42 @@ export function createRepo(db: Db): Repo {
       const rows = await db.select({ email: schema.user.email }).from(schema.member).innerJoin(schema.user, eq(schema.user.id, schema.member.userId))
         .where(and(eq(schema.member.organizationId, orgId), inArray(schema.member.role, ["owner", "admin"])));
       return [...new Set(rows.map((r) => r.email).filter(Boolean))];
+    },
+    async probeRegionStates() {
+      const rows = await db.select().from(schema.probeRegionState).orderBy(asc(schema.probeRegionState.region));
+      return rows.map((r) => ({
+        region: r.region, drained: r.drained, drainedAt: r.drainedAt, drainedBy: r.drainedBy, drainNote: r.drainNote,
+        lastAnswerAt: r.lastAnswerAt, lastUnreachableAt: r.lastUnreachableAt, lastUnreachableReason: r.lastUnreachableReason, unreachableSince: r.unreachableSince,
+      }));
+    },
+    async noteProbeHealth(region, answered, reason) {
+      const t = schema.probeRegionState;
+      // One atomic statement, so concurrent writers from several processes cannot interleave: the row is updated only
+      // when its last health write is a minute old, or 10 seconds old when this write flips the state. A drain does
+      // not touch these columns, so it does not hold health writes back.
+      const lastWrite = sql`coalesce(greatest(${t.lastAnswerAt}, ${t.lastUnreachableAt}), '-infinity'::timestamptz)`;
+      const flips = answered ? sql`${t.unreachableSince} is not null` : sql`${t.unreachableSince} is null`;
+      const due = sql`${lastWrite} < now() - interval '1 minute' or (${flips} and ${lastWrite} < now() - interval '10 seconds')`;
+      if (answered) {
+        await db.insert(t).values({ region, lastAnswerAt: sql`now()`, updatedAt: sql`now()` })
+          .onConflictDoUpdate({ target: t.region, set: { lastAnswerAt: sql`now()`, unreachableSince: null, updatedAt: sql`now()` }, setWhere: due });
+        return;
+      }
+      const why = (reason ?? "Probe unreachable").slice(0, 120);
+      await db.insert(t).values({ region, lastUnreachableAt: sql`now()`, lastUnreachableReason: why, unreachableSince: sql`now()`, updatedAt: sql`now()` })
+        .onConflictDoUpdate({ target: t.region, set: { lastUnreachableAt: sql`now()`, lastUnreachableReason: why, unreachableSince: sql`coalesce(${t.unreachableSince}, now())`, updatedAt: sql`now()` }, setWhere: due });
+    },
+    async setProbeRegionDrain(region, drain) {
+      const t = schema.probeRegionState;
+      const now = new Date();
+      const set = drain.drained
+        ? { drained: true, drainedAt: now, drainedBy: drain.by, drainNote: drain.note, updatedAt: now }
+        : { drained: false, drainedAt: null, drainedBy: null, drainNote: null, updatedAt: now };
+      await db.insert(t).values({ region, ...set }).onConflictDoUpdate({ target: t.region, set });
+    },
+    async monitorsPerRegion() {
+      const counted = await rows<{ region: string; n: number }>(db.execute(sql`select r as region, count(*)::int as n from monitor, unnest(monitor.regions) as r where monitor.paused = false group by r`));
+      return Object.fromEntries(counted.map((r) => [r.region, Number(r.n)]));
     },
     async recordRegionResults(monitorId, results, summary) {
       if (!results.length) return;

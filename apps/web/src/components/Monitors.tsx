@@ -567,6 +567,7 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
             <Select className="in" value={Math.min(f.minRegionsFailing, f.regions.length)} onChange={(v) => set("minRegionsFailing", v)}
               options={[{ value: 0, label: t("Most regions fail") }, ...Array.from({ length: f.regions.length }, (_, i) => ({ value: i + 1, label: t(i === 0 ? "Any region fails" : "{n} regions fail").replace("{n}", String(i + 1)) }))]} />
             <small className="faint">{t("Fewer failing regions are recorded but do not open an incident.")}</small>
+            <small className="faint">{t("When the other regions cannot be reached, a single failing region is confirmed from this deployment before an incident opens.")}</small>
           </label>
         )}
         {PROBED.includes(f.type) && places.length > 1 && (

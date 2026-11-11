@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { limitedJsonBody } from "./json-body-budget";
+import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 
 const request = (body: BodyInit, headers?: Record<string, string>) =>
   new Request("http://localhost/api", {
@@ -59,5 +59,19 @@ describe("bounded JSON request reader", () => {
     ]);
     expect(result).toBe(408);
     expect(canceled).toBe(true);
+  });
+});
+
+describe("strict JSON object reader (operator writes)", () => {
+  const status = (p: Promise<unknown>) => p.then(() => 200, (e: { status?: number }) => e.status);
+  it("reads an object, and an empty body as {}", async () => {
+    expect(await strictJsonObjectBody(request(JSON.stringify({ note: "Synthetic" })), 1024)).toEqual({ note: "Synthetic" });
+    expect(await strictJsonObjectBody(request(""), 1024)).toEqual({});
+    expect(await strictJsonObjectBody(new Request("http://localhost/api", { method: "POST" }), 1024)).toEqual({});
+  });
+  it("refuses malformed JSON and anything that is not an object with 400, and an oversized body with 413", async () => {
+    for (const bad of ["{invalid", "[]", "null", "42", '"text"']) expect(await status(strictJsonObjectBody(request(bad), 1024))).toBe(400);
+    expect(await status(strictJsonObjectBody(request(new Uint8Array([0x7b, 0xff, 0x7d])), 1024))).toBe(400);
+    expect(await status(strictJsonObjectBody(request(JSON.stringify({ note: "x".repeat(2048) })), 1024))).toBe(413);
   });
 });

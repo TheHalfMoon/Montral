@@ -184,6 +184,21 @@ export type NewCheck = { monitorId: string; ok: boolean; statusCode?: number | n
 /** One region's result of a run that was checked from several. */
 export type RegionResult = { region: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null };
 
+/** What the platform stores about one probe region (operator view): its drain flag and last-seen health. */
+export interface ProbeRegionState {
+  region: string;
+  drained: boolean;
+  drainedAt: Date | null;
+  drainedBy: string | null;
+  drainNote: string | null;
+  /** The last time the probe answered a check (whatever the target's result). */
+  lastAnswerAt: Date | null;
+  lastUnreachableAt: Date | null;
+  lastUnreachableReason: string | null;
+  /** Since when every attempt to ask the probe failed; null once it answers again. */
+  unreachableSince: Date | null;
+}
+
 /** A monitor's last day from one region, for the regions it has been checked from. */
 export interface RegionStat {
   region: string;
@@ -714,6 +729,8 @@ export interface Repo {
    * most once per interval. Returns when the streak started.
    */
   noteBrowserDeferral?(monitorId: string, intervalSec: number, reason: string): Promise<{ deferredSince: Date }>;
+  /** A non-browser check that did not run (its metered plan could not be read): starts or continues the deferral streak, no run row. */
+  noteCheckDeferral?(monitorId: string): Promise<{ deferredSince: Date }>;
   /** The check happened (ran, or failed in the runtime): the deferral streak is over. */
   clearBrowserDeferral?(monitorId: string): Promise<void>;
   /** Record that a digest covered these monitors' current unchecked streak. */
@@ -722,6 +739,18 @@ export interface Repo {
   purgeSecretScreenshots?(monitorId: string): Promise<void>;
   /** Mark the monitor unchecked now; true only for the call that started the streak. */
   markUnchecked?(monitorId: string): Promise<boolean>;
+  // ── probe regions (operator) ─────────────────────────────────────────────────
+  /** What is stored about each probe region: drain flag and last-seen health. Optional for test backends. */
+  probeRegionStates?(): Promise<ProbeRegionState[]>;
+  /**
+   * A probe answered (`answered`), or could not be asked (`reason` is one of the fixed, secret-free strings of
+   * probes.ts). Updates last-seen health; a region that answers ends its unreachable streak.
+   */
+  noteProbeHealth?(region: string, answered: boolean, reason?: string): Promise<void>;
+  /** Drain or undrain a region: a drained region is not asked, and its monitors confirm from elsewhere. */
+  setProbeRegionDrain?(region: string, drain: { drained: boolean; by: string | null; note: string | null }): Promise<void>;
+  /** How many unpaused monitors list each region id. */
+  monitorsPerRegion?(): Promise<Record<string, number>>;
   /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */
   clearUnchecked?(monitorId: string): Promise<void>;
   /** E-mail addresses of the workspace's owners and admins. */

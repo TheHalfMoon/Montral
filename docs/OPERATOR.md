@@ -1,7 +1,7 @@
 # Operator control plane
 
-Platform staff ("operators") of a hosted Montral deployment can look up workspaces and suspend or unsuspend them. This
-is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). There is no
+Platform staff ("operators") of a hosted Montral deployment can look up workspaces and suspend or unsuspend them, and
+see and drain probe regions. This is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). There is no
 operator UI yet.
 
 ## Who is an operator
@@ -100,6 +100,39 @@ whole workspace API is refused while suspended, the customer can read these even
 The server also logs one line per action (`operator action: suspend workspace=<id> operator=<user id> reason=<reason>`),
 without the note.
 
+## Probe regions
+
+Remote check regions are deployment configuration (`PROBE_REGIONS`, `PROBE_SECRET`; see [EDGE-PROBE.md](EDGE-PROBE.md)).
+What the platform learns about them at run time is stored per region in `probe_region_state` (migration
+`0059_probe_region_state`, a new table only):
+
+| Endpoint | Does |
+| --- | --- |
+| `GET /api/operator/probes` | Every configured region, plus any region with stored state that is no longer configured (`configured: false`): `status` (`up`, `unreachable`, `drained` or `unknown`), `lastAnswerAt`, `lastUnreachableAt`, `lastUnreachableReason`, `unreachableSince`, the drain fields and how many unpaused monitors list the region. `auto.monitors` counts monitors on this deployment's own location. |
+| `POST /api/operator/probes/:id/drain` | Body `{"note"?: string}` (at most 200 characters). Only a configured region; `auto` cannot be drained. |
+| `POST /api/operator/probes/:id/undrain` | Puts a region back. Both write routes refuse a body that is not a JSON object (400) or is over 2 KiB (413); an empty body is fine. |
+
+- **Health** is written by the scheduler as it asks probes (scheduled and manual checks, and spot checks): a probe that
+  answers sets `lastAnswerAt` and ends an unreachable streak; one that cannot be asked sets `lastUnreachableAt`, the
+  reason (one of the fixed strings of `apps/api/src/probes.ts`, never a raw network error) and, at the start of the
+  streak, `unreachableSince`. Writes are not awaited by the check (a failure is logged and dropped) and are throttled
+  twice: per process, and in the database by a conditional upsert, to at most one write per region per minute, or per
+  10 seconds when the region flips between answering and unreachable. A region is
+  `unknown` when it has neither answered in the last 15 minutes nor been seen failing (for example when no monitor uses
+  it). A probe that answers but lacks a capability a check needs is not counted either way.
+- **Drain** stops the scheduler from asking the region, on every server within 15 seconds (at once on the server that
+  took the call). Monitors that list it keep it; the region simply does not vote. If every region of a monitor is
+  drained or unreachable, the check runs from the deployment itself, as before. A single remaining region that fails
+  is confirmed from the deployment before an incident opens (see "Multi-region confirmation" in EDGE-PROBE.md), so
+  draining one region of a multi-region monitor does not let the remaining region page on its own. This is not a
+  guarantee against every false incident: when **every** region of a monitor is drained (or unreachable) and its target
+  only accepts traffic from the probes, the fallback check from the deployment itself can fail and page, exactly as
+  when all probes are unreachable. Spot checks from a drained region answer `502 probe_unreachable` and take no credit.
+- A drain is a platform action, not a customer change: it is logged as one server line
+  (`operator action: drain region=<id> operator=<user id>`) and is not written into any workspace audit log.
+- Credentials: all probes share `PROBE_SECRET`. Rotating it is a coordinated redeploy of probes and API (there is no
+  overlap window yet); drain a region while its probe is being replaced.
+
 ## Limitations
 
 - API only; there is no operator UI, and the web app shows suspended members a generic error rather than a dedicated
@@ -119,3 +152,6 @@ without the note.
   (`/api/billing/lemon`) is not behind `requireOrg` and keeps being processed.
 - Operator actions are not written to a separate platform-level audit trail; the record is the customer's audit log
   plus the server log line.
+- Probe regions are still registered through `PROBE_REGIONS`: there is no API to add or remove one, no per-probe
+  credential and no secret rotation window. Credits are charged for every region a monitor's plan allows, including a
+  region that was drained or could not be asked for that run.

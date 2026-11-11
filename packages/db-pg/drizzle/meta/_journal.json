@@ -414,6 +414,13 @@
       "when": 1794375155111,
       "tag": "0058_workspace_suspension",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1794386275851,
+      "tag": "0059_probe_region_state",
+      "breakpoints": true
     }
   ]
 }

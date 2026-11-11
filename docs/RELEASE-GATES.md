@@ -87,7 +87,7 @@ GitHub (#77, #78, #80, #82) are listed where they apply.
 | #75 | High: billing plan ids when billing is ready, fixed; incident alert emails restored to fail-open; status-page branding fallback, cause logging, frozen plans and fixed messages also fixed |
 | #76 | Several rounds. High: second-factor bypass via GitHub/SSO sign-in, fixed with `operator_mfa_session`. Medium: Better Auth endpoints and cascade delete, fixed with a before-hook gate and `ON DELETE RESTRICT`. Decoy-field workspace-selection bypasses in body and query, fixed to fail closed |
 | #77 | High: an unmapped variant kept paid limits; high: function lists in migration checks; medium: rolling-restart safety via new function names. All fixed (PR body "Review fixes") |
-| #78 | The slug retry did not match the drizzle-wrapped unique violation; fixed. An owner review comment on GitHub (the SSO JIT path has no retry) is **still open**: ledger row 62 |
+| #78 | The separate SSO JIT first-login slug retry finding was resolved in #88 (bf0c9ee) with real Drizzle error tests and all PR checks green. Windows Docker and live SaaS gates remain separate. |
 | #79 | Medium: the egress capture covered start-up only; fixed with a scheduler tick and a self-check negative control. Verification review: nothing at medium or above |
 | #80 | Owner review on GitHub (traffic must be proven during each restart, with a negative control) addressed in 57dda7c; independent review of 57dda7c: nothing at medium or above, one low fixed, remaining lows in ledger row 72 |
 | #81 | Medium: redefining the shared spend function broke rolling upgrades; fixed with `montral_spend_usage_v2`. Re-review: nothing at medium or above |

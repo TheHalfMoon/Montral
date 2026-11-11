@@ -9,7 +9,9 @@
 import type { Page, Route } from "@playwright/test";
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
 
-test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
+// The app registers a service worker (lib/pwa.ts). In WebKit the page's fetches then reach the network through it,
+// where page.route never sees them, so the synthetic API answers below would silently not apply: no worker here.
+test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL, serviceWorkers: "block" });
 
 const nextUtcMonth = () => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth() + 1, 1)).toISOString(); };
 const quota = (used: number, limit: number) => ({ used, limit, periodStart: new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1)).toISOString(), periodEnd: nextUtcMonth() });

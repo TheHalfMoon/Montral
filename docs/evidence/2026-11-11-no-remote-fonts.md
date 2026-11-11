@@ -14,15 +14,21 @@ CSP configuration, and local BYOC integration checks.
 - The BYOC qualification script now rejects served HTML containing an external
   font stylesheet reference instead of merely reporting it.
 - The privacy copy reflects that fonts do not require a third-party request.
-- `scripts/verify-no-remote-fonts.mjs` checks the eight source files that can
-  introduce font egress. Its negative control deliberately supplies a synthetic
-  external font URL and proves the guard rejects it.
+- `scripts/verify-no-remote-fonts.mjs` recursively inspects 167 current text
+  sources in the web app, public pages, design reference, and landing generator,
+  so newly added components and routes are also covered. The guard recognizes
+  common Google Fonts, Bunny Fonts, Adobe Typekit, and CDNFonts endpoints.
+  A negative control creates a new nested route with a synthetic remote font
+  link and proves that the recursive scanner discovers and rejects it.
 
 ## Local checks (not a substitute for hosted CI)
 
 - `node scripts/landing-csp.mjs`: PASS.
 - `node scripts/landing-csp.mjs --check`: PASS, four landing pages.
-- `node scripts/verify-no-remote-fonts.mjs --negative-control`: PASS.
+- `node scripts/verify-no-remote-fonts.mjs --negative-control`: PASS, 167 sources.
+- Independent mutation check: a newly added `apps/web/src/pages/*.astro` file
+  with an external font URL caused the guard to fail (expected), was removed,
+  and the clean source scan passed again.
 - `git diff --check`: PASS.
 - The full browser and Docker BYOC E2E matrix must pass in GitHub Actions at
   the exact PR head before merge.

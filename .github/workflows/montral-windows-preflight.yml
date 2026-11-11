@@ -1,0 +1,16 @@
+name: Windows Docker prerequisite safety
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  preflight-safety:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate bounded WSL enumeration and fail-closed JSON contract
+        shell: powershell
+        run: .\scripts\test-windows-docker-preflight.ps1

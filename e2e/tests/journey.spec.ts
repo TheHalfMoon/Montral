@@ -94,6 +94,9 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
       return target === button || (target !== null && button.contains(target));
     });
     expect(hittable).toBe(true);
+    // Playwright's trial action performs the same scroll/pointer-interception
+    // checks as the real click without submitting the form.
+    await create.click({ trial: true });
     await create.click();
     await expect(page).toHaveURL(/\/app\/status-pages\/[^/]+$/);
     await page.getByRole("radio", { name: "Password or share link" }).click();

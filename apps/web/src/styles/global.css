@@ -718,11 +718,10 @@ a.muted:hover{color:var(--ink)}
 .audit-actor{overflow-wrap:anywhere}
 .audit-more{display:flex;justify-content:center;margin-top:14px}
 
-/* Status-page creation sheet: keep inputs and submit actions from shrinking or
-   overlapping when system fonts differ or the mobile visual viewport is short.
-   Scroll the form instead of compressing its CSS grid's implicit rows. */
-.modal .card.status-create-form{display:flex;flex-direction:column;gap:16px;overflow-y:auto;overscroll-behavior:contain}
-.modal .card.status-create-form > *{flex:0 0 auto}
-@media (max-width:1024px){
-  .modal .card.status-create-form{max-height:min(90dvh,calc(100vh - 40px))}
-}
+/* Keep the status-page form's action row outside the scrollable inputs. On a
+   narrow viewport the focused Slug input otherwise intercepts Create clicks. */
+.modal .card.status-create-form{box-sizing:border-box;display:flex;flex-direction:column;gap:0;min-height:0;overflow:hidden;max-height:min(90dvh,calc(100vh - 40px))}
+.status-create-form > h2{flex:0 0 auto;margin-bottom:16px}
+.status-create-fields{display:grid;grid-template-columns:minmax(0,1fr);gap:16px;min-height:0;flex:1 1 auto;overflow-y:auto;overscroll-behavior:contain;scroll-padding-bottom:12px}
+.status-create-fields > .fld{min-width:0}
+.status-create-actions{display:flex;justify-content:flex-end;gap:10px;flex:0 0 auto;padding-top:16px;margin-top:0;border-top:1px solid var(--line);position:relative;z-index:1;background:var(--surface)}

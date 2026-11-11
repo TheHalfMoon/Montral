@@ -8,6 +8,7 @@
 // real plan; the plan is called "Synthetic plan" and every allowance is a round test number.
 import type { Page, Route } from "@playwright/test";
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
+import { clickWithoutLayoutShift, expectNoLayoutShift, topOf } from "../support/layout";
 
 // The app registers a service worker (lib/pwa.ts). In WebKit the page's fetches then reach the network through it,
 // where page.route never sees them, so the synthetic API answers below would silently not apply: no worker here.
@@ -24,12 +25,18 @@ const syntheticUsage = (over: Record<string, unknown>) => ({
 const json = (route: Route, status: number, body: unknown) => route.fulfill({ status, contentType: "application/json", headers: { "cache-control": "no-store" }, body: JSON.stringify(body) });
 // Playwright's unroute matches a function matcher by identity, so each matcher is one shared function
 const isUsage = (url: URL) => url.pathname === "/api/usage";
-const answerUsage = (page: Page, body: unknown) => page.route(isUsage, (route) => json(route, 200, body));
+const answerUsage = (page: Page, body: unknown, delayMs = 0) => page.route(isUsage, async (route) => {
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  await json(route, 200, body);
+});
 
 test("onboarding checklist, usage banner, quota message and suspended notice", async ({ page, guard, baseURL, browserName }, testInfo) => {
   test.setTimeout(180_000);
   const who = synthetic(testInfo);
   let monitorId = "";
+  // The email-verification bar has its own layout-shift fix and test (PR #84); it is dismissed here, under the key both
+  // versions honour, so the positions measured below depend only on the checklist and the usage banner.
+  await page.addInitScript(() => { try { sessionStorage.setItem("montral_verify_dismissed", "1"); } catch {} });
 
   await test.step("sign up: the empty dashboard shows the first-run checklist", async () => {
     await page.goto("/signup");
@@ -60,14 +67,23 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     const created = await page.request.post("/api/monitors", { data: { name: `Synthetic heartbeat ${who.id}`, type: "heartbeat", intervalSec: 3600 } });
     expect(created.status()).toBe(201);
     monitorId = (await created.json() as { id: string }).id;
+    // a slow channel list: the checklist arrives late, below the monitor list, so the list and its controls stay put
+    const isChannels = (url: URL) => url.pathname === "/api/channels";
+    await page.route(isChannels, async (route) => { await new Promise((r) => setTimeout(r, 1_500)); await route.continue(); });
     await page.goto("/app");
+    const search = page.getByPlaceholder("Search monitors…");
+    await expect(search).toBeVisible();
+    const searchTop = await topOf(search);
     const checklist = page.getByRole("region", { name: "Finish setting up" });
     await expect(checklist).toBeVisible();
+    await expectNoLayoutShift(search, searchTop);
+    await page.unroute(isChannels);
+    expect((await checklist.boundingBox())!.y, "the checklist is placed below the monitor list").toBeGreaterThan(searchTop);
     await expect(checklist.locator("[data-step=monitor]")).toHaveClass(/done/);
     await expect(checklist.locator("[data-step=channel]")).not.toHaveClass(/done/);
     await expect(checklist.getByRole("link", { name: "Connect" })).toHaveAttribute("href", "/app/alerting");
     await checkA11y(page, testInfo, "dashboard-checklist");
-    await checklist.getByRole("button", { name: "Hide checklist" }).click();
+    await clickWithoutLayoutShift(checklist.getByRole("button", { name: "Hide checklist" }));
     await expect(checklist).toBeHidden();
     await page.reload();
     await expect(page.getByText(`Synthetic heartbeat ${who.id}`).first()).toBeVisible();
@@ -79,12 +95,23 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await page.goto("/app");
     const bar = page.locator("[data-usage-alert=near]");
     await expect(bar).toBeVisible();
-    await expect(bar).toContainText("Nearly used up for this month: Webhook events.");
+    await expect(bar).toContainText("Nearly used up for this period: Webhook events.");
     await expect(bar).toContainText("(UTC)");
     await expect(bar.getByRole("link", { name: "View usage" })).toHaveAttribute("href", "/app/usage");
     await expect(bar.getByRole("link", { name: "Upgrade plan" })).toHaveAttribute("href", "/app/billing");
     await expect(page.locator("nav.nl a[data-nav=usage]")).toHaveJSProperty("hidden", false);
     await checkA11y(page, testInfo, "usage-banner-near");
+    // a revisit with slow usage: the banner this tab already showed is painted with the page, so nothing moves under it
+    await page.unroute(isUsage);
+    await answerUsage(page, syntheticUsage({ webhookEvents: quota(85, 100) }), 1_500);
+    await page.goto("/app");
+    const add = page.getByRole("button", { name: /New monitor/ });
+    await expect(add).toBeVisible();
+    const addTop = await topOf(add);
+    await expect(page.locator("[data-usage-alert=near]")).toBeVisible();
+    await expectNoLayoutShift(add, addTop);
+    await page.unroute(isUsage);
+    await answerUsage(page, syntheticUsage({ webhookEvents: quota(85, 100) }));
     await page.goto("/app/usage");
     await expect(page.getByRole("heading", { level: 2, name: "Synthetic plan" })).toBeVisible();
     await expect(page.locator("[data-meter-state=near]")).toHaveCount(1);
@@ -98,11 +125,11 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await answerUsage(page, syntheticUsage({ credits: quota(2000, 2000), webhookEvents: quota(85, 100) }));
     await page.goto("/app/usage");
     const bar = page.locator("[data-usage-alert=exhausted]");
-    await expect(bar).toContainText("Used up for this month: Checks.");
+    await expect(bar).toContainText("Used up for this period: Checks.");
     await expect(page.locator("[data-meter-state=exhausted]")).toContainText("Used up");
     await expect(page.locator("[data-meter-state=exhausted]").getByRole("link", { name: "Upgrade your plan" })).toHaveAttribute("href", "/app/billing");
     await checkA11y(page, testInfo, "usage-exhausted");
-    await bar.getByRole("button", { name: "Dismiss" }).click();
+    await clickWithoutLayoutShift(bar.getByRole("button", { name: "Dismiss" }));
     await expect(bar).toBeHidden();
     await page.goto("/app");
     await expect(page.getByText(`Synthetic heartbeat ${who.id}`).first()).toBeVisible();
@@ -120,9 +147,9 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await page.route(isCheck, (route) =>
       json(route, 402, { error: "No credits left this period", code: "credits_exhausted", resetsAt: nextUtcMonth() }));
     await page.goto(`/app/monitors/${monitorId}`);
-    await page.getByRole("button", { name: "Check now" }).click();
+    await clickWithoutLayoutShift(page.getByRole("button", { name: "Check now" }));
     const notice = page.locator("[data-quota-code=credits_exhausted]");
-    await expect(notice).toContainText("This workspace has used all of its checks for this month.");
+    await expect(notice).toContainText("There are not enough checks left this period for this check.");
     await expect(notice.getByRole("link", { name: "Upgrade plan" })).toHaveAttribute("href", "/app/billing");
     await expect(notice.getByRole("link", { name: "View usage" })).toHaveAttribute("href", "/app/usage");
     await expect(page.getByText("No credits left this period")).toHaveCount(0);

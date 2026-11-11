@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { Quota, Usage } from "./api";
 import { zh } from "./zh";
 import {
-  alertKey, formatResetDate, isQuotaCode, METER_LABEL, meterLevel, nextUtcMonthStart, QUOTA_CODES, QUOTA_MESSAGE, quotaRefusal,
-  resetDate, usageAlert, usageMeters,
+  alertKey, formatResetDate, isQuotaCode, joinMeters, METER_LABEL, meterLevel, nextUtcMonthStart, QUOTA_CODES, QUOTA_MESSAGE, quotaRefusal,
+  resetDate, usageAlert, usageBarStorage, usageMeters,
 } from "./usage-alerts";
 
 // Synthetic allowances only: no figure here describes a real plan.
@@ -104,5 +104,67 @@ describe("quotaRefusal", () => {
 describe("translations", () => {
   it("every message and meter label shown by the banner and the quota notice has a Chinese translation", () => {
     for (const s of [...Object.values(QUOTA_MESSAGE), ...Object.values(METER_LABEL)]) expect(zh[s], s).toBeTruthy();
+  });
+});
+
+describe("usage banner memory (paints with the page on revisits)", () => {
+  const memory = () => {
+    const m = new Map<string, string>();
+    return { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v), removeItem: (k: string) => void m.delete(k), m };
+  };
+  it("remembers the notice last shown and reads it back at first paint", () => {
+    const store = memory();
+    expect(usageBarStorage(store).read(NOW)).toBeNull();
+    const a = usageAlert(metered({ emails: q(8, 10) }), NOW)!;
+    usageBarStorage(store).write(a);
+    expect(usageBarStorage(store).read(NOW)).toEqual(a);
+  });
+  it("keeps what the bar displays only: state, meter keys, reset date and upgrade path, no usage figures", () => {
+    const store = memory();
+    usageBarStorage(store).write(usageAlert(metered({ emails: q(8, 10) }), NOW));
+    expect(JSON.parse(store.m.get("montral_usage_alert")!)).toEqual({ state: "near", meters: ["emails"], resetsAt: END, upgradeUrl: "/app/billing" });
+  });
+  it("forgets the notice and its dismissal once usage is back under 80 %", () => {
+    const store = memory();
+    const a = usageAlert(metered({ emails: q(10, 10) }), NOW)!;
+    usageBarStorage(store).write(a);
+    usageBarStorage(store).dismiss(alertKey(a));
+    expect(usageBarStorage(store).dismissed()).toBe(alertKey(a));
+    usageBarStorage(store).write(null);
+    expect(usageBarStorage(store).read(NOW)).toBeNull();
+    expect(usageBarStorage(store).dismissed()).toBeNull();
+  });
+  it("ignores a remembered notice from an ended period, or anything malformed", () => {
+    const store = memory();
+    usageBarStorage(store).write(usageAlert(metered({ emails: q(10, 10) }), NOW));
+    expect(usageBarStorage(store).read(new Date("2026-12-02T00:00:00Z"))).toBeNull();
+    for (const bad of ["{", "null", '{"state":"near","meters":["credits"],"resetsAt":"' + END + '","upgradeUrl":"https://elsewhere.example/"}',
+      '{"state":"near","meters":["__proto__"],"resetsAt":"' + END + '","upgradeUrl":"/app/billing"}', '{"state":"ok","meters":["credits"],"resetsAt":"' + END + '","upgradeUrl":"/app/billing"}']) {
+      store.m.set("montral_usage_alert", bad);
+      expect(usageBarStorage(store).read(NOW), bad).toBeNull();
+    }
+  });
+  it("works without session storage, or when it throws", () => {
+    expect(usageBarStorage(null).read(NOW)).toBeNull();
+    const throwing = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("denied"); }, removeItem: () => { throw new Error("denied"); } };
+    const s = usageBarStorage(throwing);
+    expect(() => { s.write(usageAlert(metered({ emails: q(10, 10) }), NOW)); s.dismiss("k"); s.write(null); }).not.toThrow();
+    expect(s.read(NOW)).toBeNull();
+    expect(s.dismissed()).toBeNull();
+  });
+});
+
+describe("meter names in a sentence", () => {
+  it("are joined with the ideographic comma in Chinese", () => {
+    expect(joinMeters(["检查额度", "邮件通知"], "zh-CN")).toBe("检查额度、邮件通知");
+    expect(joinMeters(["Checks", "Email notifications"], "en")).toBe("Checks, Email notifications");
+  });
+});
+
+describe("quota wording", () => {
+  it("says what is left is not enough for this check, per period, never 'this month'", () => {
+    expect(QUOTA_MESSAGE.credits_exhausted).toMatch(/not enough checks left this period for this check/);
+    expect(QUOTA_MESSAGE.browser_quota_exhausted).toMatch(/not enough browser check time left this period for this check/);
+    for (const m of Object.values(QUOTA_MESSAGE)) expect(m).not.toMatch(/month/);
   });
 });

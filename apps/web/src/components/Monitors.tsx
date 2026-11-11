@@ -219,12 +219,6 @@ export default function Monitors() {
         </div>
       ) : (
         <>
-          {setup && showOnboarding({ monitors: all.length, channels: setup.channels, statusPages: setup.pages }, { allProjects: everything, dismissed: hideSetup }) && (
-            <div className="onb-wrap onb-compact">
-              <OnboardingChecklist counts={{ monitors: all.length, channels: setup.channels, statusPages: setup.pages }} onAddMonitor={() => setOpen(true)}
-                onDismiss={() => { dismissOnboarding(orgId); setHideSetup(true); }} />
-            </div>
-          )}
           <div className="tool">
             <div className="ftabs">
               {tabs.map(([k, label, n]) => (
@@ -262,6 +256,14 @@ export default function Monitors() {
             {items && shown.length === 0 && <div className="tr"><span className="muted">{t("No monitors match.")}</span></div>}
             <div className="tbl-f"><span>{shown.length} / {all.length} {t("monitors")}</span></div>
           </div>
+          {/* below the list, and only once the counts and the hidden flag are both known: arriving late it never moves the
+              list or the controls above it, and it never flashes in and out */}
+          {setup && orgId !== null && showOnboarding({ monitors: all.length, channels: setup.channels, statusPages: setup.pages }, { allProjects: everything, dismissed: hideSetup }) && (
+            <div className="onb-wrap onb-compact">
+              <OnboardingChecklist counts={{ monitors: all.length, channels: setup.channels, statusPages: setup.pages }} onAddMonitor={() => setOpen(true)}
+                onDismiss={() => { dismissOnboarding(orgId); setHideSetup(true); }} />
+            </div>
+          )}
         </>
       )}
       {open && !everything && <MonitorForm onClose={() => setOpen(false)} onSaved={() => { setOpen(false); load(); window.dispatchEvent(new Event("montral:changed")); }} />}

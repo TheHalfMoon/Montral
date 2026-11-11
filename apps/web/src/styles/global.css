@@ -539,7 +539,7 @@ button.route.tog{width:100%;text-align:left;background:none;border:0;border-top:
 
 /* Onboarding (empty workspace) */
 .onb, .onb-wrap { display: grid; gap: 16px; min-width: 0; }
-.onb-compact { margin-bottom: 22px; }
+.onb-compact { margin-top: 22px; }
 .onb-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .onb-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .onb-t { font-family: "Instrument Serif", serif; font-weight: 400; font-size: 32px; margin: 0 0 4px; }

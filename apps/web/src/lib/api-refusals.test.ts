@@ -47,4 +47,32 @@ describe("API refusals the shell reacts to", () => {
     await expect(api.createMonitor({ name: "x" })).rejects.toMatchObject({ code: "monitor_limit", upgradeUrl: "/app/billing", resetsAt: undefined });
     expect(events).toEqual([]);
   });
+
+  it("a refusal from the previous workspace, answered after a switch, does not flag the new one", async () => {
+    let release!: () => void;
+    vi.stubGlobal("fetch", vi.fn(() => new Promise<Response>((done) => {
+      release = () => done(new Response(JSON.stringify({ error: "suspended", code: "workspace_suspended" }), { status: 403 }));
+    })));
+    const { api, isSuspended, resetCache } = await import("./api");
+    const pending = api.monitors();
+    resetCache(); // switched workspace while the request was in flight
+    release();
+    await expect(pending).rejects.toMatchObject({ code: "workspace_suspended" });
+    expect(isSuspended()).toBe(false);
+    expect(events).toEqual([]);
+  });
+
+  it("a later workspace call that succeeds in the same workspace lifts the notice; public config does not", async () => {
+    const fetchMock = answer(403, { error: "suspended", code: "workspace_suspended" });
+    vi.stubGlobal("fetch", fetchMock);
+    const { api, isSuspended } = await import("./api");
+    await expect(api.monitors()).rejects.toBeTruthy();
+    expect(isSuspended()).toBe(true);
+    vi.stubGlobal("fetch", answer(200, {}));
+    await api.config();
+    expect(isSuspended()).toBe(true);
+    await api.projects();
+    expect(isSuspended()).toBe(false);
+    expect(events).toEqual(["montral:suspended", "montral:unsuspended"]);
+  });
 });

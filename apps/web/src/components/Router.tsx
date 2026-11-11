@@ -114,6 +114,7 @@ export default function Router() {
     // another workspace or project: same page, new data — remount it even though the path did not change
     const onScope = () => { setSuspended(isSuspended()); setScope((n) => n + 1); show(); };
     const onSuspended = () => setSuspended(true);
+    const onUnsuspended = () => { setSuspended(false); setBump((n) => n + 1); };
     const onClick = (e: MouseEvent) => {
       const a = (e.target as Element | null)?.closest?.("a");
       if (!a || !internal(a, e)) return;
@@ -133,6 +134,7 @@ export default function Router() {
     window.addEventListener("montral:scope", onScope);
     window.addEventListener("montral:stale", onStale);
     window.addEventListener("montral:suspended", onSuspended);
+    window.addEventListener("montral:unsuspended", onUnsuspended);
     document.addEventListener("click", onClick);
     // a refusal may have arrived before this listener existed (the shell's early reads)
     if (isSuspended()) setSuspended(true);
@@ -142,6 +144,7 @@ export default function Router() {
       window.removeEventListener("montral:scope", onScope);
       window.removeEventListener("montral:stale", onStale);
       window.removeEventListener("montral:suspended", onSuspended);
+      window.removeEventListener("montral:unsuspended", onUnsuspended);
       document.removeEventListener("click", onClick);
     };
   }, []);

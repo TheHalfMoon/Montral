@@ -30,8 +30,9 @@ On the Monitors dashboard (`apps/web/src/components/Onboarding.tsx`, logic in `a
 
 Each step's state is derived from the workspace's real data (`/api/monitors`, `/api/channels`, `/api/status-pages`);
 nothing records progress on the server. The checklist is the empty state of a workspace without monitors. After the
-first monitor it stays above the list until a monitor **and** an alert channel exist (the status page is optional), and
-the customer can hide it with **Hide checklist**. Hiding is remembered in the browser (`localStorage`, per workspace), not
+first monitor it stays **below** the list until a monitor **and** an alert channel exist (the status page is optional),
+and the customer can hide it with **Hide checklist**. It renders only once the counts and the hidden flag are both known,
+and below the list, so arriving late it never moves the list or the controls above it, and never flashes in and out. Hiding is remembered in the browser (`localStorage`, per workspace), not
 on the server. The read-only "All projects" view never shows it.
 
 ## Usage page and banner
@@ -42,11 +43,15 @@ In this preview every meter counts the calendar month in UTC, so `periodEnd` is 
 
 - **Meters** (Plan & usage): a progress bar per meter, amber from 80 % ("Used N%"), red once used up ("Used up", with an
   upgrade link). An allowance of zero (the plan does not include that meter) never counts as used up.
-- **Banner** (`UsageBar.tsx`, every app page): shown when any meter is at 80 % or more ("Nearly used up for this month")
-  or used up ("Used up for this month", which wins), naming the meters and the reset date (UTC), with links to
+- **Banner** (`UsageBar.tsx`, every app page): shown when any meter is at 80 % or more ("Nearly used up for this period")
+  or used up ("Used up for this period", which wins), naming the meters and the reset date (UTC), with links to
   **View usage** (`/app/usage`) and **Upgrade plan** (the plan's `upgradeUrl`, else `/app/billing`, the sandbox billing
   page). Dismissing hides that exact notice for the browser session; a new state (for example near → used up) shows
-  again. A quota refusal anywhere in the app refreshes it.
+  again. A quota refusal anywhere in the app refreshes it. The banner sits above the page, so to never push the page
+  down under a click on revisits, the tab remembers the notice last shown in `sessionStorage` (state, meter keys,
+  reset date, upgrade path; no usage figures) and paints it with the page; usage then confirms, updates or clears it,
+  and the memory is cleared once usage is back under 80 % or the workspace changes. Usage is read once per load: the
+  shell's early `/usage` read answers both the Plan & usage nav entry and the banner.
 
 ## Quota refusals
 
@@ -58,7 +63,9 @@ In this preview every meter counts the calendar month in UTC, so `periodEnd` is 
 
 `resetsAt` is the end of the period the edition reports for that allowance, else the next UTC month
 (`allowanceResetsAt` in `apps/api/src/entitlements.ts`). The web app (`lib/usage-alerts.ts` → `QuotaNotice.tsx`) turns
-these codes into a sentence with the reset date and links to usage and billing instead of the API message. Other
+these codes into a sentence with the reset date and links to usage and billing instead of the API message. A check is
+refused when what is left does not cover it (a browser check reserves its whole timeout), so the wording is "not
+enough … left this period for this check", with the reset date the refusal gives. Other
 refusals (`monitor_limit`, `interval_not_allowed`, `metering_unavailable`, rate limits) keep their existing handling.
 
 ## Suspended workspace
@@ -68,7 +75,9 @@ answers `403 {"code": "workspace_suspended"}`. The web client notices the first 
 shell replaces the page with a notice (`Suspended.tsx`): the workspace is suspended, nothing is deleted, checks, alerts,
 webhook capture and public status pages are paused, everything resumes when the suspension is lifted, contact support.
 It never shows the reason or the operator's note (the API does not reveal them) and does not link to billing, which is
-also refused while suspended. Switching to another workspace clears the notice.
+also refused while suspended. A refusal counts only for the workspace the request was made in (a late answer from the
+previous workspace cannot flag a new one); switching workspace clears the notice, and so does a later workspace call
+that succeeds (the suspension was lifted).
 
 ## Tests
 
@@ -84,6 +93,8 @@ also refused while suspended. Switching to another workspace clears the notice.
 
 - Hiding the checklist is per browser; another browser or device shows it again until the steps are done.
 - The banner reads usage when the app loads, on workspace switches and after a quota refusal; it does not poll.
+- On the first load of a tab (nothing remembered yet) the banner still appears once usage arrives; revisits paint it with
+  the page. When usage drops back under 80 % the remembered banner disappears, which moves content up, never down.
 - An email allowance used up raises the banner and the meter, but no refusal reaches the web app: alert emails past the
   allowance are recorded as skipped in the alert log ("email allowance used up for this period").
 - Members who cannot open the billing page (it needs a workspace manager) still see the upgrade link; the billing page

@@ -140,7 +140,8 @@ export type Usage =
 /** Starts the shell's reads and the data of the route at `pathname` right away. */
 export function prefetch(pathname: string) {
   const hit = resolveRoute(pathname);
-  for (const path of ["/me", "/counts", "/projects", ...(hit ? hit.route.data(hit.params) : [])]) {
+  // "/usage" too: boot.ts (the Plan & usage entry) and the usage banner both read it on every load; this one request answers both
+  for (const path of ["/me", "/counts", "/projects", "/usage", ...(hit ? hit.route.data(hit.params) : [])]) {
     if (early.has(path)) continue;
     const p = fetchJson<unknown>(path);
     p.catch(() => {});
@@ -175,10 +176,19 @@ export function resetCache() {
 export const WORKSPACE_SUSPENDED = "workspace_suspended";
 let suspended = false;
 export const isSuspended = () => suspended;
-function markSuspended() {
-  if (suspended) return;
-  suspended = true;
-  if (typeof window !== "undefined") window.dispatchEvent(new Event("montral:suspended"));
+/** Paths whose answer says nothing about the active workspace (public config; creating another workspace). */
+const OUTSIDE_WORKSPACE = new Set(["/config", "/workspaces"]);
+/** A refusal or success counts only for the workspace the request was made in (`asked`), never for one switched to since. */
+function noteSuspension(path: string, asked: number, refused: boolean) {
+  if (asked !== scope || typeof window === "undefined") return;
+  if (refused && !suspended) {
+    suspended = true;
+    window.dispatchEvent(new Event("montral:suspended"));
+  } else if (!refused && suspended && !OUTSIDE_WORKSPACE.has(path.split("?")[0])) {
+    // the operator lifted the suspension: a workspace call went through again
+    suspended = false;
+    window.dispatchEvent(new Event("montral:unsuspended"));
+  }
 }
 
 /** An API refusal: `code` and the rest of the body let the UI explain plan limits (HTTP 402) instead of just printing the message. */
@@ -198,6 +208,7 @@ export class ApiError extends Error {
 }
 
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const asked = scope;
   const res = await fetch(`/api${path}`, {
     credentials: "include",
     ...init,
@@ -209,11 +220,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const body = (await res.json().catch(() => null)) as { error?: string; code?: string; upgradeUrl?: string; resetsAt?: string } | null;
-    if (res.status === 403 && body?.code === WORKSPACE_SUSPENDED) markSuspended();
+    if (res.status === 403 && body?.code === WORKSPACE_SUSPENDED) noteSuspension(path, asked, true);
     // a used-up allowance: the shell's usage banner reads the new state
     if ((res.status === 402 || res.status === 429) && typeof body?.code === "string" && /_exhausted$/.test(body.code)) window.dispatchEvent(new Event("montral:usage"));
     throw new ApiError(body?.error ?? res.statusText, res.status, body);
   }
+  noteSuspension(path, asked, false);
   return res.status === 204 ? (undefined as T) : res.json();
 }
 

@@ -135,8 +135,10 @@ What the platform learns about them at run time is stored per region in `probe_r
 
 ## Limitations
 
-- API only; there is no operator UI, and the web app shows suspended members a generic error rather than a dedicated
-  "suspended" screen. Members can still switch to another workspace through the auth API.
+- API only; there is no operator UI. Members of a suspended workspace see a dedicated notice in the web app instead
+  of the page (what is paused, that nothing is deleted, to contact support; never the reason or note), triggered by
+  the first `workspace_suspended` refusal; see [CUSTOMER-ONBOARDING.md](CUSTOMER-ONBOARDING.md#suspended-workspace).
+  Members can still switch to another workspace from the workspace menu (the auth API).
 - Checks already queued when the suspension is written still run (at most one per monitor). Public status responses
   may be served from the 30-second public cache for that long after suspending. A webhook body that was being read when
   the suspension was written is still stored.

@@ -75,6 +75,8 @@ export function registerServiceWorker(): void {
     sw
       .register("/sw.js", { scope: "/", updateViaCache: "none" })
       .then((reg) => {
+        // an environment that blocks service workers (Playwright's serviceWorkers: "block" in WebKit) resolves without one
+        if (!reg) return;
         const prompt = () =>
           toast(t("A new version of Montral is available."), "ok", {
             key: "pwa-update",

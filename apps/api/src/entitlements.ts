@@ -100,6 +100,25 @@ export type CreditBalance = {
   periodEnd: Date;
 };
 
+/**
+ * When a monthly allowance taken at `at` resets: 00:00 UTC on the first of the next calendar month, the period every
+ * meter of the hosted preview counts in (docs/BILLING-SANDBOX.md). Quota refusals tell the client this instant.
+ */
+export const allowanceResetUtc = (at: Date = new Date()) => new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth() + 1, 1));
+
+/**
+ * The `resetsAt` (ISO) of a quota refusal: the end of the period the edition reports for that allowance, else the next
+ * calendar month in UTC. Read only on the refusal path; a failing balance read never turns the refusal into an error.
+ */
+export async function allowanceResetsAt(e: Entitlements, workspaceId: string, meter: "credits" | Meter, at: Date): Promise<string> {
+  let balance: CreditBalance | null = null;
+  try {
+    balance = meter === "credits" ? await e.creditBalance(workspaceId) : (await e.meterBalance?.(workspaceId, meter)) ?? null;
+  } catch { /* the fallback below */ }
+  const end = balance?.periodEnd instanceof Date && !Number.isNaN(balance.periodEnd.getTime()) && balance.periodEnd > at ? balance.periodEnd : allowanceResetUtc(at);
+  return end.toISOString();
+}
+
 /** Self-hosted default: nothing is counted, nothing is refused. */
 export const unmetered: Entitlements = {
   spendCredits: async (_workspaceId, credits) => credits,

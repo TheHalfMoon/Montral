@@ -1,6 +1,6 @@
 import type { Monitor } from "@montral/repo";
 import { describe, expect, it, vi } from "vitest";
-import { billingPeriod, creditCost, unmetered, type Entitlements } from "./entitlements";
+import { allowanceResetsAt, allowanceResetUtc, billingPeriod, creditCost, unmetered, type Entitlements } from "./entitlements";
 import { withinCredits } from "./scheduler";
 
 const mon = (organizationId: string, type = "http") => ({ id: crypto.randomUUID(), organizationId, type }) as Monitor;
@@ -104,5 +104,31 @@ describe("withinCredits", () => {
     const broken: Entitlements = { ...unmetered, spendCredits: async () => { throw new Error("db down"); }, creditBalance: async () => null };
     const ms = [mon("a"), mon("a")];
     expect(await withinCredits(ms, broken)).toEqual(ms);
+  });
+});
+
+describe("quota refusal reset date", () => {
+  const at = new Date("2026-11-30T23:59:59.900Z");
+  it("is the first instant of the next UTC month, across the year boundary too", () => {
+    expect(iso(allowanceResetUtc(at))).toBe("2026-12-01T00:00:00.000Z");
+    expect(iso(allowanceResetUtc(new Date("2026-12-31T23:00:00Z")))).toBe("2027-01-01T00:00:00.000Z");
+  });
+  it("uses the period end the edition reports for that allowance", async () => {
+    const end = new Date("2026-12-15T10:30:00.000Z");
+    const e: Entitlements = {
+      ...unmetered,
+      creditBalance: async () => ({ limit: 10, used: 10, periodStart: new Date("2026-11-15T10:30:00Z"), periodEnd: end }),
+      meterBalance: async () => ({ limit: 5, used: 5, periodStart: new Date("2026-11-01T00:00:00Z"), periodEnd: new Date("2026-12-01T00:00:00Z") }),
+    };
+    expect(await allowanceResetsAt(e, "w", "credits", at)).toBe(iso(end));
+    expect(await allowanceResetsAt(e, "w", "browserSeconds", at)).toBe("2026-12-01T00:00:00.000Z");
+  });
+  it("falls back to the next UTC month without a balance, with a past period end, or when the read fails", async () => {
+    expect(await allowanceResetsAt(unmetered, "w", "credits", at)).toBe("2026-12-01T00:00:00.000Z");
+    expect(await allowanceResetsAt(unmetered, "w", "webhookEvents", at)).toBe("2026-12-01T00:00:00.000Z");
+    const stale: Entitlements = { ...unmetered, creditBalance: async () => ({ limit: 1, used: 1, periodStart: new Date(0), periodEnd: new Date("2026-11-01T00:00:00Z") }) };
+    expect(await allowanceResetsAt(stale, "w", "credits", at)).toBe("2026-12-01T00:00:00.000Z");
+    const broken: Entitlements = { ...unmetered, creditBalance: async () => { throw new Error("db down"); } };
+    expect(await allowanceResetsAt(broken, "w", "credits", at)).toBe("2026-12-01T00:00:00.000Z");
   });
 });

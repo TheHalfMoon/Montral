@@ -8,6 +8,8 @@ import { ago, api, type Channel, type CheckResult, type Incident, type Monitor, 
 import { pollWhileVisible } from "../lib/poll";
 import { groupRuns } from "../lib/runs";
 import { MonitorForm } from "./Monitors";
+import QuotaNotice, { type QuotaRefusal } from "./QuotaNotice";
+import { quotaRefusal } from "../lib/usage-alerts";
 
 type Detail = Monitor & { results: CheckResult[]; regionStats: RegionStat[]; incidents: Incident[]; stats: { uptime24h: number | null; uptime7d: number | null; avg24h: number | null; p95: number | null } };
 const every = (s: number) => (s % 3600 === 0 ? `${s / 3600} h` : s % 60 === 0 ? `${s / 60} min` : `${s} s`);
@@ -18,6 +20,8 @@ export default function MonitorDetail({ id }: { id: string }) {
   const [editing, setEditing] = useState(false);
   const [pending, setPending] = useState("");
   const [err, setErr] = useState("");
+  // an allowance used up (hosted edition): explained with its reset date and an upgrade link instead of the raw error
+  const [quota, setQuota] = useState<QuotaRefusal | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   // the answer to the last single-region request, shown under the regions table
   const [spot, setSpot] = useState<{ region: string; run: NonNullable<SpotCheck["result"]> } | null>(null);
@@ -25,7 +29,13 @@ export default function MonitorDetail({ id }: { id: string }) {
   const act = async (name: string, fn: () => Promise<unknown>) => {
     setPending(name);
     setErr("");
-    try { await fn(); } catch (e) { setErr((e as Error).message); setPending(""); return; }
+    setQuota(null);
+    try { await fn(); } catch (e) {
+      const q = quotaRefusal(e);
+      if (q) setQuota(q); else setErr((e as Error).message);
+      setPending("");
+      return;
+    }
     setPending("");
   };
   // opened from the "All projects" view: from here on work in the monitor's own project, then read what depends on it
@@ -89,6 +99,7 @@ export default function MonitorDetail({ id }: { id: string }) {
       </div>
 
       {err && <p className="err">{err}</p>}
+      {quota && <QuotaNotice refusal={quota} />}
       <TimeCoverage id={id} />
       {m.type === "browser" && <BrowserRuns monitorId={id} uncheckedSince={m.uncheckedSince} />}
       {m.type !== "browser" && m.uncheckedSince && <p className="err">{t("Unchecked since {time}: checks for this monitor are not running.").replace("{time}", new Date(m.uncheckedSince).toLocaleString())}</p>}

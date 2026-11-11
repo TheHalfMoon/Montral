@@ -67,6 +67,8 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
           <button class="mi signout"><span data-t>Sign out</span><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 8l-4 4 4 4M6 12h10"/></svg></button>
         </div>
         <button class="me" id="me-btn" aria-haspopup="menu" aria-expanded="false">
+          <!-- a name even before /api/me answers, or when it cannot (e.g. a suspended workspace) -->
+          <span class="sr-only" data-t>Account</span>
           <div><span data-me="name"></span><small data-me="email"></small></div>
           <svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="m7 15 5-5 5 5"/></svg>
         </button>

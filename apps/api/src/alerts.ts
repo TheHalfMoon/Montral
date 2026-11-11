@@ -286,6 +286,8 @@ export type PushedDevices = Map<string, Promise<boolean>>;
  * grant must not silently over-authorize or produce negative/NaN skipped counts. */
 async function withinEmails<T>(entitlements: Entitlements, orgId: string, subs: T[]) {
   if (!subs.length) return { send: subs, skipped: 0 };
+  // Incident alerts are the product's core promise: a failing ledger still sends them (bounded by incident dedupe), in
+  // every edition. Reports and digests, which may be omitted, fail closed in a metered deployment.
   const granted = await entitlements.spendEmails(orgId, subs.length).catch(() => (console.error("email allowance unavailable"), subs.length));
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > subs.length) {
     console.error("email allowance invalid");

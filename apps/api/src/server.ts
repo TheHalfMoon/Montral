@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -14,6 +15,7 @@ import { configureBrowserChecks } from "./browser-check";
 import { configureProbes } from "./probes";
 import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
+import { loadPlanCatalog } from "./plan-catalog";
 import { runMontralMaintenance } from "./montral-maintenance";
 import { migrateMontralSchema } from "./schema-migrate";
 import { applyWebSecurityHeaders } from "./web-security-headers";
@@ -51,6 +53,22 @@ env.WEB_ORIGIN ||= env.BETTER_AUTH_URL;
 process.env.API_ORIGIN ||= `http://127.0.0.1:${port}`;
 // tells the web build's SSR that this router strips and sets the custom-domain header (custom-domain-node.ts)
 process.env.MONTRAL_STATUS_DOMAINS = "node";
+
+// The plan catalog of a metered deployment is operator configuration kept out of the repository (plan-catalog.ts). The
+// file is read once here; an unreadable or invalid one stops the server instead of metering with a guess. Only the
+// catalog's label and content hash are logged, never its plans' prices or allowances.
+if (env.MONTRAL_METERING_ENABLED === "true" && env.MONTRAL_PLAN_CONFIG?.trim()) {
+  if (env.MONTRAL_PLAN_CONFIG_JSON?.trim()) throw new Error("Set either MONTRAL_PLAN_CONFIG or MONTRAL_PLAN_CONFIG_JSON, not both");
+  try {
+    env.MONTRAL_PLAN_CONFIG_JSON = readFileSync(env.MONTRAL_PLAN_CONFIG.trim(), "utf8");
+  } catch {
+    throw new Error("MONTRAL_PLAN_CONFIG: the plan catalog file could not be read");
+  }
+}
+if (env.MONTRAL_METERING_ENABLED === "true") {
+  const catalog = await loadPlanCatalog(env);
+  console.log(`metering: plan catalog ${catalog.version} (${catalog.source}, ${catalog.plans.size} plans)`);
+}
 
 // SMTP (any provider; RESEND_API_KEY is a shortcut for Resend): either one SMTP_URL (smtps://user:pass@host:465, smtp://host:587?...) or discrete SMTP_HOST/PORT/USER/PASS/SECURE
 const smtpConfig = env.SMTP_URL

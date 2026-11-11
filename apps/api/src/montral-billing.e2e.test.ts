@@ -87,6 +87,40 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(period.end.toISOString()).toBe("2024-03-01T00:00:00.000Z");
   });
 
+  it("meters with the operator's plan catalog: its limits apply at once, overrides win, an invalid catalog fails closed", async () => {
+    const { org } = await signup();
+    // synthetic catalog: these numbers describe no real offer
+    const catalog = (credits: number, overrides: unknown[] = []) => JSON.stringify({
+      schemaVersion: 1, version: "synthetic-e2e", defaultPlan: "basic",
+      plans: [{ id: "basic", name: "Basic", limits: { activeMonitors: 2, minIntervalSec: 180, regions: 1, credits, emails: 3 } },
+        { id: "pro", name: "Wide", limits: { activeMonitors: 9, minIntervalSec: 60, regions: 4, credits: 870, emails: 30 }, features: ["hideBranding"] },
+        { id: "business", name: "Widest", limits: { activeMonitors: 11, minIntervalSec: 60, regions: 4, credits: 880, emails: 30 } }],
+      overrides,
+    });
+    const metered = (json: string) => createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true", MONTRAL_PLAN_CONFIG_JSON: json });
+    const a = metered(catalog(13));
+    expect(await a.plan(org)).toMatchObject({ id: "basic", name: "Basic", maxActiveMonitors: 2, minIntervalSec: 180, maxRegions: 1, hideBranding: false });
+    expect(await a.spendCredits(org, 10)).toBe(10);
+    expect(await a.spendCredits(org, 10)).toBe(3);
+    expect(await a.creditBalance(org)).toMatchObject({ limit: 13, used: 13 });
+    // the operator lowers the allowance mid-period: nothing more is granted, and the balance shows the new limit
+    const lowered = metered(catalog(5));
+    expect(await lowered.spendCredits(org, 1)).toBe(0);
+    expect(await lowered.creditBalance(org)).toMatchObject({ limit: 5, used: 13 });
+    // a per-workspace override (an enterprise contract) changes the plan and one limit
+    const contract = metered(catalog(13, [{ organizationId: org, plan: "pro", limits: { credits: 20 }, note: "synthetic contract" }]));
+    expect(await contract.plan(org)).toMatchObject({ id: "pro", maxActiveMonitors: 9, maxRegions: 4, hideBranding: true });
+    expect(await contract.spendCredits(org, 10)).toBe(7);
+    // billing is enabled here, so a catalog without the plan ids billing stores is refused, not silently defaulted
+    const unbillable = metered(JSON.stringify({ schemaVersion: 1, version: "x", defaultPlan: "basic", plans: [{ id: "basic", name: "B", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 1, emails: 1 } }] }));
+    await expect(unbillable.spendCredits(org, 1)).rejects.toThrow(/must define the plan ids pro, business/);
+    // an invalid catalog never meters with a guess: every metered call fails
+    const broken = metered(JSON.stringify({ schemaVersion: 1, version: "x", defaultPlan: "missing", plans: [] }));
+    await expect(broken.spendCredits(org, 1)).rejects.toThrow(/Invalid plan catalog/);
+    await expect(broken.plan(org)).rejects.toThrow(/Invalid plan catalog/);
+    expect(await contract.creditBalance(org)).toMatchObject({ used: 20 });
+  });
+
   it("refunds credits to the month they were spent in, never to the new month", async () => {
     const { org } = await signup();
     const limits = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });

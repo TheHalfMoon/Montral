@@ -81,7 +81,9 @@ const domainsUnsupported = (c: Context<AppEnv>) =>
 /** The stored flag counts only while the plan allows it: after a downgrade the page shows Montral again, and the flag is kept. */
 async function brandingHidden(c: Context<AppEnv>, page: { hideBranding: boolean; organizationId: string }) {
   if (!page.hideBranding) return false;
-  return brandingAllowed(await c.get("entitlements").plan(page.organizationId));
+  // a plan lookup that fails (metering unavailable) shows the branding rather than failing the public page
+  const plan = await c.get("entitlements").plan(page.organizationId).catch(() => undefined);
+  return plan !== undefined && brandingAllowed(plan);
 }
 
 /** 402 when the request turns branding off on a plan that does not include that; null otherwise (turning it back on is always fine). */

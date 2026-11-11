@@ -1,3 +1,4 @@
+import { PlanCatalogError } from "./plan-catalog";
 import type { Monitor, Repo } from "@montral/repo";
 import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminders, sendReminders, sweepDeliveries, wasDelivered } from "./alerts";
 import type { CheckOutcome } from "./checker";
@@ -157,14 +158,25 @@ export async function processCheckMessage(repo: Repo, msg: CheckMessage, entitle
  * The monitors a workspace's remaining credits cover, in the order given; the others are left out for this round.
  * They were already leased, so they come due again after their interval and run once credits are back.
  */
+/** At most one line a minute naming the cause, so a long outage is visible to the operator without flooding the log. */
+let lastMeteringLog = 0;
+function meteringFailed(e: unknown) {
+  console.error("credits unavailable");
+  if (Date.now() - lastMeteringLog < 60_000) return;
+  lastMeteringLog = Date.now();
+  console.error(`metering unavailable: ${e instanceof PlanCatalogError ? "the plan catalog is invalid" : "the usage ledger could not be reached"}; metered checks are being skipped`);
+}
+
 export async function withinCredits(monitors: Monitor[], entitlements: Entitlements): Promise<Monitor[]> {
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of monitors) byWorkspace.set(m.organizationId, [...(byWorkspace.get(m.organizationId) ?? []), m]);
   const allowed = new Set<string>();
   await Promise.all([...byWorkspace].map(async ([workspaceId, list]) => {
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
-    // a failing ledger must not silence monitoring: the checks run and the gap is only logged
-    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch(() => (console.error("credits unavailable"), wanted));
+    // A failing ledger: self-hosted (unmetered) runs the checks and logs the gap, so monitoring is never silenced; a
+    // metered deployment grants nothing (failClosed), so a ledger or catalog failure never runs unmetered checks. The
+    // skipped checks come due again; heartbeats (cost 0) are unaffected. The log names the cause for the operator.
+    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch((e) => (meteringFailed(e), entitlements.failClosed ? 0 : wanted));
     // A malformed successful metering response must not overauthorize paid probes.
     // Zero-credit heartbeat monitors remain eligible, and an actual ledger outage
     // retains the existing monitoring-availability fallback above.
@@ -267,7 +279,8 @@ export async function reserveCredits(workspace: string, m: Monitor, entitlements
   const cost = creditCost(m);
   if (cost === 0) return 0;
   let granted: number;
-  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return 0; }
+  // a failing ledger: unmetered deployments run the check uncharged; a metered one does not run it (failClosed)
+  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return entitlements.failClosed ? null : 0; }
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
   if (granted < cost) {
     if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);
@@ -574,7 +587,7 @@ export async function sendUncheckedDigests(repo: Repo, entitlements: Entitlement
   for (const d of await repo.pendingUncheckedDigests()) {
     if (!(await repo.withinLimit(`browser-unchecked-digest:${d.organizationId}`, UNCHECKED_DIGESTS_PER_HOUR, 3600))) continue;
     const emails = repo.managerEmails ? await repo.managerEmails(d.organizationId) : [];
-    const granted = emails.length ? await entitlements.spendEmails(d.organizationId, emails.length).catch(() => emails.length) : 0;
+    const granted = emails.length ? await entitlements.spendEmails(d.organizationId, emails.length).catch(() => (entitlements.failClosed ? 0 : emails.length)) : 0;
     const allowed = Number.isSafeInteger(granted) ? Math.max(0, Math.min(granted, emails.length)) : 0;
     const names = d.monitors.map((m) => `- ${m.name}: ${m.reason ?? "browser check did not run"}`).join("\n");
     const subject = d.monitors.length === 1 ? `${d.monitors[0].name}: browser checks are not running` : `${d.monitors.length} browser monitors are not being checked`;

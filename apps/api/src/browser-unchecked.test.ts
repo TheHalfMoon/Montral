@@ -197,6 +197,15 @@ describe("browser checks that did not happen", () => {
     // a reservation costing 2 with 1 left: the 1 granted is given back and the check must not run
     setAllowance(1);
     expect(await reserveCredits("o", { type: "http", regions: ["eu", "us"] } as Monitor, entitlements)).toBeNull();
+    // a failing ledger: an unmetered deployment runs the journey uncharged, a metered one (failClosed) does not run it
+    const failing = { ...(entitlements as object), spendCredits: async () => { throw new Error("ledger down"); } };
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await reserveCredits("o", { type: "browser", regions: ["auto"] } as Monitor, failing as never)).toBe(0);
+      expect(await reserveCredits("o", { type: "browser", regions: ["auto"] } as Monitor, { ...failing, failClosed: true } as never)).toBeNull();
+    } finally {
+      quiet.mockRestore();
+    }
     expect(refunds.at(-1)).toEqual({ workspace: "o", n: 1 });
   });
 

@@ -53,6 +53,19 @@ describe("withinCredits", () => {
     const run = await withinCredits([...a, ...b], ledger({ a: 2, b: 5 }));
     expect(run).toEqual([a[0], a[1], b[0]]);
   });
+  it("a failing ledger: self-hosted runs the checks, a metered deployment (failClosed) runs none but heartbeats", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const failing: Entitlements = { ...unmetered, spendCredits: async () => { throw new Error("ledger down"); } };
+      const hb = mon("a", "heartbeat");
+      const paid = [mon("a"), mon("b")];
+      expect(await withinCredits([hb, ...paid], failing)).toEqual([hb, ...paid]);
+      expect(await withinCredits([hb, ...paid], { ...failing, failClosed: true })).toEqual([hb]);
+      expect(log).toHaveBeenCalledWith("credits unavailable");
+    } finally {
+      log.mockRestore();
+    }
+  });
   it("never charges or blocks heartbeat monitors", async () => {
     expect(creditCost({ type: "heartbeat", regions: ["auto"] })).toBe(0);
     const hb = mon("a", "heartbeat");

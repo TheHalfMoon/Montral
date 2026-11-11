@@ -127,7 +127,7 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
 6. **SaaS follow-ups** (ledger rows 53–73): unchecked digest for non-browser monitors, drain audit, per-region credit
    refunds, metering of webhook replay and inbox count, per-plan status-page and feature gates, sub-60 s plan intervals,
-   first-load banners, SCIM/SSO during suspension, `past_due_since` backfill, SSO JIT slug retry, operator UI, live
+   first-load banners, SCIM/SSO during suspension, `past_due_since` backfill, operator UI, live
    billing provider verification, probe registration and credentials.
 
 Grafana OnCall and other incident-response tools named in the brief are not yet in

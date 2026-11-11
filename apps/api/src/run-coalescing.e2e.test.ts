@@ -118,6 +118,31 @@ describe.skipIf(!url)("stale run coalescing (PostgreSQL)", () => {
     expect(credits).toBe(2);
   });
 
+  // Load qualification run 42921692743: one of 4,000 monitors recorded 3 results within 10 s after a slow target
+  // recovered. The interleaving, deterministically: each of the three checks is owed under the documented rule (a check
+  // that started before a claim never covers it), so this is the guarantee, not a leak; queued runs claimed before the
+  // latest check started still collapse into it.
+  it("a check in flight at recovery, the queued run claimed after it started and the next interval's run all check; the rest of the backlog is skipped", async () => {
+    delayMs = 600;
+    const id = await monitor();
+    const inFlight = run(await claim(id, 1)); // run 1 starts under the slow target
+    await new Promise((r) => setTimeout(r, 200));
+    const queued = await claim(id, 2); // claimed while run 1 is checking: run 1 cannot cover it
+    delayMs = 0; // the target recovers; run 1 still waits for its slow answer
+    await inFlight;
+    await run(queued); // the backlog drains: run 2 starts at once and is checked
+    const next = await claim(id, 3); // the next tick claims after run 2 started
+    const backlog = await claim(id, 4); // and one more run is queued before run 3 starts
+    await run(next); // checked: claimed after the latest check started
+    await run(backlog); // claimed before run 3 started: covered by it, skipped
+    expect(requests).toBe(3);
+    expect(credits).toBe(3);
+    const [{ n, span }] = await db.query<{ n: number; span: number }>(
+      "SELECT count(*)::int AS n, extract(epoch from max(observed_at) - min(observed_at))::float8 AS span FROM monitor_observation WHERE monitor_id = $1 AND generation IS NOT NULL", [id]);
+    expect(n).toBe(3);
+    expect(span).toBeLessThan(10); // three results within the qualification's 10 s window
+  });
+
   it("a monitor that is late on every run is not thinned out: a covering check older than half an interval supersedes nothing", async () => {
     const id = await monitor();
     const first = await claim(id, 1);

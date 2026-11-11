@@ -303,10 +303,25 @@ async function refuseTarget(c: Context<AppEnv>, type: string, target: string) {
 /** Scheduler bookkeeping of run coalescing (beginRuns): never part of the API (it would add ~150 bytes per monitor to every list). */
 // and of browser checks: the deferral streak, digest bookkeeping and the secrets version (uncheckedSince is shown)
 const SCHEDULER_ONLY = new Set(["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt", "deferredSince", "lastDeferredRunAt", "uncheckedNotifiedAt", "browserSecretsVersion"]);
-const withoutSchedulerFields = <T,>(m: T): T => Object.fromEntries(Object.entries(m as object).filter(([k]) => !SCHEDULER_ONLY.has(k))) as T;
+// One output object per monitor, built in a single pass. GET /api/monitors returns every monitor of the project (5.6 MB
+// of JSON for 4,000 monitors), so each intermediate copy is multiplied by the rows and by concurrent requests: the
+// previous spread + Object.entries/fromEntries (+ a second spread for members) made two to three full copies of every
+// row and two-element arrays for each of its ~60 fields, all garbage by the time the response was sent. Same keys,
+// order and masking as before.
 const shown = async <T extends { headers?: Record<string, string> | null; requestBody?: string | null; browserSecrets?: Record<string, string> | null }>(c: Context<AppEnv>, rows: T[]): Promise<T[]> => {
-  const all = rows.map((m) => withoutSchedulerFields(m.browserSecrets !== undefined ? { ...m, browserSecrets: maskedSecrets(m.browserSecrets) } : m));
-  return (await isManager(c)) ? all : all.map((m) => ({ ...m, ...(m.headers ? { headers: maskHeaders(m.headers) } : {}), ...(m.requestBody ? { requestBody: MASK } : {}) }));
+  const manager = await isManager(c);
+  return rows.map((m) => {
+    const out: Record<string, unknown> = {};
+    for (const k in m) {
+      if (!Object.hasOwn(m, k) || SCHEDULER_ONLY.has(k)) continue;
+      const v = (m as Record<string, unknown>)[k];
+      if (k === "browserSecrets") out[k] = v === undefined ? v : maskedSecrets(v as Record<string, string> | null);
+      else if (!manager && k === "headers" && v) out[k] = maskHeaders(v as Record<string, string>);
+      else if (!manager && k === "requestBody" && v) out[k] = MASK;
+      else out[k] = v;
+    }
+    return out as T;
+  });
 };
 
 /** Source fields that look like credentials: a record carrying one is refused rather than imported without its authentication. */

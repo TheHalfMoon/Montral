@@ -1,4 +1,5 @@
 import { slugify } from "./auth";
+import { createWorkspaceWithSlugRetry } from "./workspace-slug-retry";
 import { linkScimUser, scimGate } from "./scim";
 import type { Database } from "@montral/repo";
 import { APIError, createAuthEndpoint, getSessionFromCtx } from "better-auth/api";
@@ -239,8 +240,12 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             if (conn.orgId) await linkScimUser(q, conn.orgId, identity.email, userId).catch(() => console.error("scim user could not be linked; private diagnostics suppressed"));
             if (!conn.orgId) {
               const ws = `${name}'s workspace`;
-              const slug = slugify(ws);
-              if (!(await database.repo.anyWorkspaceOf(userId))) await database.repo.createPersonalWorkspace({ id: crypto.randomUUID(), name: ws, slug, ownerId: userId });
+              if (!(await database.repo.anyWorkspaceOf(userId))) {
+                await createWorkspaceWithSlugRetry(
+                  (slug) => database.repo.createPersonalWorkspace({ id: crypto.randomUUID(), name: ws, slug, ownerId: userId! }),
+                  () => slugify(ws),
+                );
+              }
             }
             how = "provisioned";
           }

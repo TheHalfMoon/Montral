@@ -124,6 +124,12 @@ for id in $(app_ids); do
   wait_replicas
   sleep 5
 done
+# The floors below are about load during the restart, not about how fast the restarts were: keep the load running
+# after the last restart until both floors are reached (bounded), instead of failing when the restarts were quick.
+for _ in $(seq 1 120); do
+  [[ $(wc -l < "$codes") -ge 100 && $(wc -l < "$posts") -ge 40 ]] && break
+  sleep 1
+done
 kill "$load_pid" "$post_pid" 2>/dev/null || true; wait "$load_pid" "$post_pid" 2>/dev/null || true; load_pid=""; post_pid=""
 total="$(wc -l < "$codes")"
 bad="$(grep -vc '^200$' "$codes" || true)"

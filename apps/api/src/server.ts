@@ -17,6 +17,7 @@ import type { Edition } from "./edition";
 import { montralEdition } from "./montral-edition";
 import { loadPlanCatalog } from "./plan-catalog";
 import { runMontralMaintenance } from "./montral-maintenance";
+import { subscriptionCatalogDrift } from "./montral-billing";
 import { migrateMontralSchema } from "./schema-migrate";
 import { applyWebSecurityHeaders } from "./web-security-headers";
 import type { Bindings } from "./env";
@@ -161,11 +162,31 @@ const server = createServer((req, res) => {
   );
 });
 
+/**
+ * After switching billing to catalog variants (or editing the catalog), warn when live subscriptions name plan ids the
+ * catalog no longer defines, or variants it no longer lists. Counts and plan ids only. Never fatal.
+ */
+async function warnBillingCatalogDrift() {
+  try {
+    const drift = await subscriptionCatalogDrift(database, env as never);
+    if (!drift) return;
+    if (drift.missingPlans.length) {
+      console.warn(`billing: live subscriptions name plan ids missing from the plan catalog (they get the default plan): ${drift.missingPlans.map((m) => `${m.plan}=${m.count}`).join(", ")}`);
+    }
+    if (drift.unmappedVariants > 0) {
+      console.warn(`billing: ${drift.unmappedVariants} live subscription(s) use a provider variant the ${drift.source === "catalog" ? "plan catalog" : "environment"} does not map; their plan is kept, plan changes by that variant are refused`);
+    }
+  } catch {
+    console.warn("billing: the subscription catalog check could not run; private diagnostics suppressed");
+  }
+}
+
 // retry: on a fresh `docker compose up` Postgres may still be starting
 for (let attempt = 1; ; attempt++) {
   try {
     const applied = await migrateMontralSchema(database, edition);
     if (applied.length) console.log(`migrations applied: ${applied.join(", ")}`);
+    await warnBillingCatalogDrift();
     break;
   } catch (error) {
     // A database migrated by a newer (or another) build: retrying cannot help, so refuse at once, before listening.

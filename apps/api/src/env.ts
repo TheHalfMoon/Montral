@@ -39,6 +39,10 @@ export type Bindings = {
   MONTRAL_MONTHLY_REPORTS_PAUSED?: string;
   MONTRAL_BILLING_ENABLED?: string;
   MONTRAL_BILLING_MODE?: string;
+  /** Days a past-due subscription keeps its plan, counted from the first failed payment (0–30, default 7). */
+  MONTRAL_BILLING_GRACE_DAYS?: string;
+  /** "true" once the owner published prices: GET /api/billing/plans then includes catalog price metadata. Default off. */
+  MONTRAL_BILLING_SHOW_PRICES?: string;
   LEMONSQUEEZY_API_KEY?: string;
   LEMONSQUEEZY_WEBHOOK_SECRET?: string;
   LEMONSQUEEZY_STORE_ID?: string;

@@ -25,3 +25,12 @@ export async function columnExists(db: Database, table: string, column: string):
   );
   return rows.length > 0;
 }
+
+/** A named constraint on a table (pg_constraint; no lock on the relation). */
+export async function constraintExists(db: Database, table: string, name: string): Promise<boolean> {
+  const rows = await db.query(
+    "SELECT 1 AS found FROM pg_constraint WHERE conrelid = to_regclass($1::text) AND conname = $2::text",
+    [table, name],
+  );
+  return rows.length > 0;
+}

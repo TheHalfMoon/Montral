@@ -2,11 +2,8 @@ import type { Database } from "@montral/repo";
 import type { Bindings } from "./env";
 import type { Entitlements, Plan, CreditBalance } from "./entitlements";
 import { unmetered } from "./entitlements";
-import { billingReady } from "./montral-billing";
+import { billingGraceDays, billingReady, entitledPlanId, ENV_FALLBACK_PLAN_IDS, envVariantsValid, type SubscriptionEntitlementRow } from "./montral-billing";
 import { cachedPlanCatalog, PlanCatalogError, type PlanLimits } from "./plan-catalog";
-
-/** The plan ids the billing integration can store on a subscription (montral-billing.ts); a billed catalog must offer them. */
-export const BILLING_PLAN_IDS = ["pro", "business"] as const;
 
 export const meteringEnabled = (env: Bindings) => env.MONTRAL_METERING_ENABLED === "true";
 
@@ -172,29 +169,25 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   /** The plan id of the workspace's valid subscription, or null (then the catalog's default plan applies). */
   async function subscribedPlan(workspaceId: string): Promise<string | null> {
     if (!billingReady(env)) return null;
-    const rows = await database.query<{ plan: string; status: string; test_mode: boolean; ends_at: Date | null }>(
-      "SELECT plan,status,test_mode,ends_at FROM montral_subscription WHERE organization_id=$1", [workspaceId],
+    const rows = await database.query<SubscriptionEntitlementRow>(
+      `SELECT plan,status,test_mode,ends_at,provider_updated_at,payment_state,payment_updated_at,past_due_since
+         FROM montral_subscription WHERE organization_id=$1`, [workspaceId],
     );
-    const row = rows[0];
     // Fail closed without the test-mode merchant, a test-mode subscription,
-    // or a bounded end date on cancellation. Never grant lifetime paid access
-    // just because the cancellation/expiration webhook is delayed or lost.
-    if (!row || row.test_mode !== true) return null;
-    if (row.status === "cancelled") {
-      if (!row.ends_at || new Date(row.ends_at).getTime() <= Date.now()) return null;
-    } else if (!["active", "on_trial"].includes(row.status)) {
-      return null;
-    }
-    return typeof row.plan === "string" ? row.plan : null;
+    // or a bounded end date on cancellation; past due keeps the plan only for
+    // the grace period; a refund falls back at once (entitledPlanId). Never
+    // grant lifetime paid access because a provider webhook is delayed or lost.
+    return entitledPlanId(rows[0], Date.now(), billingGraceDays(env));
   }
   /** The workspace's effective plan and limits, read at the moment of use: a plan change or a reduced allowance applies at once. */
   async function effective(workspaceId: string) {
     const c = await catalog();
-    // A subscription can only name a plan billing knows; a catalog without those plans would quietly put every paying
-    // workspace on the default plan, so it is refused instead (fail closed, with the reason).
-    if (billingReady(env)) {
-      const missing = BILLING_PLAN_IDS.filter((id) => !c.plans.has(id));
-      if (missing.length) throw new PlanCatalogError([`plans: billing is enabled, so the catalog must define the plan ids ${BILLING_PLAN_IDS.join(", ")}`]);
+    // With catalog-driven billing (plans list providerVariants) a subscription names a catalog plan by construction.
+    // The environment fallback stores the fixed ids "pro"/"business"; a catalog without them would quietly put every
+    // paying workspace on the default plan, so it is refused instead (fail closed, with the reason).
+    if (billingReady(env) && !c.hasProviderVariants && envVariantsValid(env)) {
+      const missing = ENV_FALLBACK_PLAN_IDS.filter((id) => !c.plans.has(id));
+      if (missing.length) throw new PlanCatalogError([`plans: billing uses the environment variants, so the catalog must define the plan ids ${ENV_FALLBACK_PLAN_IDS.join(", ")} (or list providerVariants)`]);
     }
     const r = c.resolve(workspaceId, await subscribedPlan(workspaceId));
     if (r.unknownPlan && !unknownPlanLogged) {

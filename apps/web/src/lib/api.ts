@@ -33,7 +33,13 @@ export type Monitor = {
 export type BrowserRuntime = { enabled: boolean; mode: "runner" | "in-process"; available: boolean | null; checkedAt: string | null; lastError: string | null; lastErrorAt: string | null };
 export type BrowserJourney = { steps: Record<string, unknown>[]; timeoutMs: number; screenshot: "never" | "on_failure" };
 export type BrowserRun = { id: string; createdAt: string; ok: boolean; failedStep: number | null; error: string | null; durationMs: number; steps: { action: string; ms: number; ok: boolean }[]; blockedRequests: number; peakRssMb: number | null; cpuMs: number | null; hasScreenshot: boolean; kind: "run" | "deferred" | "error"; usedSecrets: boolean };
-export type BillingStatus = { plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null; endsAt: string | null };
+export type BillingStatus = {
+  plan: string; status: string; billingConfigured: boolean; providerUpdatedAt: string | null; endsAt: string | null;
+  /** the plan the subscription grants now (null: the default plan); past due beyond grace or refunded grants nothing */
+  entitledPlan?: string | null; paymentState?: "paid" | "failed" | "refunded" | null; graceEndsAt?: string | null;
+};
+/** A plan the deployment offers. `price` is present only once the owner publishes prices. */
+export type BillingPlan = { id: string; name: string; checkoutAvailable: boolean; price?: { amountMinor: number; currency: string; interval: "month" | "year" } };
 export type HookInbox = { id: string; name: string; created_at: string };
 export type HookEvent = { id: string; method: string; content_type: string | null; headers: Record<string,string>; body: string; created_at: string; response_status?: number | null };
 export type HookResponseContentType = "text/plain" | "application/json" | "application/xml" | "text/xml" | "text/csv";
@@ -263,7 +269,8 @@ export const api = {
   /** `query` is a URLSearchParams string of filters and the cursor, without the leading "?". */
   auditEvents: (query: string) => fetchJson<{ events: AuditEvent[]; next: string | null }>(`/audit-events${query ? "?" + query : ""}`, { cache: "no-store" }),
   billingStatus: () => req<BillingStatus>("/billing"),
-  billingCheckout: (plan: "pro" | "business") => req<{ url: string; testMode: true }>("/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
+  billingPlans: () => req<{ defaultPlan: string; plans: BillingPlan[] }>("/billing/plans"),
+  billingCheckout: (plan: string) => req<{ url: string; testMode: true }>("/billing/checkout", { method: "POST", body: JSON.stringify({ plan }) }),
   revokeStatusAccess: (id: string) => req<{ ok: true }>(`/status-pages/${id}/access/revoke`, { method: "POST" }),
   setStatusDomain: (id: string, domain: string) =>
     req<{ customDomain: string; customDomainVerifiedAt: null; customDomainRecord: DomainRecord }>(`/status-pages/${id}/domain`, { method: "PUT", body: JSON.stringify({ domain }) }),

@@ -5,6 +5,7 @@ import { montralEdition } from "./montral-edition";
 import { migrateMontralSchema } from "./schema-migrate";
 import { calendarMonthUtc, createMontralEntitlements } from "./montral-metering";
 import { runMontralMaintenance } from "./montral-maintenance";
+import { reconcileSubscription, subscriptionCatalogDrift } from "./montral-billing";
 import type { Bindings } from "./env";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -49,11 +50,13 @@ const event = (id: string, intent: string | null, eventName: string, status: str
   } },
 });
 
+// One pool for both suites below: closed once, after the last test of the file.
+afterAll(async () => { await db?.close(1); });
+
 describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
   beforeAll(async () => {
     await migrateMontralSchema(db!, montralEdition);
   });
-  afterAll(async () => { await db?.close(1); });
 
   it("refuses a stalled signed sandbox callback with 408 and zero event writes", async () => {
     const provider = String(Math.floor(Math.random() * 9000000 + 11000000));
@@ -597,13 +600,301 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect((await fire(event(sub, id, "subscription_expired", "expired", "2026-10-30T21:00:00.000Z"))).status).toBe(200);
     const after = await db!.query<{ plan: string; status: string }>("SELECT plan,status FROM montral_subscription WHERE provider_id=$1", [sub]);
     expect(after[0]).toMatchObject({ plan: "pro", status: "expired" });
-    const wrong = await fire(event(sub, id, "subscription_updated", "active", "2026-10-30T22:00:00.000Z", 102));
-    expect(wrong.status).toBe(409);
+    // Expiry is terminal: a later update (here naming the other catalog plan's variant) cannot revive it.
+    const revive = await fire(event(sub, id, "subscription_updated", "active", "2026-10-30T22:00:00.000Z", 102));
+    expect(revive.status).toBe(200);
+    expect(await revive.json()).toMatchObject({ result: "stale" });
+    expect((await db!.query<{ plan: string; status: string }>("SELECT plan,status FROM montral_subscription WHERE provider_id=$1", [sub]))[0])
+      .toMatchObject({ plan: "pro", status: "expired" });
+    // ...nor can one naming a variant no plan maps to.
+    const wrong = await fire(event(sub, id, "subscription_updated", "active", "2026-10-30T22:30:00.000Z", 999));
+    expect(wrong.status).toBe(200);
+    expect(await wrong.json()).toMatchObject({ result: "stale" });
     const intentReuse = await fire(event(String(Number(sub)+1), id, "subscription_created", "active", "2026-10-30T23:00:00.000Z", 102));
     expect(intentReuse.status).toBe(409);
     const disabled = await app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
       method: "POST", headers: { cookie, "content-type": "application/json" }, body: '{"plan":"pro"}',
     }), { ...config, MONTRAL_BILLING_ENABLED: "false" } as never);
     expect(disabled.status).toBe(503);
+  });
+});
+
+/**
+ * Catalog-driven billing lifecycle. Synthetic catalog: the plans "lite" (default, never sold), "team" (variants
+ * 301/302) and "scale" (303); the variant ids, limits and the price metadata describe no real offer.
+ */
+const lifecycleCatalog = JSON.stringify({
+  schemaVersion: 1, version: "synthetic-lifecycle-e2e", defaultPlan: "lite",
+  plans: [
+    { id: "lite", name: "Lite", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 11, emails: 1 } },
+    { id: "team", name: "Team", limits: { activeMonitors: 3, minIntervalSec: 300, regions: 1, credits: 33, emails: 3 }, providerVariants: ["301", "302"],
+      price: { amountMinor: 999, currency: "EUR", interval: "month" } },
+    { id: "scale", name: "Scale", limits: { activeMonitors: 7, minIntervalSec: 60, regions: 2, credits: 77, emails: 7 }, providerVariants: ["303"] },
+  ],
+});
+// the env variants are deliberately absent: the catalog alone maps variants to plans
+const lifecycle: Bindings = { ...config, LEMONSQUEEZY_VARIANT_PRO: undefined, LEMONSQUEEZY_VARIANT_BUSINESS: undefined, MONTRAL_PLAN_CONFIG_JSON: lifecycleCatalog };
+const lifecycleEntitlements = (over: Partial<Bindings> = {}) =>
+  createMontralEntitlements(db!, { ...lifecycle, MONTRAL_METERING_ENABLED: "true", ...over });
+const invoiceEvent = (subscription: string, eventName: string, status: string, updated: string, invoiceId = String(Math.floor(Math.random() * 9e8 + 1e8))) => ({
+  meta: { event_name: eventName },
+  data: { type: "subscription-invoices", id: invoiceId, attributes: {
+    store_id: 42, subscription_id: Number(subscription), status, test_mode: true, updated_at: updated,
+  } },
+});
+const ago = (ms: number) => new Date(Date.now() - ms).toISOString();
+const HOUR = 3_600_000;
+async function billingAudit(org: string) {
+  return db!.query<{ action: string; actor_type: string; actor_label: string; changes: { fields: string[]; values: Record<string, unknown> } }>(
+    "SELECT action,actor_type,actor_label,changes FROM audit_event WHERE organization_id=$1 AND action LIKE 'billing.%'", [org]);
+}
+const countActions = (rows: { action: string }[]) => rows.reduce<Record<string, number>>((n, r) => ({ ...n, [r.action]: (n[r.action] ?? 0) + 1 }), {});
+
+describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", () => {
+  beforeAll(async () => { await migrateMontralSchema(db!, montralEdition); });
+
+  it("replaces the fixed plan CHECK with a plan-id format check on both billing tables", async () => {
+    const constraints = await db!.query<{ conname: string }>(
+      `SELECT conname FROM pg_constraint WHERE conrelid IN (to_regclass('montral_billing_intent'), to_regclass('montral_subscription'))
+         AND conname IN ('montral_billing_intent_plan_check','montral_billing_intent_plan_format','montral_subscription_plan_format')`);
+    expect(constraints.map((c) => c.conname).sort()).toEqual(["montral_billing_intent_plan_format", "montral_subscription_plan_format"]);
+    const { org, userId } = await signup();
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()-INTERVAL '1 hour')", [crypto.randomUUID(), org, userId]);
+    await expect(db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'Team!','301',NOW())", [crypto.randomUUID(), org, userId]))
+      .rejects.toThrow();
+  });
+
+  it("lists catalog plans without prices until the owner publishes them, and checks out a catalog plan id", async () => {
+    const { cookie, org } = await signup();
+    const plans = async (env: Bindings) => {
+      const r = await app.fetch(new Request(ORIGIN + "/api/billing/plans", { headers: { cookie } }), env as never);
+      expect(r.status).toBe(200);
+      return r.json() as Promise<{ defaultPlan: string; plans: Record<string, unknown>[] }>;
+    };
+    expect(await plans(lifecycle)).toEqual({ defaultPlan: "lite", plans: [
+      { id: "lite", name: "Lite", checkoutAvailable: false },
+      { id: "team", name: "Team", checkoutAvailable: true },
+      { id: "scale", name: "Scale", checkoutAvailable: true },
+    ] });
+    expect(JSON.stringify(await plans(lifecycle))).not.toMatch(/price|999|EUR/);
+    const published = await plans({ ...lifecycle, MONTRAL_BILLING_SHOW_PRICES: "true" });
+    expect(published.plans[1]).toEqual({ id: "team", name: "Team", checkoutAvailable: true, price: { amountMinor: 999, currency: "EUR", interval: "month" } });
+    expect(published.plans[2]).not.toHaveProperty("price");
+    // billing off: the plans are listed, none can be bought
+    expect((await plans({ ...lifecycle, MONTRAL_BILLING_ENABLED: "false" })).plans.every((p) => p.checkoutAvailable === false)).toBe(true);
+
+    const fetchBefore = globalThis.fetch;
+    const variants: number[] = [];
+    try {
+      vi.stubGlobal("fetch", async (_url: string, options: RequestInit) => {
+        variants.push(...JSON.parse(String(options.body)).data.attributes.product_options.enabled_variants);
+        return new Response(JSON.stringify({ data: { attributes: { test_mode: true, url: "https://test.lemonsqueezy.com/checkout/custom/synthetic" } } }), { status: 201 });
+      });
+      const checkout = (plan: string) => app.fetch(new Request(ORIGIN + "/api/billing/checkout", {
+        method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ plan }),
+      }), lifecycle as never);
+      // the default plan, plans the catalog does not have (including the old fixed ids) and malformed ids: 400
+      for (const plan of ["lite", "pro", "business", "enterprise", "Team!"]) expect((await checkout(plan)).status, plan).toBe(400);
+      expect(variants).toEqual([]);
+      expect((await checkout("team")).status).toBe(201);
+      expect(variants).toEqual([301]);
+      expect(await db!.query("SELECT plan,variant_id FROM montral_billing_intent WHERE organization_id=$1", [org])).toEqual([{ plan: "team", variant_id: "301" }]);
+    } finally {
+      vi.stubGlobal("fetch", fetchBefore);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("applies plan changes by variant in provider order, keeps the plan for unmapped variants, ignores replays, and audits each outcome once", async () => {
+    const { cookie, org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 31000000));
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()+INTERVAL '30 minutes')", [intent, org, userId]);
+    const entitlements = lifecycleEntitlements();
+    expect(await entitlements.plan(org)).toMatchObject({ id: "lite" });
+    const created = event(provider, intent, "subscription_created", "active", "2026-11-01T10:00:00.000Z", 301);
+    expect(await (await fire(created, lifecycle)).json()).toMatchObject({ result: "applied" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "team", maxActiveMonitors: 3 });
+    // upgrade: another catalog variant on a newer provider update
+    const upgrade = await fire(event(provider, null, "subscription_updated", "active", "2026-11-02T10:00:00.000Z", 303), lifecycle);
+    expect(await upgrade.json()).toMatchObject({ result: "applied" });
+    expect((await db!.query("SELECT plan,variant_id FROM montral_subscription WHERE provider_id=$1", [provider]))[0]).toEqual({ plan: "scale", variant_id: "303" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "scale", maxActiveMonitors: 7 });
+    // reorder: an older downgrade arriving after the upgrade is stale
+    const late = await fire(event(provider, null, "subscription_updated", "active", "2026-11-01T12:00:00.000Z", 302), lifecycle);
+    expect(await late.json()).toMatchObject({ result: "stale" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "scale" });
+    // an equal-timestamp event never changes the plan, even with a stricter status
+    const tie = await fire(event(provider, null, "subscription_updated", "past_due", "2026-11-02T10:00:00.000Z", 301), lifecycle);
+    expect(await tie.json()).toMatchObject({ result: "applied" });
+    expect((await db!.query("SELECT plan,status FROM montral_subscription WHERE provider_id=$1", [provider]))[0]).toEqual({ plan: "scale", status: "past_due" });
+    // downgrade on a newer update
+    expect(await (await fire(event(provider, null, "subscription_updated", "active", "2026-11-04T10:00:00.000Z", 302), lifecycle)).json()).toMatchObject({ result: "applied" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "team" });
+    // replay: the exact same signed bytes again, several times; audited once
+    for (let i = 0; i < 3; i++) expect(await (await fire(created, lifecycle)).json()).toMatchObject({ result: "duplicate" });
+    // a variant the catalog does not sell: the status and clock apply, the plan change is refused (plan and variant kept)
+    const unknown = await fire(event(provider, null, "subscription_updated", "active", "2026-11-05T10:00:00.000Z", 399), lifecycle);
+    expect(await unknown.json()).toMatchObject({ result: "applied" });
+    const kept = (await db!.query<{ plan: string; variant_id: string; provider_updated_at: string | Date }>("SELECT plan,variant_id,provider_updated_at FROM montral_subscription WHERE provider_id=$1", [provider]))[0]!;
+    expect({ plan: kept.plan, variant_id: kept.variant_id, at: new Date(kept.provider_updated_at).toISOString() })
+      .toEqual({ plan: "team", variant_id: "302", at: "2026-11-05T10:00:00.000Z" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "team" });
+    const status = await app.fetch(new Request(ORIGIN + "/api/billing", { headers: { cookie } }), lifecycle as never);
+    expect(await status.json()).toMatchObject({ plan: "team", status: "active", entitledPlan: "team", billingConfigured: true, graceEndsAt: null });
+
+    const audit = await billingAudit(org);
+    expect(countActions(audit)).toEqual({ "billing.event_applied": 5, "billing.event_ignored": 2 });
+    expect(audit.every((r) => r.actor_type === "system" && r.actor_label === "Billing provider")).toBe(true);
+    expect(audit.map((r) => r.changes.values.reason).filter(Boolean).sort()).toEqual(["duplicate", "stale", "unmapped_variant_plan_kept"]);
+    // status and plan only: no amounts, prices or customer data
+    for (const r of audit) {
+      expect(r.changes.fields).toEqual(["plan", "status"]);
+      expect(Object.keys(r.changes.values).sort().join(",")).toMatch(/^(plan,reason,status,type|plan,status,type)$/);
+    }
+  });
+
+  it("keeps the plan through the grace period after a failed payment, then falls back until a payment succeeds", async () => {
+    const { cookie, org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 41000000));
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()+INTERVAL '30 minutes')", [intent, org, userId]);
+    const entitlements = lifecycleEntitlements();
+    const plan = async (e = entitlements) => (await e.plan(org))?.id;
+    expect((await fire(event(provider, intent, "subscription_created", "active", ago(10 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect(await plan()).toBe("team");
+
+    // a renewal payment fails: past due, within grace the plan stays
+    const failedAt = ago(9 * HOUR);
+    expect(await (await fire(invoiceEvent(provider, "subscription_payment_failed", "pending", failedAt), lifecycle)).json()).toMatchObject({ result: "applied" });
+    expect(await plan()).toBe("team");
+    // the subscription follows to past_due; grace still counts from the first failed payment
+    expect(await (await fire(event(provider, null, "subscription_updated", "past_due", ago(8 * HOUR), 301), lifecycle)).json()).toMatchObject({ result: "applied" });
+    const pastDue = (await db!.query<{ past_due_since: Date; payment_state: string }>("SELECT past_due_since,payment_state FROM montral_subscription WHERE provider_id=$1", [provider]))[0]!;
+    expect(new Date(pastDue.past_due_since).toISOString()).toBe(failedAt);
+    expect(pastDue.payment_state).toBe("failed");
+    expect(await plan()).toBe("team");
+    const during = await (await app.fetch(new Request(ORIGIN + "/api/billing", { headers: { cookie } }), lifecycle as never)).json() as Record<string, unknown>;
+    expect(during).toMatchObject({ status: "past_due", paymentState: "failed", entitledPlan: "team" });
+    expect(new Date(during.graceEndsAt as string).getTime()).toBe(new Date(failedAt).getTime() + 7 * 24 * HOUR);
+
+    // simulate time: the first failed payment is now eight days old, beyond the default seven-day grace
+    await db!.query("UPDATE montral_subscription SET past_due_since=NOW()-INTERVAL '8 days' WHERE provider_id=$1", [provider]);
+    expect(await plan()).toBe("lite");
+    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "10" }))).toBe("team");
+    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "0" }))).toBe("lite");
+    // a second failed retry does not restart the grace period
+    expect((await fire(invoiceEvent(provider, "subscription_payment_failed", "pending", ago(7 * HOUR)), lifecycle)).status).toBe(200);
+    expect(await plan()).toBe("lite");
+
+    // the payment is recovered: the plan is back at once, even before the subscription status follows
+    expect(await (await fire(invoiceEvent(provider, "subscription_payment_recovered", "paid", ago(6 * HOUR)), lifecycle)).json()).toMatchObject({ result: "applied" });
+    expect(await plan()).toBe("team");
+    expect((await db!.query<{ past_due_since: Date | null }>("SELECT past_due_since FROM montral_subscription WHERE provider_id=$1", [provider]))[0]!.past_due_since).toBeNull();
+    // a delayed, older failure is stale on the invoice clock
+    expect(await (await fire(invoiceEvent(provider, "subscription_payment_failed", "pending", ago(8.5 * HOUR)), lifecycle)).json()).toMatchObject({ result: "stale" });
+    expect(await plan()).toBe("team");
+    expect((await fire(event(provider, null, "subscription_updated", "active", ago(5 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect(await plan()).toBe("team");
+
+    // a refund falls back at once; a later successful payment restores the plan
+    expect(await (await fire(invoiceEvent(provider, "subscription_payment_refunded", "refunded", ago(4 * HOUR)), lifecycle)).json()).toMatchObject({ result: "applied" });
+    expect(await plan()).toBe("lite");
+    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "30" }))).toBe("lite");
+    expect((await fire(invoiceEvent(provider, "subscription_payment_success", "paid", ago(3 * HOUR)), lifecycle)).status).toBe(200);
+    expect(await plan()).toBe("team");
+
+    // expiry falls back at once and is terminal: a later "active" update cannot revive it
+    expect((await fire(event(provider, null, "subscription_expired", "expired", ago(2 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect(await plan()).toBe("lite");
+    expect(await (await fire(event(provider, null, "subscription_updated", "active", ago(1 * HOUR), 301), lifecycle)).json()).toMatchObject({ result: "stale" });
+    expect(await (await fire(invoiceEvent(provider, "subscription_payment_success", "paid", ago(0.5 * HOUR)), lifecycle)).json()).toMatchObject({ result: "stale" });
+    expect(await plan()).toBe("lite");
+
+    // payment events of a subscription Montral never linked are unmatched
+    expect((await fire(invoiceEvent(String(Number(provider) + 1), "subscription_payment_success", "paid", ago(0)), lifecycle)).status).toBe(409);
+    const audit = await billingAudit(org);
+    expect(countActions(audit)).toEqual({ "billing.event_applied": 9, "billing.event_ignored": 3 });
+    expect(JSON.stringify(audit)).not.toMatch(/amount|total|email|card/i);
+  });
+
+  it("reconciles a provider snapshot through the same monotonic path", async () => {
+    const { org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 51000000));
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()+INTERVAL '30 minutes')", [intent, org, userId]);
+    expect((await fire(event(provider, intent, "subscription_created", "active", "2026-11-01T10:00:00.000Z", 301), lifecycle)).status).toBe(200);
+    const snapshot = { providerId: provider, status: "active", variantId: "303", updatedAt: "2026-11-05T10:00:00.000Z", endsAt: null };
+    expect(await reconcileSubscription(db!, lifecycle, snapshot)).toBe("applied");
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "scale" });
+    expect(await reconcileSubscription(db!, lifecycle, snapshot)).toBe("duplicate");
+    expect(await reconcileSubscription(db!, lifecycle, { ...snapshot, variantId: "302", updatedAt: "2026-11-04T10:00:00.000Z" })).toBe("stale");
+    // an unmapped variant applies the status but keeps the plan
+    expect(await reconcileSubscription(db!, lifecycle, { ...snapshot, variantId: "399", updatedAt: "2026-11-06T10:00:00.000Z" })).toBe("applied");
+    expect((await db!.query("SELECT plan,variant_id FROM montral_subscription WHERE provider_id=$1", [provider]))[0]).toEqual({ plan: "scale", variant_id: "303" });
+    // a reconciliation can never create a subscription
+    expect(await reconcileSubscription(db!, lifecycle, { ...snapshot, providerId: String(Number(provider) + 1) })).toBe("unmatched");
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "scale" });
+    expect(countActions(await billingAudit(org))).toEqual({ "billing.event_applied": 3, "billing.event_ignored": 2 });
+    // a cancellation snapshot naming a variant the catalog does not list, with a passed deadline: the default plan
+    expect(await reconcileSubscription(db!, lifecycle, { ...snapshot, status: "cancelled", variantId: "399", updatedAt: "2026-11-07T10:00:00.000Z", endsAt: "2026-11-08T10:00:00.000Z" })).toBe("applied");
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "lite" });
+  });
+
+  it("still applies cancellation and expiry after the subscription's variant left the catalog, and reports the drift", async () => {
+    const { org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 61000000));
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()+INTERVAL '30 minutes')", [intent, org, userId]);
+    expect((await fire(event(provider, intent, "subscription_created", "active", ago(5 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "team" });
+    // the operator removes variant 301 from the catalog ("team" now sells only 302)
+    const parsed = JSON.parse(lifecycleCatalog) as { plans: { id: string; providerVariants?: string[] }[] };
+    const withoutVariant = JSON.stringify({ ...parsed, version: "synthetic-lifecycle-e2e-no-301",
+      plans: parsed.plans.map((p) => (p.id === "team" ? { ...p, providerVariants: ["302"] } : p)) });
+    const dropped: Bindings = { ...lifecycle, MONTRAL_PLAN_CONFIG_JSON: withoutVariant };
+    const entitlements = lifecycleEntitlements({ MONTRAL_PLAN_CONFIG_JSON: withoutVariant });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "team" });
+    expect((await subscriptionCatalogDrift(db!, dropped))!.unmappedVariants).toBeGreaterThanOrEqual(1);
+    // cancellation with a deadline in the future: applied, plan kept until ends_at
+    const cancelled = await fire(event(provider, null, "subscription_cancelled", "cancelled", ago(4 * HOUR), 301, new Date(Date.now() + HOUR).toISOString()), dropped);
+    expect(await cancelled.json()).toMatchObject({ result: "applied" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "team" });
+    // a cancellation deadline that passed: the default plan
+    expect(await (await fire(event(provider, null, "subscription_updated", "cancelled", ago(3 * HOUR), 301, ago(HOUR)), dropped)).json()).toMatchObject({ result: "applied" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "lite" });
+    // expiry: applied, default plan, the stored plan id and variant unchanged
+    expect(await (await fire(event(provider, null, "subscription_expired", "expired", ago(2 * HOUR), 301), dropped)).json()).toMatchObject({ result: "applied" });
+    expect((await db!.query("SELECT plan,status,variant_id FROM montral_subscription WHERE provider_id=$1", [provider]))[0]).toEqual({ plan: "team", status: "expired", variant_id: "301" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "lite" });
+    // a catalog without the plan at all reports live subscriptions naming it (counts only)
+    const noTeam = JSON.stringify({ ...parsed, version: "synthetic-lifecycle-e2e-no-team", plans: parsed.plans.filter((p) => p.id !== "team") });
+    const { org: other, userId: otherUser } = await signup();
+    const otherIntent = crypto.randomUUID();
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','302',NOW()+INTERVAL '30 minutes')", [otherIntent, other, otherUser]);
+    expect((await fire(event(String(Number(provider) + 1), otherIntent, "subscription_created", "active", ago(HOUR), 302), lifecycle)).status).toBe(200);
+    const drift = (await subscriptionCatalogDrift(db!, { ...lifecycle, MONTRAL_PLAN_CONFIG_JSON: noTeam }))!;
+    expect(drift.source).toBe("catalog");
+    expect(drift.missingPlans.find((m) => m.plan === "team")!.count).toBeGreaterThanOrEqual(1);
+  });
+
+  it("ends a failed payment when the provider reports the subscription active on a strictly newer update", async () => {
+    const { org, userId } = await signup();
+    const intent = crypto.randomUUID();
+    const provider = String(Math.floor(Math.random() * 5000000 + 71000000));
+    await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()+INTERVAL '30 minutes')", [intent, org, userId]);
+    expect((await fire(event(provider, intent, "subscription_created", "active", ago(6 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect((await fire(invoiceEvent(provider, "subscription_payment_failed", "pending", ago(5 * HOUR)), lifecycle)).status).toBe(200);
+    // grace already over: the default plan applies
+    await db!.query("UPDATE montral_subscription SET past_due_since=NOW()-INTERVAL '10 days' WHERE provider_id=$1", [provider]);
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "lite" });
+    // an "active" update newer than the subscription clock but OLDER than the failed invoice does not clear it
+    expect((await fire(event(provider, null, "subscription_updated", "active", ago(5.5 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect((await db!.query<{ payment_state: string }>("SELECT payment_state FROM montral_subscription WHERE provider_id=$1", [provider]))[0]!.payment_state).toBe("failed");
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "lite" });
+    // the payment-success event was lost, but the provider reports "active" later: the failure ends
+    expect((await fire(event(provider, null, "subscription_updated", "active", ago(4 * HOUR), 301), lifecycle)).status).toBe(200);
+    expect((await db!.query("SELECT payment_state,past_due_since FROM montral_subscription WHERE provider_id=$1", [provider]))[0]).toEqual({ payment_state: null, past_due_since: null });
+    expect(await lifecycleEntitlements().plan(org)).toMatchObject({ id: "team" });
   });
 });

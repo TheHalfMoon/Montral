@@ -736,8 +736,9 @@ describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", 
     // a variant the catalog does not sell: the status and clock apply, the plan change is refused (plan and variant kept)
     const unknown = await fire(event(provider, null, "subscription_updated", "active", "2026-11-05T10:00:00.000Z", 399), lifecycle);
     expect(await unknown.json()).toMatchObject({ result: "applied" });
-    expect((await db!.query("SELECT plan,variant_id,provider_updated_at FROM montral_subscription WHERE provider_id=$1", [provider]))[0])
-      .toEqual({ plan: "team", variant_id: "302", provider_updated_at: new Date("2026-11-05T10:00:00.000Z") });
+    const kept = (await db!.query<{ plan: string; variant_id: string; provider_updated_at: string | Date }>("SELECT plan,variant_id,provider_updated_at FROM montral_subscription WHERE provider_id=$1", [provider]))[0]!;
+    expect({ plan: kept.plan, variant_id: kept.variant_id, at: new Date(kept.provider_updated_at).toISOString() })
+      .toEqual({ plan: "team", variant_id: "302", at: "2026-11-05T10:00:00.000Z" });
     expect(await entitlements.plan(org)).toMatchObject({ id: "team" });
     const status = await app.fetch(new Request(ORIGIN + "/api/billing", { headers: { cookie } }), lifecycle as never);
     expect(await status.json()).toMatchObject({ plan: "team", status: "active", entitledPlan: "team", billingConfigured: true, graceEndsAt: null });

@@ -23,3 +23,7 @@ $result = ($output -join "`n") | ConvertFrom-Json
 if ($result.read_only -ne $true -or $result.checks.Count -ne 4) { throw 'Invalid JSON contract' }
 if ($result.status -notin @('PASS','BLOCKED')) { throw 'Invalid gate status' }
 Write-Output 'WINDOWS_PREFLIGHT_TESTS_PASS (bounded negative control, cleanup, JSON contract, syntax)'
+# powershell.exe deliberately returns 2 for a BLOCKED prerequisite gate.
+# Reset the script process exit status after validating that expected result;
+# otherwise PowerShell propagates the child exit code despite passing tests.
+exit 0

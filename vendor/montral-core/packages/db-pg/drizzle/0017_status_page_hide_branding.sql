@@ -1,1 +1,0 @@
-ALTER TABLE "status_page" ADD COLUMN "hide_branding" boolean DEFAULT false NOT NULL;

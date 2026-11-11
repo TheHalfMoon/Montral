@@ -1,6 +1,5 @@
 name: Montral source integrity
 on:
-  # main runs on push; branches run once, as the pull request (an extra push run tested the same commit twice)
   push:
     branches: [main]
   pull_request:
@@ -10,17 +9,17 @@ concurrency:
 permissions:
   contents: read
 jobs:
-  preserved-sources:
+  montral-source:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Check exact imported source snapshots
+      - name: Verify Montral-only source tree
         run: python3 scripts/verify_sources.py
-      - name: Ensure upstream licenses exist
+      - name: Verify active Montral branding
+        run: bash scripts/verify-active-branding.sh
+      - name: Verify Montral license
         run: |
-          test -s vendor/montral-core/LICENSE
-          test -s vendor/montral-cloud-probes/LICENSE
-          test -s vendor/montral-webhooks-legacy/LICENSE
+          test -s LICENSE

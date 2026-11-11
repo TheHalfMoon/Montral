@@ -6,7 +6,7 @@
 
 > **Private engineering preview — NOT deployed, NOT taking payments, NOT production-qualified.**
 
-Montral is an independently branded project built on three preserved code sources, with a single active runtime and authentication model. It monitors websites, APIs and services; creates incident and status pages; accepts test webhooks; and exposes private operations over REST and OAuth-enabled MCP.
+Montral is one independently maintained product with a single active runtime and authentication model. It monitors websites, APIs and services; creates incident and status pages; accepts test webhooks; and exposes private operations over REST and OAuth-enabled MCP.
 
 ## Current integrated product
 
@@ -43,14 +43,13 @@ For a **local disposable environment only**, configure `DATABASE_URL` and `BETTE
 
 The Worker source is `apps/probe/src/edge.ts`, built with `pnpm --filter @montral/probe build:edge`; the example config is `apps/probe/wrangler.edge.jsonc`. **No Worker is deployed by CI.** To enable one, privately provision its `PROBE_SECRET` and explicit `ALLOWED_HOSTS`, build/deploy it separately, and configure `PROBE_REGIONS` on the scheduler with the shared secret. It runs only signed on-demand HTTP checks; the single Montral scheduler retains ownership of monitoring state.
 
-## Upstream source preservation and identity
+## Montral source identity
 
-Three complete git-tracked snapshots remain **unchanged** under `vendor/`:
-- `vendor/montral-core/` (monitoring/MCP architecture, MIT)
-- `vendor/montral-cloud-probes/` (Cloudflare monitoring donor, Apache-2.0)
-- `vendor/montral-webhooks-legacy/` (webhook behavior donor, MIT; insecure obsolete PHP stack **never served in production**)
-
-Original license files and copyright are retained as required, and exact SHAs and every source-file hash are recorded in `docs/SOURCES.md` and `docs/source-manifest.json`. Customer-facing code is Montral-branded; preserving historical names inside legal source evidence is intentional.
+This repository contains the Montral product source, configuration, deployment,
+tests and documentation. Duplicate historical source snapshots are not bundled.
+The CI source-integrity check verifies that the application packages use the
+Montral namespace and that no obsolete vendor source tree is tracked.
+The Montral license is in LICENSE.
 
 ## Before launch
 

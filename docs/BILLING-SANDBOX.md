@@ -2,7 +2,7 @@
 
 **Status (2026-11-11): Test-mode adapter with catalog-driven plans and the subscription lifecycle (payment-failure grace, refunds, plan changes). Unit tests run locally; the PostgreSQL E2E tests run in CI. No production commerce enabled.**
 
-This is a Montral-owned integration; it is NOT part of the historical OpenUptime donor's hosted/proprietary edition.
+This is a Montral-owned integration, not a dependency on any third-party hosted billing edition.
 
 ## Components
 

@@ -4,13 +4,13 @@
 
 ## Completed in this private engineering wave
 
-- Three immutable donor snapshots remain intact, with 638 source files verified by hash.
+- Montral is now maintained as a single source tree, without duplicate historical source snapshots.
 - Unified Montral monitoring, PostgreSQL API and OAuth REST/MCP with no separate scheduler.
 - Montral-managed webhook inboxes, inbox creation/read/delete and sensitive payload viewer restricted to workspace managers. All private webhook responses set `Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`. Secret receiver URL shown once; only hash persisted.
 - Authorized, per-project webhook capture with 32 KiB bounded body and safe header allowlist; transactional 250-event per-inbox cap and scheduled seven-day expiry.
 - **Real PostgreSQL correction**: PL/pgSQL transactional advisory lock + fresh count statement enforces concurrent 10-inbox limit. Verified 16 parallel creates in five repeated runs; earlier CTE design incorrectly allowed 12.
 - Housekeeping on Node and Cloudflare scheduler ticks: remove expired webhook events after 7 days, and inboxes orphaned by deleted projects/workspaces. Direct real Postgres pruning tests passed.
-- Montral-branded active web/API/PWA/cache/service-worker metadata and private-only documentation (no fake published images, skills or MCP Registry claims); original source copyright and license retained in immutable `vendor/` snapshots.
+- Montral-branded active web/API/PWA/cache/service-worker metadata and private-only documentation; Montral license in LICENSE.
 - CI workflow wired to disposable PostgreSQL 17 service, all suites and self-hosted Node smoke, not deployment.
 - Real Chromium qualification now wired into CI with a dedicated scratch database and automatic cleanup; the browser script refuses non-`montral_test_*` database names. Hosted CI is still runner-blocked. [Browser CI evidence](evidence/2026-10-31-ci-browser-qualification.md).
 - Billing and hooks E2E setup now reuse advisory-locked Montral schema migrations; a real PostgreSQL parallel-suite catalog race was reproduced and a fresh isolated run passed **574 API + 20 probe + 122 web** tests, browser E2E and all 638 source hashes. [Migration race evidence](evidence/2026-10-31-test-migration-lock-qualification.md).

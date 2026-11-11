@@ -1,6 +1,6 @@
 # Montral Edge Probe (no production deployment yet)
 
-Instead of running UptimeFlare's second scheduler / D1 monitor store, Montral ports its Cloudflare monitoring patterns into an **on-demand** HTTP probe that obeys the existing Montral scheduler's HMAC protocol and response contract.
+Montral provides an **on-demand** HTTP edge probe that obeys the existing Montral scheduler's HMAC protocol and response contract, without introducing a second scheduler or monitor store.
 
 Files:
 - `apps/probe/src/edge.ts`: Cloudflare Worker fetch entrypoint

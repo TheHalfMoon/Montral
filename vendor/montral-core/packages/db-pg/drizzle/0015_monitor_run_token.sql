@@ -1,1 +1,0 @@
-ALTER TABLE "monitor" ADD COLUMN "last_run_token" timestamp with time zone;

@@ -33,6 +33,13 @@ export const BROWSER_NOT_RUN_KEPT = 20;
 export const BROWSER_RUN_RETENTION_DAYS = 14;
 export const BROWSER_SCREENSHOT_MAX_BYTES = 200 * 1024;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/**
+ * The workspace is not suspended by a platform operator (docs/OPERATOR.md). Every scheduled claim (checks, alert
+ * deliveries and retries, reminders, escalations, maintenance reminders, digests, monthly reports) leaves suspended
+ * workspaces out, so nothing runs, is billed or is sent for them; their rows stay due and are picked up after unsuspension.
+ */
+const notSuspended = (organizationId: SQLWrapper | SQL): SQL =>
+  sql`not exists (select 1 from workspace_suspension ws where ws.organization_id = ${organizationId})`;
 /** Run coalescing: an earlier run counts as in flight for its timeout plus this long (timeouts are at most 30 s). */
 export const RUN_IN_FLIGHT_MARGIN_SEC = 15;
 /** A run is stale once its lease deadline (the next run's due time) is this far past: one 30 s tick + the 40 s slot delay. */
@@ -342,7 +349,8 @@ export function createRepo(db: Db): Repo {
       return out;
     },
     async deleteWorkspaces(ids) {
-      for (const id of ids) await db.delete(schema.organization).where(eq(schema.organization.id, id));
+      // one statement: all of them or none (a suspended workspace makes the whole delete fail: ON DELETE RESTRICT)
+      if (ids.length) await db.delete(schema.organization).where(inArray(schema.organization.id, ids));
     },
     async createPersonalWorkspace(w) {
       await db.insert(schema.organization).values({ id: w.id, name: w.name, slug: w.slug, createdAt: new Date() });
@@ -691,7 +699,9 @@ export function createRepo(db: Db): Repo {
           inArray(
             schema.monitor.id,
             // SKIP LOCKED: overlapping cron runs (or several workers) never pick up the same monitor
-            sql`(select id from monitor where paused = false and next_check_at <= now() order by next_check_at limit ${limit} for update skip locked)`,
+            sql`(select id from monitor where paused = false and next_check_at <= now()
+              and not exists (select 1 from workspace_suspension ws where ws.organization_id = monitor.organization_id)
+              order by next_check_at limit ${limit} for update skip locked)`,
           ),
         )
         .returning(),
@@ -778,6 +788,7 @@ export function createRepo(db: Db): Repo {
           (select r.error from browser_check_run r where r.monitor_id = m.id order by r.created_at desc, r.id desc limit 1) as reason
         from monitor m
         where m.type = 'browser' and m.paused = false and m.unchecked_since is not null and m.unchecked_notified_at is null
+          and not exists (select 1 from workspace_suspension ws where ws.organization_id = m.organization_id)
         order by m.organization_id, m.name limit 1000`));
       const byOrg = new Map<string, { id: string; name: string; projectId: string | null; reason: string | null }[]>();
       for (const r of found) (byOrg.get(r.organization_id) ?? byOrg.set(r.organization_id, []).get(r.organization_id)!).push({ id: r.id, name: r.name, projectId: r.project_id, reason: r.reason });
@@ -1241,7 +1252,7 @@ export function createRepo(db: Db): Repo {
       const [row] = await db
         .update(t)
         .set({ status: "sending", claimedAt: sql`now()` })
-        .where(and(eq(t.id, id), eq(t.status, "pending"), or(isNull(t.nextAttemptAt), lte(t.nextAttemptAt, sql`now()`))))
+        .where(and(eq(t.id, id), eq(t.status, "pending"), or(isNull(t.nextAttemptAt), lte(t.nextAttemptAt, sql`now()`)), notSuspended(t.organizationId)))
         .returning();
       return (row as AlertDelivery) ?? null;
     },
@@ -1272,7 +1283,7 @@ export function createRepo(db: Db): Repo {
       const t = schema.alertDelivery;
       // rows from before delivery states existed count as pending when they failed and wait for a retry
       // custom-domain notices (domain.*) have no incident: their own sender retries them (apps/api/src/domain-notice.ts)
-      const due = sql`(${t.status} = 'pending' or (${t.status} is null and ${t.ok} = false)) and ${t.nextAttemptAt} <= now() and ${t.kind} not in ('domain.withdrawn', 'domain.failing')`;
+      const due = sql`(${t.status} = 'pending' or (${t.status} is null and ${t.ok} = false)) and ${t.nextAttemptAt} <= now() and ${t.kind} not in ('domain.withdrawn', 'domain.failing') and ${notSuspended(t.organizationId)}`;
       const claimed = await db
         .update(t)
         .set({ status: "sending", claimedAt: sql`now()`, nextAttemptAt: null })
@@ -1376,7 +1387,7 @@ export function createRepo(db: Db): Repo {
             .from(i)
             .innerJoin(schema.monitor, eq(schema.monitor.id, i.monitorId))
             .innerJoin(schema.project, eq(schema.project.id, schema.monitor.projectId))
-            .where(and(lte(i.nextReminderAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt), sql`not ${underMaintenance}`, seen.length ? notInArray(i.id, seen) : undefined))
+            .where(and(lte(i.nextReminderAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt), sql`not ${underMaintenance}`, notSuspended(schema.monitor.organizationId), seen.length ? notInArray(i.id, seen) : undefined))
             .orderBy(asc(i.nextReminderAt))
             .limit(pageSize);
           for (const c of candidates) {
@@ -1421,7 +1432,7 @@ export function createRepo(db: Db): Repo {
         .innerJoin(schema.monitor, eq(schema.monitor.id, i.monitorId))
         .leftJoin(schema.project, eq(schema.project.id, schema.monitor.projectId))
         .leftJoin(schema.escalationPolicy, and(eq(schema.escalationPolicy.id, schema.monitor.escalationPolicyId), eq(schema.escalationPolicy.organizationId, schema.monitor.organizationId)))
-        .where(and(lte(i.nextEscalationAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt)))
+        .where(and(lte(i.nextEscalationAt, sql`now()`), isNull(i.acknowledgedAt), isNull(i.resolvedAt), notSuspended(schema.monitor.organizationId)))
         .orderBy(asc(i.nextEscalationAt))
         .limit(limit);
       const out: EscalationDue[] = [];
@@ -1633,7 +1644,8 @@ export function createRepo(db: Db): Repo {
     },
 
     async statusPageBySlug(slug) {
-      const [page] = await db.select().from(schema.statusPage).where(eq(schema.statusPage.slug, slug));
+      // public lookups only: a page of a suspended workspace does not exist for visitors, subscribers or feeds
+      const [page] = await db.select().from(schema.statusPage).where(and(eq(schema.statusPage.slug, slug), notSuspended(schema.statusPage.organizationId)));
       return page ?? null;
     },
     async statusBoard(page) {
@@ -1779,6 +1791,7 @@ export function createRepo(db: Db): Repo {
         .where(
           and(
             sql`${schema.statusPage.maintenanceReminderHours} > 0`,
+            notSuspended(schema.statusPage.organizationId),
             gte(schema.maintenanceWindow.startsAt, now),
             sql`${schema.maintenanceWindow.startsAt} <= now() + ${schema.statusPage.maintenanceReminderHours} * interval '1 hour'`,
             sql`not exists (select 1 from maintenance_reminder r where r.maintenance_id = ${schema.maintenanceWindow.id} and r.status_page_id = ${schema.statusPage.id})`,
@@ -1839,6 +1852,7 @@ export function createRepo(db: Db): Repo {
           where organization_id in (
             select w.organization_id from workspace_setting w
             where w.monthly_report and w.last_report_month is distinct from ${month}
+              and not exists (select 1 from workspace_suspension ws where ws.organization_id = w.organization_id)
               -- A prior staged recipient row is irreversible evidence this
               -- workspace/month may already have attempted SMTP. Even if an
               -- admin resets last_report_month, legacy must NEVER resurrect it.
@@ -1860,6 +1874,7 @@ export function createRepo(db: Db): Repo {
         const candidates = await rows<{ organization_id: string }>(tx.execute(sql`
           select w.organization_id from workspace_setting w
           where w.monthly_report and w.last_report_month is distinct from ${month}
+            and not exists (select 1 from workspace_suspension ws where ws.organization_id = w.organization_id)
             and exists (
               select 1 from member m join "user" u on u.id=m.user_id
               where m.organization_id=w.organization_id and m.role='owner' and length(trim(u.email))>0

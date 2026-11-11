@@ -37,6 +37,8 @@ import { availableRegions } from "./probes";
 import { PROBE_TYPES } from "./regions";
 import { completeRecovery, runDueChecks } from "./scheduler";
 import { auditRetentionDays } from "./audit";
+import { suspendedResponse, workspaceSuspended } from "./suspension";
+import { operatorApi } from "./operator";
 
 export function createApp(openDatabase: OpenDatabase, options: { edition?: Edition } = {}) {
   const edition = options.edition ?? community;
@@ -210,6 +212,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   app.route("/api/public/status", publicStatus);
   // SCIM 2.0 provisioning by the workspace's identity provider; its own bearer token, never a session (scim.ts)
   app.route("/api/scim/v2", scimApi);
+  // platform staff (MONTRAL_OPERATOR_USER_IDS, signed-in session with two-factor): never workspace-scoped, so outside
+  // requireOrg; see operator.ts and docs/OPERATOR.md
+  app.route("/api/operator", operatorApi);
   // a person's on-call shifts as an iCalendar feed; the secret token in the path is the only credential (revocable)
   app.get("/api/public/oncall/:file", async (c) => {
     const m = /^([0-9a-f]{64})\.ics$/.exec(c.req.param("file"));
@@ -223,6 +228,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     if (ip && !(await allow(repo, `oncall-ics:ip:${ip}`, 120, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
     const owner = await repo.oncallCalendarByToken(hash);
     if (!owner) return c.json({ error: "Not found" }, 404);
+    // the shifts of a suspended workspace are not served (docs/OPERATOR.md)
+    const database = c.get("database");
+    if (await workspaceSuspended((sql, params) => database.query(sql, params), owner.organizationId)) return c.json({ error: "Not found" }, 404);
     if (!ip && !(await allow(repo, `oncall-ics:token:${hash}`, 120, 3600))) return c.json({ error: "Too many requests, try again later" }, 429);
     return new Response(icsFeed(await personalShifts(repo, owner.organizationId, owner.userId)), {
       headers: { "content-type": "text/calendar; charset=utf-8", "cache-control": "private, no-store", "referrer-policy": "no-referrer", "x-content-type-options": "nosniff" },
@@ -232,6 +240,9 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const repo = c.get("repo");
     const m = await repo.monitorByHeartbeatToken(c.req.param("token"));
     if (!m) return c.json({ error: "Unknown token" }, 404);
+    // a suspended workspace records nothing: no check, no recovery, no alert
+    const database = c.get("database");
+    if (await workspaceSuspended((sql, params) => database.query(sql, params), m.organizationId)) return suspendedResponse(c);
     // a paused monitor stays paused: the ping is acknowledged but changes nothing
     if (m.status === "paused") return c.json({ ok: true, paused: true });
     const accepted = await repo.recordHeartbeatObservation(m);

@@ -904,6 +904,36 @@ export const oncallCalendarToken = pgTable(
   (t) => [uniqueIndex("oncall_calendar_token_hash_idx").on(t.tokenHash), index("oncall_calendar_token_user_idx").on(t.organizationId, t.userId)],
 );
 
+/**
+ * A workspace suspended by a platform operator (docs/OPERATOR.md). While a row exists the workspace's API access,
+ * checks, alerts, webhook capture and public status pages are refused; its data is kept and deleting the row restores
+ * everything. `suspended_by` is the operator's user id (no foreign key: the record outlives the operator's account).
+ * The foreign key RESTRICTs: a suspended workspace cannot be deleted (by its owner or by cascade) until it is unsuspended.
+ */
+export const workspaceSuspension = pgTable(
+  "workspace_suspension",
+  {
+    organizationId: text("organization_id").primaryKey().references(() => organization.id, { onDelete: "restrict" }),
+    reason: text("reason").notNull(),
+    note: text("note"),
+    suspendedBy: text("suspended_by"),
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("workspace_suspension_reason_chk", sql`${t.reason} in ('abuse', 'payment', 'legal', 'operator')`),
+    check("workspace_suspension_note_chk", sql`${t.note} is null or char_length(${t.note}) <= 500`),
+  ],
+);
+
+/**
+ * Sessions that were created by passing a second factor (Better Auth's two-factor verify endpoints during sign-in).
+ * Operator requests (docs/OPERATOR.md) need such a session: a GitHub, SSO or one-time-token sign-in never gets a row.
+ */
+export const operatorMfaSession = pgTable("operator_mfa_session", {
+  sessionId: text("session_id").primaryKey().references(() => session.id, { onDelete: "cascade" }),
+  verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const monitorRelations = relations(monitor, ({ many }) => ({
   results: many(checkResult),
   incidents: many(incident),

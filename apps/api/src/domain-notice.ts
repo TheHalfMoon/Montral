@@ -124,6 +124,8 @@ export async function deliverDomainNotices(query: Query, options: { limit?: numb
          SELECT id FROM alert_delivery
          WHERE kind IN ('domain.withdrawn', 'domain.failing') AND status = 'pending'
            AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+           -- nothing is sent for a workspace a platform operator suspended (docs/OPERATOR.md); it stays queued
+           AND NOT EXISTS (SELECT 1 FROM workspace_suspension ws WHERE ws.organization_id = alert_delivery.organization_id)
            AND ($2::text IS NULL OR status_page_id::text = ANY(string_to_array($2::text, ',')))
          ORDER BY created_at, id LIMIT $1
          FOR UPDATE SKIP LOCKED)

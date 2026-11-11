@@ -10,9 +10,10 @@ import type { Locator, Route } from "@playwright/test";
  */
 async function clickWithoutLayoutShift(target: Locator) {
   await expect(target).toBeVisible();
-  const painted = await target.boundingBox();
+  const painted = (await target.boundingBox())?.y ?? Number.NaN;
   await target.page().waitForLoadState("networkidle");
-  expect(await target.boundingBox(), "the control moved after it was painted (layout shift)").toEqual(painted);
+  // vertical position only, to the pixel: content inserted above moves it down; a scrollbar or font swap does not count
+  expect(Math.abs(((await target.boundingBox())?.y ?? Number.NaN) - painted), "the control moved down after it was painted (layout shift)").toBeLessThanOrEqual(1);
   await target.click();
 }
 
@@ -86,9 +87,12 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     // a slow account lookup: the email verification bar must still not push the page down once it arrives
     const slowMe = async (route: Route) => { await new Promise((r) => setTimeout(r, 1_000)); await route.continue(); };
     await page.route("**/api/me", slowMe);
-    await page.goto("/app/status-pages");
-    await clickWithoutLayoutShift(page.getByRole("button", { name: /Create a status page|New status page/ }).first());
-    await page.unroute("**/api/me", slowMe);
+    try {
+      await page.goto("/app/status-pages");
+      await clickWithoutLayoutShift(page.getByRole("button", { name: /Create a status page|New status page/ }).first());
+    } finally {
+      await page.unroute("**/api/me", slowMe);
+    }
     const dialog = page.locator(".modal form");
     await dialog.getByLabel("Title").fill(lockedTitle);
     await dialog.getByLabel("Slug").fill(lockedSlug);

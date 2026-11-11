@@ -198,7 +198,8 @@ echo "== every connection the server attempted, over both container lifetimes"
 facts="$(python3 - "$work/egress-1.log" "$work/egress-2.log" <<'PY'
 import json, sys
 allowed_hosts = {"customer-db", "127.0.0.1", "::1", "localhost"}
-allowed_names = {"customer-db", "localhost"}
+# server.listen(port, BIND_HOST) passes the bind address through dns.lookup; an IP literal resolves locally, no query
+allowed_names = {"customer-db", "localhost", "0.0.0.0", "::", "127.0.0.1", "::1"}
 events, bad = [], []
 for path in sys.argv[1:]:
     for line in open(path, encoding="utf-8", errors="replace"):
@@ -219,7 +220,7 @@ if bad:
     print("connections outside the customer network:", file=sys.stderr)
     for e in bad[:20]: print("  " + json.dumps(e), file=sys.stderr)
     sys.exit(1)
-print(f"{len(events)} recorded attempts: {db} to customer-db:5432, {loop} loopback, {dns} DNS queries (all for customer-db/localhost), 0 elsewhere")
+print(f"{len(events)} recorded attempts: {db} to customer-db:5432, {loop} loopback, {dns} DNS lookups (customer-db, or the local bind address literal), 0 elsewhere")
 PY
 )" || fail "outbound connection check failed"
 echo "$facts"

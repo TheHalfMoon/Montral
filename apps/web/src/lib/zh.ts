@@ -843,4 +843,6 @@ export const zh: Record<string, string> = {
   "Payment past due: paid access is paused until a payment succeeds.": "付款逾期：付费权益已暂停，付款成功后恢复。",
   "No plans are offered for checkout.": "目前没有可结账的套餐。",
   "Checkout unavailable": "暂不可结账",
+  "Plan in effect": "当前生效套餐",
+  "Your subscribed plan is not in effect right now, so the default plan's limits apply.": "你订阅的套餐目前未生效，因此适用默认套餐的限额。",
 };

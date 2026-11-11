@@ -88,14 +88,16 @@ catalog without it stays valid (schema version 1 is unchanged for existing catal
   through the catalog. A test checkout can be opened for every plan that lists at least one variant (it uses the
   plan's first variant); any other plan id is refused (400). A `subscription_updated` event naming another plan's
   variant moves the workspace to that plan (upgrade or downgrade), in provider order. An event naming a variant no
-  plan lists is refused as unmatched (409) and changes nothing. `LEMONSQUEEZY_VARIANT_PRO`/`_BUSINESS` are ignored.
+  plan lists still applies its status, deadline and ordering (a cancellation or expiry always takes effect), but the
+  plan change is refused: the stored plan and variant stay. `LEMONSQUEEZY_VARIANT_PRO`/`_BUSINESS` are ignored.
 - **Environment fallback (no plan lists variants, e.g. the built-in sandbox catalog).** `LEMONSQUEEZY_VARIANT_PRO` and
   `LEMONSQUEEZY_VARIANT_BUSINESS` map to the plan ids `pro` and `business`, so the catalog must define both; a
   catalog without them is refused (every metered call fails) rather than silently moving paying workspaces to the
   default plan.
 
-Removing a variant from the catalog does not move existing subscribers: their stored plan id stays until the provider
-sends a newer event. Removing a plan does: a subscription naming a plan the catalog no longer has gets the default
+Removing a variant from the catalog does not move existing subscribers: their stored plan id stays, and their
+cancellations and expiries still apply. The Node server logs a start-up warning with the number of live subscriptions
+using unlisted variants or plan ids the catalog no longer defines. Removing a plan does: a subscription naming a plan the catalog no longer has gets the default
 plan (see Failure behaviour).
 
 **Prices.** `price` is metadata. `GET /api/billing/plans` returns it only when the deployment sets

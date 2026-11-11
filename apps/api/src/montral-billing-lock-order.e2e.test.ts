@@ -67,7 +67,7 @@ async function interleave(target: string, observer: Db, org: string) {
     });
     const phase = await settleOrBlock(observer, migration, () => migratorPid);
     const reservation = await checkout.query<{ reserved: boolean }>(
-      "SELECT montral_reserve_billing_intent($1::uuid,$2::text,$3::text,$4::text,$5::text) AS reserved",
+      "SELECT montral_reserve_billing_intent_v2($1::uuid,$2::text,$3::text,$4::text,$5::text) AS reserved",
       [randomUUID(), org, "lock-order-test", "pro", "101"],
     );
     await checkout.query("COMMIT");
@@ -144,9 +144,11 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
         UNION ALL SELECT 'montral_subscription.' || column_name FROM information_schema.columns
           WHERE table_schema = current_schema() AND table_name='montral_subscription'
             AND column_name IN ('payment_state','payment_updated_at','past_due_since')
+        UNION ALL SELECT 'montral_billing_event.duplicate_audited_at' FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name='montral_billing_event' AND column_name='duplicate_audited_at'
         UNION ALL SELECT 'constraint:' || conname FROM pg_constraint
           WHERE conrelid IN (to_regclass('montral_billing_intent'), to_regclass('montral_subscription'))
-            AND conname IN ('montral_billing_intent_plan_check','montral_billing_intent_plan_format','montral_subscription_plan_format')
+            AND conname IN ('montral_billing_intent_plan_check','legacy_plan_rule','montral_billing_intent_plan_format','montral_subscription_plan_format')
         `)).map(x => x.item).sort(); // sorted here: SQL ORDER BY follows the cluster's collation ('.' vs '_' differs on macOS)
       const complete = [
         "montral_billing_intent.consumed_at", "montral_billing_intent_pending",
@@ -155,6 +157,7 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
         "montral_subscription.ends_at",
         "montral_subscription.payment_state", "montral_subscription.payment_updated_at", "montral_subscription.past_due_since",
         "constraint:montral_billing_intent_plan_format", "constraint:montral_subscription_plan_format",
+        "montral_billing_event.duplicate_audited_at",
       ].sort();
       expect(await shape()).toEqual(complete);
 
@@ -163,7 +166,20 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
       await fresh.query("DROP INDEX montral_billing_intent_pending");
       // ...and the pre-lifecycle billing schema: the fixed plan CHECK, no plan format checks, no payment state.
       await fresh.query("ALTER TABLE montral_billing_intent DROP CONSTRAINT montral_billing_intent_plan_format");
-      await fresh.query("ALTER TABLE montral_billing_intent ADD CONSTRAINT montral_billing_intent_plan_check CHECK (plan IN ('pro','business'))");
+      // (under a name other than PostgreSQL's default: the upgrade finds it by its definition)
+      await fresh.query("ALTER TABLE montral_billing_intent ADD CONSTRAINT legacy_plan_rule CHECK (plan IN ('pro','business'))");
+      await fresh.query("ALTER TABLE montral_billing_event DROP COLUMN duplicate_audited_at");
+      // The previous release's functions, as a still-running old replica defines them: this release must leave
+      // them exactly as they are (rolling upgrade / rollback), never drop or replace them.
+      await fresh.query(`CREATE FUNCTION montral_reserve_billing_intent(p_id uuid, p_org text, p_creator text, p_plan text, p_variant text)
+        RETURNS boolean LANGUAGE sql AS $legacy$ SELECT false /* previous release */ $legacy$`);
+      await fresh.query(`CREATE FUNCTION montral_apply_billing_event(text,text,text,text,text,timestamptz,uuid,timestamptz)
+        RETURNS text LANGUAGE sql AS $legacy$ SELECT 'previous release'::text $legacy$`);
+      const legacyBodies = async () => (await fresh!.query<{ proname: string; prosrc: string }>(
+        "SELECT proname, prosrc FROM pg_proc WHERE proname IN ('montral_reserve_billing_intent','montral_apply_billing_event') ORDER BY proname"))
+        .map((p) => `${p.proname}:${p.prosrc.trim()}`);
+      const legacyBefore = await legacyBodies();
+      expect(legacyBefore).toHaveLength(2);
       await fresh.query(`ALTER TABLE montral_subscription DROP CONSTRAINT montral_subscription_plan_format,
         DROP COLUMN payment_state, DROP COLUMN payment_updated_at, DROP COLUMN past_due_since`);
       // ...and on both webhook tables (configurable responses): the upgrade adds them back, inbox before event.
@@ -178,6 +194,7 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
       expect(result.phase).toBe("blocked");
       expect(result.reserved).toBe(true);
       expect(await shape()).toEqual(complete);
+      expect(await legacyBodies()).toEqual(legacyBefore);
     } finally {
       await fresh?.close(5);
       try {

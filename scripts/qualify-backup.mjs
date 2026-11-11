@@ -163,7 +163,7 @@ try {
     throw new Error(`Restored PostgreSQL catalog differs: ${schemaDrift.slice(0, 12).join(", ")}${schemaDrift.length > 12 ? " (additional differences suppressed)" : ""}`);
   }
   const nonemptyTables = tableNames.filter(t => Number(sourceCounts[t]) > 0).length;
-  const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_capture_hook_event','montral_apply_billing_event','montral_spend_usage','montral_spend_usage_once','montral_claim_monthly_report_send','montral_reserve_billing_intent','montral_monthly_content_no_update')");
+  const functions = await sql(restoredUrl.href, "SELECT count(*) FROM pg_proc WHERE proname IN ('montral_create_hook_inbox','montral_capture_hook_event','montral_billing_apply','montral_spend_usage','montral_spend_usage_once','montral_claim_monthly_report_send','montral_reserve_billing_intent_v2','montral_monthly_content_no_update')");
   if (Number(functions) !== 8) throw new Error("Expected business-critical Postgres functions missing from restore");
   const appTables = await sql(restoredUrl.href, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name IN ('montral_hook_inbox','montral_hook_event','montral_subscription','montral_billing_event','montral_usage','montral_usage_reservation','monthly_report_reconciliation','monthly_report_content')");
   if (Number(appTables) !== 8) throw new Error("Montral-specific tables missing from restored database");

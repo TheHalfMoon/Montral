@@ -148,7 +148,7 @@ const catalogJson = JSON.stringify({
 const catalogConfig = { ...config, LEMONSQUEEZY_VARIANT_PRO: undefined, LEMONSQUEEZY_VARIANT_BUSINESS: undefined, MONTRAL_PLAN_CONFIG_JSON: catalogJson } as Bindings;
 
 /** A fake database: answers the billing apply function and records every statement (no PostgreSQL, no network). */
-function fakeDb(answer: { r_outcome: string; r_org: string | null; r_plan: string | null; r_status: string | null }) {
+function fakeDb(answer: { r_outcome: string; r_org: string | null; r_plan: string | null; r_status: string | null; r_audit?: boolean; r_plan_kept?: boolean }) {
   const calls: { sql: string; params: unknown[] }[] = [];
   const db = { query: async (sql: string, params: unknown[] = []) => {
     calls.push({ sql, params });
@@ -224,6 +224,9 @@ describe("catalog-driven billing plans and the subscription lifecycle", () => {
     expect(entitledPlanId(row({ status: "cancelled" }), now, 7)).toBeNull();
     expect(graceEndsAt(row({ status: "past_due", past_due_since: since }), 7)).toBe(new Date(now + 4 * day).toISOString());
     expect(graceEndsAt(row(), 7)).toBeNull();
+    // a paid invoice newer than the past_due status: no past-due notice
+    expect(graceEndsAt(row({ status: "past_due", past_due_since: since, payment_state: "paid", payment_updated_at: "2026-11-02T00:00:00Z" }), 7)).toBeNull();
+    expect(graceEndsAt(row({ payment_state: "refunded", past_due_since: since }), 7)).toBeNull();
   });
 
   it("parses subscription-invoice payment events by subscription id, refusing inconsistent or live ones", () => {
@@ -275,12 +278,25 @@ describe("catalog-driven billing plans and the subscription lifecycle", () => {
     expect(ignored.params[8]).toBe("billing.event_ignored");
     expect(JSON.parse(ignored.params[11] as string).values).toMatchObject({ reason: "stale", plan: "team" });
 
-    const unknown = fakeDb({ r_outcome: "unmatched", r_org: "org_synthetic", r_plan: "team", r_status: "active" });
-    expect(await applyBillingEvent(unknown.db, map, { ...event, variant: "999" }, "f".repeat(64))).toBe("unmatched");
+    // an unmapped variant: the plan is passed as NULL; SQL applies the status but keeps the plan, audited as such
+    const unknown = fakeDb({ r_outcome: "applied", r_org: "org_synthetic", r_plan: "team", r_status: "cancelled", r_audit: true, r_plan_kept: true });
+    expect(await applyBillingEvent(unknown.db, map, { ...event, status: "cancelled", variant: "999" }, "f".repeat(64))).toBe("applied");
     expect(unknown.calls[0]!.params[4]).toBeNull();
-    const unmatched = unknown.calls.find((c) => c.sql.includes("INSERT INTO audit_event"))!;
+    const kept = unknown.calls.find((c) => c.sql.includes("INSERT INTO audit_event"))!;
+    expect(kept.params[8]).toBe("billing.event_applied");
+    expect(JSON.parse(kept.params[11] as string).values).toEqual({ status: "cancelled", plan: "team", type: "subscription_updated", reason: "unmapped_variant_plan_kept" });
+
+    // a creation whose checkout intent does not match is unmatched
+    const mismatch = fakeDb({ r_outcome: "unmatched", r_org: "org_synthetic", r_plan: null, r_status: null, r_audit: true });
+    expect(await applyBillingEvent(mismatch.db, map, { ...event, name: "subscription_created", intent: "00000000-0000-4000-8000-000000000001" }, "a".repeat(64))).toBe("unmatched");
+    const unmatched = mismatch.calls.find((c) => c.sql.includes("INSERT INTO audit_event"))!;
     expect(unmatched.params[8]).toBe("billing.event_unmatched");
-    expect(JSON.parse(unmatched.params[11] as string).values).toMatchObject({ reason: "unknown_variant" });
+    expect(JSON.parse(unmatched.params[11] as string).values).toMatchObject({ reason: "unmatched" });
+
+    // a further redelivery of an already audited digest: answered, not audited again
+    const replayed = fakeDb({ r_outcome: "duplicate", r_org: "org_synthetic", r_plan: "team", r_status: "active", r_audit: false });
+    expect(await applyBillingEvent(replayed.db, map, event, "b".repeat(64))).toBe("duplicate");
+    expect(replayed.calls).toHaveLength(1);
 
     // no workspace identified: nothing to audit
     const orphan = fakeDb({ r_outcome: "unmatched", r_org: null, r_plan: null, r_status: null });

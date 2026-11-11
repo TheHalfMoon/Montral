@@ -48,6 +48,15 @@ export default function Billing() {
       {!state && !error && <p className="muted">{t("Loading…")}</p>}
       {state && <>
         <p><strong>{t("Plan")}:</strong> {planName(state.plan)}</p>
+        {state.entitledPlan !== undefined && (() => {
+          // what the subscription grants right now: the default plan when nothing is granted
+          const effective = state.entitledPlan ?? plans?.defaultPlan ?? null;
+          if (!effective) return null;
+          return <>
+            <p><strong>{t("Plan in effect")}:</strong> {planName(effective)}</p>
+            {effective !== state.plan && state.status !== "none" && <p className="muted">{t("Your subscribed plan is not in effect right now, so the default plan's limits apply.")}</p>}
+          </>;
+        })()}
         <p><strong>{t("Status")}:</strong> {state.status}</p>
         {state.status === "cancelled" && <p className="muted">{state.endsAt && new Date(state.endsAt).getTime() > Date.now()
           ? `${t("Subscription access ends")}: ${new Date(state.endsAt).toLocaleString()}`

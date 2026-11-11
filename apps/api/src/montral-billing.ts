@@ -123,6 +123,28 @@ export async function billingPlanMap(env: Bindings): Promise<BillingPlanMap | nu
   return { source: "env", catalog, variantForPlan, planForVariant: (v) => byVariant.get(v) ?? null };
 }
 
+/**
+ * Catalog drift of live (non-expired) subscriptions: stored plan ids the catalog no longer defines (those workspaces
+ * get the default plan) and stored variants no catalog plan lists (a later plan change by that variant is refused).
+ * Counts and plan ids only, never workspace or customer data. Null when billing has no plan map.
+ */
+export async function subscriptionCatalogDrift(db: Database, env: Bindings): Promise<{
+  source: BillingPlanMap["source"]; missingPlans: { plan: string; count: number }[]; unmappedVariants: number;
+} | null> {
+  const map = await billingPlanMap(env);
+  if (!map) return null;
+  const rows = await db.query<{ plan: string; variant_id: string; count: string }>(
+    "SELECT plan, variant_id, COUNT(*)::text AS count FROM montral_subscription WHERE status <> 'expired' GROUP BY plan, variant_id",
+  );
+  const missing = new Map<string, number>();
+  let unmappedVariants = 0;
+  for (const r of rows) {
+    if (!map.catalog.plans.has(r.plan)) missing.set(r.plan, (missing.get(r.plan) ?? 0) + Number(r.count));
+    if (map.planForVariant(r.variant_id) === null) unmappedVariants += Number(r.count);
+  }
+  return { source: map.source, missingPlans: [...missing].map(([plan, count]) => ({ plan, count })), unmappedVariants };
+}
+
 /** The stored subscription columns entitlements are computed from. */
 export type SubscriptionEntitlementRow = {
   plan: string; status: string; test_mode: boolean; ends_at: Date | string | null;
@@ -150,47 +172,82 @@ export function entitledPlanId(row: SubscriptionEntitlementRow | null | undefine
   } else if (!["active", "on_trial", "past_due"].includes(row.status)) {
     return null;
   }
-  const paidSinceStatus = row.payment_state === "paid" && time(row.payment_updated_at) >= time(row.provider_updated_at);
-  const pastDue = row.payment_state === "failed" || (row.status === "past_due" && !paidSinceStatus);
-  if (pastDue) {
+  if (isPastDue(row)) {
     const since = time(row.past_due_since);
     if (!Number.isFinite(since) || now >= since + graceDays * DAY_MS) return null;
   }
   return row.plan;
 }
 
-/** When a past-due subscription's grace period ends (null: not past due). For display only. */
-export function graceEndsAt(row: SubscriptionEntitlementRow | null | undefined, graceDays: number): string | null {
-  if (!row || !row.past_due_since) return null;
-  const pastDue = row.payment_state === "failed" || row.status === "past_due";
-  return pastDue ? new Date(new Date(row.past_due_since).getTime() + graceDays * DAY_MS).toISOString() : null;
+/**
+ * Past due: the latest payment failed, or the provider status is past_due and no successful payment is newer than that
+ * status update (a newer paid invoice ends past due even before the provider's subscription_updated arrives).
+ */
+function isPastDue(row: SubscriptionEntitlementRow): boolean {
+  const time = (d: Date | string | null) => (d === null ? Number.NaN : new Date(d).getTime());
+  const paidSinceStatus = row.payment_state === "paid" && time(row.payment_updated_at) >= time(row.provider_updated_at);
+  return row.payment_state === "failed" || (row.status === "past_due" && !paidSinceStatus);
 }
 
+/** When a past-due subscription's grace period ends (null: not past due). For display only. */
+export function graceEndsAt(row: SubscriptionEntitlementRow | null | undefined, graceDays: number): string | null {
+  if (!row || !row.past_due_since || row.payment_state === "refunded") return null;
+  return isPastDue(row) ? new Date(new Date(row.past_due_since).getTime() + graceDays * DAY_MS).toISOString() : null;
+}
+
+/**
+ * CHECK constraints on montral_billing_intent that restrict `plan` to the fixed ids of earlier versions, by their
+ * actual names (earlier versions declared it inline, so PostgreSQL chose the name).
+ */
+async function legacyIntentPlanChecks(db: Database): Promise<string[]> {
+  const rows = await db.query<{ conname: string }>(
+    `SELECT conname FROM pg_constraint
+      WHERE conrelid = to_regclass('montral_billing_intent') AND contype = 'c'
+        AND conname <> 'montral_billing_intent_plan_format'
+        AND pg_get_constraintdef(oid) LIKE '%plan%'
+        AND pg_get_constraintdef(oid) LIKE '%''pro''%' AND pg_get_constraintdef(oid) LIKE '%''business''%'`,
+  );
+  return rows.map((r) => r.conname);
+}
+const quoteIdent = (name: string) => `"${name.replace(/"/g, '""')}"`;
+
+/**
+ * Rolling upgrades and rollbacks: replicas of the previous release keep running (and restarting) while this one
+ * migrates. This release therefore never drops, replaces or redefines a database function the previous release uses:
+ * `montral_reserve_billing_intent` and the eight-argument `montral_apply_billing_event` stay exactly as that release
+ * defines them (an old replica restarting re-creates its own versions, which no new code calls). New code calls only
+ * `montral_reserve_billing_intent_v2` and `montral_billing_apply`. Old replicas against the new schema are merely less
+ * capable (only the fixed plan ids, no payment state), never conflicting. The old functions are removed in a later
+ * release, once no replica of the previous release can run.
+ */
 export async function migrateMontralBilling(db: Database): Promise<string[]> {
   // This runs inside the single edition-migration transaction on EVERY replica
-  // startup, while checkouts may be in flight. montral_reserve_billing_intent
-  // reads montral_subscription and then montral_billing_intent. An
+  // startup, while checkouts may be in flight. The reservation functions read
+  // montral_subscription and then montral_billing_intent. An
   // unconditional `ADD COLUMN IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`
   // locks the table even when the object exists, and the old order (intent,
   // then subscription) deadlocked (40P01) with a concurrent reservation. Decide
   // from the catalog first: an up-to-date schema takes no table-locking DDL.
   const hasSubscription = await relationExists(db, "montral_subscription");
   const hasIntent = await relationExists(db, "montral_billing_intent");
+  const hasEvent = await relationExists(db, "montral_billing_event");
   const addIntentConsumedAt = hasIntent && !await columnExists(db, "montral_billing_intent", "consumed_at");
   const createIntentIndex = !await relationExists(db, "montral_billing_intent_pending");
   const addSubscriptionEndsAt = hasSubscription && !await columnExists(db, "montral_subscription", "ends_at");
   // Billing lifecycle (catalog-driven plans, payment state and grace). Plan ids
   // come from the operator catalog, so the hard-coded plan CHECK of earlier
-  // versions (PostgreSQL's default name montral_billing_intent_plan_check) is
-  // replaced by a plan-id FORMAT check on both tables.
+  // versions is replaced by a plan-id FORMAT check on both tables.
   const addPaymentColumns = hasSubscription && !await columnExists(db, "montral_subscription", "payment_state");
   const addSubscriptionPlanFormat = hasSubscription && !await constraintExists(db, "montral_subscription", "montral_subscription_plan_format");
   const replaceIntentPlanCheck = hasIntent && !await constraintExists(db, "montral_billing_intent", "montral_billing_intent_plan_format");
+  const addEventDuplicateAudit = hasEvent && !await columnExists(db, "montral_billing_event", "duplicate_audited_at");
   // Genuine upgrade of existing tables: take every lock this migration needs
-  // up front, in the checkout function's order (subscription, then intent).
+  // up front, in the checkout function's order (subscription, then intent),
+  // then the event ledger (which no checkout touches).
   const upgrade = [
     (addSubscriptionEndsAt || addPaymentColumns || addSubscriptionPlanFormat) && "montral_subscription",
     (addIntentConsumedAt || (hasIntent && createIntentIndex) || replaceIntentPlanCheck) && "montral_billing_intent",
+    addEventDuplicateAudit && "montral_billing_event",
   ].filter((name): name is string => !!name);
   if (upgrade.length) await db.query(`LOCK TABLE ${upgrade.join(", ")} IN ACCESS EXCLUSIVE MODE`);
   await db.query(`CREATE TABLE IF NOT EXISTS montral_billing_intent (
@@ -204,7 +261,11 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
     await db.query("ALTER TABLE montral_billing_intent ADD COLUMN IF NOT EXISTS consumed_at timestamptz");
   }
   if (replaceIntentPlanCheck) {
-    await db.query("ALTER TABLE montral_billing_intent DROP CONSTRAINT IF EXISTS montral_billing_intent_plan_check");
+    // Previous-release replicas only ever insert 'pro'/'business', which the
+    // format check admits, so dropping the fixed check cannot break them.
+    for (const name of await legacyIntentPlanChecks(db)) {
+      await db.query(`ALTER TABLE montral_billing_intent DROP CONSTRAINT IF EXISTS ${quoteIdent(name)}`);
+    }
     await db.query(`ALTER TABLE montral_billing_intent ADD CONSTRAINT montral_billing_intent_plan_format
       CHECK (plan ~ '^[a-z][a-z0-9_-]{0,31}$')`);
   }
@@ -214,8 +275,10 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
   }
   // Atomically reserve a single unexpired checkout per workspace. This lock is
   // scoped to the workspace, so independent customers are never serialized.
+  // A new name: the previous release's montral_reserve_billing_intent (fixed
+  // plan ids) is left exactly as that release defines it.
   await db.query(`
-    CREATE OR REPLACE FUNCTION montral_reserve_billing_intent(
+    CREATE OR REPLACE FUNCTION montral_reserve_billing_intent_v2(
       p_id uuid, p_org text, p_creator text, p_plan text, p_variant text
     ) RETURNS boolean LANGUAGE plpgsql AS $montral$
     BEGIN
@@ -268,23 +331,33 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
     await db.query(`ALTER TABLE montral_subscription ADD CONSTRAINT montral_subscription_plan_format
       CHECK (plan ~ '^[a-z][a-z0-9_-]{0,31}$')`);
   }
-  // Earlier preview versions exposed seven- and eight-argument SQL functions
-  // returning only an outcome. Drop them so nothing can call the old rules
-  // (fixed plans, no payment state) against the new columns.
+  // An earlier checkout preview (before the previous release) exposed a
+  // seven-argument SQL function that no supported release calls any more.
   await db.query("DROP FUNCTION IF EXISTS montral_apply_billing_event(text,text,text,text,text,timestamptz,uuid)");
-  await db.query("DROP FUNCTION IF EXISTS montral_apply_billing_event(text,text,text,text,text,timestamptz,uuid,timestamptz)");
   await db.query(`CREATE TABLE IF NOT EXISTS montral_billing_event (
     digest char(64) PRIMARY KEY, provider_id text NOT NULL, name text NOT NULL,
-    created_at timestamptz NOT NULL DEFAULT NOW()
+    created_at timestamptz NOT NULL DEFAULT NOW(), duplicate_audited_at timestamptz
   )`);
+  if (addEventDuplicateAudit) {
+    // When a redelivery of this digest was first audited: later identical
+    // redeliveries are answered "duplicate" without another audit row.
+    await db.query("ALTER TABLE montral_billing_event ADD COLUMN IF NOT EXISTS duplicate_audited_at timestamptz");
+  }
+  // A development build of this release defined montral_billing_apply with a
+  // shorter result row; CREATE OR REPLACE cannot change a result type.
+  if ((await db.query(`SELECT 1 AS found FROM pg_proc
+      WHERE proname = 'montral_billing_apply' AND NOT ('r_plan_kept' = ANY (COALESCE(proargnames, ARRAY[]::text[])))`)).length) {
+    await db.query("DROP FUNCTION IF EXISTS montral_billing_apply(text,text,text,text,text,text,timestamptz,uuid,timestamptz,text)");
+  }
   await db.query(`
     CREATE OR REPLACE FUNCTION montral_billing_apply(
       p_digest text, p_event text, p_provider text, p_variant text, p_plan text,
       p_status text, p_updated timestamptz, p_intent uuid, p_ends timestamptz, p_payment text
-    ) RETURNS TABLE (r_outcome text, r_org text, r_plan text, r_status text)
+    ) RETURNS TABLE (r_outcome text, r_org text, r_plan text, r_status text, r_audit boolean, r_plan_kept boolean)
     LANGUAGE plpgsql AS $montral$
     DECLARE target_org text; target_plan text; expected_variant text; current_status text;
-            inserted_count integer; changed_count integer := 0;
+            current_variant text; current_updated timestamptz; plan_kept boolean := false;
+            inserted_count integer; changed_count integer := 0; first_redelivery integer;
             strictness text[] := ARRAY['on_trial','active','paused','past_due','unpaid','cancelled','expired']::text[];
             payment_strictness text[] := ARRAY['paid','failed','refunded']::text[];
     BEGIN
@@ -292,10 +365,15 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
       -- and the subscription update; no event is "consumed" before an update commits.
       -- p_payment NULL: a subscription event (status/variant/plan); otherwise a
       -- subscription-invoice payment outcome that changes only the payment state.
+      -- r_audit: whether the caller records this outcome in the audit log (a
+      -- redelivered digest is audited once, not on every further redelivery).
       IF EXISTS (SELECT 1 FROM montral_billing_event WHERE digest=p_digest) THEN
-        RETURN QUERY SELECT 'duplicate'::text, s.organization_id, s.plan, s.status
+        UPDATE montral_billing_event SET duplicate_audited_at=NOW()
+          WHERE digest=p_digest AND duplicate_audited_at IS NULL;
+        GET DIAGNOSTICS first_redelivery = ROW_COUNT;
+        RETURN QUERY SELECT 'duplicate'::text, s.organization_id, s.plan, s.status, first_redelivery > 0, false
           FROM montral_subscription s WHERE s.provider_id=p_provider;
-        IF NOT FOUND THEN RETURN QUERY SELECT 'duplicate'::text, NULL::text, NULL::text, NULL::text; END IF;
+        IF NOT FOUND THEN RETURN QUERY SELECT 'duplicate'::text, NULL::text, NULL::text, NULL::text, false, false; END IF;
         RETURN;
       END IF;
       IF p_event = 'subscription_created' THEN
@@ -304,10 +382,10 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
           FROM montral_billing_intent i
           WHERE i.id=p_intent AND i.expires_at > NOW() AND i.consumed_at IS NULL FOR UPDATE;
         IF target_org IS NULL THEN
-          RETURN QUERY SELECT 'unmatched'::text, NULL::text, NULL::text, NULL::text; RETURN;
+          RETURN QUERY SELECT 'unmatched'::text, NULL::text, NULL::text, NULL::text, false, false; RETURN;
         END IF;
         IF expected_variant <> p_variant THEN
-          RETURN QUERY SELECT 'unmatched'::text, target_org, NULL::text, NULL::text; RETURN;
+          RETURN QUERY SELECT 'unmatched'::text, target_org, NULL::text, NULL::text, true, false; RETURN;
         END IF;
         -- Multiple intents may exist from older preview versions. A second
         -- provider must not replace an active subscription. Serialize with
@@ -317,29 +395,28 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
           SELECT 1 FROM montral_subscription s
           WHERE s.organization_id=target_org AND s.provider_id<>p_provider AND s.status<>'expired'
         ) THEN
-          RETURN QUERY SELECT 'unmatched'::text, target_org, NULL::text, NULL::text; RETURN;
+          RETURN QUERY SELECT 'unmatched'::text, target_org, NULL::text, NULL::text, true, false; RETURN;
         END IF;
       ELSE
-        SELECT s.organization_id, s.status INTO target_org, current_status
+        SELECT s.organization_id, s.status, s.variant_id, s.provider_updated_at
+          INTO target_org, current_status, current_variant, current_updated
           FROM montral_subscription s WHERE s.provider_id=p_provider FOR UPDATE;
         IF target_org IS NULL THEN
-          RETURN QUERY SELECT 'unmatched'::text, NULL::text, NULL::text, NULL::text; RETURN;
+          RETURN QUERY SELECT 'unmatched'::text, NULL::text, NULL::text, NULL::text, false, false; RETURN;
         END IF;
-        -- A subscription event must name a variant the plan catalog maps to a
-        -- plan (resolved by the caller into p_plan). Unknown: recorded by the
-        -- caller as unmatched, entitlements untouched, digest NOT consumed (a
-        -- corrected catalog can still apply the provider's retry).
-        IF p_payment IS NULL AND (p_plan IS NULL OR p_variant IS NULL) THEN
-          RETURN QUERY SELECT 'unmatched'::text, s.organization_id, s.plan, s.status
-            FROM montral_subscription s WHERE s.provider_id=p_provider;
-          RETURN;
-        END IF;
+        -- A subscription event whose variant the catalog does not map (p_plan
+        -- NULL; e.g. the variant was removed from the catalog) still applies its
+        -- status, deadline and clock: a cancellation or expiry must always take
+        -- effect. Only the PLAN CHANGE is refused: plan and variant stay.
+        plan_kept := p_payment IS NULL AND p_plan IS NULL
+          AND p_variant IS DISTINCT FROM current_variant AND current_updated < p_updated;
       END IF;
       INSERT INTO montral_billing_event(digest,provider_id,name)
         VALUES(p_digest,p_provider,p_event) ON CONFLICT DO NOTHING;
       GET DIAGNOSTICS inserted_count = ROW_COUNT;
       IF inserted_count = 0 THEN
-        RETURN QUERY SELECT 'duplicate'::text, s.organization_id, s.plan, s.status
+        -- a concurrent delivery of the same digest committed first
+        RETURN QUERY SELECT 'duplicate'::text, s.organization_id, s.plan, s.status, false, false
           FROM montral_subscription s WHERE s.organization_id=target_org;
         RETURN;
       END IF;
@@ -390,12 +467,22 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
         UPDATE montral_subscription s SET
             status=p_status, ends_at=p_ends, updated_at=NOW(),
             -- a plan change (another catalog variant) applies only from a strictly
-            -- newer provider update; an equal-timestamp tie never changes the plan
-            variant_id=CASE WHEN s.provider_updated_at < p_updated THEN p_variant ELSE s.variant_id END,
-            plan=CASE WHEN s.provider_updated_at < p_updated THEN p_plan ELSE s.plan END,
+            -- newer provider update and only for a variant the catalog maps; an
+            -- equal-timestamp tie or an unmapped variant never changes the plan
+            variant_id=CASE WHEN s.provider_updated_at < p_updated AND p_plan IS NOT NULL THEN p_variant ELSE s.variant_id END,
+            plan=CASE WHEN s.provider_updated_at < p_updated AND p_plan IS NOT NULL THEN p_plan ELSE s.plan END,
+            -- the provider reporting the subscription active/on_trial on a strictly
+            -- newer update than the last failed invoice ends that failure (a lost
+            -- payment-success event must not downgrade a paying customer)
+            payment_state=CASE
+              WHEN s.payment_state='failed' AND p_status IN ('active','on_trial')
+                AND s.provider_updated_at < p_updated AND (s.payment_updated_at IS NULL OR s.payment_updated_at < p_updated)
+              THEN NULL ELSE s.payment_state END,
             past_due_since=CASE
               WHEN p_status='past_due' THEN COALESCE(s.past_due_since, p_updated)
-              WHEN s.payment_state='failed' THEN s.past_due_since
+              WHEN s.payment_state='failed' AND NOT (p_status IN ('active','on_trial')
+                AND s.provider_updated_at < p_updated AND (s.payment_updated_at IS NULL OR s.payment_updated_at < p_updated))
+              THEN s.past_due_since
               ELSE NULL END,
             provider_updated_at=p_updated
           WHERE s.provider_id=p_provider AND (
@@ -428,10 +515,10 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
       -- Digest remains in the replay ledger even if this valid signed event
       -- is older, or tied in timestamp and not more restrictive.
       RETURN QUERY SELECT CASE WHEN changed_count = 0 THEN 'stale' ELSE 'applied' END::text,
-          s.organization_id, s.plan, s.status
+          s.organization_id, s.plan, s.status, true, plan_kept AND changed_count > 0
         FROM montral_subscription s WHERE s.organization_id=target_org;
       IF NOT FOUND THEN
-        RETURN QUERY SELECT CASE WHEN changed_count = 0 THEN 'stale' ELSE 'applied' END::text, target_org, NULL::text, NULL::text;
+        RETURN QUERY SELECT CASE WHEN changed_count = 0 THEN 'stale' ELSE 'applied' END::text, target_org, NULL::text, NULL::text, true, false;
       END IF;
     END;
     $montral$
@@ -523,16 +610,17 @@ const OUTCOMES = new Set<BillingOutcome>(["applied", "stale", "duplicate", "unma
 /**
  * Applies one verified billing event through the single monotonic SQL path (montral_billing_apply) and records what
  * happened in the workspace's audit log: `billing.event_applied` for a state change, `billing.event_ignored` for a
- * stale or duplicate event (the state it left unchanged), `billing.event_unmatched` for an event naming a known
- * subscription that could not be applied (e.g. an unknown variant). An event whose workspace cannot be identified is
- * not audited (there is no workspace log to write to). Audit values hold only status, plan and event type: no amounts,
- * no customer data.
+ * stale or duplicate event (the state it left unchanged; a redelivered digest is audited once), and
+ * `billing.event_unmatched` for a creation whose checkout intent does not match. A subscription event naming a variant
+ * the catalog does not map still applies its status and deadline; only the plan change is refused (audited as applied
+ * with reason `unmapped_variant_plan_kept`). An event whose workspace cannot be identified is not audited (there is no
+ * workspace log to write to). Audit values hold only status, plan and event type: no amounts, no customer data.
  */
 export async function applyBillingEvent(db: Database, map: BillingPlanMap, event: BillingEvent, digest: string): Promise<BillingOutcome> {
   const isSubscription = event.kind === "subscription";
   const plan = isSubscription ? map.planForVariant(event.variant) : null;
-  const rows = await db.query<{ r_outcome: string; r_org: string | null; r_plan: string | null; r_status: string | null }>(
-    "SELECT r_outcome,r_org,r_plan,r_status FROM montral_billing_apply($1,$2,$3,$4,$5,$6,$7::timestamptz,$8::uuid,$9::timestamptz,$10)",
+  const rows = await db.query<{ r_outcome: string; r_org: string | null; r_plan: string | null; r_status: string | null; r_audit: boolean; r_plan_kept: boolean }>(
+    "SELECT r_outcome,r_org,r_plan,r_status,r_audit,r_plan_kept FROM montral_billing_apply($1,$2,$3,$4,$5,$6,$7::timestamptz,$8::uuid,$9::timestamptz,$10)",
     [
       digest, event.name, event.id,
       isSubscription ? event.variant : null, plan,
@@ -543,7 +631,8 @@ export async function applyBillingEvent(db: Database, map: BillingPlanMap, event
   );
   const row = rows[0];
   const outcome = (row && OUTCOMES.has(row.r_outcome as BillingOutcome) ? row.r_outcome : "unmatched") as BillingOutcome;
-  if (row?.r_org) {
+  // r_audit is false for further redeliveries of an already audited digest (audited once, not on every retry)
+  if (row?.r_org && row.r_audit !== false) {
     const action = outcome === "applied" ? "billing.event_applied" : outcome === "unmatched" ? "billing.event_unmatched" : "billing.event_ignored";
     try {
       await recordAuditEvent((sql, params) => db.query(sql, params), {
@@ -552,7 +641,8 @@ export async function applyBillingEvent(db: Database, map: BillingPlanMap, event
         action, targetType: "subscription", targetId: event.id,
         changes: { fields: ["plan", "status"], values: {
           status: row.r_status, plan: row.r_plan, type: event.name,
-          ...(outcome === "applied" ? {} : { reason: outcome === "unmatched" && isSubscription && plan === null ? "unknown_variant" : outcome }),
+          // applied with an unmapped variant: status/deadline applied, the plan change refused (plan kept)
+          ...(outcome === "applied" ? (row.r_plan_kept ? { reason: "unmapped_variant_plan_kept" } : {}) : { reason: outcome }),
         } },
         ip: null,
       });
@@ -572,8 +662,9 @@ export type SubscriptionSnapshot = {
 /**
  * Reconciliation hook: applies a provider subscription snapshot through the same monotonic path as a signed webhook,
  * so a lost or delayed `subscription_updated` can be repaired later. It can only update a subscription Montral already
- * linked through a verified checkout (never create one), an older or equal-and-less-strict snapshot is stale, an
- * unknown variant is unmatched, and the same snapshot twice is a duplicate. Makes no network call: the caller fetches
+ * linked through a verified checkout (never create one), an older or equal-and-less-strict snapshot is stale, a
+ * variant the catalog does not map applies status and deadline but keeps the plan, and the same snapshot twice is a
+ * duplicate. Makes no network call: the caller fetches
  * the snapshot (none does yet; no operator job is scheduled in this preview).
  */
 export async function reconcileSubscription(db: Database, env: Bindings, snapshot: SubscriptionSnapshot): Promise<BillingOutcome | "invalid" | "not_configured"> {
@@ -793,7 +884,7 @@ export function mountMontralBilling({ app, authed }: { app: Hono<AppEnv>; authed
     // workspace, even across different Node/Worker processes and connections.
     // The intent is committed before contacting the provider for callback safety.
     const reservation = await c.get("database").query<{ reserved: boolean }>(
-      "SELECT montral_reserve_billing_intent($1::uuid,$2::text,$3::text,$4::text,$5::text) AS reserved",
+      "SELECT montral_reserve_billing_intent_v2($1::uuid,$2::text,$3::text,$4::text,$5::text) AS reserved",
       [id, c.get("orgId"), c.get("userId"), result.data.plan, variant],
     );
     if (!reservation[0]?.reserved) return c.json({

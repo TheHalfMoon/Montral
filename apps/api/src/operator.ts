@@ -6,6 +6,9 @@ import { limitedJsonBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
 import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
+import { availableRegions, isRegionConfigured, resetProbeRegionCache } from "./probes";
+import { AUTO, REGION_ID } from "./regions";
+import type { ProbeRegionState } from "@montral/repo";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
 
 /**
@@ -16,7 +19,8 @@ import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
  * whether or not they are signed in, so the API tells a non-operator nothing about workspaces or operators.
  *
  * What an operator can do: list and look up workspaces (name, slug, size, owner email, plan and usage, suspension) and
- * suspend or unsuspend one. Monitor targets, alert channels, incidents and member lists are not exposed here.
+ * suspend or unsuspend one; list probe regions with their health and drain or undrain one. Monitor targets, alert
+ * channels, incidents and member lists are not exposed here.
  */
 
 /** The configured operator user ids; an empty or unset variable means there are no operators. */
@@ -119,6 +123,29 @@ const toWorkspace = async (c: Context<AppEnv>, r: WorkspaceRow) => ({
 /** One server log line per operator action: who, what, which workspace and the reason, never the note. */
 function logAction(operatorId: string, action: "suspend" | "unsuspend", orgId: string, reason: string | null) {
   console.log(`operator action: ${action} workspace=${orgId} operator=${operatorId}${reason ? ` reason=${reason}` : ""}`);
+}
+
+/** A probe that has not answered for this long, without being seen failing either, is reported as "unknown". */
+export const PROBE_SILENT_AFTER_MS = 15 * 60_000;
+export const PROBE_DRAIN_NOTE_MAX = 200;
+
+/** One region's line in the operator view: configuration, drain flag, last-seen health and how many monitors use it. */
+export function probeRegionView(id: string, name: string | null, state: ProbeRegionState | undefined, monitors: number, now = Date.now()) {
+  const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
+  const status = state?.drained ? "drained"
+    : state?.unreachableSince ? "unreachable"
+    : state?.lastAnswerAt && now - new Date(state.lastAnswerAt).getTime() <= PROBE_SILENT_AFTER_MS ? "up"
+    : "unknown";
+  return {
+    id, name: name ?? id, configured: name !== null, status, monitors,
+    drained: state?.drained ?? false, drainedAt: iso(state?.drainedAt), drainedBy: state?.drainedBy ?? null, drainNote: state?.drainNote ?? null,
+    lastAnswerAt: iso(state?.lastAnswerAt), lastUnreachableAt: iso(state?.lastUnreachableAt),
+    lastUnreachableReason: state?.lastUnreachableReason ?? null, unreachableSince: iso(state?.unreachableSince),
+  };
+}
+
+function logProbeAction(operatorId: string, action: "drain" | "undrain", region: string) {
+  console.log(`operator action: ${action} region=${region} operator=${operatorId}`);
 }
 
 type Query = <T>(sql: string, params?: unknown[]) => Promise<T[]>;
@@ -244,4 +271,49 @@ export const operatorApi = new Hono<AppEnv>()
     if (outcome === "missing") return c.json({ error: "Not found" }, 404);
     if (outcome === "lifted") logAction(operatorId, "unsuspend", id, null);
     return c.json({ id, suspended: false });
+  })
+  // Probe regions: the configured ones (PROBE_REGIONS) and any with stored state that is no longer configured.
+  .get("/probes", async (c) => {
+    const repo = c.get("repo");
+    if (!repo.probeRegionStates) return c.json({ error: "Probe region state is not available on this backend" }, 501);
+    const [states, counts] = await Promise.all([repo.probeRegionStates(), repo.monitorsPerRegion?.() ?? Promise.resolve({} as Record<string, number>)]);
+    const byId = new Map(states.map((st) => [st.region, st] as const));
+    const configured = availableRegions().filter((r) => r.id !== AUTO);
+    const stale = states.filter((st) => !configured.some((r) => r.id === st.region)).map((st) => st.region);
+    return c.json({
+      auto: { monitors: counts[AUTO] ?? 0 },
+      regions: [
+        ...configured.map((r) => probeRegionView(r.id, r.name, byId.get(r.id), counts[r.id] ?? 0)),
+        ...stale.map((id) => probeRegionView(id, null, byId.get(id), counts[id] ?? 0)),
+      ],
+    });
+  })
+  // A drained region is not asked by the scheduler (within DRAIN_TTL_MS on every server); monitors that list it
+  // confirm from their other regions or this location. Only a configured region can be drained; any can be undrained.
+  .post("/probes/:id/drain", async (c) => {
+    const id = c.req.param("id");
+    if (!REGION_ID.test(id) || id === AUTO || !isRegionConfigured(id)) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    if (!repo.setProbeRegionDrain) return c.json({ error: "Probe region state is not available on this backend" }, 501);
+    const operatorId = c.get("operatorId")!;
+    if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const body = (await limitedJsonBody(c.req.raw, 2048)) as { note?: unknown } | null;
+    const note = body?.note === undefined || body?.note === null ? null : body.note;
+    if (note !== null && (typeof note !== "string" || note.length > PROBE_DRAIN_NOTE_MAX)) return c.json({ error: `note must be text of at most ${PROBE_DRAIN_NOTE_MAX} characters` }, 400);
+    await repo.setProbeRegionDrain(id, { drained: true, by: operatorId, note: note?.trim() || null });
+    resetProbeRegionCache();
+    logProbeAction(operatorId, "drain", id);
+    return c.json({ id, drained: true });
+  })
+  .post("/probes/:id/undrain", async (c) => {
+    const id = c.req.param("id");
+    if (!REGION_ID.test(id) || id === AUTO) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    if (!repo.setProbeRegionDrain) return c.json({ error: "Probe region state is not available on this backend" }, 501);
+    const operatorId = c.get("operatorId")!;
+    if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    await repo.setProbeRegionDrain(id, { drained: false, by: null, note: null });
+    resetProbeRegionCache();
+    logProbeAction(operatorId, "undrain", id);
+    return c.json({ id, drained: false });
   });

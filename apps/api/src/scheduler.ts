@@ -4,6 +4,7 @@ import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminde
 import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
 import { measure, type Measured } from "./probes";
+import { withinPlanRegions } from "./regions";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
 import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, browserAvailable, browserCheckWorstCaseMs, browserProbeDue } from "./browser-check";
@@ -170,8 +171,9 @@ function meteringFailed(e: unknown) {
 export async function withinCredits(monitors: Monitor[], entitlements: Entitlements): Promise<Monitor[]> {
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of monitors) byWorkspace.set(m.organizationId, [...(byWorkspace.get(m.organizationId) ?? []), m]);
-  const allowed = new Set<string>();
-  await Promise.all([...byWorkspace].map(async ([workspaceId, list]) => {
+  const allowed = new Map<string, Monitor>();
+  await Promise.all([...byWorkspace].map(async ([workspaceId, due]) => {
+    const list = await withinPlanRegions(due, workspaceId, entitlements);
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
     // A failing ledger: self-hosted (unmetered) runs the checks and logs the gap, so monitoring is never silenced; a
     // metered deployment grants nothing (failClosed), so a ledger or catalog failure never runs unmetered checks. The
@@ -187,11 +189,11 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
       const cost = creditCost(m);
       if (cost <= left) {
         left -= cost;
-        allowed.add(m.id);
+        allowed.set(m.id, m);
       }
     }
   }));
-  return monitors.filter((m) => allowed.has(m.id));
+  return monitors.flatMap((m) => (allowed.has(m.id) ? [allowed.get(m.id)!] : []));
 }
 
 /** Wall time one queue task may spend on a workspace's browser checks (well under the 5-minute stall watchdog). */

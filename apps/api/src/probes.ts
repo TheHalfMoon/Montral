@@ -132,13 +132,74 @@ const capable = new Map<string, number>();
 /** Forgets which probes were seen supporting request bodies (tests, and a configuration reload). */
 export function resetProbeCapabilities() { capable.clear(); }
 
+export const NOT_CONFIGURED = "Region is not configured on this deployment";
+export const DRAINED = "Region is drained by the operator";
+
 export async function runInRegion(region: string, input: CheckInput, repo?: Repo): Promise<RegionRun> {
   if (region === AUTO) {
     const outcome = await runCheck(input, repo);
     return outcome.inconclusive ? { region, unreachable: "This location is offline" } : { region, outcome };
   }
   const probe = regions.get(region);
-  if (!probe) return { region, unreachable: "Region is not configured on this deployment" };
+  if (!probe) return { region, unreachable: NOT_CONFIGURED };
+  // a drained region is not asked at all: its monitors confirm from their other regions (see `measure`)
+  if ((await drainedRegions(repo)).has(region)) return { region, unreachable: DRAINED };
+  const run = await askProbe(probe, input);
+  // capability gaps say nothing about the probe's health; anything else is a sign of life, or of trouble
+  if ("outcome" in run) await noteHealth(repo, region, true);
+  else if (!run.unreachable.startsWith("Probe upgrade required")) await noteHealth(repo, region, false, run.unreachable);
+  return run;
+}
+
+/** How long the drained set read from the database is reused by this process. */
+const DRAIN_TTL_MS = 15_000;
+let drainCache: { at: number; drained: Set<string> } | null = null;
+let drainLoad: Promise<Set<string>> | null = null;
+
+/**
+ * The regions an operator drained (repo `probeRegionStates`), cached briefly and loaded once for concurrent checks. If
+ * the state cannot be read the last known drains stay in force (none before the first read): a database hiccup must
+ * neither silence monitoring nor suddenly send checks to a region an operator took out.
+ */
+export async function drainedRegions(repo?: Repo): Promise<Set<string>> {
+  if (!repo?.probeRegionStates) return new Set();
+  if (drainCache && Date.now() - drainCache.at < DRAIN_TTL_MS) return drainCache.drained;
+  drainLoad ??= repo.probeRegionStates().then(
+    (states) => (drainCache = { at: Date.now(), drained: new Set(states.filter((st) => st.drained).map((st) => st.region)) }).drained,
+    () => {
+      console.warn("probe region state unavailable; last known drains kept");
+      return drainCache?.drained ?? new Set<string>();
+    },
+  ).finally(() => { drainLoad = null; });
+  return drainLoad;
+}
+
+/** At most one health write per region and process this often, unless the region's state flips. */
+const HEALTH_WRITE_MS = 60_000;
+const healthWritten = new Map<string, { at: number; answered: boolean }>();
+
+/** Record that a probe answered or could not be asked (operator view). Never fails the check. */
+async function noteHealth(repo: Repo | undefined, region: string, answered: boolean, reason?: string) {
+  if (!repo?.noteProbeHealth) return;
+  const last = healthWritten.get(region);
+  if (last && last.answered === answered && Date.now() - last.at < HEALTH_WRITE_MS) return;
+  healthWritten.set(region, { at: Date.now(), answered });
+  try {
+    await repo.noteProbeHealth(region, answered, reason);
+  } catch {
+    healthWritten.delete(region);
+    console.warn("probe health not recorded");
+  }
+}
+
+/** Forgets cached drains and health-write throttling (tests, and an operator drain in this process). */
+export function resetProbeRegionCache() {
+  drainCache = null;
+  healthWritten.clear();
+}
+
+async function askProbe(probe: ProbeRegion, input: CheckInput): Promise<RegionRun> {
+  const region = probe.id;
   const body = JSON.stringify({
     type: input.type, target: input.target, method: input.method, expectedStatus: input.expectedStatus, timeoutMs: input.timeoutMs,
     keyword: input.keyword ?? null, keywordMode: input.keywordMode ?? "contains", expectedLocation: input.expectedLocation ?? null, headers: input.headers ?? {},
@@ -239,7 +300,9 @@ export function combine(runs: RegionRun[], minFailing = 0): Measured | null {
 
 /**
  * Run a monitor's check from the regions it asks for. A monitor on `auto` (the default) never touches a probe. If no
- * probe answers, the check falls back to this location so a probe outage cannot blind monitoring.
+ * probe answers, the check falls back to this location so a probe outage cannot blind monitoring; if only some answer
+ * and their failures fall short of what the monitor's rule asks for, this location confirms first (`needsConfirmation`),
+ * so an unreachable or drained probe neither hides an outage nor lets a single region page.
  */
 export async function measure(m: Monitor, repo?: Repo): Promise<Measured> {
   const regions = effectiveRegions(m);
@@ -249,11 +312,59 @@ export async function measure(m: Monitor, repo?: Repo): Promise<Measured> {
     return { out, results: [{ region: AUTO, ok: out.ok, statusCode: out.statusCode, latencyMs: out.latencyMs, error: out.error }] };
   }
   const runs = await Promise.all(regions.map((r) => runInRegion(r, m, repo)));
-  const lost = runs.flatMap((r) => ("unreachable" in r ? [`${r.region}: ${r.unreachable}`] : []));
+  // a drained region is the operator's choice, not news: it is left out of the log line
+  const lost = runs.flatMap((r) => ("unreachable" in r && r.unreachable !== DRAINED ? [`${r.region}: ${r.unreachable}`] : []));
   if (lost.length) console.warn(`probes unavailable for ${m.id}: ${lost.join("; ")}`);
   const combined = combine(runs, m.minRegionsFailing);
-  if (combined) return combined;
+  if (combined) {
+    if (!needsConfirmation(regions, combined, m.minRegionsFailing)) return combined;
+    // one region failing while the others could not vote: this location's own check is one more vote
+    const local = await runCheck(m, repo);
+    return confirmLocally(combined, local.inconclusive ? null : local, regions.length, m.minRegionsFailing);
+  }
   const out = await runCheck(m, repo);
   if (out.inconclusive) return inconclusive(out);
   return { out, results: [{ region: AUTO, ok: out.ok, statusCode: out.statusCode, latencyMs: out.latencyMs, error: out.error }] };
+}
+
+/** Failed regions a monitor listing `regions` regions needs to go down: its own number, or a strict majority. */
+export function requiredFailures(regions: number, minFailing = 0): number {
+  return minFailing > 0 ? Math.min(minFailing, regions) : Math.floor(regions / 2) + 1;
+}
+
+/**
+ * Does this failing verdict rest on a single region's view only because the monitor's other regions could not vote
+ * (unreachable or drained)? `combine` lowers the bar to the regions that answered, so that a broken probe cannot hide a
+ * real outage, and two or more regions that agree still alert that way. But one region's bad route must not page a
+ * monitor that asked for more than one region to agree: such a verdict is confirmed from this location first. A monitor
+ * that lists `auto` already has this location's vote, so nothing is added.
+ */
+export function needsConfirmation(regions: string[], combined: Measured, minFailing = 0): boolean {
+  if (combined.out.ok || regions.length < 2 || regions.includes(AUTO)) return false;
+  if (combined.results.length >= regions.length) return false;
+  const failed = combined.results.filter((r) => !r.ok).length;
+  return failed === 1 && requiredFailures(regions.length, minFailing) > 1;
+}
+
+/**
+ * Fold this location's check into a verdict `needsConfirmation` did not trust. With its vote added, the run fails when
+ * the monitor's rule holds over the regions that answered plus this location (capped like `combine`); otherwise it
+ * passes and the failing regions stay recorded. When this location could not check either (`local` null) the verdict
+ * stands: an answer from a region is still evidence, and staying blind is worse than an unconfirmed alert.
+ */
+export function confirmLocally(combined: Measured, local: CheckOutcome | null, configured: number, minFailing = 0): Measured {
+  const answered = combined.results.length;
+  const failed = combined.results.filter((r) => !r.ok).length;
+  const vote = `${failed} of ${answered} regions failed, ${configured - answered} unavailable`;
+  if (!local) return { ...combined, note: `${vote}; this location could not confirm` };
+  const results: RegionResult[] = [...combined.results, { region: AUTO, ok: local.ok, statusCode: local.statusCode, latencyMs: local.latencyMs, error: local.error }];
+  const failing = failed + (local.ok ? 0 : 1);
+  const needed = minFailing > 0 ? Math.min(minFailing, results.length) : Math.floor(results.length / 2) + 1;
+  if (failing >= needed) return { out: combined.out, results, note: `${vote}; confirmed from this location` };
+  const lat = results.filter((r) => r.ok && r.latencyMs != null).map((r) => r.latencyMs!);
+  return {
+    out: { ok: true, statusCode: local.statusCode, latencyMs: lat.length ? Math.round(lat.reduce((n, v) => n + v, 0) / lat.length) : undefined },
+    results,
+    note: `${vote}; not confirmed from this location`,
+  };
 }

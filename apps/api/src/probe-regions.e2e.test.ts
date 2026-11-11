@@ -1,0 +1,237 @@
+import { openDatabase } from "@montral/db-pg";
+import { createHmac } from "node:crypto";
+import { createServer, type Server } from "node:http";
+import type { AddressInfo } from "node:net";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createApp } from "./app";
+import type { Edition } from "./edition";
+import { unmetered } from "./entitlements";
+import { configureProbes, resetProbeRegionCache } from "./probes";
+
+// Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests). Region ids are unique
+// to this file: the probe region table is platform-wide and other suites write to it too.
+const url = process.env.TEST_DATABASE_URL;
+const ORIGIN = "http://localhost:8787";
+const PASSWORD = "correct horse battery staple";
+const PROBES = {
+  "e2e-north": "https://probe.test/api/probe/e2e-north",
+  "e2e-south": "https://probe.test/api/probe/e2e-south",
+  "e2e-west": "https://probe.test/api/probe/e2e-west",
+};
+const baseEnv = {
+  DATABASE_URL: url, BETTER_AUTH_SECRET: "probe-regions-e2e-only-secret-not-for-production", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron",
+  PROBE_SECRET: "probe-regions-e2e-secret", PROBE_REGIONS: JSON.stringify(PROBES),
+  // the monitored target is a local server, so this location's own check can confirm or refute the probes
+  ALLOW_PRIVATE_TARGETS: "true",
+};
+
+/** RFC 6238 TOTP (SHA-1, 6 digits, 30 s) from the base32 secret of an otpauth:// URI. */
+function totp(uri: string, at = Date.now()): string {
+  const secret = new URL(uri).searchParams.get("secret")!.replace(/=+$/, "").toUpperCase();
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = "";
+  for (const ch of secret) bits += alphabet.indexOf(ch).toString(2).padStart(5, "0");
+  const key = Buffer.from((bits.match(/.{8}/g) ?? []).map((b) => parseInt(b, 2)));
+  const counter = Buffer.alloc(8);
+  counter.writeBigUInt64BE(BigInt(Math.floor(at / 30_000)));
+  const h = createHmac("sha1", key).update(counter).digest();
+  const o = h[h.length - 1] & 0xf;
+  return String((h.readUInt32BE(o) & 0x7fffffff) % 1_000_000).padStart(6, "0");
+}
+
+const cookiesOf = (r: Response, current = "") => {
+  const map = new Map(current.split("; ").filter(Boolean).map((kv) => [kv.slice(0, kv.indexOf("=")), kv.slice(kv.indexOf("=") + 1)] as const));
+  for (const c of r.headers.getSetCookie()) {
+    const kv = c.split(";")[0];
+    const value = kv.slice(kv.indexOf("=") + 1);
+    if (!value || /max-age=0/i.test(c)) map.delete(kv.slice(0, kv.indexOf("=")));
+    else map.set(kv.slice(0, kv.indexOf("=")), value);
+  }
+  return [...map].map(([k, v]) => `${k}=${v}`).join("; ");
+};
+
+/** A plan whose region cap the tests change, as a downgrade would. */
+const plan = { maxRegions: 3 as number | null };
+const edition: Edition = {
+  entitlements: () => ({
+    ...unmetered,
+    plan: async () => ({ id: "test", name: "Test", maxActiveMonitors: 50, minIntervalSec: 60, maxRegions: plan.maxRegions }),
+  }),
+};
+
+describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan cap (PostgreSQL)", () => {
+  const db = url ? openDatabase(url, { max: 2 }) : null;
+  const app = createApp(openDatabase, { edition });
+  const monitorIds: string[] = [];
+  const realFetch = globalThis.fetch;
+  const asked: string[] = [];
+  /** What each probe answers; a probe not listed is down. */
+  const answers: Record<string, { ok: boolean; statusCode?: number; latencyMs?: number; error?: string }> = {};
+  /** The local target: what this location's own check sees. */
+  let targetStatus = 200;
+  let server: Server;
+  let target = "";
+
+  beforeAll(async () => {
+    server = createServer((_req, res) => { res.statusCode = targetStatus; res.end("ok"); });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    target = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const u = String(input instanceof Request ? input.url : input);
+      if (!u.startsWith("https://probe.test/")) return realFetch(input, init);
+      const id = u.split("/").pop()!;
+      asked.push(id);
+      const a = answers[id];
+      if (!a) throw new Error("connect ECONNREFUSED");
+      return new Response(JSON.stringify(a), { headers: { "content-type": "application/json" } });
+    });
+    await app.fetch(new Request(`${ORIGIN}/internal/migrate`, { method: "POST", headers: { "x-cron-secret": "cron" } }), baseEnv as never);
+  });
+  afterAll(async () => {
+    vi.unstubAllGlobals();
+    configureProbes({});
+    if (monitorIds.length) await db!.query(`UPDATE monitor SET paused = true, next_check_at = now() + interval '30 days' WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [monitorIds.join(",")]);
+    await db!.query(`DELETE FROM probe_region_state WHERE region = ANY(string_to_array($1::text, ','))`, [Object.keys(PROBES).join(",")]);
+    await db?.close(1);
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  async function account(extraEnv: Record<string, string> = {}) {
+    const env = { ...baseEnv, ...extraEnv };
+    const send = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
+    const email = `regions-${crypto.randomUUID()}@example.com`;
+    const su = await send("/api/auth/sign-up/email", { method: "POST", headers: { "content-type": "application/json", origin: ORIGIN }, body: JSON.stringify({ email, password: PASSWORD, name: "Ada" }) });
+    const userId = ((await su.json()) as { user: { id: string } }).user.id;
+    let cookie = cookiesOf(su);
+    const call = async (method: string, path: string, body?: unknown) => {
+      const r = await send(`/api${path}`, { method, headers: { cookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const next = cookiesOf(r, cookie);
+      return { status: r.status, body: (await r.json().catch(() => null)) as any, next };
+    };
+    return { email, userId, call, send, setCookie: (c: string) => { cookie = c; }, get cookie() { return cookie; } };
+  }
+
+  async function monitor(call: Awaited<ReturnType<typeof account>>["call"], regions: string[]) {
+    const r = await call("POST", "/monitors", { name: `Regions ${regions.join("+")}`, type: "http", target, intervalSec: 60, regions, failureThreshold: 1 });
+    expect(r.status).toBe(201);
+    monitorIds.push(r.body.id);
+    return r.body as { id: string };
+  }
+  const reset = () => { for (const k of Object.keys(answers)) delete answers[k]; asked.length = 0; };
+
+  it("does not open an incident on one region's failure while the others are down, unless this location agrees", async () => {
+    const { call } = await account();
+    const m = await monitor(call, ["e2e-north", "e2e-south", "e2e-west"]);
+    reset();
+    answers["e2e-north"] = { ok: false, statusCode: 503, latencyMs: 50, error: "Expected 200, got 503" };
+    targetStatus = 200;
+    expect((await call("POST", `/monitors/${m.id}/check`)).body).toEqual({ ok: true });
+    let detail = (await call("GET", `/monitors/${m.id}`)).body;
+    expect(detail.status).not.toBe("down");
+    const incidents = () => db!.query<{ evaluation_note: string }>(`SELECT evaluation_note FROM incident WHERE monitor_id = $1::uuid AND auto = true`, [m.id]);
+    expect(await incidents()).toHaveLength(0);
+    // the failing region and this location's passing check are both on record
+    expect(detail.results.map((r: { region: string; ok: boolean }) => [r.region, r.ok]).sort()).toEqual([["auto", true], ["e2e-north", false]]);
+
+    // this location sees the outage too: the incident opens, with the vote in its evaluation note
+    targetStatus = 503;
+    expect((await call("POST", `/monitors/${m.id}/check`)).body).toEqual({ ok: true });
+    detail = (await call("GET", `/monitors/${m.id}`)).body;
+    expect(detail.status).toBe("down");
+    const [incident] = await incidents();
+    expect(incident.evaluation_note).toContain("1 of 1 regions failed, 2 unavailable; confirmed from this location");
+    targetStatus = 200;
+  });
+
+  it("records last-seen health per probe region, without probe error details", async () => {
+    resetProbeRegionCache();
+    const { call } = await account();
+    const m = await monitor(call, ["e2e-north", "e2e-south"]);
+    reset();
+    answers["e2e-north"] = { ok: true, statusCode: 200, latencyMs: 20 };
+    await call("POST", `/monitors/${m.id}/check`);
+    const rows = await db!.query<{ region: string; last_answer_at: Date | null; unreachable_since: Date | null; last_unreachable_reason: string | null }>(
+      `SELECT region, last_answer_at, unreachable_since, last_unreachable_reason FROM probe_region_state WHERE region IN ('e2e-north', 'e2e-south') ORDER BY region`,
+    );
+    const by = Object.fromEntries(rows.map((r) => [r.region, r]));
+    expect(by["e2e-north"].last_answer_at).not.toBeNull();
+    expect(by["e2e-north"].unreachable_since).toBeNull();
+    expect(by["e2e-south"].unreachable_since).not.toBeNull();
+    expect(by["e2e-south"].last_unreachable_reason).toBe("Probe unreachable");
+  });
+
+  it("checks a downgraded monitor from the regions its plan allows only", async () => {
+    const { call } = await account();
+    plan.maxRegions = 3;
+    const m = await monitor(call, ["e2e-north", "e2e-south", "e2e-west"]);
+    plan.maxRegions = 1;
+    try {
+      reset();
+      answers["e2e-north"] = { ok: true, statusCode: 200 };
+      answers["e2e-south"] = { ok: true, statusCode: 200 };
+      answers["e2e-west"] = { ok: true, statusCode: 200 };
+      expect((await call("POST", `/monitors/${m.id}/check`)).body).toEqual({ ok: true });
+      expect(asked).toEqual(["e2e-north"]);
+      // the stored selection is kept, so upgrading again restores it
+      expect((await call("GET", `/monitors/${m.id}`)).body.regions).toEqual(["e2e-north", "e2e-south", "e2e-west"]);
+    } finally {
+      plan.maxRegions = 3;
+    }
+  });
+
+  it("lets an operator with a second factor see probe health and drain a region, which the scheduler then skips", async () => {
+    const operator = await account();
+    const ops = { MONTRAL_OPERATOR_USER_IDS: operator.userId };
+    const opSend = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), { ...baseEnv, ...ops } as never);
+    // a customer (not an operator) is refused like everyone else
+    const customer = await account();
+    expect((await opSend("/api/operator/probes", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
+
+    // enrol a second factor, then sign in with it
+    const auth = (cookie: string, path: string, body: unknown) => opSend(`/api/auth${path}`, { method: "POST", headers: { "content-type": "application/json", origin: ORIGIN, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+    const enabled = await auth(operator.cookie, "/two-factor/enable", { password: PASSWORD });
+    const enrolment = (await enabled.json()) as { totpURI: string; backupCodes: string[] };
+    expect((await auth(cookiesOf(enabled, operator.cookie), "/two-factor/verify-totp", { code: totp(enrolment.totpURI) })).status).toBe(200);
+    const plain = await auth("", "/sign-in/email", { email: operator.email, password: PASSWORD });
+    const verified = await auth(cookiesOf(plain), "/two-factor/verify-backup-code", { code: enrolment.backupCodes[0] });
+    expect(verified.status).toBe(200);
+    const opCookie = cookiesOf(verified);
+    const op = async (method: string, path: string, body?: unknown) => {
+      const r = await opSend(`/api/operator${path}`, { method, headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+      return { status: r.status, body: (await r.json().catch(() => null)) as any };
+    };
+
+    const listed = await op("GET", "/probes");
+    expect(listed.status).toBe(200);
+    const ids = listed.body.regions.map((r: { id: string }) => r.id);
+    expect(ids).toEqual(expect.arrayContaining(Object.keys(PROBES)));
+    expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-west")).toMatchObject({ configured: true, drained: false });
+
+    expect((await op("POST", "/probes/auto/drain", {})).status).toBe(404);
+    expect((await op("POST", "/probes/nowhere-else/drain", {})).status).toBe(404);
+    expect((await op("POST", "/probes/e2e-west/drain", { note: "x".repeat(201) })).status).toBe(400);
+    expect((await op("POST", "/probes/e2e-west/drain", { note: "Synthetic maintenance window" })).body).toEqual({ id: "e2e-west", drained: true });
+    const drained = (await op("GET", "/probes")).body.regions.find((r: { id: string }) => r.id === "e2e-west");
+    expect(drained).toMatchObject({ status: "drained", drained: true, drainNote: "Synthetic maintenance window", drainedBy: operator.userId });
+
+    // the scheduler no longer asks the drained region
+    const { call } = await account();
+    const m = await monitor(call, ["e2e-north", "e2e-west"]);
+    reset();
+    answers["e2e-north"] = { ok: true, statusCode: 200 };
+    answers["e2e-west"] = { ok: true, statusCode: 200 };
+    await call("POST", `/monitors/${m.id}/check`);
+    expect(asked).toEqual(["e2e-north"]);
+    // nor does a spot check from it
+    const spot = await call("POST", `/monitors/${m.id}/check`, { region: "e2e-west" });
+    expect(spot.status).toBe(502);
+    expect(spot.body.error).toBe("Region is drained by the operator");
+
+    expect((await op("POST", "/probes/e2e-west/undrain")).body).toEqual({ id: "e2e-west", drained: false });
+    reset();
+    answers["e2e-north"] = { ok: true, statusCode: 200 };
+    answers["e2e-west"] = { ok: true, statusCode: 200 };
+    await call("POST", `/monitors/${m.id}/check`);
+    expect(asked.sort()).toEqual(["e2e-north", "e2e-west"]);
+  });
+});

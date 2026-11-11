@@ -841,6 +841,37 @@ export function createRepo(db: Db): Repo {
         .where(and(eq(schema.member.organizationId, orgId), inArray(schema.member.role, ["owner", "admin"])));
       return [...new Set(rows.map((r) => r.email).filter(Boolean))];
     },
+    async probeRegionStates() {
+      const rows = await db.select().from(schema.probeRegionState).orderBy(asc(schema.probeRegionState.region));
+      return rows.map((r) => ({
+        region: r.region, drained: r.drained, drainedAt: r.drainedAt, drainedBy: r.drainedBy, drainNote: r.drainNote,
+        lastAnswerAt: r.lastAnswerAt, lastUnreachableAt: r.lastUnreachableAt, lastUnreachableReason: r.lastUnreachableReason, unreachableSince: r.unreachableSince,
+      }));
+    },
+    async noteProbeHealth(region, answered, reason) {
+      const t = schema.probeRegionState;
+      const now = new Date();
+      if (answered) {
+        await db.insert(t).values({ region, lastAnswerAt: now, updatedAt: now })
+          .onConflictDoUpdate({ target: t.region, set: { lastAnswerAt: now, unreachableSince: null, updatedAt: now } });
+        return;
+      }
+      const why = (reason ?? "Probe unreachable").slice(0, 120);
+      await db.insert(t).values({ region, lastUnreachableAt: now, lastUnreachableReason: why, unreachableSince: now, updatedAt: now })
+        .onConflictDoUpdate({ target: t.region, set: { lastUnreachableAt: now, lastUnreachableReason: why, unreachableSince: sql`coalesce(${t.unreachableSince}, now())`, updatedAt: now } });
+    },
+    async setProbeRegionDrain(region, drain) {
+      const t = schema.probeRegionState;
+      const now = new Date();
+      const set = drain.drained
+        ? { drained: true, drainedAt: now, drainedBy: drain.by, drainNote: drain.note, updatedAt: now }
+        : { drained: false, drainedAt: null, drainedBy: null, drainNote: null, updatedAt: now };
+      await db.insert(t).values({ region, ...set }).onConflictDoUpdate({ target: t.region, set });
+    },
+    async monitorsPerRegion() {
+      const counted = await rows<{ region: string; n: number }>(db.execute(sql`select r as region, count(*)::int as n from monitor, unnest(monitor.regions) as r where monitor.paused = false group by r`));
+      return Object.fromEntries(counted.map((r) => [r.region, Number(r.n)]));
+    },
     async recordRegionResults(monitorId, results, summary) {
       if (!results.length) return;
       await db.insert(schema.checkResult).values(

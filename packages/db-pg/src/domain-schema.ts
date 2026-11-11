@@ -934,6 +934,33 @@ export const operatorMfaSession = pgTable("operator_mfa_session", {
   verifiedAt: timestamp("verified_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * What the platform knows about one probe region (docs/OPERATOR.md, "Probe regions"). Which regions exist stays
+ * deployment configuration (PROBE_REGIONS); a row appears once a region is asked or drained. A drained region is not
+ * asked by the scheduler. Health is written at most once a minute per region and process, or when it flips; the
+ * reason is one of the scheduler's fixed, secret-free strings.
+ */
+export const probeRegionState = pgTable(
+  "probe_region_state",
+  {
+    region: text("region").primaryKey(),
+    drained: boolean("drained").notNull().default(false),
+    drainedAt: timestamp("drained_at", { withTimezone: true }),
+    drainedBy: text("drained_by"),
+    drainNote: text("drain_note"),
+    lastAnswerAt: timestamp("last_answer_at", { withTimezone: true }),
+    lastUnreachableAt: timestamp("last_unreachable_at", { withTimezone: true }),
+    lastUnreachableReason: text("last_unreachable_reason"),
+    unreachableSince: timestamp("unreachable_since", { withTimezone: true }),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("probe_region_state_region_chk", sql`char_length(${t.region}) between 1 and 24`),
+    check("probe_region_state_note_chk", sql`${t.drainNote} is null or char_length(${t.drainNote}) <= 200`),
+    check("probe_region_state_reason_chk", sql`${t.lastUnreachableReason} is null or char_length(${t.lastUnreachableReason}) <= 120`),
+  ],
+);
+
 export const monitorRelations = relations(monitor, ({ many }) => ({
   results: many(checkResult),
   incidents: many(incident),

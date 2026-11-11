@@ -17,7 +17,7 @@ import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
 import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds } from "../scheduler";
 import { isRegionConfigured, runInRegion } from "../probes";
-import { AUTO, PROBE_TYPES, REGION_ID } from "../regions";
+import { AUTO, PROBE_TYPES, REGION_ID, withinPlanRegions } from "../regions";
 
 import { HTTP_METHODS, MAX_REQUEST_BODY_BYTES, requestBodyProblem } from "../http-request";
 import { JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, MAX_JSON_PATH_LENGTH, jsonPathProblem } from "../json-assertion";
@@ -657,6 +657,14 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ error: `Regions other than auto are available for ${PROBE_TYPES.join(" and ")} monitors only`, code: "regions_not_supported" }, 400);
       }
       if (!isRegionConfigured(region)) return c.json({ error: `Unknown region: ${region}`, code: "unknown_region", regions: [region] }, 400);
+    } else {
+      // a monitor saved under a larger plan runs from the regions its current plan allows (and is charged for those)
+      const [planned] = await withinPlanRegions([m], m.organizationId, c.get("entitlements"));
+      if (!planned) {
+        c.header("retry-after", "30");
+        return c.json({ error: "Usage metering is unavailable; the check did not run. Try again shortly.", code: "metering_unavailable" }, 503);
+      }
+      m.regions = planned.regions;
     }
     // bounded per process (sockets, ping processes) and per workspace (shared by every server): see manual-check-gate.ts.
     // The process slot comes first, so a request refused as busy does not use up the workspace's allowance.

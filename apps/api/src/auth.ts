@@ -279,13 +279,16 @@ export function createAuth(database: Database, env: Bindings) {
       // OIDC default ("web") would refuse those, so such clients are treated as the native apps they are.
       before: createAuthMiddleware(async (ctx) => {
         if (ctx.path === "/api-key/delete") keyNote = await noteKeyBeforeDelete(query, ctx.body).catch(() => null);
-        if (MFA_VERIFY_PATHS.has(ctx.path)) mfaHadSession = !!(await getSessionFromCtx(ctx).catch(() => null));
+        // a failed session lookup counts as "had a session": the call is then never recorded as a second-factor sign-in
+        if (MFA_VERIFY_PATHS.has(ctx.path)) mfaHadSession = await getSessionFromCtx(ctx).then((s) => !!s, () => true);
         // a workspace suspended by a platform operator (docs/OPERATOR.md): no invitations, renames, role changes, removals,
         // deletion or new or changed API keys; reading it, leaving it and switching away stay possible
         if (suspensionGuardsAuthPath(ctx.path)) {
           const session = await getSessionFromCtx(ctx).catch(() => null);
           const active = session ? text((session.session as { activeOrganizationId?: unknown }).activeOrganizationId) : null;
           const targets = await authCallWorkspaces(query, { path: ctx.path, body: ctx.body, query: ctx.query, activeOrgId: active });
+          // an invitation or workspace named in the call that does not exist: refused rather than guessed (fail closed)
+          if (targets === "unresolved") throw new APIError("BAD_REQUEST", { message: "Workspace or invitation not found", code: "NOT_FOUND" });
           if (await anySuspended(query, targets)) {
             throw new APIError("FORBIDDEN", { message: "This workspace is suspended. Contact support.", code: WORKSPACE_SUSPENDED });
           }

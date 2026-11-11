@@ -155,15 +155,20 @@ describe("suspension gate for Better Auth endpoints", () => {
   it("finds the workspace a call acts on", async () => {
     const query = vi.fn(async (sql: string, params?: unknown[]) => {
       if (sql.includes("FROM apikey")) return [{ metadata: JSON.stringify(JSON.stringify({ organizationId: "key-org" })) }];
-      if (sql.includes("FROM invitation")) return [{ organization_id: "inv-org" }];
-      if (sql.includes("FROM organization WHERE slug")) return [{ id: `slug:${params?.[0]}` }];
+      if (sql.includes("FROM invitation")) return params?.[0] === "i" ? [{ organization_id: "inv-org" }] : [];
+      if (sql.includes("FROM organization WHERE slug")) return params?.[0] === "nope" ? [] : [{ id: `slug:${params?.[0]}` }];
       return [];
     });
     const q = query as never;
     expect(await authCallWorkspaces(q, { path: "/organization/update", body: { data: {} }, query: {}, activeOrgId: "active" })).toEqual(["active"]);
     expect(await authCallWorkspaces(q, { path: "/organization/delete", body: { organizationId: "named" }, query: {}, activeOrgId: "active" })).toEqual(["named"]);
-    expect(await authCallWorkspaces(q, { path: "/organization/get-full-organization", body: {}, query: { organizationSlug: "acme" }, activeOrgId: "active" })).toEqual(["slug:acme"]);
-    expect(await authCallWorkspaces(q, { path: "/organization/accept-invitation", body: { invitationId: "i" }, query: {}, activeOrgId: "active" })).toEqual(["inv-org"]);
+    // Better Auth acts on organizationId || the active workspace: a decoy slug or invitation never replaces the active one
+    expect(await authCallWorkspaces(q, { path: "/organization/invite-member", body: { email: "x@example.com", organizationSlug: "acme" }, query: {}, activeOrgId: "active" })).toEqual(["active", "slug:acme"]);
+    expect(await authCallWorkspaces(q, { path: "/organization/update", body: { data: {} }, query: { invitationId: "i" }, activeOrgId: "active" })).toEqual(["active", "inv-org"]);
+    expect(await authCallWorkspaces(q, { path: "/organization/accept-invitation", body: { invitationId: "i" }, query: {}, activeOrgId: "active" })).toEqual(["active", "inv-org"]);
+    // a slug or invitation that does not exist is refused, not ignored
+    expect(await authCallWorkspaces(q, { path: "/organization/invite-member", body: { organizationSlug: "nope" }, query: {}, activeOrgId: "active" })).toBe("unresolved");
+    expect(await authCallWorkspaces(q, { path: "/organization/update", body: {}, query: { invitationId: "missing" }, activeOrgId: "active" })).toBe("unresolved");
     expect(await authCallWorkspaces(q, { path: "/api-key/create", body: { metadata: { organizationId: "pin" } }, query: {}, activeOrgId: "active" })).toEqual(["pin"]);
     expect(await authCallWorkspaces(q, { path: "/api-key/create", body: {}, query: {}, activeOrgId: "active" })).toEqual(["active"]);
     expect(await authCallWorkspaces(q, { path: "/api-key/update", body: { keyId: "k" }, query: {}, activeOrgId: "active" })).toEqual(["key-org", "active"]);

@@ -66,7 +66,12 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
   workspaces, switching the active workspace, leaving it, creating a new workspace and deleting API keys still work.
   Deleting the account of an owner of a suspended workspace is refused, and the database refuses to delete a suspended
   workspace at all (`workspace_suspension` references it with `ON DELETE RESTRICT`), so the suspension cannot be
-  removed by deleting the workspace.
+  removed by deleting the workspace. **Deleting a suspended workspace, or the account of its owner, requires an operator
+  to unsuspend it first.** An account deletion removes all of the owner's sole-member workspaces in one statement, so a
+  suspension written at the same moment makes the whole deletion fail rather than leave it half done.
+  The workspace a call is checked against follows Better Auth's own rule: the `organizationId` it names, else the
+  session's active workspace, plus any workspace an invitation or slug in the call points to; an invitation or slug that
+  does not exist gets `400`.
 - **On-call calendar feeds** of the workspace's members answer 404.
 - **Alerts and mail**: alert deliveries and their retries, incident reminders, escalations, maintenance reminders to
   status page subscribers, unchecked-browser-monitor digests, custom-domain notices and monthly reports of the workspace

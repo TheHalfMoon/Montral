@@ -349,7 +349,8 @@ export function createRepo(db: Db): Repo {
       return out;
     },
     async deleteWorkspaces(ids) {
-      for (const id of ids) await db.delete(schema.organization).where(eq(schema.organization.id, id));
+      // one statement: all of them or none (a suspended workspace makes the whole delete fail: ON DELETE RESTRICT)
+      if (ids.length) await db.delete(schema.organization).where(inArray(schema.organization.id, ids));
     },
     async createPersonalWorkspace(w) {
       await db.insert(schema.organization).values({ id: w.id, name: w.name, slug: w.slug, createdAt: new Date() });

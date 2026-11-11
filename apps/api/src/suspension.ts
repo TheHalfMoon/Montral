@@ -71,10 +71,14 @@ function keyOrg(raw: unknown): string | null {
 }
 
 /**
- * The workspaces a guarded Better Auth call acts on: the one named by id or slug, the invitation's, the API key's, or
- * else the session's active workspace.
+ * The workspaces a guarded Better Auth call may act on, or "unresolved" when it names an invitation or a workspace slug
+ * that does not exist (the caller refuses: fail closed).
+ *
+ * Better Auth acts on `body.organizationId || session.activeOrganizationId` and drops unknown fields after this hook
+ * runs, so a decoy field must never stand in for the active workspace: the active workspace is always included unless
+ * an explicit organizationId is given. An invitation or slug named in the call adds its workspace on top.
  */
-export async function authCallWorkspaces(query: Query, call: { path: string; body: unknown; query: unknown; activeOrgId: string | null }): Promise<string[]> {
+export async function authCallWorkspaces(query: Query, call: { path: string; body: unknown; query: unknown; activeOrgId: string | null }): Promise<string[] | "unresolved"> {
   const body = obj(call.body) ?? {};
   const args = obj(call.query) ?? {};
   const out: (string | null)[] = [];
@@ -88,16 +92,20 @@ export async function authCallWorkspaces(query: Query, call: { path: string; bod
     }
     out.push(str(obj(body.metadata)?.organizationId), call.activeOrgId);
   } else {
+    const byId = str(body.organizationId) ?? str(args.organizationId);
+    out.push(byId ?? call.activeOrgId);
     const invitationId = str(body.invitationId) ?? str(args.invitationId);
     if (invitationId) {
       const [inv] = await query<{ organization_id: string }>(`SELECT organization_id FROM invitation WHERE id = $1::text`, [invitationId]);
-      out.push(inv?.organization_id ?? null);
+      if (!inv) return "unresolved";
+      out.push(inv.organization_id);
     }
     const slug = str(body.organizationSlug) ?? str(args.organizationSlug);
-    if (slug) out.push((await query<{ id: string }>(`SELECT id FROM organization WHERE slug = $1::text`, [slug]))[0]?.id ?? null);
-    const byId = str(body.organizationId) ?? str(args.organizationId);
-    if (byId) out.push(byId);
-    if (!invitationId && !slug && !byId) out.push(call.activeOrgId);
+    if (slug) {
+      const [org] = await query<{ id: string }>(`SELECT id FROM organization WHERE slug = $1::text`, [slug]);
+      if (!org) return "unresolved";
+      out.push(org.id);
+    }
   }
   return [...new Set(out.filter((x): x is string => !!x))];
 }

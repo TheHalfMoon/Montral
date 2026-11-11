@@ -2,6 +2,7 @@ import { openDatabase } from "@montral/db-pg";
 import { createHmac } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "./app";
+import { deliverDomainNotices } from "./domain-notice";
 import { montralEdition } from "./montral-edition";
 import { migrateMontralSchema } from "./schema-migrate";
 
@@ -205,16 +206,39 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect((await other.as("/monitors")).status).toBe(200);
 
     // Better Auth's own workspace endpoints: no invitations, renames, deletion, new or changed keys, account deletion
-    const refusedAuth = async (path: string, body: unknown) => {
-      const r = await authCall(owner.cookie, path, body);
-      expect(r.status, path).toBe(403);
-      expect(r.body?.code, path).toBe("workspace_suspended");
+    // switching to the suspended workspace is allowed (and makes it the session's active workspace, which Better Auth
+    // falls back to when a call names no organizationId)
+    const activated = await authCall(owner.cookie, "/organization/set-active", { organizationId: owner.orgId });
+    expect(activated.status).toBe(200);
+    const ownerCookie = jar(owner.cookie, activated);
+    const refusedAuth = async (path: string, body: unknown, status = 403) => {
+      const r = await authCall(ownerCookie, path, body);
+      expect(r.status, path).toBe(status);
+      if (status === 403) expect(r.body?.code, path).toBe("workspace_suspended");
     };
-    await refusedAuth("/organization/invite-member", { organizationId: owner.orgId, email: `invitee-${crypto.randomUUID()}@example.com`, role: "member" });
-    expect(await db!.query(`SELECT 1 FROM invitation WHERE organization_id = $1`, [owner.orgId])).toHaveLength(0);
+    const invitee = () => `invitee-${crypto.randomUUID()}@example.com`;
+    const invitations = async () => (await db!.query(`SELECT 1 FROM invitation WHERE organization_id = $1`, [owner.orgId])).length;
+    const name = async () => (await db!.query<{ name: string }>(`SELECT name FROM organization WHERE id = $1`, [owner.orgId]))[0].name;
+    const nameBefore = await name();
+    await refusedAuth("/organization/invite-member", { organizationId: owner.orgId, email: invitee(), role: "member" });
+    await refusedAuth("/organization/invite-member", { email: invitee(), role: "member" });
     await refusedAuth("/organization/update", { organizationId: owner.orgId, data: { name: "Renamed while suspended" } });
     await refusedAuth("/organization/update", { data: { name: "Renamed via active workspace" } });
-    expect((await db!.query<{ name: string }>(`SELECT name FROM organization WHERE id = $1`, [owner.orgId]))[0].name).not.toMatch(/Renamed/);
+    // decoy fields that Better Auth ignores never replace the active workspace: a real slug or invitation of another
+    // workspace adds that workspace to the check, the active one is still checked; an unknown one is refused outright
+    const [{ slug: otherSlug }] = await db!.query<{ slug: string }>(`SELECT slug FROM organization WHERE id = $1`, [other.orgId]);
+    const otherInvite = await authCall(other.cookie, "/organization/invite-member", { organizationId: other.orgId, email: invitee(), role: "member" });
+    expect(otherInvite.status).toBe(200);
+    await refusedAuth("/organization/invite-member", { email: invitee(), role: "member", organizationSlug: otherSlug });
+    await refusedAuth("/organization/invite-member", { email: invitee(), role: "member", invitationId: otherInvite.body.id });
+    await refusedAuth("/organization/invite-member", { email: invitee(), role: "member", organizationSlug: `nope-${crypto.randomUUID()}` }, 400);
+    await refusedAuth("/organization/invite-member?invitationId=missing", { email: invitee(), role: "member" }, 400);
+    await refusedAuth("/organization/update", { data: { name: "Renamed via decoy slug" }, organizationSlug: otherSlug });
+    await refusedAuth("/organization/update", { data: { name: "Renamed via decoy invitation" }, invitationId: otherInvite.body.id });
+    await refusedAuth("/organization/update", { data: { name: "Renamed via unknown slug" }, organizationSlug: `nope-${crypto.randomUUID()}` }, 400);
+    await refusedAuth("/organization/update?invitationId=missing", { data: { name: "Renamed via unknown invitation" } }, 400);
+    expect(await invitations()).toBe(0);
+    expect(await name()).toBe(nameBefore);
     await refusedAuth("/organization/delete", { organizationId: owner.orgId });
     await refusedAuth("/api-key/create", { name: "while-suspended", metadata: { organizationId: owner.orgId } });
     await refusedAuth("/api-key/update", { keyId: key.body.id, name: "renamed-while-suspended" });
@@ -225,8 +249,8 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     await expect(db!.query(`DELETE FROM organization WHERE id = $1`, [owner.orgId])).rejects.toThrow();
     expect(await db!.query(`SELECT 1 FROM workspace_suspension WHERE organization_id = $1`, [owner.orgId])).toHaveLength(1);
     // reading, switching and listing workspaces still work
-    expect((await authCall(owner.cookie, "/organization/set-active", { organizationId: owner.orgId })).status).toBe(200);
-    expect((await authCall(owner.cookie, "/organization/list", undefined, "GET")).status).toBe(200);
+    expect((await authCall(ownerCookie, "/organization/set-active", { organizationId: owner.orgId })).status).toBe(200);
+    expect((await authCall(ownerCookie, "/organization/list", undefined, "GET")).status).toBe(200);
 
     // the scheduler does not claim the suspended workspace's monitors: the earliest due monitor is skipped
     await db!.query(`UPDATE monitor SET paused = false, next_check_at = '1970-01-01T00:00:00Z' WHERE id = $1::uuid`, [monitor.body.id]);
@@ -347,14 +371,28 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
         await db!.query(`INSERT INTO status_subscriber (status_page_id, email, token, confirmed_at) VALUES ($1::uuid, $2, $3, now())`, [page.id, `sub-${crypto.randomUUID()}@example.com`, crypto.randomUUID()]);
         const [w] = await db!.query<{ id: string }>(
           `INSERT INTO maintenance_window (organization_id, name, starts_at, ends_at) VALUES ($1, 'Upgrade', now() + interval '1 hour', now() + interval '2 hours') RETURNING id`, [org]);
-        return w.id;
+        return { id: w.id, page: page.id };
       };
-      const wS = await window(S);
-      const wT = await window(T);
+      const { id: wS, page: pageS } = await window(S);
+      const { id: wT, page: pageT } = await window(T);
       const claimedWindows = (await db!.repo.claimMaintenanceReminders(500)).map((r) => r.window.id);
       expect(claimedWindows).toContain(wT);
       expect(claimedWindows).not.toContain(wS);
       expect(await db!.query(`SELECT 1 FROM maintenance_reminder WHERE maintenance_id = $1::uuid`, [wS])).toHaveLength(0);
+
+      // custom-domain notices: a queued notice of each page; only the active workspace's is claimed for sending
+      const notice = async (org: string, page: string) =>
+        (await db!.query<{ id: string }>(
+          `INSERT INTO alert_delivery (organization_id, channel_name, channel_type, kind, ok, status, attempts, target_user_id, status_page_id, monitor_name)
+           VALUES ($1, 'o', 'email', 'domain.failing', false, 'pending', 0, $2, $3::uuid, 'status.example.com') RETURNING id`,
+          [org, owner.id, page],
+        ))[0].id;
+      const noticeS = await notice(S, pageS);
+      const noticeT = await notice(T, pageT);
+      await deliverDomainNotices((sql, params) => db!.query(sql, params), { pageIds: [pageS, pageT] });
+      const claimedAt = async (id: string) => (await db!.query<{ claimed_at: Date | null; status: string }>(`SELECT claimed_at, status FROM alert_delivery WHERE id = $1::uuid`, [id]))[0];
+      expect(await claimedAt(noticeS)).toEqual({ claimed_at: null, status: "pending" });
+      expect((await claimedAt(noticeT)).claimed_at).not.toBeNull();
 
       // pendingUncheckedDigests: both browser monitors went unchecked; only the active workspace gets a digest
       await db!.query(`UPDATE monitor SET unchecked_since = now(), unchecked_notified_at = NULL WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [`${s.monitor},${t.monitor}`]);

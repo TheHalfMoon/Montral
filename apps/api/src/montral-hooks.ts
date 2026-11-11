@@ -11,6 +11,8 @@ import { columnExists, relationExists } from "./schema-catalog";
 import { boundedDelay, buildConfiguredResponse, DelaySlots, parseHookResponseConfig, RESPONSE_LIMITS, responseVariant, type HookResponseConfig } from "./montral-hook-response";
 import { z } from "zod";
 import { WORKSPACE_SUSPENDED } from "./suspension";
+import type { Entitlements } from "./entitlements";
+import { calendarMonthUtc, secondsUntil } from "./montral-metering";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOKEN = /^[0-9a-f]{64}$/;
@@ -375,6 +377,37 @@ export async function pruneExpiredHookEvents(db: Database): Promise<number> {
   return Number(rows[0]?.removed ?? 0);
 }
 
+export const WEBHOOK_QUOTA_EXHAUSTED = "webhook_quota_exhausted";
+export const METERING_UNAVAILABLE = "metering_unavailable";
+export type WebhookCharge =
+  | { ok: true; charged: number }
+  | { ok: false; status: 429 | 503; body: { error: string; code: string }; retryAfter?: number };
+
+/**
+ * One captured webhook request against the workspace's monthly webhook-event allowance, taken at `spentAt`.
+ * Self-hosted (no `spendMeter`): nothing is counted. Exhausted: 429 with the seconds until the next calendar month
+ * (UTC). A ledger or plan-catalog failure: 503 when the deployment is metered (failClosed), otherwise the capture goes
+ * on uncounted. A malformed grant is never taken as permission.
+ */
+export async function chargeWebhookEvent(entitlements: Entitlements, organizationId: string, spentAt: Date): Promise<WebhookCharge> {
+  if (!entitlements.spendMeter) return { ok: true, charged: 0 };
+  let granted: number;
+  try {
+    granted = await entitlements.spendMeter(organizationId, "webhookEvents", 1, spentAt);
+  } catch {
+    console.error("webhook metering unavailable");
+    if (!entitlements.failClosed) return { ok: true, charged: 0 };
+    return { ok: false, status: 503, body: { error: "Usage metering is unavailable; nothing was captured. Try again shortly.", code: METERING_UNAVAILABLE }, retryAfter: 30 };
+  }
+  if (granted === 1) return { ok: true, charged: 1 };
+  if (granted !== 0) console.error("webhook event allowance invalid");
+  return {
+    ok: false, status: 429,
+    body: { error: "This workspace's webhook event allowance for the month is used up; nothing was captured.", code: WEBHOOK_QUOTA_EXHAUSTED },
+    retryAfter: secondsUntil(calendarMonthUtc(spentAt).end, new Date()),
+  };
+}
+
 export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: Hono<AppEnv> }) {
   const privateHooks = new Hono<AppEnv>();
   // One-time secret receiver URLs, inbox names and captured bodies are all
@@ -617,19 +650,39 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       throw error;
     }
     if (payload === null) return c.json({ error: "Payload too large (32 KiB)" }, 413);
+    // A metered deployment charges one webhook event per capture BEFORE anything is stored: an exhausted allowance
+    // (429 until the next period) or an unreachable ledger (503, fail closed) stores nothing.
+    const entitlements = c.get("entitlements");
+    const spentAt = new Date();
+    const charge = await chargeWebhookEvent(entitlements, inbox.organization_id, spentAt);
+    if (!charge.ok) {
+      if (charge.retryAfter !== undefined) c.header("retry-after", String(charge.retryAfter));
+      return c.json(charge.body, charge.status);
+    }
+    // a capture that then stores nothing (inbox deleted meanwhile, database error) gives its event back
+    const giveBack = () => charge.charged > 0 ? entitlements.refundMeter?.(inbox.organization_id, "webhookEvents", charge.charged, spentAt).catch(() => console.error("webhook event refund failed")) : undefined;
     // Re-check the secret and inbox under a row lock in the same transaction as
     // the INSERT and retention pruning. If it was deleted while we streamed the
     // body, return 404 instead of raising a foreign-key error or leaking data.
     // The full response configuration comes back from the capture, read under that lock.
     const eventId = crypto.randomUUID();
-    const captured = await db.query<{ result: { status: number; response: unknown } | null }>(
-      "SELECT montral_capture_hook_event_v2($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS result",
-      [id, await fingerprint(token), eventId, c.req.method,
-        (c.req.header("content-type") ?? "").slice(0, 256) || null,
-        JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
-    );
+    let captured: { result: { status: number; response: unknown } | null }[];
+    try {
+      captured = await db.query<{ result: { status: number; response: unknown } | null }>(
+        "SELECT montral_capture_hook_event_v2($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS result",
+        [id, await fingerprint(token), eventId, c.req.method,
+          (c.req.header("content-type") ?? "").slice(0, 256) || null,
+          JSON.stringify(capturedHeaders(c.req.raw.headers)), payload],
+      );
+    } catch (error) {
+      await giveBack();
+      throw error;
+    }
     const result = captured[0]?.result;
-    if (!result) return c.json({ error: "Not found" }, 404);
+    if (!result) {
+      await giveBack();
+      return c.json({ error: "Not found" }, 404);
+    }
     const stored = typeof result.response === "string" ? JSON.parse(result.response) as unknown : result.response;
     const config = stored ? parseHookResponseConfig(stored) : null;
     const variant = config?.ok ? responseVariant(config.value, c.req.method) : null;

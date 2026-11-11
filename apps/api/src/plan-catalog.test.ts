@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BUILTIN_SANDBOX_CATALOG, buildPlanCatalog, cachedPlanCatalog, loadPlanCatalog, parsePlanCatalog, PlanCatalogError } from "./plan-catalog";
+import { BUILTIN_SANDBOX_CATALOG, buildPlanCatalog, cachedPlanCatalog, loadPlanCatalog, METER_DEFAULTS, parsePlanCatalog, PlanCatalogError } from "./plan-catalog";
 
 /** Synthetic values only: they describe no real offer. */
 const plan = (id: string, credits: number, extra: Record<string, unknown> = {}) => ({
@@ -34,6 +34,45 @@ describe("plan catalog", () => {
     // plans are frozen: a caller cannot change what later lookups return
     expect(() => { (c.resolve("org-1", "beta").plan.limits as { credits: number }).credits = 1; }).toThrow();
     expect(c.resolve("org-1", "beta").limits.credits).toBe(2222);
+  });
+
+  it("accepts the optional resource meters, and fills an absent one with the conservative built-in default (never unlimited)", async () => {
+    const withMeters = plan("beta", 2222, { limits: { activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 2222, emails: 7, webhookEvents: 77, browserSeconds: 0 } });
+    const c = await buildPlanCatalog(parsePlanCatalog(doc({
+      plans: [plan("alpha", 111), withMeters],
+      overrides: [{ organizationId: "org-x", limits: { webhookEvents: 9 } }],
+    })), "operator");
+    // a catalog written before the meters existed: the Free plan's values, whatever the plan
+    expect(c.resolve("org-1", null).limits).toMatchObject({ credits: 111, webhookEvents: METER_DEFAULTS.webhookEvents, browserSeconds: METER_DEFAULTS.browserSeconds });
+    // explicit values win, zero included (a plan without browser checks)
+    expect(c.resolve("org-1", "beta").limits).toMatchObject({ webhookEvents: 77, browserSeconds: 0 });
+    // an override changes only the meter it names
+    expect(c.resolve("org-x", null).limits).toMatchObject({ webhookEvents: 9, browserSeconds: METER_DEFAULTS.browserSeconds });
+    const free = BUILTIN_SANDBOX_CATALOG.plans.find((p) => p.id === BUILTIN_SANDBOX_CATALOG.defaultPlan)!;
+    expect(free.limits).toMatchObject(METER_DEFAULTS);
+    for (const p of BUILTIN_SANDBOX_CATALOG.plans) {
+      expect(Number.isSafeInteger(p.limits.webhookEvents)).toBe(true);
+      expect(Number.isSafeInteger(p.limits.browserSeconds)).toBe(true);
+    }
+    // the built-in catalog is itself valid
+    expect(() => parsePlanCatalog(BUILTIN_SANDBOX_CATALOG)).not.toThrow();
+  });
+
+  it("refuses invalid resource meter limits, naming the path but never the value", () => {
+    const limits = (extra: Record<string, unknown>) => ({ activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 5, emails: 7, ...extra });
+    const cases: [unknown, RegExp][] = [
+      [doc({ plans: [plan("alpha", 1, { limits: limits({ webhookEvents: -1 }) })] }), /plans\.0\.limits\.webhookEvents/],
+      [doc({ plans: [plan("alpha", 1, { limits: limits({ webhookEvents: 2.5 }) })] }), /plans\.0\.limits\.webhookEvents/],
+      [doc({ plans: [plan("alpha", 1, { limits: limits({ browserSeconds: 3_000_000_000 }) })] }), /plans\.0\.limits\.browserSeconds/],
+      [doc({ plans: [plan("alpha", 1, { limits: limits({ browserSeconds: "unlimited" }) })] }), /plans\.0\.limits\.browserSeconds/],
+      [doc({ plans: [plan("alpha", 1, { limits: limits({ browserSeconds: null }) })] }), /plans\.0\.limits\.browserSeconds/],
+      [doc({ overrides: [{ organizationId: "o", limits: { webhookEvents: -5 } }] }), /overrides\.0\.limits\.webhookEvents/],
+    ];
+    for (const [raw, rule] of cases) {
+      const found = issues(raw);
+      expect(found.join("; ")).toMatch(rule);
+      expect(found.join(" ")).not.toMatch(/3000000000|unlimited/);
+    }
   });
 
   it("names the same content with the same hash whatever the key order, and a change with another", async () => {

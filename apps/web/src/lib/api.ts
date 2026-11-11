@@ -127,6 +127,10 @@ export type Usage =
       metered: true;
       credits: Quota | null;
       emails: Quota | null;
+      /** captured webhook requests this month; absent or null when not metered */
+      webhookEvents?: Quota | null;
+      /** browser-check runtime seconds this month; absent or null when not metered */
+      browserSeconds?: Quota | null;
       activeMonitors: number;
       plan: { id: string; name: string; maxActiveMonitors: number | null; minIntervalSec: number; maxRegions?: number | null; upgradeUrl?: string; manageUrl?: string } | null;
     };

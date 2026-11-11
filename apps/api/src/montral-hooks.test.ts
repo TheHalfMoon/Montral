@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
+import { unmetered } from "./entitlements";
 import { capturedHeaders, fingerprint, hookDelaySlots, mountMontralHooks, replayAddressForbidden, readInboxCreation, readPayload, sameHash, InvalidWebhookPayloadError } from "./montral-hooks";
 
 function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean) {
@@ -69,6 +70,8 @@ function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean) {
   app.use("*", async (c, next) => {
     c.set("repo", repo as never);
     c.set("database", db as never);
+    // createApp always sets the deployment's entitlements; this harness is the self-hosted (unmetered) edition
+    c.set("entitlements", unmetered);
     if (earlyDatabaseRelease !== undefined) c.set("earlyDatabaseRelease", earlyDatabaseRelease);
     c.set("orgId", "org-a");
     c.set("projectId", projectId);

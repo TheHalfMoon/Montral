@@ -10,6 +10,8 @@ published to any registry.
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
+> **Evidence freshness (2026-11-11):** This report's qualified candidate is `b01e28e`, **not automatically the current `main`**. Subsequent merges (including #82, #83 and #84) require a new exact-revision qualification and a refreshed evidence table before any GO statement applies to that revision. The historical self-hosted GO below applies **only** to the stated candidate and is not authorization to publish, tag, deploy or enable billing. The hosted SaaS remains **NO-GO**. In particular, successful PR-head checks are not a substitute for checking the final integration commit. Do not change the candidate SHA without attaching the corresponding complete CI and hardware/security gate evidence.
+
 ## 1. Decision
 
 | Target | Decision | Why |

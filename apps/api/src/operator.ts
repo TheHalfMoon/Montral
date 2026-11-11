@@ -2,7 +2,7 @@ import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
 import { auditChanges, recordAuditEvent } from "./audit";
 import type { AppEnv, Bindings } from "./env";
-import { limitedJsonBody } from "./json-body-budget";
+import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
 import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
@@ -297,8 +297,9 @@ export const operatorApi = new Hono<AppEnv>()
     if (!repo.setProbeRegionDrain) return c.json({ error: "Probe region state is not available on this backend" }, 501);
     const operatorId = c.get("operatorId")!;
     if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
-    const body = (await limitedJsonBody(c.req.raw, 2048)) as { note?: unknown } | null;
-    const note = body?.note === undefined || body?.note === null ? null : body.note;
+    // a malformed or non-object body is refused, never read as "no note"
+    const body = await strictJsonObjectBody(c.req.raw, 2048);
+    const note = body.note === undefined || body.note === null ? null : body.note;
     if (note !== null && (typeof note !== "string" || note.length > PROBE_DRAIN_NOTE_MAX)) return c.json({ error: `note must be text of at most ${PROBE_DRAIN_NOTE_MAX} characters` }, 400);
     await repo.setProbeRegionDrain(id, { drained: true, by: operatorId, note: note?.trim() || null });
     resetProbeRegionCache();
@@ -312,6 +313,8 @@ export const operatorApi = new Hono<AppEnv>()
     if (!repo.setProbeRegionDrain) return c.json({ error: "Probe region state is not available on this backend" }, 501);
     const operatorId = c.get("operatorId")!;
     if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    // undrain takes no fields, but a malformed or oversized body is still refused rather than ignored
+    await strictJsonObjectBody(c.req.raw, 2048);
     await repo.setProbeRegionDrain(id, { drained: false, by: null, note: null });
     resetProbeRegionCache();
     logProbeAction(operatorId, "undrain", id);

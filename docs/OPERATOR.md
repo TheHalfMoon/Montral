@@ -110,7 +110,7 @@ What the platform learns about them at run time is stored per region in `probe_r
 | --- | --- |
 | `GET /api/operator/probes` | Every configured region, plus any region with stored state that is no longer configured (`configured: false`): `status` (`up`, `unreachable`, `drained` or `unknown`), `lastAnswerAt`, `lastUnreachableAt`, `lastUnreachableReason`, `unreachableSince`, the drain fields and how many unpaused monitors list the region. `auto.monitors` counts monitors on this deployment's own location. |
 | `POST /api/operator/probes/:id/drain` | Body `{"note"?: string}` (at most 200 characters). Only a configured region; `auto` cannot be drained. |
-| `POST /api/operator/probes/:id/undrain` | Puts a region back. |
+| `POST /api/operator/probes/:id/undrain` | Puts a region back. Both write routes refuse a body that is not a JSON object (400) or is over 2 KiB (413); an empty body is fine. |
 
 - **Health** is written by the scheduler as it asks probes (scheduled and manual checks, and spot checks): a probe that
   answers sets `lastAnswerAt` and ends an unreachable streak; one that cannot be asked sets `lastUnreachableAt`, the

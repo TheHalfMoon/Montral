@@ -17,6 +17,9 @@ const PROBES = {
   "e2e-north": "https://probe.test/api/probe/e2e-north",
   "e2e-south": "https://probe.test/api/probe/e2e-south",
   "e2e-west": "https://probe.test/api/probe/e2e-west",
+  // used only by the operator write-route negative tests: never checked, so no health write can touch their rows
+  "e2e-east": "https://probe.test/api/probe/e2e-east",
+  "e2e-central": "https://probe.test/api/probe/e2e-central",
 };
 const baseEnv = {
   DATABASE_URL: url, BETTER_AUTH_SECRET: "probe-regions-e2e-only-secret-not-for-production", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron",
@@ -122,6 +125,31 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
   }
   const reset = () => { for (const k of Object.keys(answers)) delete answers[k]; asked.length = 0; };
 
+  /**
+   * An operator listed in MONTRAL_OPERATOR_USER_IDS, as in the operator control-plane e2e: `verifiedCookie` comes from a
+   * password + backup-code sign-in (recorded in operator_mfa_session); `unverifiedCookie` is the session that enabled
+   * two-factor, which never passed a second factor at sign-in, and `signUpCookie` the original sign-up session.
+   */
+  async function operatorSessions() {
+    const operator = await account();
+    const ops = { MONTRAL_OPERATOR_USER_IDS: operator.userId };
+    const send = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), { ...baseEnv, ...ops } as never);
+    const auth = (cookie: string, path: string, body: unknown) => send(`/api/auth${path}`, { method: "POST", headers: { "content-type": "application/json", origin: ORIGIN, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
+    const signUpCookie = operator.cookie;
+    const enabled = await auth(signUpCookie, "/two-factor/enable", { password: PASSWORD });
+    const enrolment = (await enabled.json()) as { totpURI: string; backupCodes: string[] };
+    const confirmed = await auth(cookiesOf(enabled, signUpCookie), "/two-factor/verify-totp", { code: totp(enrolment.totpURI) });
+    expect(confirmed.status).toBe(200);
+    const unverifiedCookie = cookiesOf(confirmed, cookiesOf(enabled, signUpCookie));
+    const plain = await auth("", "/sign-in/email", { email: operator.email, password: PASSWORD });
+    const verified = await auth(cookiesOf(plain), "/two-factor/verify-backup-code", { code: enrolment.backupCodes[0] });
+    expect(verified.status).toBe(200);
+    const verifiedCookie = cookiesOf(verified);
+    const recorded = await db!.query<{ session_id: string }>(`SELECT m.session_id FROM operator_mfa_session m JOIN session s ON s.id = m.session_id WHERE s.user_id = $1`, [operator.userId]);
+    expect(recorded).toHaveLength(1);
+    return { operator, send, signUpCookie, unverifiedCookie, verifiedCookie };
+  }
+
   it("does not open an incident on one region's failure while the others are down, unless this location agrees", async () => {
     const { call } = await account();
     const m = await monitor(call, ["e2e-north", "e2e-south", "e2e-west"]);
@@ -208,22 +236,10 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
   });
 
   it("lets an operator with a second factor see probe health and drain a region, which the scheduler then skips", async () => {
-    const operator = await account();
-    const ops = { MONTRAL_OPERATOR_USER_IDS: operator.userId };
-    const opSend = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), { ...baseEnv, ...ops } as never);
+    const { operator, send: opSend, verifiedCookie: opCookie } = await operatorSessions();
     // a customer (not an operator) is refused like everyone else
     const customer = await account();
     expect((await opSend("/api/operator/probes", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
-
-    // enrol a second factor, then sign in with it
-    const auth = (cookie: string, path: string, body: unknown) => opSend(`/api/auth${path}`, { method: "POST", headers: { "content-type": "application/json", origin: ORIGIN, ...(cookie ? { cookie } : {}) }, body: JSON.stringify(body) });
-    const enabled = await auth(operator.cookie, "/two-factor/enable", { password: PASSWORD });
-    const enrolment = (await enabled.json()) as { totpURI: string; backupCodes: string[] };
-    expect((await auth(cookiesOf(enabled, operator.cookie), "/two-factor/verify-totp", { code: totp(enrolment.totpURI) })).status).toBe(200);
-    const plain = await auth("", "/sign-in/email", { email: operator.email, password: PASSWORD });
-    const verified = await auth(cookiesOf(plain), "/two-factor/verify-backup-code", { code: enrolment.backupCodes[0] });
-    expect(verified.status).toBe(200);
-    const opCookie = cookiesOf(verified);
     const op = async (method: string, path: string, body?: unknown) => {
       const r = await opSend(`/api/operator${path}`, { method, headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
@@ -264,5 +280,75 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     answers["e2e-west"] = { ok: true, statusCode: 200 };
     await call("POST", `/monitors/${m.id}/check`);
     expect(asked.sort()).toEqual(["e2e-north", "e2e-west"]);
+  });
+
+  it("refuses drain and undrain to everyone but a verified operator, and refuses malformed bodies, without changing state", async () => {
+    const { operator, send, signUpCookie, unverifiedCookie, verifiedCookie } = await operatorSessions();
+    const customer = await account();
+    const repo = db!.repo;
+    // known starting state: e2e-east undrained, e2e-central drained by a synthetic operator id with a note
+    await repo.setProbeRegionDrain!("e2e-east", { drained: false, by: null, note: null });
+    await repo.setProbeRegionDrain!("e2e-central", { drained: true, by: "synthetic-operator-id", note: "Synthetic seeded drain" });
+    type Row = { region: string; drained: boolean; drained_at: Date | null; drained_by: string | null; drain_note: string | null; updated_at: Date };
+    const snapshot = () => db!.query<Row>(
+      `SELECT region, drained, drained_at, drained_by, drain_note, updated_at FROM probe_region_state WHERE region IN ('e2e-east', 'e2e-central') ORDER BY region`,
+    );
+    const seeded = await snapshot();
+    expect(seeded.map((r) => [r.region, r.drained, r.drained_by, r.drain_note])).toEqual([
+      ["e2e-central", true, "synthetic-operator-id", "Synthetic seeded drain"],
+      ["e2e-east", false, null, null],
+    ]);
+    const unchanged = async () => expect(await snapshot()).toEqual(seeded);
+    const post = (path: string, cookie: string | null, body: string | undefined = "{}", extra: Record<string, string> = {}) =>
+      send(`/api/operator${path}`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json", ...(cookie ? { cookie } : {}), ...extra }, body });
+    const routes = ["/probes/e2e-east/drain", "/probes/e2e-central/undrain"];
+
+    for (const path of routes) {
+      // (1) a signed-in customer who is not an operator
+      const notOperator = await post(path, customer.cookie, JSON.stringify({ note: "Synthetic note" }));
+      expect(notOperator.status).toBe(403);
+      expect(await notOperator.json()).toEqual({ error: "Forbidden" });
+      await unchanged();
+      // (2) a listed operator whose session did not pass a second factor: the enrolling session and the sign-up session
+      for (const cookie of [unverifiedCookie, signUpCookie]) {
+        const unverified = await post(path, cookie, JSON.stringify({ note: "Synthetic note" }));
+        expect(unverified.status).toBe(403);
+        expect(await unverified.json()).toEqual({ error: "Forbidden" });
+        await unchanged();
+      }
+      // (3) no session at all: the operator gate answers 403 to everyone it does not admit
+      const anonymous = await post(path, null, JSON.stringify({ note: "Synthetic note" }));
+      expect(anonymous.status).toBe(403);
+      await unchanged();
+      // a verified operator session sent from another origin, or next to an API key header, is refused as well
+      expect((await post(path, verifiedCookie, "{}", { origin: "https://elsewhere.example" })).status).toBe(403);
+      expect((await post(path, verifiedCookie, "{}", { "x-api-key": "synthetic-key" })).status).toBe(403);
+      await unchanged();
+
+      // a verified operator with a malformed body: refused, nothing changes
+      for (const bad of ["{not json", "[]", "\"just a string\"", "42", "null"]) {
+        const r = await post(path, verifiedCookie, bad);
+        expect(r.status, `${path} ${bad}`).toBe(400);
+        await unchanged();
+      }
+      // an oversized body: refused before it is read, nothing changes
+      const huge = await post(path, verifiedCookie, JSON.stringify({ note: "x".repeat(4096) }));
+      expect(huge.status).toBe(413);
+      await unchanged();
+    }
+    // an over-long note on drain (201 characters, within the body limit): 400, nothing changes
+    const longNote = await post("/probes/e2e-east/drain", verifiedCookie, JSON.stringify({ note: "x".repeat(201) }));
+    expect(longNote.status).toBe(400);
+    expect((await post("/probes/e2e-east/drain", verifiedCookie, JSON.stringify({ note: 42 }))).status).toBe(400);
+    await unchanged();
+
+    // and the same verified session can change state with a valid request, so the refusals above were not accidental
+    expect(await (await post("/probes/e2e-east/drain", verifiedCookie, JSON.stringify({ note: "Synthetic valid drain" }))).json()).toEqual({ id: "e2e-east", drained: true });
+    expect(await (await post("/probes/e2e-central/undrain", verifiedCookie, undefined)).json()).toEqual({ id: "e2e-central", drained: false });
+    const after = Object.fromEntries((await snapshot()).map((r) => [r.region, r]));
+    expect(after["e2e-east"]).toMatchObject({ drained: true, drained_by: operator.userId, drain_note: "Synthetic valid drain" });
+    expect(after["e2e-central"]).toMatchObject({ drained: false, drained_by: null, drain_note: null, drained_at: null });
+    await repo.setProbeRegionDrain!("e2e-east", { drained: false, by: null, note: null });
+    resetProbeRegionCache();
   });
 });

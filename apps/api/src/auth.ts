@@ -26,8 +26,15 @@ const text = (v: unknown) => (typeof v === "string" && v ? v : null);
 /** Message (and code) of a sign-in refused because a workspace of the user requires single sign-on. */
 export const SSO_REQUIRED_MESSAGE = "Your workspace requires single sign-on. Use “Sign in with SSO”.";
 
+/**
+ * A workspace slug: the name, made URL-safe, plus a random suffix. Slugs are globally unique and names repeat (every
+ * "Alex's workspace"), so the suffix carries the uniqueness: 8 characters from the CSPRNG (36^8, about 2.8e12), where
+ * the former 4 from Math.random (about 1.7e6) collided once a name was common, failing that sign-up with a 500.
+ */
 export function slugify(s: string) {
-  return (s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "workspace") + "-" + Math.random().toString(36).slice(2, 6);
+  const bytes = crypto.getRandomValues(new Uint8Array(8));
+  const suffix = Array.from(bytes, (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+  return `${(s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "workspace")}-${suffix}`;
 }
 
 /** Invitation lifetime in days: INVITE_TTL_DAYS when it is a positive number, else 7. */
@@ -120,7 +127,16 @@ export function parseGrant(raw: string): "all" | GrantEntry[] {
 export async function givePersonalWorkspace(database: Pick<Database, "repo" | "query">, user: { id: string; name?: string | null; email: string }) {
   const name = `${user.name || user.email.split("@")[0]}'s workspace`;
   const id = crypto.randomUUID();
-  await database.repo.createPersonalWorkspace({ id, name, slug: slugify(name), ownerId: user.id });
+  // a slug collision is now vanishingly rare; should one happen, a fresh suffix is tried instead of failing the sign-up
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await database.repo.createPersonalWorkspace({ id, name, slug: slugify(name), ownerId: user.id });
+      break;
+    } catch (e) {
+      const unique = (e as { code?: string }).code === "23505" && /slug/i.test(String((e as { constraint_name?: string; constraint?: string }).constraint_name ?? (e as { constraint?: string }).constraint ?? (e as Error).message));
+      if (!unique || attempt >= 3) throw e;
+    }
+  }
   await database.query(`update session set active_organization_id = $2 where user_id = $1 and active_organization_id is null`, [user.id, id]);
   return id;
 }

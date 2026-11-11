@@ -812,6 +812,11 @@ export function createRepo(db: Db): Repo {
         return { deferredSince: m.deferredSince };
       });
     },
+    async noteCheckDeferral(monitorId) {
+      const [m] = await db.update(schema.monitor).set({ deferredSince: sql`coalesce(${schema.monitor.deferredSince}, now())` })
+        .where(eq(schema.monitor.id, monitorId)).returning({ deferredSince: schema.monitor.deferredSince });
+      return { deferredSince: m?.deferredSince ?? new Date() };
+    },
     async clearBrowserDeferral(monitorId) {
       await db.update(schema.monitor).set({ deferredSince: null, lastDeferredRunAt: null }).where(and(eq(schema.monitor.id, monitorId), isNotNull(schema.monitor.deferredSince)));
     },
@@ -850,15 +855,20 @@ export function createRepo(db: Db): Repo {
     },
     async noteProbeHealth(region, answered, reason) {
       const t = schema.probeRegionState;
-      const now = new Date();
+      // One atomic statement, so concurrent writers from several processes cannot interleave: the row is updated only
+      // when its last health write is a minute old, or 10 seconds old when this write flips the state. A drain does
+      // not touch these columns, so it does not hold health writes back.
+      const lastWrite = sql`coalesce(greatest(${t.lastAnswerAt}, ${t.lastUnreachableAt}), '-infinity'::timestamptz)`;
+      const flips = answered ? sql`${t.unreachableSince} is not null` : sql`${t.unreachableSince} is null`;
+      const due = sql`${lastWrite} < now() - interval '1 minute' or (${flips} and ${lastWrite} < now() - interval '10 seconds')`;
       if (answered) {
-        await db.insert(t).values({ region, lastAnswerAt: now, updatedAt: now })
-          .onConflictDoUpdate({ target: t.region, set: { lastAnswerAt: now, unreachableSince: null, updatedAt: now } });
+        await db.insert(t).values({ region, lastAnswerAt: sql`now()`, updatedAt: sql`now()` })
+          .onConflictDoUpdate({ target: t.region, set: { lastAnswerAt: sql`now()`, unreachableSince: null, updatedAt: sql`now()` }, setWhere: due });
         return;
       }
       const why = (reason ?? "Probe unreachable").slice(0, 120);
-      await db.insert(t).values({ region, lastUnreachableAt: now, lastUnreachableReason: why, unreachableSince: now, updatedAt: now })
-        .onConflictDoUpdate({ target: t.region, set: { lastUnreachableAt: now, lastUnreachableReason: why, unreachableSince: sql`coalesce(${t.unreachableSince}, now())`, updatedAt: now } });
+      await db.insert(t).values({ region, lastUnreachableAt: sql`now()`, lastUnreachableReason: why, unreachableSince: sql`now()`, updatedAt: sql`now()` })
+        .onConflictDoUpdate({ target: t.region, set: { lastUnreachableAt: sql`now()`, lastUnreachableReason: why, unreachableSince: sql`coalesce(${t.unreachableSince}, now())`, updatedAt: sql`now()` }, setWhere: due });
     },
     async setProbeRegionDrain(region, drain) {
       const t = schema.probeRegionState;

@@ -65,12 +65,16 @@ export async function planRegionCap(entitlements: Pick<Entitlements, "plan" | "f
 /**
  * Due monitors of one workspace with their regions capped to its plan (`capRegions`). The plan is only read when some
  * monitor runs from more than one region, since a cap is never below one. When a metered deployment cannot read the
- * plan, the multi-region monitors are left out of this round (they come due again); the rest still run.
+ * plan, the multi-region monitors are left out of this round (they come due again) and handed to `onSkipped`, so the
+ * caller can count them on the monitor's deferral streak; the rest still run.
  */
-export async function withinPlanRegions<T extends Pick<Monitor, "type" | "regions">>(due: T[], workspaceId: string, entitlements: Pick<Entitlements, "plan" | "failClosed">): Promise<T[]> {
+export async function withinPlanRegions<T extends Pick<Monitor, "type" | "regions">>(due: T[], workspaceId: string, entitlements: Pick<Entitlements, "plan" | "failClosed">, onSkipped?: (skipped: T[]) => Promise<unknown>): Promise<T[]> {
   if (!due.some((m) => effectiveRegions(m).length > 1)) return due;
   const cap = await planRegionCap(entitlements, workspaceId);
-  if (cap === "unavailable") return due.filter((m) => effectiveRegions(m).length <= 1);
+  if (cap === "unavailable") {
+    if (onSkipped) await onSkipped(due.filter((m) => effectiveRegions(m).length > 1));
+    return due.filter((m) => effectiveRegions(m).length <= 1);
+  }
   return due.map((m) => {
     const regions = capRegions(m, cap);
     return regions === m.regions ? m : { ...m, regions };

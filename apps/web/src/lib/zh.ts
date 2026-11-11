@@ -549,6 +549,7 @@ export const zh: Record<string, string> = {
   "Never": "从不",
   "Go down when": "判定为故障的条件", "Most regions fail": "多数区域失败", "Any region fails": "任一区域失败", "{n} regions fail": "{n} 个区域失败",
   "Fewer failing regions are recorded but do not open an incident.": "失败区域数不足时只记录结果,不会创建事件。",
+  "Unchecked since {time}: checks for this monitor are not running.": "自 {time} 起未检查：此监控的检查未在运行。",
   "When the other regions cannot be reached, a single failing region is confirmed from this deployment before an incident opens.": "其他区域无法访问时，单个区域的失败会先由本部署确认，然后才会创建事件。",
   "Depends on": "依赖于", "Nothing": "无",
   "While that monitor is down, this one opens no incidents and sends no alerts.": "该监控处于故障时,本监控不会创建事件,也不会发送告警。",

@@ -91,6 +91,7 @@ export default function MonitorDetail({ id }: { id: string }) {
       {err && <p className="err">{err}</p>}
       <TimeCoverage id={id} />
       {m.type === "browser" && <BrowserRuns monitorId={id} uncheckedSince={m.uncheckedSince} />}
+      {m.type !== "browser" && m.uncheckedSince && <p className="err">{t("Unchecked since {time}: checks for this monitor are not running.").replace("{time}", new Date(m.uncheckedSince).toLocaleString())}</p>}
       {editing && <MonitorForm monitor={m} onClose={() => setEditing(false)} onSaved={() => { setEditing(false); load(); }} />}
 
       <div className="kp">

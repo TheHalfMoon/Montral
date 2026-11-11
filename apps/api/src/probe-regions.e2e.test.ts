@@ -52,9 +52,12 @@ const cookiesOf = (r: Response, current = "") => {
 
 /** A plan whose region cap the tests change, as a downgrade would. */
 const plan = { maxRegions: 3 as number | null };
+/** Credits taken, per workspace (the allowance itself is unlimited here). */
+const spent: Record<string, number> = {};
 const edition: Edition = {
   entitlements: () => ({
     ...unmetered,
+    spendCredits: async (workspace: string, credits: number) => { spent[workspace] = (spent[workspace] ?? 0) + credits; return credits; },
     plan: async () => ({ id: "test", name: "Test", maxActiveMonitors: 50, minIntervalSec: 60, maxRegions: plan.maxRegions }),
   }),
 };
@@ -91,7 +94,7 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     vi.unstubAllGlobals();
     configureProbes({});
     if (monitorIds.length) await db!.query(`UPDATE monitor SET paused = true, next_check_at = now() + interval '30 days' WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [monitorIds.join(",")]);
-    await db!.query(`DELETE FROM probe_region_state WHERE region = ANY(string_to_array($1::text, ','))`, [Object.keys(PROBES).join(",")]);
+    await db!.query(`DELETE FROM probe_region_state WHERE region = ANY(string_to_array($1::text, ','))`, [[...Object.keys(PROBES), "e2e-flip"].join(",")]);
     await db?.close(1);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -150,14 +153,39 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     reset();
     answers["e2e-north"] = { ok: true, statusCode: 200, latencyMs: 20 };
     await call("POST", `/monitors/${m.id}/check`);
-    const rows = await db!.query<{ region: string; last_answer_at: Date | null; unreachable_since: Date | null; last_unreachable_reason: string | null }>(
-      `SELECT region, last_answer_at, unreachable_since, last_unreachable_reason FROM probe_region_state WHERE region IN ('e2e-north', 'e2e-south') ORDER BY region`,
-    );
-    const by = Object.fromEntries(rows.map((r) => [r.region, r]));
+    // health writes are not awaited by the check: wait for them (bounded)
+    type Row = { region: string; last_answer_at: Date | null; unreachable_since: Date | null; last_unreachable_reason: string | null };
+    let by: Record<string, Row> = {};
+    for (let i = 0; i < 50; i++) {
+      const rows = await db!.query<Row>(`SELECT region, last_answer_at, unreachable_since, last_unreachable_reason FROM probe_region_state WHERE region IN ('e2e-north', 'e2e-south') ORDER BY region`);
+      by = Object.fromEntries(rows.map((r) => [r.region, r]));
+      if (by["e2e-north"]?.last_answer_at && by["e2e-south"]?.unreachable_since) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
     expect(by["e2e-north"].last_answer_at).not.toBeNull();
     expect(by["e2e-north"].unreachable_since).toBeNull();
     expect(by["e2e-south"].unreachable_since).not.toBeNull();
     expect(by["e2e-south"].last_unreachable_reason).toBe("Probe unreachable");
+  });
+
+  it("throttles health writes in the database: a minute per state, 10 seconds per flip", async () => {
+    const repo = db!.repo;
+    const read = async () => (await db!.query<{ unreachable_since: Date | null; last_answer_at: Date | null }>(`SELECT unreachable_since, last_answer_at FROM probe_region_state WHERE region = 'e2e-flip'`))[0];
+    await db!.query(`DELETE FROM probe_region_state WHERE region = 'e2e-flip'`);
+    await repo.noteProbeHealth!("e2e-flip", true);
+    const first = await read();
+    expect(first.last_answer_at).not.toBeNull();
+    // the same state again within a minute: no write
+    await repo.noteProbeHealth!("e2e-flip", true);
+    expect((await read()).last_answer_at).toEqual(first.last_answer_at);
+    // a flip within 10 seconds: no write
+    await repo.noteProbeHealth!("e2e-flip", false, "Probe unreachable");
+    expect((await read()).unreachable_since).toBeNull();
+    // 11 seconds later the flip is written
+    await db!.query(`UPDATE probe_region_state SET last_answer_at = now() - interval '11 seconds' WHERE region = 'e2e-flip'`);
+    await repo.noteProbeHealth!("e2e-flip", false, "Probe unreachable");
+    expect((await read()).unreachable_since).not.toBeNull();
+    await db!.query(`DELETE FROM probe_region_state WHERE region = 'e2e-flip'`);
   });
 
   it("checks a downgraded monitor from the regions its plan allows only", async () => {
@@ -222,10 +250,13 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     answers["e2e-west"] = { ok: true, statusCode: 200 };
     await call("POST", `/monitors/${m.id}/check`);
     expect(asked).toEqual(["e2e-north"]);
-    // nor does a spot check from it
+    // nor does a spot check from it, which takes no credit
+    const [{ organization_id: workspace }] = await db!.query<{ organization_id: string }>(`SELECT organization_id FROM monitor WHERE id = $1::uuid`, [m.id]);
+    const before = spent[workspace] ?? 0;
     const spot = await call("POST", `/monitors/${m.id}/check`, { region: "e2e-west" });
     expect(spot.status).toBe(502);
-    expect(spot.body.error).toBe("Region is drained by the operator");
+    expect(spot.body).toMatchObject({ code: "probe_unreachable", region: "e2e-west", error: "Region is drained by the operator" });
+    expect(spent[workspace] ?? 0).toBe(before);
 
     expect((await op("POST", "/probes/e2e-west/undrain")).body).toEqual({ id: "e2e-west", drained: false });
     reset();

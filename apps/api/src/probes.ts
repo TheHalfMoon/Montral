@@ -146,8 +146,8 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
   if ((await drainedRegions(repo)).has(region)) return { region, unreachable: DRAINED };
   const run = await askProbe(probe, input);
   // capability gaps say nothing about the probe's health; anything else is a sign of life, or of trouble
-  if ("outcome" in run) await noteHealth(repo, region, true);
-  else if (!run.unreachable.startsWith("Probe upgrade required")) await noteHealth(repo, region, false, run.unreachable);
+  if ("outcome" in run) noteHealth(repo, region, true);
+  else if (!run.unreachable.startsWith("Probe upgrade required")) noteHealth(repo, region, false, run.unreachable);
   return run;
 }
 
@@ -174,22 +174,25 @@ export async function drainedRegions(repo?: Repo): Promise<Set<string>> {
   return drainLoad;
 }
 
-/** At most one health write per region and process this often, unless the region's state flips. */
-const HEALTH_WRITE_MS = 60_000;
+/**
+ * Health writes per region and process: at most one per HEALTH_WRITE_MS while the state holds, and one per
+ * HEALTH_FLIP_MS when it flips between answering and unreachable (a flapping probe cannot turn every check into a
+ * write). The database applies the same bounds in its upsert, so several processes stay within them too.
+ */
+export const HEALTH_WRITE_MS = 60_000;
+export const HEALTH_FLIP_MS = 10_000;
 const healthWritten = new Map<string, { at: number; answered: boolean }>();
 
-/** Record that a probe answered or could not be asked (operator view). Never fails the check. */
-async function noteHealth(repo: Repo | undefined, region: string, answered: boolean, reason?: string) {
+/** Record that a probe answered or could not be asked (operator view). Not awaited by the check; never fails it. */
+function noteHealth(repo: Repo | undefined, region: string, answered: boolean, reason?: string) {
   if (!repo?.noteProbeHealth) return;
   const last = healthWritten.get(region);
-  if (last && last.answered === answered && Date.now() - last.at < HEALTH_WRITE_MS) return;
+  const since = last ? Date.now() - last.at : Infinity;
+  if (since < (last?.answered === answered ? HEALTH_WRITE_MS : HEALTH_FLIP_MS)) return;
   healthWritten.set(region, { at: Date.now(), answered });
-  try {
-    await repo.noteProbeHealth(region, answered, reason);
-  } catch {
-    healthWritten.delete(region);
-    console.warn("probe health not recorded");
-  }
+  let write: Promise<void>;
+  try { write = repo.noteProbeHealth(region, answered, reason); } catch { write = Promise.reject(new Error("health write failed")); }
+  void write.catch(() => console.warn("probe health not recorded"));
 }
 
 /** Forgets cached drains and health-write throttling (tests, and an operator drain in this process). */

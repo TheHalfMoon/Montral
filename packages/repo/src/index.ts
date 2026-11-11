@@ -729,6 +729,8 @@ export interface Repo {
    * most once per interval. Returns when the streak started.
    */
   noteBrowserDeferral?(monitorId: string, intervalSec: number, reason: string): Promise<{ deferredSince: Date }>;
+  /** A non-browser check that did not run (its metered plan could not be read): starts or continues the deferral streak, no run row. */
+  noteCheckDeferral?(monitorId: string): Promise<{ deferredSince: Date }>;
   /** The check happened (ran, or failed in the runtime): the deferral streak is over. */
   clearBrowserDeferral?(monitorId: string): Promise<void>;
   /** Record that a digest covered these monitors' current unchecked streak. */

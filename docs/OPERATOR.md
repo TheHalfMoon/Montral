@@ -115,14 +115,19 @@ What the platform learns about them at run time is stored per region in `probe_r
 - **Health** is written by the scheduler as it asks probes (scheduled and manual checks, and spot checks): a probe that
   answers sets `lastAnswerAt` and ends an unreachable streak; one that cannot be asked sets `lastUnreachableAt`, the
   reason (one of the fixed strings of `apps/api/src/probes.ts`, never a raw network error) and, at the start of the
-  streak, `unreachableSince`. At most one write per region per minute and process, or when it flips. A region is
+  streak, `unreachableSince`. Writes are not awaited by the check (a failure is logged and dropped) and are throttled
+  twice: per process, and in the database by a conditional upsert, to at most one write per region per minute, or per
+  10 seconds when the region flips between answering and unreachable. A region is
   `unknown` when it has neither answered in the last 15 minutes nor been seen failing (for example when no monitor uses
   it). A probe that answers but lacks a capability a check needs is not counted either way.
 - **Drain** stops the scheduler from asking the region, on every server within 15 seconds (at once on the server that
   took the call). Monitors that list it keep it; the region simply does not vote. If every region of a monitor is
   drained or unreachable, the check runs from the deployment itself, as before. A single remaining region that fails
-  is confirmed from the deployment before an incident opens (see "Multi-region confirmation" in EDGE-PROBE.md), so a
-  drain does not cause false incidents. Spot checks from a drained region answer `502 probe_unreachable`.
+  is confirmed from the deployment before an incident opens (see "Multi-region confirmation" in EDGE-PROBE.md), so
+  draining one region of a multi-region monitor does not let the remaining region page on its own. This is not a
+  guarantee against every false incident: when **every** region of a monitor is drained (or unreachable) and its target
+  only accepts traffic from the probes, the fallback check from the deployment itself can fail and page, exactly as
+  when all probes are unreachable. Spot checks from a drained region answer `502 probe_unreachable` and take no credit.
 - A drain is a platform action, not a customer change: it is logged as one server line
   (`operator action: drain region=<id> operator=<user id>`) and is not written into any workspace audit log.
 - Credentials: all probes share `PROBE_SECRET`. Rotating it is a coordinated redeploy of probes and API (there is no

@@ -9,9 +9,10 @@ vi.mock("./checker", async (importOriginal) => ({
   runCheck: async () => { local.calls++; return local.outcome; },
 }));
 
-const { DRAINED, combine, confirmLocally, configureProbes, drainedRegions, measure, needsConfirmation, requiredFailures, resetProbeRegionCache, runInRegion } = await import("./probes");
+const { DRAINED, HEALTH_FLIP_MS, HEALTH_WRITE_MS, combine, confirmLocally, configureProbes, drainedRegions, measure, needsConfirmation, requiredFailures, resetProbeRegionCache, runInRegion } = await import("./probes");
 const { capRegions, planRegionCap, withinPlanRegions } = await import("./regions");
-const { withinCredits } = await import("./scheduler");
+const { notePlanDeferral, withinCredits } = await import("./scheduler");
+const { BROWSER_UNCHECKED_AFTER } = await import("./browser-check");
 
 const run = (region: string, ok: boolean, latencyMs = 100) => ({ region, outcome: { ok, statusCode: ok ? 200 : 503, latencyMs, error: ok ? undefined : "Expected 200, got 503" } });
 const down = (region: string) => ({ region, unreachable: "Probe unreachable" });
@@ -177,17 +178,46 @@ describe("measure with unreachable and drained probes", () => {
     }
   });
 
-  it("records probe health at most once a minute per region, and at once when it flips, without secrets", async () => {
+  it("records probe health at most once a minute per region, and a flip at most every 10 s, without secrets", async () => {
     const { repo, health } = stateRepo();
-    answers["us-east"] = { ok: true, statusCode: 200 };
-    await runInRegion("us-east", monitor(), repo);
-    await runInRegion("us-east", monitor(), repo);
-    expect(health).toEqual([["us-east", true, undefined]]);
-    delete answers["us-east"];
-    await runInRegion("us-east", monitor(), repo);
-    await runInRegion("us-east", monitor(), repo);
-    expect(health).toEqual([["us-east", true, undefined], ["us-east", false, "Probe unreachable"]]);
+    const start = Date.now();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(start);
+      answers["us-east"] = { ok: true, statusCode: 200 };
+      await runInRegion("us-east", monitor(), repo);
+      await runInRegion("us-east", monitor(), repo);
+      expect(health).toEqual([["us-east", true, undefined]]);
+      // a flip right away is not written: a flapping probe cannot turn every check into a write
+      delete answers["us-east"];
+      await runInRegion("us-east", monitor(), repo);
+      expect(health).toHaveLength(1);
+      vi.setSystemTime(start + HEALTH_FLIP_MS);
+      await runInRegion("us-east", monitor(), repo);
+      await runInRegion("us-east", monitor(), repo);
+      expect(health).toEqual([["us-east", true, undefined], ["us-east", false, "Probe unreachable"]]);
+      // the same state again only after a minute
+      vi.setSystemTime(start + HEALTH_FLIP_MS + HEALTH_WRITE_MS - 1);
+      await runInRegion("us-east", monitor(), repo);
+      expect(health).toHaveLength(2);
+      vi.setSystemTime(start + HEALTH_FLIP_MS + HEALTH_WRITE_MS);
+      await runInRegion("us-east", monitor(), repo);
+      expect(health).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
     expect(JSON.stringify(health)).not.toContain("secret");
+  });
+
+  it("does not hold the check up while health is being written", async () => {
+    const { repo, calls } = stateRepo();
+    let release!: () => void;
+    calls.noteProbeHealth.mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+    answers["us-east"] = { ok: true, statusCode: 200 };
+    // the write never settles before the check returns
+    expect(await runInRegion("us-east", monitor(), repo)).toMatchObject({ outcome: { ok: true } });
+    expect(calls.noteProbeHealth).toHaveBeenCalledTimes(1);
+    release();
   });
 
   it("never fails a check because health could not be written", async () => {
@@ -240,6 +270,34 @@ describe("plan region cap at run time", () => {
     const out = await withinCredits([three], entitlements as never);
     expect(spent).toEqual([2]);
     expect(out.map((m) => m.regions)).toEqual([["us-east", "eu-central"]]);
+  });
+
+  it("hands the monitors it skipped for an unreadable plan to the caller, and only those", async () => {
+    const skipped: string[][] = [];
+    const entitlements = { failClosed: true, plan: async () => { throw new Error("catalog invalid"); }, spendCredits: async (_w: string, n: number) => n };
+    const single = monitor({ id: "m2", regions: ["us-east"] });
+    const out = await withinCredits([three, single], entitlements as never, async (list) => { skipped.push(list.map((m) => m.id)); });
+    expect(out.map((m) => m.id)).toEqual(["m2"]);
+    expect(skipped).toEqual([["m1"]]);
+  });
+
+  it("marks a monitor unchecked only after its plan has been unreadable for the unchecked threshold", async () => {
+    const now = Date.parse("2026-11-11T12:00:00Z");
+    const marked: string[] = [];
+    let since = new Date(now);
+    const repo = { noteCheckDeferral: vi.fn(async () => ({ deferredSince: since })), markUnchecked: async (id: string) => { marked.push(id); return true; } } as unknown as Repo;
+    const m = monitor({ intervalSec: 60 });
+    // a single blip starts the streak and marks nothing
+    await notePlanDeferral(repo, m, now);
+    expect(marked).toEqual([]);
+    since = new Date(now - (BROWSER_UNCHECKED_AFTER * 60 - 1) * 1000);
+    await notePlanDeferral(repo, m, now);
+    expect(marked).toEqual([]);
+    since = new Date(now - BROWSER_UNCHECKED_AFTER * 60 * 1000);
+    await notePlanDeferral(repo, m, now);
+    expect(marked).toEqual(["m1"]);
+    // a backend without the streak changes nothing
+    await notePlanDeferral({} as Repo, m, now);
   });
 
   it("changes nothing for the community edition", async () => {

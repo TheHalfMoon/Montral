@@ -527,6 +527,20 @@ describe("checkOne noise rules", () => {
   });
 });
 
+describe("checkOne deferral streak", () => {
+  it("clears a deferral streak and unchecked mark once a non-browser run is recorded, and leaves clean monitors alone", async () => {
+    const { repo } = fakeRepo();
+    const cleared: string[] = [];
+    (repo as unknown as Record<string, unknown>).clearUnchecked = async () => void cleared.push("unchecked");
+    (repo as unknown as Record<string, unknown>).clearBrowserDeferral = async () => void cleared.push("deferral");
+    await checkOne(repo, hb({ deferredSince: new Date(Date.now() - 600_000), uncheckedSince: new Date() }));
+    expect(cleared).toEqual(["unchecked", "deferral"]);
+    cleared.length = 0;
+    await checkOne(repo, hb());
+    expect(cleared).toEqual([]);
+  });
+});
+
 describe("checkOne across regions", () => {
   const url = (r: string) => `https://probe.example.app/api/probe/${r}`;
   const probes = (answers: Record<string, { ok: boolean } | "down">) => {

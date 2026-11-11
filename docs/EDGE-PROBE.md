@@ -43,7 +43,9 @@ The local check costs no extra credit: it stands in for a region that was charge
 The hosted plan's `regions` limit is enforced when a monitor is created, changed or imported, and also at run time: a
 monitor saved under a larger plan (before a downgrade) is checked, and charged, only from the first regions its current
 plan allows; its stored list is kept for an upgrade. A metered deployment that cannot read the plan skips multi-region
-checks for that round (fail closed); single-region monitors and heartbeats still run. Self-hosted Community has no plan
+checks for that round (fail closed); single-region monitors and heartbeats still run. Each skip counts on the monitor's
+deferral streak: a single blip marks nothing, but after the same number of intervals as a deferred browser check the
+monitor is marked unchecked (shown on the monitor page); its next recorded run clears it. Self-hosted Community has no plan
 and is unaffected.
 
 Operators see each region's last answer and can drain a region: [OPERATOR.md, "Probe regions"](OPERATOR.md#probe-regions).

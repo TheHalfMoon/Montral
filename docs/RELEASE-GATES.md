@@ -18,7 +18,7 @@ Every CI gate below passed on GitHub Actions at `b01e28e` (`main` after #73). Ru
 | G5 | Docker image and compose: health, persistence, container recreation, PostgreSQL major-downgrade refusal | PASS | 42950068358: DOCKER_COMPOSE_PASS |
 | G6 | Browser-monitoring isolation (separate hardened runner, egress policy), incl. script steps | PASS | 42950068702: 122/122, BROWSER_RUNNER_PASS |
 | G7 | Cross-browser and WCAG 2.1 AA (Chromium, Firefox, WebKit, Pixel 7, iPhone 14; light and dark) | PASS | 42950068348: 55/55, 0 axe violations |
-| G8 | Sustained load, backpressure, pool exhaustion | PASS (intermittent failures on main before #73 recorded in ledger row 41) | 42950068456: 4,000 monitors at 4,000 checks/min, 64,419 results == target requests, drained in 133 s, no 5xx, RSS within 850 MB (heap limit as shipped); passed 3/3 runs on #73's head before merge |
+| G8 | Sustained load, backpressure, pool exhaustion | PASS at `b01e28e`; **failed again on main at `cc037bb`** (scheduler bug, ledger row 41): re-qualify after its fix | 42950068456: 4,000 monitors at 4,000 checks/min, 64,419 results == target requests, drained in 133 s, no 5xx, RSS within 850 MB (heap limit as shipped); passed 3/3 runs on #73's head before merge |
 | G9 | Network partition and primary promotion (PostgreSQL 17 and 18.6-alpine) | PASS | 42950068372: FAILOVER_PASS on both |
 | G10 | Terraform provider acceptance (unpublished) | PASS | 42950068326: 22 TestAcc passed, 0 skipped, 0 failed |
 | G11 | Vendored source integrity | PASS | 42950068583 |

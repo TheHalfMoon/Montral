@@ -672,11 +672,14 @@ export function createRepo(db: Db): Repo {
     claimDue: (limit) =>
       db
         .update(schema.monitor)
-        // advance from the scheduled time, so finishing a check late never pushes the next one past a whole cron tick;
-        // a monitor that is far behind (paused, outage of the scheduler) restarts from now instead of catching up in a burst
+        // Advance from the scheduled time, so finishing a check late never pushes the next one past a whole cron tick. A
+        // monitor that is more than half an interval behind (paused, a scheduler outage, a claim released under
+        // backpressure) restarts from now instead: advancing it from the old time would leave the next run due at once or
+        // within seconds, so the next claim round would claim it again (three results within 10 s after a backlog,
+        // load run 42956388081). The next run is therefore always at least half an interval away.
         .set({
           runGeneration: sql`${schema.monitor.runGeneration} + 1`,
-          nextCheckAt: sql`case when ${schema.monitor.nextCheckAt} + make_interval(secs => ${schema.monitor.intervalSec}) > now()
+          nextCheckAt: sql`case when ${schema.monitor.nextCheckAt} + make_interval(secs => ${schema.monitor.intervalSec}) > now() + make_interval(secs => ${schema.monitor.intervalSec} / 2.0)
             then ${schema.monitor.nextCheckAt} + make_interval(secs => ${schema.monitor.intervalSec})
             else now() + make_interval(secs => ${schema.monitor.intervalSec}) end`,
         })

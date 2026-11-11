@@ -1,5 +1,4 @@
-// Layout-shift guards shared by the specs. The same helper as the signed-in journey's in PR #84; once both are on main
-// the journey can import it from here.
+// Layout-shift guards shared by the specs (the signed-in journey and the cloud usage spec).
 import { expect, type Locator } from "@playwright/test";
 
 /** Vertical position of a control right now (NaN when it has no box). */

@@ -2,20 +2,8 @@
 // dashboard and skip link, a heartbeat monitor (never probes anything external), a public status page, a password
 // status page (locked form, wrong password refused, right password unlocks), and a webhook inbox.
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
-import type { Locator, Route } from "@playwright/test";
-
-/**
- * Clicks a control only after showing it stays where it was first painted: content that appears late above it (for example
- * the email verification bar) would move it under a click already on its way, for a person as for the test.
- */
-async function clickWithoutLayoutShift(target: Locator) {
-  await expect(target).toBeVisible();
-  const painted = (await target.boundingBox())?.y ?? Number.NaN;
-  await target.page().waitForLoadState("networkidle");
-  // vertical position only, to the pixel: content inserted above moves it down; a scrollbar or font swap does not count
-  expect(Math.abs(((await target.boundingBox())?.y ?? Number.NaN) - painted), "the control moved down after it was painted (layout shift)").toBeLessThanOrEqual(1);
-  await target.click();
-}
+import type { Route } from "@playwright/test";
+import { clickWithoutLayoutShift } from "../support/layout";
 
 test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
 

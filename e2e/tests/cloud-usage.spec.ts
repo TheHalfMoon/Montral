@@ -34,8 +34,8 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
   test.setTimeout(180_000);
   const who = synthetic(testInfo);
   let monitorId = "";
-  // The email-verification bar has its own layout-shift fix and test (PR #84); it is dismissed here, under the key both
-  // versions honour, so the positions measured below depend only on the checklist and the usage banner.
+  // The email-verification bar has its own layout-shift fix and test (the signed-in journey); it is dismissed here so the
+  // positions measured below depend only on the checklist and the usage banner.
   await page.addInitScript(() => { try { sessionStorage.setItem("montral_verify_dismissed", "1"); } catch {} });
 
   await test.step("sign up: the empty dashboard shows the first-run checklist", async () => {

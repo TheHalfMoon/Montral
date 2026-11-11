@@ -82,7 +82,7 @@ at `3fbc6e6` (after #74–#84).
 | Fail-closed metering | `plan-catalog.test.ts`, `entitlements.test.ts`, `montral-metering.e2e.test.ts`: invalid catalog or ledger error refuses metered work; 8 concurrent captures against a limit of 3 store exactly 3 (#75, #81) |
 | Billing lifecycle (sandbox) | `montral-billing.e2e.test.ts`: upgrade/downgrade, grace, recovered, refund, expired, reconciliation, stale and duplicate events; rolling-upgrade function compatibility (#77) |
 | Multi-region confirmation, probe drain | `regions-confirm.test.ts`, `probe-regions.e2e.test.ts` incl. operator write-route negative tests with rows compared before and after (#82) |
-| BYOC no-egress | `qualify-byoc.sh` `BYOC_PASS` on an internal Docker network, connection recorder in the server process only (child processes and the end user's browser not covered), with canary (#79) |
+| BYOC no-egress | `qualify-byoc.sh` `BYOC_PASS` on an internal Docker network, connection recorder in the server process only (not covered: child processes such as `/bin/ping`, the separate browser-runner container, the end user's browser), with canary (#79) |
 | Replica restart coverage | `qualify-replicas.sh`: each restart window needs a successful read and webhook POST; negative control (#80) |
 | Layout-shift-free clicks | `clickWithoutLayoutShift` in the journey and `cloud-usage.spec.ts` (#84, #83) |
 
@@ -106,7 +106,7 @@ repository.
 | Multi-region confirmation and plan region cap | n/a (one region) | P (simulated probes) | n/a | #82; no deployed probes; credits for drained/unreachable regions (ledger 55); drain audit (ledger 54); digest gap (ledger 53) |
 | Onboarding checklist | Y | Y | Y | #83 |
 | Usage banner, meters, quota messages, suspended notice | n/a | Y (states mocked in e2e) | n/a | #83; late first-load banners (ledger 59) |
-| No-egress reference deployment | n/a | n/a | Y (reference) | #79; server process only; browser-side Google Fonts documented, not blocked (ledger 73); child processes not covered |
+| No-egress reference deployment | n/a | n/a | Y (reference) | #79; server process only; browser-side Google Fonts documented, not blocked (ledger 73); child processes and the browser-runner container not covered |
 | Production hosting, email provider, payment provider, legal terms, external pen test | n/a | N | N (pen test, legal) | external blockers, `docs/RELEASE-GATES.md` §S.4 |
 
 ## Prioritised gaps

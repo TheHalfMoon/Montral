@@ -35,6 +35,11 @@ export type Bindings = {
   MONTRAL_REPLAY_PRIVATE_TARGETS?: string;
   /** Staged owner-only evidence review: OFF by default, and metered edition only. No dispatch enabled. */
   MONTRAL_RECONCILIATION_ENABLED?: string;
+  /**
+   * Comma-separated user ids of platform operators (docs/OPERATOR.md): they may list workspaces and suspend them through
+   * /api/operator, only from a signed-in session with two-factor enabled. Unset or empty: there are no operators.
+   */
+  MONTRAL_OPERATOR_USER_IDS?: string;
   /** Emergency transition guard: prevent new monthly digest claims, without silencing monitors or alert deliveries. OFF by default. */
   MONTRAL_MONTHLY_REPORTS_PAUSED?: string;
   MONTRAL_BILLING_ENABLED?: string;
@@ -135,6 +140,8 @@ export type RequestPrincipal = Readonly<RequestIdentity & {
 }>;
 
 export type Variables = {
+  /** Set only by requireOperator (operator.ts): the platform operator making this request. */
+  operatorId?: string;
   /** Present only after requireOrg has successfully verified identity, membership and selected project access. */
   requestPrincipal?: RequestPrincipal;
   statusResponsePrivate?: boolean;

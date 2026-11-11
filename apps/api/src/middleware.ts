@@ -6,6 +6,7 @@ import type { AppEnv, RequestIdentity } from "./env";
 import { currentSession } from "./auth";
 import { verifyOAuthToken } from "./oauth";
 import { credentialVia, isOwnerRole, sessionVia, ssoRequirementOf } from "./sso-store";
+import { suspendedResponse, workspaceSuspended } from "./suspension";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -103,6 +104,10 @@ export const requireOrg = createMiddleware<AppEnv>(async (c, next) => {
     orgId = (await repo.anyWorkspaceOf(userId)) ?? undefined;
     if (!orgId) throw new HTTPException(403, { message: "No workspace" });
   }
+  // A workspace a platform operator suspended (docs/OPERATOR.md) is closed to every credential: sessions, API keys and
+  // agent tokens alike. Checked after membership, so only members learn that a workspace is suspended.
+  const database = c.get("database");
+  if (await workspaceSuspended((sql, params) => database.query(sql, params), orgId)) return suspendedResponse(c);
   // "Require SSO": a member other than an owner (the break-glass account) reaches the workspace only with what its own
   // SSO connection produced: a session it created, an API key made from such a session, or an agent token whose
   // authorizing session (its `sid`) is such a session and is still alive.

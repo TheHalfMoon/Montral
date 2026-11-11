@@ -904,6 +904,26 @@ export const oncallCalendarToken = pgTable(
   (t) => [uniqueIndex("oncall_calendar_token_hash_idx").on(t.tokenHash), index("oncall_calendar_token_user_idx").on(t.organizationId, t.userId)],
 );
 
+/**
+ * A workspace suspended by a platform operator (docs/OPERATOR.md). While a row exists the workspace's API access,
+ * checks, alerts, webhook capture and public status pages are refused; its data is kept and deleting the row restores
+ * everything. `suspended_by` is the operator's user id (no foreign key: the record outlives the operator's account).
+ */
+export const workspaceSuspension = pgTable(
+  "workspace_suspension",
+  {
+    organizationId: text("organization_id").primaryKey().references(() => organization.id, { onDelete: "cascade" }),
+    reason: text("reason").notNull(),
+    note: text("note"),
+    suspendedBy: text("suspended_by"),
+    suspendedAt: timestamp("suspended_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    check("workspace_suspension_reason_chk", sql`${t.reason} in ('abuse', 'payment', 'legal', 'operator')`),
+    check("workspace_suspension_note_chk", sql`${t.note} is null or char_length(${t.note}) <= 500`),
+  ],
+);
+
 export const monitorRelations = relations(monitor, ({ many }) => ({
   results: many(checkResult),
   incidents: many(incident),

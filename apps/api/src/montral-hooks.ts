@@ -10,6 +10,7 @@ import { pinnedFetch } from "./pinnedfetch";
 import { columnExists, relationExists } from "./schema-catalog";
 import { boundedDelay, buildConfiguredResponse, DelaySlots, parseHookResponseConfig, RESPONSE_LIMITS, responseVariant, type HookResponseConfig } from "./montral-hook-response";
 import { z } from "zod";
+import { WORKSPACE_SUSPENDED } from "./suspension";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOKEN = /^[0-9a-f]{64}$/;
@@ -597,11 +598,15 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const { id, token } = c.req.param();
     if (!UUID.test(id) || !TOKEN.test(token)) return c.json({ error: "Not found" }, 404);
     const db = c.get("database");
-    const found = await db.query<HookInbox>(
-      "SELECT id,organization_id,project_id,token_hash FROM montral_hook_inbox WHERE id=$1", [id],
+    const found = await db.query<HookInbox & { suspended: boolean }>(
+      `SELECT id,organization_id,project_id,token_hash,
+         EXISTS (SELECT 1 FROM workspace_suspension s WHERE s.organization_id=montral_hook_inbox.organization_id) AS suspended
+       FROM montral_hook_inbox WHERE id=$1`, [id],
     );
     const inbox = found[0];
     if (!inbox || !sameHash(await fingerprint(token), inbox.token_hash)) return c.json({ error: "Not found" }, 404);
+    // a workspace suspended by a platform operator captures nothing; only a sender holding the secret URL learns why
+    if (inbox.suspended) return c.json({ error: "This workspace is suspended", code: WORKSPACE_SUSPENDED }, 403);
     if (!(await allow(c.get("repo"), `montral:hook:${id}`, 120, 60))) return c.json({ error: "Too many events" }, 429);
     let payload: string | null;
     try {

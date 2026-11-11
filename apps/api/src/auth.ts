@@ -34,7 +34,7 @@ export const SSO_REQUIRED_MESSAGE = "Your workspace requires single sign-on. Use
 export function slugify(s: string) {
   const bytes = crypto.getRandomValues(new Uint8Array(8));
   const suffix = Array.from(bytes, (b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
-  return `${(s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 48) || "workspace")}-${suffix}`;
+  return `${(s.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 48).replace(/^-+|-+$/g, "") || "workspace")}-${suffix}`;
 }
 
 /** Invitation lifetime in days: INVITE_TTL_DAYS when it is a positive number, else 7. */
@@ -133,7 +133,9 @@ export async function givePersonalWorkspace(database: Pick<Database, "repo" | "q
       await database.repo.createPersonalWorkspace({ id, name, slug: slugify(name), ownerId: user.id });
       break;
     } catch (e) {
-      const unique = (e as { code?: string }).code === "23505" && /slug/i.test(String((e as { constraint_name?: string; constraint?: string }).constraint_name ?? (e as { constraint?: string }).constraint ?? (e as Error).message));
+      // drizzle wraps the driver's error: SQLSTATE and constraint are on `cause` (as elsewhere in this codebase)
+      const pg = ((e as { cause?: unknown }).cause ?? e) as { code?: string; constraint_name?: string; message?: string };
+      const unique = pg.code === "23505" && /slug/i.test(String(pg.constraint_name ?? pg.message ?? ""));
       if (!unique || attempt >= 3) throw e;
     }
   }

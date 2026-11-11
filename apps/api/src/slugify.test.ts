@@ -6,6 +6,8 @@ describe("workspace slugs", () => {
     expect(slugify("Alex's workspace")).toMatch(/^alex-s-workspace-[a-z0-9]{8}$/);
     expect(slugify("!!!")).toMatch(/^workspace-[a-z0-9]{8}$/);
     expect(slugify("x".repeat(200)).length).toBe(48 + 1 + 8);
+    // a dash at the cut never doubles before the suffix
+    expect(slugify(`${"a".repeat(47)} b`)).toMatch(/^a{47}-[a-z0-9]{8}$/);
   });
 
   it("do not repeat for the same name across many sign-ups", () => {
@@ -19,7 +21,8 @@ describe("workspace slugs", () => {
     const database = {
       repo: { createPersonalWorkspace: async (w: { slug: string }) => {
         slugs.push(w.slug);
-        if (failures-- > 0) throw Object.assign(new Error('duplicate key value violates unique constraint "organization_slug_unique"'), { code: "23505", constraint_name: "organization_slug_unique" });
+        // the shape drizzle-orm throws: the driver's error (SQLSTATE, constraint) is the cause
+        if (failures-- > 0) throw Object.assign(new Error("Failed query: insert into organization ..."), { cause: Object.assign(new Error('duplicate key value violates unique constraint "organization_slug_unique"'), { code: "23505", constraint_name: "organization_slug_unique" }) });
       } },
       query: async () => [],
     };
@@ -27,7 +30,7 @@ describe("workspace slugs", () => {
     expect(slugs).toHaveLength(2);
     expect(slugs[0]).not.toBe(slugs[1]);
 
-    const other = { ...database, repo: { createPersonalWorkspace: async () => { throw Object.assign(new Error("connection reset"), { code: "08006" }); } } };
+    const other = { ...database, repo: { createPersonalWorkspace: async () => { throw Object.assign(new Error("connection reset"), { cause: { code: "08006" } }); } } };
     await expect(givePersonalWorkspace(other as never, { id: "u2", name: "Bo", email: "bo@example.com" })).rejects.toThrow(/connection reset/);
   });
 });

@@ -84,7 +84,17 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     const dialog = page.locator(".modal form");
     await dialog.getByLabel("Title").fill(lockedTitle);
     await dialog.getByLabel("Slug").fill(lockedSlug);
-    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    // On narrow viewports the Slug label previously covered the Create button.
+    // Verify the real pointer target before submitting instead of force-clicking.
+    const create = dialog.getByRole("button", { name: "Create", exact: true });
+    await create.scrollIntoViewIfNeeded();
+    const hittable = await create.evaluate((button) => {
+      const bounds = button.getBoundingClientRect();
+      const target = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+      return target === button || (target !== null && button.contains(target));
+    });
+    expect(hittable).toBe(true);
+    await create.click();
     await expect(page).toHaveURL(/\/app\/status-pages\/[^/]+$/);
     await page.getByRole("radio", { name: "Password or share link" }).click();
     await expect(page.getByRole("radio", { name: "Password or share link" })).toHaveAttribute("aria-checked", "true");

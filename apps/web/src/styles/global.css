@@ -717,3 +717,12 @@ a.muted:hover{color:var(--ink)}
 .audit-id{display:block;overflow-wrap:anywhere}
 .audit-actor{overflow-wrap:anywhere}
 .audit-more{display:flex;justify-content:center;margin-top:14px}
+
+/* Status-page creation sheet: keep inputs and submit actions from shrinking or
+   overlapping when system fonts differ or the mobile visual viewport is short.
+   Scroll the form instead of compressing its CSS grid's implicit rows. */
+.modal .card.status-create-form{display:flex;flex-direction:column;gap:16px;overflow-y:auto;overscroll-behavior:contain}
+.modal .card.status-create-form > *{flex:0 0 auto}
+@media (max-width:1024px){
+  .modal .card.status-create-form{max-height:min(90dvh,calc(100vh - 40px))}
+}

@@ -143,7 +143,7 @@ The repository is public with the owner's approval; that is not release authoriz
 
 
 ## Completed and locally verified
-- [x] Three exact source snapshots and original license notices preserved (638 hashed files)
+- [x] Montral-only application source verified; duplicate historical source trees removed, with applicable license notices retained
 - [x] Montral active brand, source packages and unified auth/API/MCP runtime
 - [x] Montral inboxes, one-time token, event inspector, manager-only sensitive body reads; `private, no-store` and `nosniff` for all authenticated inbox routes
 - [x] Real PostgreSQL webhook sessions, tenant isolation, token refusal, upload cap and cascade deletion E2E

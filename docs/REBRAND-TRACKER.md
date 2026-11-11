@@ -2,7 +2,7 @@
 
 Active apps, package names, runtime signals, REST/MCP metadata, OAuth references, page titles, favicons, PWA icons, Open Graph images and navigation use **Montral**.
 
-Historical source snapshots under `vendor/`, and legal provenance, original LICENSE and NOTICE text must not be altered. This is required source attribution, not a customer-facing product brand.
+The Montral application and packages are the only active source tree; duplicate historical snapshots are removed. Applicable legal license text stays in `LICENSE` and `legal/`.
 
 ## Verified active brand work
 

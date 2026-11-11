@@ -1,1 +1,0 @@
-ALTER TABLE "incident" ADD COLUMN "postmortem_published_at" timestamp with time zone;

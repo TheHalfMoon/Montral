@@ -1,1 +1,0 @@
-ALTER TABLE "monitor" ADD COLUMN "expected_location" text;

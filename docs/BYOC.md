@@ -166,7 +166,7 @@ invitation, and removing the member is a manual step.
 - **Qualification scripts** the customer can rerun against its own build: `scripts/qualify-docker.sh` (image, compose,
   persistence, downgrade refusal), `scripts/qualify-replicas.sh`, `scripts/qualify-upgrade.mjs`,
   `scripts/qualify-backup.mjs`, `scripts/qualify-backup-negative.mjs`, `scripts/qualify-browser-runner.sh`.
-- **Source provenance**: `docs/SOURCES.md` and `docs/source-manifest.json` record upstream sources and file hashes.
+- **Montral source identity**: `docs/SOURCES.md` and `scripts/verify_sources.py` describe and verify the unified Montral source tree.
 
 ## 9. What CI verifies (job `byoc` in `.github/workflows/montral-docker.yml`)
 

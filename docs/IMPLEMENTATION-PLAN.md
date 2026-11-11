@@ -14,12 +14,12 @@
 
 ## Phase 2 — probe adapter
 - Formal ProbeRequest/ProbeResult contract with timeout/error semantics and security guardrails.
-- Port portable Cloudflare probe patterns from `vendor/montral-cloud-probes` into active `services/montral-probes`.
+- Maintain Montral's active edge-probe implementation under `apps/probe`.
 - Add compatibility tests for HTTP/TCP/DNS where Cloudflare supports them and avoid duplicate monitoring costs.
 - CI demonstrates identical incident semantics across probe adapters.
 
 ## Phase 3 — secure webhook receiver
-- Use `vendor/montral-webhooks-legacy` as read-only behavior source, not executable production dependency.
+- Use the Montral-native webhook receiver in `apps/api`; no duplicate legacy application is included.
 - Implement modern `services/montral-hooks`: inbox lifecycle, capture, redact, retention, inspect, replay, API, pagination.
 - Integrate auth/workspace ownership and secret rotation, quotas, event expiry and abuse/rate limits.
 - E2E: create inbox, send request, inspect event, replay to allowed target, confirm isolation.

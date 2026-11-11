@@ -138,9 +138,9 @@ describe("Montral commercial billing is sandbox-only and signature-bound", () =>
 
 /** Synthetic catalog: a "team" plan sold through variants 903/904; plans and numbers describe no real offer. */
 const catalogJson = JSON.stringify({
-  schemaVersion: 1, version: "synthetic-billing-unit", defaultPlan: "starter",
+  schemaVersion: 1, version: "synthetic-billing-unit", defaultPlan: "lite",
   plans: [
-    { id: "starter", name: "Starter", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 10, emails: 1 } },
+    { id: "lite", name: "Lite", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 10, emails: 1 } },
     { id: "team", name: "Team", limits: { activeMonitors: 3, minIntervalSec: 300, regions: 1, credits: 30, emails: 3 }, providerVariants: ["903", "904"] },
     { id: "scale", name: "Scale", limits: { activeMonitors: 9, minIntervalSec: 60, regions: 2, credits: 90, emails: 9 }, providerVariants: ["905"] },
   ],

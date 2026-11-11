@@ -619,13 +619,13 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
 });
 
 /**
- * Catalog-driven billing lifecycle. Synthetic catalog: the plans "starter" (default, never sold), "team" (variants
+ * Catalog-driven billing lifecycle. Synthetic catalog: the plans "lite" (default, never sold), "team" (variants
  * 301/302) and "scale" (303); the variant ids, limits and the price metadata describe no real offer.
  */
 const lifecycleCatalog = JSON.stringify({
-  schemaVersion: 1, version: "synthetic-lifecycle-e2e", defaultPlan: "starter",
+  schemaVersion: 1, version: "synthetic-lifecycle-e2e", defaultPlan: "lite",
   plans: [
-    { id: "starter", name: "Starter", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 11, emails: 1 } },
+    { id: "lite", name: "Lite", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 11, emails: 1 } },
     { id: "team", name: "Team", limits: { activeMonitors: 3, minIntervalSec: 300, regions: 1, credits: 33, emails: 3 }, providerVariants: ["301", "302"],
       price: { amountMinor: 999, currency: "EUR", interval: "month" } },
     { id: "scale", name: "Scale", limits: { activeMonitors: 7, minIntervalSec: 60, regions: 2, credits: 77, emails: 7 }, providerVariants: ["303"] },
@@ -670,8 +670,8 @@ describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", 
       expect(r.status).toBe(200);
       return r.json() as Promise<{ defaultPlan: string; plans: Record<string, unknown>[] }>;
     };
-    expect(await plans(lifecycle)).toEqual({ defaultPlan: "starter", plans: [
-      { id: "starter", name: "Starter", checkoutAvailable: false },
+    expect(await plans(lifecycle)).toEqual({ defaultPlan: "lite", plans: [
+      { id: "lite", name: "Lite", checkoutAvailable: false },
       { id: "team", name: "Team", checkoutAvailable: true },
       { id: "scale", name: "Scale", checkoutAvailable: true },
     ] });
@@ -693,7 +693,7 @@ describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", 
         method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ plan }),
       }), lifecycle as never);
       // the default plan, plans the catalog does not have (including the old fixed ids) and malformed ids: 400
-      for (const plan of ["starter", "pro", "business", "enterprise", "Team!"]) expect((await checkout(plan)).status, plan).toBe(400);
+      for (const plan of ["lite", "pro", "business", "enterprise", "Team!"]) expect((await checkout(plan)).status, plan).toBe(400);
       expect(variants).toEqual([]);
       expect((await checkout("team")).status).toBe(201);
       expect(variants).toEqual([301]);
@@ -710,7 +710,7 @@ describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", 
     const provider = String(Math.floor(Math.random() * 5000000 + 31000000));
     await db!.query("INSERT INTO montral_billing_intent(id,organization_id,created_by,plan,variant_id,expires_at) VALUES($1,$2,$3,'team','301',NOW()+INTERVAL '30 minutes')", [intent, org, userId]);
     const entitlements = lifecycleEntitlements();
-    expect(await entitlements.plan(org)).toMatchObject({ id: "starter" });
+    expect(await entitlements.plan(org)).toMatchObject({ id: "lite" });
     const created = event(provider, intent, "subscription_created", "active", "2026-11-01T10:00:00.000Z", 301);
     expect(await (await fire(created, lifecycle)).json()).toMatchObject({ result: "applied" });
     expect(await entitlements.plan(org)).toMatchObject({ id: "team", maxActiveMonitors: 3 });
@@ -777,12 +777,12 @@ describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", 
 
     // simulate time: the first failed payment is now eight days old, beyond the default seven-day grace
     await db!.query("UPDATE montral_subscription SET past_due_since=NOW()-INTERVAL '8 days' WHERE provider_id=$1", [provider]);
-    expect(await plan()).toBe("starter");
+    expect(await plan()).toBe("lite");
     expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "10" }))).toBe("team");
-    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "0" }))).toBe("starter");
+    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "0" }))).toBe("lite");
     // a second failed retry does not restart the grace period
     expect((await fire(invoiceEvent(provider, "subscription_payment_failed", "pending", ago(7 * HOUR)), lifecycle)).status).toBe(200);
-    expect(await plan()).toBe("starter");
+    expect(await plan()).toBe("lite");
 
     // the payment is recovered: the plan is back at once, even before the subscription status follows
     expect(await (await fire(invoiceEvent(provider, "subscription_payment_recovered", "paid", ago(6 * HOUR)), lifecycle)).json()).toMatchObject({ result: "applied" });
@@ -796,17 +796,17 @@ describe.skipIf(!url)("Montral catalog-driven billing lifecycle on PostgreSQL", 
 
     // a refund falls back at once; a later successful payment restores the plan
     expect(await (await fire(invoiceEvent(provider, "subscription_payment_refunded", "refunded", ago(4 * HOUR)), lifecycle)).json()).toMatchObject({ result: "applied" });
-    expect(await plan()).toBe("starter");
-    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "30" }))).toBe("starter");
+    expect(await plan()).toBe("lite");
+    expect(await plan(lifecycleEntitlements({ MONTRAL_BILLING_GRACE_DAYS: "30" }))).toBe("lite");
     expect((await fire(invoiceEvent(provider, "subscription_payment_success", "paid", ago(3 * HOUR)), lifecycle)).status).toBe(200);
     expect(await plan()).toBe("team");
 
     // expiry falls back at once and is terminal: a later "active" update cannot revive it
     expect((await fire(event(provider, null, "subscription_expired", "expired", ago(2 * HOUR), 301), lifecycle)).status).toBe(200);
-    expect(await plan()).toBe("starter");
+    expect(await plan()).toBe("lite");
     expect(await (await fire(event(provider, null, "subscription_updated", "active", ago(1 * HOUR), 301), lifecycle)).json()).toMatchObject({ result: "stale" });
     expect(await (await fire(invoiceEvent(provider, "subscription_payment_success", "paid", ago(0.5 * HOUR)), lifecycle)).json()).toMatchObject({ result: "stale" });
-    expect(await plan()).toBe("starter");
+    expect(await plan()).toBe("lite");
 
     // payment events of a subscription Montral never linked are unmatched
     expect((await fire(invoiceEvent(String(Number(provider) + 1), "subscription_payment_success", "paid", ago(0)), lifecycle)).status).toBe(409);

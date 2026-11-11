@@ -1,10 +1,13 @@
 # Montral release gates
 
 Publication of any kind (tag, GitHub release, Docker image, npm package, Terraform provider, deployment) requires the
-owner's explicit `GREEN LIGHT MONTRAL`. This file has two parts: the **current self-hosted release-candidate gates**,
-each verified at the candidate revision, and the **historical production/SaaS gate log** below, kept for traceability.
+owner's explicit `GREEN LIGHT MONTRAL`. This file has three parts: the **current self-hosted release-candidate gates**,
+each verified at the candidate revision (§A), the **SaaS release gates per delivery model** — Community, Montral Cloud
+and Enterprise BYOC (§S), and the **historical production/SaaS gate log** below, kept for traceability (§B).
 
 ## A. Self-hosted Docker release candidate — mandatory gates at `b01e28e` (2026-11-11)
+
+**Candidate revision update:** Community would ship from current `main` at **`3fbc6e6`**, which supersedes `b01e28e` as the candidate. All ten workflows succeeded at `3fbc6e6` (§S.1), re-running every CI gate below (G1–G11, G14) on that exact commit; the table keeps the `b01e28e` evidence for traceability. G12–G13 at `3fbc6e6`: §S.1 review table and S7. G15 is unchanged (physical Safari, public landing at `dc02d02`).
 
 Every CI gate below passed on GitHub Actions at `b01e28e` (`main` after #73). Run ids are links on
 `https://github.com/TheHalfMoon/Montral/actions/runs/<id>`.
@@ -32,6 +35,106 @@ the signed-in app, VoiceOver, and physical iOS Safari (ledger 36); Windows Docke
 development machine but not running; owner action, ledger 30); ARM64 Linux hosts for the Docker image; PostgreSQL
 versions other than 17 and 18.6; replicas on different hosts and rolling upgrades; real external SMTP/APNs delivery;
 SAML (not implemented, ledger 37).
+
+## S. SaaS release gates per delivery model — `main` at `3fbc6e6` (2026-11-11)
+
+Three delivery models share one codebase:
+
+- **Community**: self-hosted, free, no quotas (metering off; no plan, quota or upgrade UI).
+- **Montral Cloud**: multi-tenant SaaS with metering and billing. Billing exists **only in sandbox (test) mode**; no
+  live payment provider is connected.
+- **Enterprise BYOC**: the customer runs Montral in its own infrastructure from the reference overlay
+  (`docker-compose.byoc.yml`, `docs/BYOC.md`).
+
+Commercial terms (prices, plan allowances, contract terms) live in private operator configuration and are not part of
+the repository. The plan catalog format is public (`docs/PLAN-CATALOG.md`, synthetic examples only); its values are not.
+
+**How to read the table.** **GO** means the gate has evidence at or before `3fbc6e6` for the scope stated in the cell
+(a merged PR, a CI run, or an evidence document). **NO-GO** means the evidence is missing or incomplete. **N/A** means
+the gate does not apply to that model. A model can ship only when every applicable gate is GO **and** the owner has said
+`GREEN LIGHT MONTRAL` (S15). No gate below authorizes a tag, release, image, package or deployment.
+
+### S.1 Requalification of `main` at `3fbc6e6`
+
+All ten workflows ran on the exact merge commit of #83
+(`3fbc6e6989f5b2cac30ceb59c2e173ed9203a15b`, push to `main`). Run ids are links on
+`https://github.com/TheHalfMoon/Montral/actions/runs/<id>`.
+
+| Workflow | Run | Result | What it covers for §S |
+|---|---|---|---|
+| Montral app CI (PostgreSQL 17 and 18.6-alpine) | 43010585281 | **success**: API + real-PostgreSQL e2e 1,540 passed / 23 skipped per leg, probe 22/22, web 171/171; RESTORE_DRILL_PASS 65 tables on both legs | API unit + real-PostgreSQL e2e incl. `operator.e2e`, `montral-metering.e2e`, `montral-billing.e2e`, `probe-regions.e2e`; restore drill |
+| Montral macOS PostgreSQL 18 qualification | 43010585268 | **success**: 1,540 passed / 23 skipped, 22/22, 171/171 | Same suites on macOS ARM64 |
+| Montral browser checks | 43010585116 | **success**: both jobs, BROWSER_RUNNER_PASS | Isolated browser-runner; browser-seconds metering paths |
+| Montral cross-browser and accessibility | 43010585084 | **success**: 60 passed | `cloud-usage.spec.ts` (checklist, usage banner, quota refusal, suspended notice) on 5 projects with axe |
+| Montral Terraform provider | 43010585068 | **success** | Provider acceptance (unpublished) |
+| Montral upgrade, rollback and disaster recovery | 43010585124 | **success**: RTO 2.1 s on the synthetic dataset | Upgrade from `17f55c1` through the new billing/metering/probe migrations, rollback, DR |
+| Montral load qualification | 43010585062 | **success**: LOAD_QUALIFICATION_PASS, 4,000 monitors at 4,001.4 checks/min, 63,044 results == target requests, drained in 132 s, no 5xx | 4,000-monitor load on one node (scheduler claim fix #74) |
+| Montral Docker Compose qualification | 43010585390 | **success**: DOCKER_COMPOSE_PASS, REPLICAS_PASS (every restart covered), BYOC_PASS | Compose, replicas with the per-restart coverage gate (#80), **`byoc` no-egress job** (#79) |
+| Montral failover qualification | 43010585122 | **success**: PostgreSQL 17 and 18.6-alpine | Partition and primary promotion on PostgreSQL 17 and 18.6 |
+| Montral source integrity | 43010585138 | **success** | Vendored source hashes |
+
+**Result: 10 of 10 workflows succeeded at `3fbc6e6`; no workflow failed.** The `byoc` job's recorder watches **the server process only**. It allows the customer database, loopback and the failing test monitor's own configured target. It recorded 19 attempts: 7 connects to the customer database, 11 DNS lookups (3 of them for the monitor's target), and 1 connect to the monitor's target (19 − 7 − 11; the job prints no separate count for it); 0 elsewhere. Its negative control with the default `SELFCHECK_URLS` showed the recorder catches the self-check targets. **Not covered:** the served HTML loads Google Fonts in the end user's browser (reported by the job, not blocked; there is no setting to disable it), child processes of the server (for example `/bin/ping`) are outside the recorder, and so is the browser-runner, which is a separate container (off in the BYOC run).
+
+Each PR listed in §S.2 also passed every check on its own exact head before it merged (`gh pr checks`: every one of the 14–15
+checks passing for each of #74–#84). Every PR #74–#84 had an **independent agent review (not posted on GitHub); medium-or-above findings fixed before merge; accepted lows are tracked in the ledger** (for example #80's
+row 72). These
+reviews were run read-only by the programme's coordinator; none is a GitHub review. Owner review comments posted on
+GitHub (#77, #78, #80, #82) are listed where they apply.
+
+| PR | Independent agent review (not posted on GitHub); medium-or-above findings fixed before merge; accepted lows are tracked in the ledger |
+|---|---|
+| #74 | A half-interval margin equalled the tick for 60 s monitors and could skip runs; changed to a fixed 15 s margin (PR body) |
+| #75 | High: billing plan ids when billing is ready, fixed; incident alert emails restored to fail-open; status-page branding fallback, cause logging, frozen plans and fixed messages also fixed |
+| #76 | Several rounds. High: second-factor bypass via GitHub/SSO sign-in, fixed with `operator_mfa_session`. Medium: Better Auth endpoints and cascade delete, fixed with a before-hook gate and `ON DELETE RESTRICT`. Decoy-field workspace-selection bypasses in body and query, fixed to fail closed |
+| #77 | High: an unmapped variant kept paid limits; high: function lists in migration checks; medium: rolling-restart safety via new function names. All fixed (PR body "Review fixes") |
+| #78 | The slug retry did not match the drizzle-wrapped unique violation; fixed. An owner review comment on GitHub (the SSO JIT path has no retry) is **still open**: ledger row 62 |
+| #79 | Medium: the egress capture covered start-up only; fixed with a scheduler tick and a self-check negative control. Verification review: nothing at medium or above |
+| #80 | Owner review on GitHub (traffic must be proven during each restart, with a negative control) addressed in 57dda7c; independent review of 57dda7c: nothing at medium or above, one low fixed, remaining lows in ledger row 72 |
+| #81 | Medium: redefining the shared spend function broke rolling upgrades; fixed with `montral_spend_usage_v2`. Re-review: nothing at medium or above |
+| #82 | Four review findings fixed (plan-unreadable skips silent, drained spot check charged, OPERATOR.md overclaim, health writes); owner review on GitHub (operator write-route negative tests) addressed in 69669d1, which also fixed a malformed-body drain |
+| #83 | M1–M3 (checklist and banner layout shift, e2e clicks) and lows fixed; re-review lows fixed |
+| #84 | Nothing at medium or above; two test lows fixed |
+
+### S.2 Gate table
+
+| # | Gate | Community | Cloud | BYOC | Evidence |
+|---|---|---|---|---|---|
+| S1 | Tenant isolation and operator controls | **GO**: tenant isolation e2e suites as in §A G1; operator plane off unless `MONTRAL_OPERATOR_USER_IDS` is set | **GO (engineering)**: operator plane is session + second factor only, API keys/agents refused; server-side suspension of API, scheduler, alerts, heartbeats, webhooks and public pages; operator probe drain routes with negative tests. Limits: API only, no platform audit trail, SCIM and Better Auth org/API-key endpoints not gated during suspension (ledger 60) | **GO**: overlay pins `MONTRAL_OPERATOR_USER_IDS` empty; vendor access none by default | #76, #82 (commit 69669d1), `docs/OPERATOR.md`, `docs/BYOC.md` §7; app CI 43010585281 (`operator.e2e`, `probe-regions.e2e`) |
+| S2 | Metering correctness and fail-closed behaviour | **N/A**: unmetered; tests assert self-hosted counts and refuses nothing | **GO (engineering)**: operator catalog, fail-closed on catalog/ledger errors, webhook-event and browser-second meters through `montral_spend_usage_v2`, concurrency e2e, run-time plan region cap. Documented bounded gaps: at most one event / one journey timeout lost on a process kill, no later reconciliation; webhook replay and inbox count not metered (ledger 56) | **N/A**: metering off in the reference overlay | #75, #81, #82; `docs/PLAN-CATALOG.md`; app CI 43010585281 (`montral-metering.e2e`, `montral-billing.e2e`) |
+| S3 | Billing lifecycle | **N/A**: billing off | **NO-GO**: lifecycle (create, upgrade/downgrade, payment failed with grace, recovered, refunded, expired, reconciliation hook) is qualified **in sandbox only** against synthetic signed events. No live provider is connected; provider behaviours assumed in #77 (invoice statuses, clock comparability, plan-change reporting, event order) are unverified; no reconciliation job; chargebacks not handled; `past_due_since` not backfilled (ledger 61) | **N/A**: no in-product billing | #77, `docs/BILLING-SANDBOX.md`; app CI 43010585281 (`montral-billing.e2e`) |
+| S4 | Onboarding and usage UX | **GO**: checklist derived from real data; no banner, meters or plan nav on self-hosted (asserted first by the spec) | **GO (engineering)**: usage banner, meter states, quota refusal messages, suspended notice; WCAG 2.1 AA scans. Metered and suspended states are **synthetic API responses** (`page.route`), not a metered server; first load per tab can still show banners late (ledger 59) | **GO**: same UI as Community | #83, #84, `docs/CUSTOMER-ONBOARDING.md`; cross-browser 43010585084 |
+| S5 | Multi-region | **Not qualified**: one local region by default; the optional edge probes exist but were never qualified on deployed probes (not a Community release gate) | **NO-GO**: confirmation from the scheduler's location when quorum is degraded, run-time region cap, probe health and drain are unit/e2e-tested with simulated probes only. No probe is deployed; no real cross-region qualification; credits still charged for drained or unreachable regions (ledger 55) | **N/A**: probes off in the reference run | #82, `docs/EDGE-PROBE.md`; app CI 43010585281 (`probe-regions.e2e`) |
+| S6 | BYOC reference and no-egress | N/A | N/A | **GO (reference)**: on an `--internal` Docker network with a separate customer PostgreSQL, the shipped overlay migrates, serves sign-up, monitors, webhooks and audit export, survives recreation; a recorder in the **server process only** fails the job on any connection other than the database, loopback and the failing test monitor's own target: 19 attempts = 7 database connects, 11 DNS lookups, 1 connect to the monitor's target, 0 elsewhere (`BYOC_PASS`). Not covered: Google Fonts loaded by the end user's browser (no setting to disable it, ledger 73); child processes of the server (for example `/bin/ping`); the browser-runner, a separate container (off in this run). Documented only: browser-runner, browser-side requests, replicas/browser overlays, managed PostgreSQL, SMTP, SSO, GitHub sign-in, APNs, probes, DNS/domain monitors | #79, `docs/BYOC.md` §§6, 10; Docker 43010585390 (`byoc` job) |
+| S7 | Security review and penetration test | **GO (self-assessed)**: independent agent reviews of every merged PR #74–#84 (not posted on GitHub), medium-or-above findings fixed before merge; accepted lows are tracked in the ledger (§S.1); no external review or pen test | **NO-GO**: no external penetration test of the multi-tenant service; operator plane and billing reviewed only by independent agents (not posted on GitHub) and owner comments | **NO-GO**: no external penetration test or customer-facing security assessment | §S.1 review table, §A G12–G13, `docs/FINAL-REPORT.md` §6; no external pen test exists |
+| S8 | DR, backup and restore | **GO**: restore drill with catalog negative control; upgrade from `17f55c1`, exact rollback, DR into a new database | **NO-GO**: no managed PITR, no hosted or cross-region DR drill | **GO (reference procedure)**: same procedure on the customer's PostgreSQL; managed database services not qualified | §A G3–G4; `docs/evidence/2026-11-10-upgrade-rollback-dr.md`; upgrade 43010585124, app CI 43010585281 |
+| S9 | Load and capacity | **GO**: one node, 4,000 monitors at 4,000 checks/min, no lost or duplicated checks | **NO-GO**: no multi-node or multi-region capacity qualification; no capacity plan | **GO (single-node reference)**: customer sizes its own hosts | §A G8, #74; `docs/evidence/2026-11-09-load-backpressure.md`; load 43010585062 |
+| S10 | Legal terms and privacy | **N/A**: the self-hoster operates its instance; source licences preserved (§A G11) | **NO-GO**: bundled `/terms` and `/privacy` not legally reviewed; no DPA, sub-processor list or retention policy | **NO-GO**: no customer contract or DPA template | No evidence |
+| S11 | Payment provider and merchant account | N/A | **NO-GO**: no merchant account, no live provider credentials | **N/A**: no in-product payment | No evidence |
+| S12 | Production hosting and regions | **N/A**: self-hoster's infrastructure | **NO-GO**: no hosting provider, no paid infrastructure authorization, no production regions | **N/A**: customer's infrastructure | No evidence |
+| S13 | Email deliverability | **N/A**: operator-supplied SMTP; only loopback SMTP qualified | **NO-GO**: no email provider, no domain authentication or deliverability test | **N/A**: customer-supplied SMTP (off in the reference run) | §B (loopback SMTP); no external evidence |
+| S14 | Support and incident response | **N/A**: no support commitment | **NO-GO**: no support desk, on-call rota for the service, service status page or incident runbook | **NO-GO**: support-access procedure documented (`docs/BYOC.md`), no support organisation or response commitment | No evidence beyond `docs/BYOC.md` |
+| S15 | Owner approval (`GREEN LIGHT MONTRAL`) | **NO-GO**: not given | **NO-GO**: not given | **NO-GO**: not given | — |
+
+### S.3 Outcome per delivery model
+
+| Model | Decision | Reason |
+|---|---|---|
+| **Community** | **GO-eligible, pending the owner's release decision** | Would ship from `main` at `3fbc6e6` (supersedes `b01e28e`). Every applicable engineering gate (S1, S4, S7–S9) is GO and all ten workflows succeeded at `3fbc6e6` (§S.1); S5 multi-region is not qualified and is not a Community gate; S15 is not given. |
+| **Montral Cloud** | **NO-GO** | S3, S5, S7–S15 are NO-GO. The engineering slices (S1, S2, S4) are qualified in CI, billing in sandbox only. |
+| **Enterprise BYOC** | **NO-GO — reference qualified, not commercially released** | S6 reference and no-egress qualification passes; S7, S10, S14 and S15 are NO-GO. |
+
+### S.4 External blockers (cannot be closed in engineering)
+
+1. **Merchant account and payment provider credentials** (live mode) — Cloud S3, S11.
+2. **Hosting provider and paid infrastructure authorization**, including production regions and deployed probes — Cloud
+   S5, S8, S9, S12.
+3. **Legal terms and privacy**: review of `/terms` and `/privacy`, DPA, sub-processors, retention — Cloud S10, BYOC S10.
+4. **External penetration test** — Cloud S7, BYOC S7.
+5. **Email provider** with an authenticated sending domain — Cloud S13.
+6. **Owner commercial decisions pending** — Cloud S3/S11 and the commercial release of BYOC (no values are recorded
+   in this repository).
+7. **Support and incident-response organisation** — Cloud S14, BYOC S14.
+8. **`GREEN LIGHT MONTRAL`** — all models, S15.
 
 ## B. Historical production and SaaS gate log
 

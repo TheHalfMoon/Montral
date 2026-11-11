@@ -6,7 +6,7 @@ Nothing is released, deployed, packaged, published or tagged; that requires the 
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
 published to any registry.
 
-**Candidate revision:** `main` at `b01e28e` (2026-11-11). Every claim below points to a merged pull request, a CI run on
+**Candidate revision:** `main` at **`3fbc6e6`** (2026-11-11), superseding `b01e28e`: all ten workflows succeeded on that exact commit (§12, [RELEASE-GATES.md](RELEASE-GATES.md) §S.1). Sections 2–9 describe the `b01e28e` round and its runs; the SaaS round #74–#84 is in §12. Every claim below points to a merged pull request, a CI run on
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 
@@ -14,8 +14,12 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release** | **GO, once `GREEN LIGHT MONTRAL` is given** | Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows pass at the candidate revision (`b01e28e`) on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from `17f55c1`, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
+| **Self-hosted Docker release (Community)** | **GO-eligible, once `GREEN LIGHT MONTRAL` is given** | Ships from `3fbc6e6`. Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows passed at `b01e28e` and again at the candidate `3fbc6e6` on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from `17f55c1`, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed PITR, no third-party penetration test. |
+
+Per delivery model (SaaS stages #74–#84, requalified at `3fbc6e6`; see §12 and [RELEASE-GATES.md](RELEASE-GATES.md) §S):
+**Community** GO-eligible, pending the owner's release decision; **Montral Cloud** NO-GO; **Enterprise BYOC** NO-GO —
+reference qualified, not commercially released.
 
 ## 2. Work merged in this round (since `17f55c1`)
 
@@ -178,9 +182,30 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
    VoiceOver, and a physical iPhone for iOS Safari, if those must be qualified.
 6. Starting Docker Desktop on the Windows development machine (it is installed but not running) to qualify the
    Windows Docker Desktop / WSL 2 path.
-7. Optional: a third-party penetration test.
+7. A third-party penetration test: a blocker for Montral Cloud and Enterprise BYOC ([RELEASE-GATES.md](RELEASE-GATES.md) S7), not optional for them.
 
 ## 11. Open pull requests not from this programme
 
 #72 (draft, by the parallel assistant) proposes wording that does not imply qualification of a head that was not requalified; this report now cites runs on the exact candidate `b01e28e`, so #72 is left to its author to close or rebase. #45 (blocked Safari preflight) was closed as superseded by #62 after its remaining checklist was moved to ledger
 row 36; #61 and #62 from the parallel assistant were reviewed and merged; #46, #51 and #57 were closed earlier.
+
+## 12. SaaS delivery models: real, sandbox, missing (`main` at `3fbc6e6`)
+
+Stages merged on 2026-11-11: #75 (plan catalog, fail-closed metering), #76 (operator plane, suspension), #77 (billing
+lifecycle, sandbox), #81 (webhook-event and browser-second metering), #82 (multi-region confirmation, probe health and
+drain), #83 (onboarding and usage UX), #79 (BYOC reference), and fixes #74 (scheduler claim margin), #78 (slug
+collisions), #80 (replica restart coverage gate), #84 (verification-bar layout shift). Ledger rows 42–52; follow-ups in
+rows 53–65. Commercial terms live in private operator configuration and are not part of the repository.
+
+**Requalification at `3fbc6e6`:** all ten workflows succeeded — app CI 43010585281, macOS 43010585268, browser checks 43010585116, cross-browser 43010585084 (60 passed), Terraform 43010585068, upgrade/rollback/DR 43010585124, load 43010585062, Docker Compose incl. replicas and BYOC 43010585390, failover 43010585122, source integrity 43010585138. Details in [RELEASE-GATES.md](RELEASE-GATES.md) §S.1.
+
+| | What it is |
+|---|---|
+| **Real (qualified in CI)** | Operator plane gated by session and second factor; server-side suspension across API, scheduler, alerts, heartbeats, webhooks and public pages; operator-supplied plan catalog; metering of check credits, emails, webhook events and browser seconds that fails closed on catalog or ledger errors (self-hosted stays unmetered); plan region cap at check time; confirmation of a lone regional failure from the scheduler's location; probe health and drain; onboarding checklist, usage banner, quota messages and suspended notice; BYOC overlay on an internal network: the server process made no connection except to its database, loopback and the failing test monitor's own target (19 attempts: 7 database connects, 11 DNS lookups, 1 connect to the monitor's target, 0 elsewhere). Not covered: Google Fonts loaded by the end user's browser; child processes of the server (for example `/bin/ping`); the browser-runner, a separate container (off in the BYOC run) |
+| **Sandbox only** | Billing lifecycle (checkout, plan changes, payment failure with grace, recovery, refund, expiry, reconciliation hook) against synthetic signed events in test mode. Provider behaviours assumed from public docs are unverified; no reconciliation job; chargebacks not handled |
+| **Simulated, not deployed** | Multi-region: probes are simulated in tests; no probe is deployed and no cross-region run exists. Metered and suspended UI states are mocked API responses in the browser tests |
+| **Missing (external)** | Merchant account and payment provider credentials; hosting provider and paid infrastructure authorization; legal terms and privacy (terms, privacy policy, DPA); external penetration test; email provider; support and incident-response organisation; owner commercial decisions pending; `GREEN LIGHT MONTRAL` |
+| **Missing (engineering follow-ups)** | Unchecked digest for non-browser monitors; drain audit; per-region credit refunds; metering of webhook replay and inbox count; per-plan status-page and feature gates; sub-60 s plan intervals; first-load-per-tab late banners; SCIM/SSO behaviour during suspension; `past_due_since` backfill; SSO JIT slug retry; operator UI; probe registration and per-probe credentials (ledger 65); the further follow-ups in ledger rows 66–73 |
+
+**Decision:** Community GO-eligible, pending the owner's release decision. Montral Cloud NO-GO. Enterprise BYOC NO-GO —
+reference qualified, not commercially released. Nothing was tagged, released or deployed.

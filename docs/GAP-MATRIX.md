@@ -82,7 +82,7 @@ at `3fbc6e6` (after #74–#84).
 | Fail-closed metering | `plan-catalog.test.ts`, `entitlements.test.ts`, `montral-metering.e2e.test.ts`: invalid catalog or ledger error refuses metered work; 8 concurrent captures against a limit of 3 store exactly 3 (#75, #81) |
 | Billing lifecycle (sandbox) | `montral-billing.e2e.test.ts`: upgrade/downgrade, grace, recovered, refund, expired, reconciliation, stale and duplicate events; rolling-upgrade function compatibility (#77) |
 | Multi-region confirmation, probe drain | `regions-confirm.test.ts`, `probe-regions.e2e.test.ts` incl. operator write-route negative tests with rows compared before and after (#82) |
-| BYOC no-egress | `qualify-byoc.sh` `BYOC_PASS` on an internal Docker network, in-process connection recorder with canary (#79) |
+| BYOC no-egress | `qualify-byoc.sh` `BYOC_PASS` on an internal Docker network, connection recorder in the server process only (child processes and the end user's browser not covered), with canary (#79) |
 | Replica restart coverage | `qualify-replicas.sh`: each restart window needs a successful read and webhook POST; negative control (#80) |
 | Layout-shift-free clicks | `clickWithoutLayoutShift` in the journey and `cloud-usage.spec.ts` (#84, #83) |
 
@@ -106,7 +106,7 @@ repository.
 | Multi-region confirmation and plan region cap | n/a (one region) | P (simulated probes) | n/a | #82; no deployed probes; credits for drained/unreachable regions (ledger 55); drain audit (ledger 54); digest gap (ledger 53) |
 | Onboarding checklist | Y | Y | Y | #83 |
 | Usage banner, meters, quota messages, suspended notice | n/a | Y (states mocked in e2e) | n/a | #83; late first-load banners (ledger 59) |
-| No-egress reference deployment | n/a | n/a | Y (reference) | #79; browser-side Google Fonts documented, not blocked |
+| No-egress reference deployment | n/a | n/a | Y (reference) | #79; server process only; browser-side Google Fonts documented, not blocked (ledger 73); child processes not covered |
 | Production hosting, email provider, payment provider, legal terms, external pen test | n/a | N | N (pen test, legal) | external blockers, `docs/RELEASE-GATES.md` §S.4 |
 
 ## Prioritised gaps
@@ -125,7 +125,7 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). A page script step was added in #66 (owners and admins, in the page of the isolated runner, never with secrets). Still missing against Checkly-style products: full Playwright test scripts running outside the page.
 4. **Custom webhook responses** (webhook.site parity): implemented in #47 (`docs/evidence/2026-11-10-webhook-responses.md`).
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
-6. **SaaS follow-ups** (ledger rows 53–65): unchecked digest for non-browser monitors, drain audit, per-region credit
+6. **SaaS follow-ups** (ledger rows 53–73): unchecked digest for non-browser monitors, drain audit, per-region credit
    refunds, metering of webhook replay and inbox count, per-plan status-page and feature gates, sub-60 s plan intervals,
    first-load banners, SCIM/SSO during suspension, `past_due_since` backfill, SSO JIT slug retry, operator UI, live
    billing provider verification, probe registration and credentials.

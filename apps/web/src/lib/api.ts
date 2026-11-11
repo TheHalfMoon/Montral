@@ -125,6 +125,8 @@ export type Usage =
   | { metered: false }
   | {
       metered: true;
+      /** when every allowance resets (the start of the next UTC month in this preview) */
+      periodEnd?: string;
       credits: Quota | null;
       emails: Quota | null;
       /** captured webhook requests this month; absent or null when not metered */
@@ -162,6 +164,21 @@ export function resetCache() {
   armedUntil = 0;
   store.clear();
   early.clear();
+  // another workspace: whether it is suspended is learned from its own answers
+  suspended = false;
+}
+
+/**
+ * The active workspace was suspended by a platform operator (docs/OPERATOR.md): every workspace API call answers 403
+ * with this code. The first such answer flips the flag and tells the shell, which replaces the page with a notice.
+ */
+export const WORKSPACE_SUSPENDED = "workspace_suspended";
+let suspended = false;
+export const isSuspended = () => suspended;
+function markSuspended() {
+  if (suspended) return;
+  suspended = true;
+  if (typeof window !== "undefined") window.dispatchEvent(new Event("montral:suspended"));
 }
 
 /** An API refusal: `code` and the rest of the body let the UI explain plan limits (HTTP 402) instead of just printing the message. */
@@ -169,11 +186,14 @@ export class ApiError extends Error {
   status: number;
   code?: string;
   upgradeUrl?: string;
-  constructor(message: string, status: number, body: { code?: string; upgradeUrl?: string } | null) {
+  /** quota refusals: when the allowance resets (ISO) */
+  resetsAt?: string;
+  constructor(message: string, status: number, body: { code?: string; upgradeUrl?: string; resetsAt?: string } | null) {
     super(message);
     this.status = status;
     this.code = body?.code;
     this.upgradeUrl = body?.upgradeUrl;
+    this.resetsAt = typeof body?.resetsAt === "string" ? body.resetsAt : undefined;
   }
 }
 
@@ -188,7 +208,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("Unauthorized");
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; code?: string; upgradeUrl?: string } | null;
+    const body = (await res.json().catch(() => null)) as { error?: string; code?: string; upgradeUrl?: string; resetsAt?: string } | null;
+    if (res.status === 403 && body?.code === WORKSPACE_SUSPENDED) markSuspended();
+    // a used-up allowance: the shell's usage banner reads the new state
+    if ((res.status === 402 || res.status === 429) && typeof body?.code === "string" && /_exhausted$/.test(body.code)) window.dispatchEvent(new Event("montral:usage"));
     throw new ApiError(body?.error ?? res.statusText, res.status, body);
   }
   return res.status === 204 ? (undefined as T) : res.json();

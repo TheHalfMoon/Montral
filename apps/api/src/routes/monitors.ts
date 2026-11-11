@@ -7,7 +7,7 @@ import { z } from "zod";
 import type { AppEnv } from "../env";
 import { audit, auditChanges } from "../audit";
 import { ALL_PROJECTS, cookieValue, isManager, listedProjects, requireManager, uuidParams } from "../middleware";
-import { creditCost } from "../entitlements";
+import { allowanceResetsAt, creditCost } from "../entitlements";
 import { isWorkers, targetProblem } from "../netguard";
 import { WORKERS_UNSUPPORTED } from "../certificate";
 import { PING_WORKERS_UNSUPPORTED } from "../ping";
@@ -674,7 +674,7 @@ export const monitors = new Hono<AppEnv>()
       // a manual check is a request like any other: it takes a credit
       const spentAt = new Date();
       if (!(await spendAllOrNothing(m.organizationId, cost, c.get("entitlements"), spentAt))) {
-        return c.json({ error: "No credits left this period", code: "credits_exhausted" }, 402);
+        return c.json({ error: "No credits left this period", code: "credits_exhausted", resetsAt: await allowanceResetsAt(c.get("entitlements"), m.organizationId, "credits", spentAt) }, 402);
       }
       if (region === undefined) {
         const entitlements = c.get("entitlements");
@@ -684,7 +684,7 @@ export const monitors = new Hono<AppEnv>()
           const seconds = await reserveBrowserSeconds(m.organizationId, m, entitlements, spentAt);
           if (!seconds.ok) {
             await refundCredits(m.organizationId, cost, entitlements, spentAt);
-            if (seconds.reason === "exhausted") return c.json({ error: "No browser check time left this period", code: "browser_quota_exhausted" }, 402);
+            if (seconds.reason === "exhausted") return c.json({ error: "No browser check time left this period", code: "browser_quota_exhausted", resetsAt: await allowanceResetsAt(entitlements, m.organizationId, "browserSeconds", spentAt) }, 402);
             c.header("retry-after", "30");
             return c.json({ error: "Usage metering is unavailable; the check did not run. Try again shortly.", code: "metering_unavailable" }, 503);
           }

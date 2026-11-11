@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
-import { armCache } from "../lib/api";
+import { armCache, isSuspended } from "../lib/api";
 import { NAV_LABEL, isSamePage, pageKey, resolveRoute } from "../lib/routes";
 import { t } from "../lib/i18n";
 import { lp, stripLocale } from "../lib/locale-path";
 import Toaster from "./Toaster";
 import VerifyBar from "./VerifyBar";
+import UsageBar from "./UsageBar";
+import SuspendedNotice from "./Suspended";
 import Monitors from "./Monitors";
 import MonitorDetail from "./MonitorDetail";
 import Incidents from "./Incidents";
@@ -90,6 +92,8 @@ export default function Router() {
   const [path, setPath] = useState(() => location.pathname);
   const [bump, setBump] = useState(0);
   const [scope, setScope] = useState(0);
+  // the active workspace is suspended: every page would only show refusals, so a notice replaces it
+  const [suspended, setSuspended] = useState(() => isSuspended());
 
   useEffect(() => {
     let remounted = false;
@@ -108,7 +112,8 @@ export default function Router() {
     // a fragment-only history change (the skip link, Back after it) stays on this page: the browser scrolls and focuses
     const onPopState = () => { if (pageKey(location) !== shown) onPop(); };
     // another workspace or project: same page, new data — remount it even though the path did not change
-    const onScope = () => { setScope((n) => n + 1); show(); };
+    const onScope = () => { setSuspended(isSuspended()); setScope((n) => n + 1); show(); };
+    const onSuspended = () => setSuspended(true);
     const onClick = (e: MouseEvent) => {
       const a = (e.target as Element | null)?.closest?.("a");
       if (!a || !internal(a, e)) return;
@@ -127,17 +132,22 @@ export default function Router() {
     window.addEventListener("popstate", onPopState);
     window.addEventListener("montral:scope", onScope);
     window.addEventListener("montral:stale", onStale);
+    window.addEventListener("montral:suspended", onSuspended);
     document.addEventListener("click", onClick);
+    // a refusal may have arrived before this listener existed (the shell's early reads)
+    if (isSuspended()) setSuspended(true);
     syncShell(location.pathname);
     return () => {
       window.removeEventListener("popstate", onPopState);
       window.removeEventListener("montral:scope", onScope);
       window.removeEventListener("montral:stale", onStale);
+      window.removeEventListener("montral:suspended", onSuspended);
       document.removeEventListener("click", onClick);
     };
   }, []);
 
   const hit = resolveRoute(path);
   if (!hit) return <p className="muted">{t("Page not found.")} <a href={lp("/app")}>{t("← Monitors")}</a></p>;
-  return <><Toaster /><VerifyBar /><View key={`${path}#${scope}#${bump}`} name={hit.route.name} params={hit.params} title={hit.route.title} /></>;
+  if (suspended) return <><Toaster /><SuspendedNotice /></>;
+  return <><Toaster /><VerifyBar /><UsageBar /><View key={`${path}#${scope}#${bump}`} name={hit.route.name} params={hit.params} title={hit.route.title} /></>;
 }

@@ -1,20 +1,22 @@
 import { useEffect, useState } from "react";
 import { api, type Monitor, type Quota, type Usage as UsageData } from "../lib/api";
 import { t } from "../lib/i18n";
+import { formatResetDate, meterLevel, resetDate } from "../lib/usage-alerts";
 
 const fmt = (n: number) => n.toLocaleString();
-const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+const lang = () => (typeof document !== "undefined" && document.documentElement.lang) || undefined;
+const day = (iso: string) => formatResetDate(new Date(iso), lang());
 
-/** One allowance: used / limit, a bar, and what resets when. The bar turns amber from 80 %. */
-function Meter({ label, q, note }: { label: string; q: Quota; note: string }) {
-  const pct = q.limit > 0 ? Math.min(100, Math.round((q.used / q.limit) * 100)) : 0;
-  const warn = pct >= 80;
+/** One allowance: used / limit, a bar, and what resets when. Amber from 80 %, red once used up. */
+function Meter({ label, q, note, upgradeUrl }: { label: string; q: Quota; note: string; upgradeUrl?: string }) {
+  const { pct, state } = meterLevel(q);
   return (
-    <div className="card meter">
-      <div className="meter-h"><span className="k">{label}</span>{warn && <span className="pill warn">{pct >= 100 ? t("Used up") : `${t("Used")} ${pct}%`}</span>}</div>
+    <div className={`card meter${state === "exhausted" ? " exhausted" : ""}`} data-meter-state={state}>
+      <div className="meter-h"><span className="k">{label}</span>{state !== "ok" && <span className={`pill ${state === "exhausted" ? "down" : "warn"}`}>{state === "exhausted" ? t("Used up") : `${t("Used")} ${pct}%`}</span>}</div>
       <div><span className="meter-n">{fmt(q.used)}</span><span className="muted mono"> / {fmt(q.limit)}</span></div>
-      <div className="track" role="img" aria-label={`${label}: ${pct}%`}><div className={`fill${warn ? " warn" : ""}`} style={{ width: `${pct}%` }} /></div>
+      <div className="track" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-valuetext={`${pct}%`}><div className={`fill${state === "exhausted" ? " down" : state === "near" ? " warn" : ""}`} style={{ width: `${pct}%` }} /></div>
       <small className="muted">{note} {t("Resets on")} {day(q.periodEnd)}.</small>
+      {state === "exhausted" && <small>{t("Used up until the reset.")} {upgradeUrl && <a href={upgradeUrl}>{t("Upgrade your plan")}</a>}</small>}
     </div>
   );
 }
@@ -41,6 +43,7 @@ export default function Usage() {
   const perMonth = (m: Monitor) => (m.type === "heartbeat" || m.status === "paused" ? 0 : Math.round((30 * 86400) / Math.max(1, m.intervalSec)));
   const top = [...monitors].map((m) => ({ m, n: perMonth(m) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 5);
   const total = monitors.reduce((s, m) => s + perMonth(m), 0);
+  const upgradeUrl = plan?.upgradeUrl;
   const capPct = plan?.maxActiveMonitors ? Math.min(100, Math.round((activeMonitors / plan.maxActiveMonitors) * 100)) : 0;
   return (
     <>
@@ -51,7 +54,7 @@ export default function Usage() {
             <div>
               <span className="k">{t("Current plan")}</span>
               <h2>{plan.name}</h2>
-              {credits && <small className="muted">{t("Next reset")} {day(credits.periodEnd)}</small>}
+              <small className="muted">{t("Next reset")} {formatResetDate(resetDate(u), lang())} (UTC)</small>
             </div>
             <div className="plan-actions">
               {plan.manageUrl && <a className="btn" href={plan.manageUrl}>{t("Manage billing")}</a>}
@@ -60,7 +63,7 @@ export default function Usage() {
           </section>
         )}
         <div className="meters">
-          {credits && <Meter label={t("Checks")} q={credits} note={t("Heartbeat monitors do not count.")} />}
+          {credits && <Meter label={t("Checks")} q={credits} note={t("Heartbeat monitors do not count.")} upgradeUrl={upgradeUrl} />}
           {plan && (
             <div className="card meter">
               <div className="meter-h"><span className="k">{t("Active monitors")}</span>{capPct >= 100 && <span className="pill warn">{t("Limit reached")}</span>}</div>
@@ -69,9 +72,9 @@ export default function Usage() {
               <small className="muted">{t("Paused monitors do not count and use no checks.")}</small>
             </div>
           )}
-          {emails && <Meter label={t("Email notifications")} q={emails} note={t("Alert emails and status page subscriber emails.")} />}
-          {webhookEvents && <Meter label={t("Webhook events")} q={webhookEvents} note={t("Requests captured by webhook inboxes.")} />}
-          {browserSeconds && <Meter label={t("Browser check time")} q={browserSeconds} note={t("Seconds. Each check reserves its journey timeout; unused seconds are returned.")} />}
+          {emails && <Meter label={t("Email notifications")} q={emails} note={t("Alert emails and status page subscriber emails.")} upgradeUrl={upgradeUrl} />}
+          {webhookEvents && <Meter label={t("Webhook events")} q={webhookEvents} note={t("Requests captured by webhook inboxes.")} upgradeUrl={upgradeUrl} />}
+          {browserSeconds && <Meter label={t("Browser check time")} q={browserSeconds} note={t("Seconds. Each check reserves its journey timeout; unused seconds are returned.")} upgradeUrl={upgradeUrl} />}
         </div>
         {top.length > 0 && (
           <section className="card sect">

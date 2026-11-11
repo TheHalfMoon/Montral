@@ -214,7 +214,7 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
       browser='{"steps":[{"action":"goto","url":"https://example.com/"}],"timeoutMs":30000,"screenshot":"never"}'::jsonb WHERE id=$1`, [created.body.id]);
     const short = await call("POST", `/monitors/${created.body.id}/check`, {}, metered({ browserSeconds: 10 }));
     expect(short.status).toBe(402);
-    expect(short.body).toMatchObject({ code: "browser_quota_exhausted" });
+    expect(short.body).toMatchObject({ code: "browser_quota_exhausted", resetsAt: calendarMonthUtc().end.toISOString() });
     expect(await used(org, "credits")).toBe(0);
     expect(await used(org, "browser_seconds")).toBe(0);
     // enough seconds: the check is attempted; browser checks are not enabled on this server, so it did not run and
@@ -223,5 +223,36 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     expect(tried.status).toBe(200);
     expect(await used(org, "credits")).toBe(0);
     expect(await used(org, "browser_seconds")).toBe(0);
+  });
+
+  it("GET /usage tells a metered workspace each meter and when they reset; self-hosted answers only metered: false", async () => {
+    const { call } = await signup();
+    expect((await call("GET", "/usage")).body).toEqual({ metered: false });
+    const env = metered({ webhookEvents: 7, browserSeconds: 9 });
+    const usage = await call("GET", "/usage", undefined, env);
+    expect(usage.status).toBe(200);
+    const end = calendarMonthUtc().end.toISOString();
+    expect(usage.body).toMatchObject({
+      metered: true, periodEnd: end,
+      credits: { limit: 100, used: 0, periodEnd: end },
+      emails: { limit: 3, used: 0, periodEnd: end },
+      webhookEvents: { limit: 7, used: 0, periodEnd: end },
+      browserSeconds: { limit: 9, used: 0, periodEnd: end },
+      plan: { id: "basic", upgradeUrl: "/app/billing" },
+    });
+  });
+
+  it("refuses a manual check without credits (402 credits_exhausted) with the reset instant", async () => {
+    const { org, call } = await signup();
+    const created = await call("POST", "/monitors", { name: "Credits", type: "heartbeat", intervalSec: 3600 });
+    expect(created.status).toBe(201);
+    // an outbound check costs a credit; stored directly so nothing is created through the type-specific validation
+    await db!.query(`UPDATE monitor SET type='http', target='https://example.com/', interval_sec=600 WHERE id=$1`, [created.body.id]);
+    const env = metered({ credits: 2 });
+    expect(await createMontralEntitlements(db!, env).spendCredits(org, 2)).toBe(2);
+    const refused = await call("POST", `/monitors/${created.body.id}/check`, {}, env);
+    expect(refused.status).toBe(402);
+    expect(refused.body).toEqual({ error: "No credits left this period", code: "credits_exhausted", resetsAt: calendarMonthUtc().end.toISOString() });
+    expect(await used(org, "credits")).toBe(2);
   });
 });

@@ -10,6 +10,8 @@ import { regionLocked, toggleRegion } from "../lib/regions";
 import { isAllProjects } from "../lib/scope";
 import { ProjectBadge, ProjectStrip, ScopeChip, useProjects } from "./AllProjects";
 import { draftsOf, JourneyEditor, journeyOf, SECRET_MASK, type StepDraft } from "./BrowserJourney";
+import OnboardingChecklist from "./Onboarding";
+import { dismissOnboarding, onboardingDismissed, showOnboarding } from "../lib/onboarding";
 
 const TYPE_LABEL: Record<Monitor["type"], string> = { http: "HTTP", tcp: "TCP", dns: "DNS", heartbeat: "CRON", postgres: "PG", mysql: "MYSQL", redis: "REDIS", websocket: "WS", domain: "DOMAIN", certificate: "CERT", ping: "PING", browser: "WEB" };
 
@@ -89,7 +91,10 @@ function IntervalTag({ monitor, onChanged }: { monitor: Monitor; onChanged: (sec
 export default function Monitors() {
   const [items, setItems] = useState<Monitor[] | null>(null);
   const [incidents, setIncidents] = useState<Incident[]>([]);
-  const [setup, setSetup] = useState({ channels: false, pages: false });
+  // first-run checklist: counts read from the workspace, never stored progress; null until both reads answered
+  const [setup, setSetup] = useState<{ channels: number; pages: number } | null>(null);
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [hideSetup, setHideSetup] = useState(false);
   const [open, setOpen] = useState(false);
   const [importText, setImportText] = useState<string | null>(null);
   const [tab, setTab] = useState<"all" | "up" | "down" | "paused">("all");
@@ -102,12 +107,15 @@ export default function Monitors() {
   const [overview, setOverview] = useState<ProjectOverview[]>([]);
 
   const load = () => {
-    api.monitors().then(setItems);
+    api.monitors().then(setItems).catch(() => {});
     api.incidents().then(setIncidents).catch(() => {});
     if (everything) api.projectOverview().then(setOverview).catch(() => {});
   };
   useEffect(() => {
-    if (!everything) Promise.all([api.channels(), api.statusPages()]).then(([c, p]) => setSetup({ channels: c.length > 0, pages: p.length > 0 })).catch(() => {});
+    if (!everything) {
+      Promise.all([api.channels(), api.statusPages()]).then(([c, p]) => setSetup({ channels: c.length, pages: p.length })).catch(() => {});
+      api.me().then((m) => { setOrgId(m.organization.id); setHideSetup(onboardingDismissed(m.organization.id)); }).catch(() => {});
+    }
     load();
     return pollWhileVisible(load, 15000);
   }, []);
@@ -201,30 +209,8 @@ export default function Monitors() {
       ) : items.length === 0 && everything ? (
         <div className="empty"><h3 style={{ fontSize: 28 }}>{t("No monitors yet")}</h3><p className="muted">{t("Choose a project to add the first one.")}</p></div>
       ) : items.length === 0 ? (
-        <div className="onb">
-          <div className="onb-h">
-            <div>
-              <h2 className="onb-t">{t("Welcome to Montral.")}</h2>
-              <p className="muted">{t("Four steps to a monitor that wakes you up before your customers notice.")}</p>
-            </div>
-            <span className="chip">{1 + (setup.channels ? 1 : 0) + (setup.pages ? 1 : 0)} / 4</span>
-          </div>
-          <div className="onb-steps">
-            {[
-              { done: true, title: t("Create your workspace"), sub: t("Your workspace is ready."), cta: null as null | [string, string | (() => void)] },
-              { done: false, title: t("Add your first monitor"), sub: t("HTTP, TCP, DNS, heartbeat — about 30 seconds."), cta: [t("Add monitor"), () => setOpen(true)] as [string, () => void] },
-              { done: setup.channels, title: t("Connect an alert channel"), sub: t("Slack, email, Telegram or PagerDuty."), cta: [t("Connect"), "/app/alerting"] as [string, string] },
-              { done: setup.pages, title: t("Publish a status page"), sub: t("Give customers one place to check."), cta: [t("Create page"), "/app/status-pages"] as [string, string] },
-            ].map((st, i) => (
-              <div className={`onb-step ${st.done ? "done" : ""}`} key={i}>
-                <span className="onb-n">{st.done ? "✓" : i + 1}</span>
-                <div className="onb-b"><b>{st.title}</b><small>{st.sub}</small></div>
-                {!st.done && st.cta && (typeof st.cta[1] === "string"
-                  ? <a className="btn sm" href={st.cta[1]}>{st.cta[0]}</a>
-                  : <button className="btn sm primary" onClick={st.cta[1] as () => void}>{st.cta[0]}</button>)}
-              </div>
-            ))}
-          </div>
+        <div className="onb-wrap">
+          <OnboardingChecklist counts={{ monitors: 0, channels: setup?.channels ?? 0, statusPages: setup?.pages ?? 0 }} onAddMonitor={() => setOpen(true)} />
           <div className="empty">
             <h3 style={{ fontSize: 26 }}>{t("No monitors yet")}</h3>
             <p className="muted" style={{ margin: "6px 0 18px" }}>{t("Add a URL and we’ll check it every minute.")}</p>
@@ -233,6 +219,12 @@ export default function Monitors() {
         </div>
       ) : (
         <>
+          {setup && showOnboarding({ monitors: all.length, channels: setup.channels, statusPages: setup.pages }, { allProjects: everything, dismissed: hideSetup }) && (
+            <div className="onb-wrap onb-compact">
+              <OnboardingChecklist counts={{ monitors: all.length, channels: setup.channels, statusPages: setup.pages }} onAddMonitor={() => setOpen(true)}
+                onDismiss={() => { dismissOnboarding(orgId); setHideSetup(true); }} />
+            </div>
+          )}
           <div className="tool">
             <div className="ftabs">
               {tabs.map(([k, label, n]) => (

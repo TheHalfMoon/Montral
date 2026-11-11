@@ -538,10 +538,13 @@ button.route.tog{width:100%;text-align:left;background:none;border:0;border-top:
 .region-opt-mark{width:14px;flex:none;color:var(--accent);font-size:12px}
 
 /* Onboarding (empty workspace) */
-.onb { display: grid; gap: 16px; min-width: 0; }
+.onb, .onb-wrap { display: grid; gap: 16px; min-width: 0; }
+.onb-compact { margin-bottom: 22px; }
+.onb-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .onb-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
 .onb-t { font-family: "Instrument Serif", serif; font-weight: 400; font-size: 32px; margin: 0 0 4px; }
-.onb-steps { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.onb-steps { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; list-style: none; margin: 0; padding: 0; }
+.onb-opt { font-weight: 400; }
 .onb-step { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--line); min-width: 0; }
 .onb-step:last-child { border-bottom: 0; }
 .onb-n { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font: 500 13px "Geist Mono", monospace; flex: none; color: var(--muted); }
@@ -622,7 +625,18 @@ html[lang="zh-CN"] h1{font-weight:700}
 .meter-n{font:400 36px/1 "Instrument Serif",Georgia,serif}
 .track{height:8px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
 .fill{height:100%;border-radius:99px;background:var(--accent)}.fill.warn{background:#c98a0a}
-.pill.warn{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:99px;font-size:12.5px;font-weight:500;border:1px solid rgba(201,138,10,.32);background:rgba(201,138,10,.12);color:#c98a0a}
+.pill.warn{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:99px;font-size:12.5px;font-weight:500;border:1px solid color-mix(in srgb,var(--warn) 32%,transparent);background:color-mix(in srgb,var(--warn) 12%,transparent);color:var(--warn)}
+.fill.down{background:var(--down)}
+.meter.exhausted{border-color:color-mix(in srgb,var(--down) 35%,var(--line))}
+/* in-app notices of the hosted edition: allowance near its limit or used up, and a suspended workspace */
+.usage-bar{display:flex;align-items:center;gap:10px 14px;flex-wrap:wrap;padding:10px 14px;margin:0 0 16px;border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line));background:color-mix(in srgb,var(--warn) 9%,var(--surface));border-radius:12px;font-size:14px}
+.usage-bar.exhausted{border-color:color-mix(in srgb,var(--down) 40%,var(--line));background:color-mix(in srgb,var(--down) 7%,var(--surface))}
+.usage-bar-t{flex:1 1 260px;min-width:0}
+.usage-bar-a{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.suspended{max-width:640px;padding:22px 24px;display:grid;gap:10px;border-color:color-mix(in srgb,var(--down) 35%,var(--line))}
+.suspended h1{font-size:26px;margin:0}
+.suspended ul{margin:0;padding-left:20px;display:grid;gap:4px;color:var(--muted)}
+.quota-msg{display:grid;gap:6px}
 .seg i.locked{opacity:.45;cursor:not-allowed}
 
 /* "All projects" view: project label on merged rows, and the per-project summary on top of Monitors */

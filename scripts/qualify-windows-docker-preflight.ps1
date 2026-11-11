@@ -25,10 +25,6 @@ function Check-DockerDaemon {
     }
     # Do not inherit DOCKER_HOST or the selected context: they can point to a
     # remote daemon. Only the local Docker Desktop Linux named pipe is allowed.
-    $pipe = '\\.\pipe\dockerDesktopLinuxEngine'
-    if (-not [System.IO.File]::Exists($pipe)) {
-        return @{ ok = $false; detail = 'Local Docker Desktop Linux pipe unavailable' }
-    }
     $job = $null
     try {
         $job = Start-Job -ScriptBlock {

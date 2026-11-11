@@ -7,7 +7,7 @@ const plan = (id: string, credits: number, extra: Record<string, unknown> = {}) 
 });
 const doc = (over: Record<string, unknown> = {}) => ({
   schemaVersion: 1, version: "synthetic-1", defaultPlan: "alpha",
-  plans: [plan("alpha", 111), plan("beta", 2222, { features: ["hideBranding"], providerVariants: ["4242"], price: { amountMinor: 1234, currency: "EUR", interval: "month" } })],
+  plans: [plan("alpha", 111), plan("beta", 2222, { features: ["hideBranding"], price: { amountMinor: 1234, currency: "EUR", interval: "month" } })],
   ...over,
 });
 const issues = (raw: unknown) => {
@@ -31,8 +31,9 @@ describe("plan catalog", () => {
     expect(c.resolve("org-1", "platinum")).toMatchObject({ plan: { id: "alpha" }, limits: { credits: 111 }, unknownPlan: true });
     // a per-workspace override wins over the subscription, field by field
     expect(c.resolve("org-x", null)).toMatchObject({ plan: { id: "beta" }, limits: { credits: 5, activeMonitors: 3 } });
-    expect(c.planForVariant("4242")?.id).toBe("beta");
-    expect(c.planForVariant("9999")).toBeNull();
+    // plans are frozen: a caller cannot change what later lookups return
+    expect(() => { (c.resolve("org-1", "beta").plan.limits as { credits: number }).credits = 1; }).toThrow();
+    expect(c.resolve("org-1", "beta").limits.credits).toBe(2222);
   });
 
   it("names the same content with the same hash whatever the key order, and a change with another", async () => {
@@ -56,7 +57,7 @@ describe("plan catalog", () => {
       [doc({ plans: [plan("Alpha!", 1)] }), /plans\.0\.id/],
       [doc({ plans: [plan("alpha", 1, { features: ["unlimitedEverything"] })] }), /plans\.0\.features/],
       [doc({ plans: [plan("alpha", 1, { surprise: true })] }), /plans\.0/],
-      [doc({ plans: [plan("alpha", 1, { providerVariants: ["7"] }), plan("beta", 1, { providerVariants: ["7"] })] }), /variant mapped to two plans/],
+      [doc({ plans: [plan("alpha", 1, { 'a"b"SECRET': 1 })] }), /plans\.0: unknown field/],
       [doc({ overrides: [{ organizationId: "o", plan: "ghost" }] }), /overrides\.0\.plan: names no plan/],
       [doc({ plans: [plan("alpha", 1, { price: { amountMinor: 5, currency: "usd", interval: "month" } })] }), /price\.currency/],
       [doc({ plans: [] }), /plans/],
@@ -66,7 +67,7 @@ describe("plan catalog", () => {
       const found = issues(raw);
       expect(found.join("; "), JSON.stringify(raw)?.slice(0, 80)).toMatch(rule);
       // values from the document never appear in the error
-      expect(found.join(" ")).not.toMatch(/3000000000|1234|EUR|unlimitedEverything|surprise|ghost/);
+      expect(found.join(" ")).not.toMatch(/3000000000|1234|EUR|unlimitedEverything|surprise|ghost|SECRET/);
     }
   });
 

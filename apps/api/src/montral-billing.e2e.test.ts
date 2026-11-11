@@ -93,7 +93,8 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     const catalog = (credits: number, overrides: unknown[] = []) => JSON.stringify({
       schemaVersion: 1, version: "synthetic-e2e", defaultPlan: "basic",
       plans: [{ id: "basic", name: "Basic", limits: { activeMonitors: 2, minIntervalSec: 180, regions: 1, credits, emails: 3 } },
-        { id: "wide", name: "Wide", limits: { activeMonitors: 9, minIntervalSec: 60, regions: 4, credits: 870, emails: 30 }, features: ["hideBranding"] }],
+        { id: "pro", name: "Wide", limits: { activeMonitors: 9, minIntervalSec: 60, regions: 4, credits: 870, emails: 30 }, features: ["hideBranding"] },
+        { id: "business", name: "Widest", limits: { activeMonitors: 11, minIntervalSec: 60, regions: 4, credits: 880, emails: 30 } }],
       overrides,
     });
     const metered = (json: string) => createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true", MONTRAL_PLAN_CONFIG_JSON: json });
@@ -107,9 +108,12 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(await lowered.spendCredits(org, 1)).toBe(0);
     expect(await lowered.creditBalance(org)).toMatchObject({ limit: 5, used: 13 });
     // a per-workspace override (an enterprise contract) changes the plan and one limit
-    const contract = metered(catalog(13, [{ organizationId: org, plan: "wide", limits: { credits: 20 }, note: "synthetic contract" }]));
-    expect(await contract.plan(org)).toMatchObject({ id: "wide", maxActiveMonitors: 9, maxRegions: 4, hideBranding: true });
+    const contract = metered(catalog(13, [{ organizationId: org, plan: "pro", limits: { credits: 20 }, note: "synthetic contract" }]));
+    expect(await contract.plan(org)).toMatchObject({ id: "pro", maxActiveMonitors: 9, maxRegions: 4, hideBranding: true });
     expect(await contract.spendCredits(org, 10)).toBe(7);
+    // billing is enabled here, so a catalog without the plan ids billing stores is refused, not silently defaulted
+    const unbillable = metered(JSON.stringify({ schemaVersion: 1, version: "x", defaultPlan: "basic", plans: [{ id: "basic", name: "B", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 1, emails: 1 } }] }));
+    await expect(unbillable.spendCredits(org, 1)).rejects.toThrow(/must define the plan ids pro, business/);
     // an invalid catalog never meters with a guess: every metered call fails
     const broken = metered(JSON.stringify({ schemaVersion: 1, version: "x", defaultPlan: "missing", plans: [] }));
     await expect(broken.spendCredits(org, 1)).rejects.toThrow(/Invalid plan catalog/);

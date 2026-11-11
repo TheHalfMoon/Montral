@@ -46,8 +46,6 @@ const planSchema = z.object({
   /** features this plan includes; only features Montral enforces are accepted (see FEATURES) */
   features: z.array(z.enum(["hideBranding"])).max(16).default([]),
   price: priceSchema.optional(),
-  /** billing provider product/variant ids that subscribe to this plan */
-  providerVariants: z.array(z.string().regex(/^[0-9]{1,20}$/)).max(16).default([]),
 }).strict();
 
 const overrideSchema = z.object({
@@ -75,11 +73,6 @@ const catalogSchema = z.object({
     ids.add(p.id);
   });
   if (!ids.has(c.defaultPlan)) ctx.addIssue({ code: "custom", path: ["defaultPlan"], message: "names no plan" });
-  const variants = new Map<string, string>();
-  c.plans.forEach((p, i) => p.providerVariants.forEach((v, j) => {
-    if (variants.has(v) && variants.get(v) !== p.id) ctx.addIssue({ code: "custom", path: ["plans", i, "providerVariants", j], message: "variant mapped to two plans" });
-    variants.set(v, p.id);
-  }));
   const orgs = new Set<string>();
   c.overrides.forEach((o, i) => {
     if (o.plan !== undefined && !ids.has(o.plan)) ctx.addIssue({ code: "custom", path: ["overrides", i, "plan"], message: "names no plan" });
@@ -100,8 +93,6 @@ export type PlanCatalog = {
   source: "builtin" | "operator";
   defaultPlan: CatalogPlan;
   plans: ReadonlyMap<string, CatalogPlan>;
-  /** the plan a provider variant subscribes to */
-  planForVariant(variantId: string): CatalogPlan | null;
   /** the effective plan and limits of a workspace whose subscription names `planId` (null: no valid subscription) */
   resolve(organizationId: string, planId: string | null): { plan: CatalogPlan; limits: PlanLimits; unknownPlan: boolean };
 };
@@ -118,9 +109,9 @@ export const BUILTIN_SANDBOX_CATALOG: PlanCatalogDocument = {
   version: "builtin-sandbox",
   defaultPlan: "free",
   plans: [
-    { id: "free", name: "Free", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 4500, emails: 20 }, features: [], providerVariants: [] },
-    { id: "pro", name: "Pro", limits: { activeMonitors: 5, minIntervalSec: 300, regions: 2, credits: 50000, emails: 200 }, features: [], providerVariants: [] },
-    { id: "business", name: "Business", limits: { activeMonitors: 20, minIntervalSec: 60, regions: 3, credits: 250000, emails: 1000 }, features: ["hideBranding"], providerVariants: [] },
+    { id: "free", name: "Free", limits: { activeMonitors: 1, minIntervalSec: 600, regions: 1, credits: 4500, emails: 20 }, features: [] },
+    { id: "pro", name: "Pro", limits: { activeMonitors: 5, minIntervalSec: 300, regions: 2, credits: 50000, emails: 200 }, features: [] },
+    { id: "business", name: "Business", limits: { activeMonitors: 20, minIntervalSec: 60, regions: 3, credits: 250000, emails: 1000 }, features: ["hideBranding"] },
   ],
   overrides: [],
 };
@@ -138,19 +129,20 @@ async function sha256(text: string): Promise<string> {
 }
 
 /** A validation message without anything taken from the document (quoted keys or values, "received ..."). */
+const FIXED: Record<string, string> = { unrecognized_keys: "unknown field", invalid_value: "not an allowed value", invalid_union: "not an allowed value", invalid_key: "invalid key", invalid_element: "invalid entry" };
 const safeMessage = (m: string) => m.replace(/,?\s*received.*$/i, "").replace(/"[^"]*"/g, "…").replace(/[,:;\s]+$/, "");
 
 /** Validates a catalog document; issues name paths and rules, never the values found there. */
 export function parsePlanCatalog(raw: unknown): PlanCatalogDocument {
   const parsed = catalogSchema.safeParse(raw);
-  if (!parsed.success) throw new PlanCatalogError(parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${safeMessage(i.message)}`));
+  if (!parsed.success) throw new PlanCatalogError(parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${FIXED[i.code] ?? safeMessage(i.message)}`));
   return parsed.data;
 }
 
 export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCatalog["source"]): Promise<PlanCatalog> {
-  const plans = new Map(doc.plans.map((p) => [p.id, p] as const));
-  const byVariant = new Map<string, CatalogPlan>();
-  for (const p of doc.plans) for (const v of p.providerVariants) byVariant.set(v, p);
+  // frozen: callers share these objects, and a catalog never changes after it was built
+  const frozen = doc.plans.map((p) => Object.freeze({ ...p, limits: Object.freeze({ ...p.limits }), features: Object.freeze([...p.features]) }) as CatalogPlan);
+  const plans = new Map(frozen.map((p) => [p.id, p] as const));
   const overrides = new Map(doc.overrides.map((o) => [o.organizationId, o] as const));
   const defaultPlan = plans.get(doc.defaultPlan)!;
   const hash = (await sha256(canonical(doc))).slice(0, 16);
@@ -160,7 +152,6 @@ export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCat
     source,
     defaultPlan,
     plans,
-    planForVariant: (v) => byVariant.get(v) ?? null,
     resolve(organizationId, planId) {
       const override = overrides.get(organizationId);
       const named = planId === null ? null : plans.get(planId) ?? null;
@@ -177,7 +168,7 @@ export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCat
 export async function loadPlanCatalog(env: { MONTRAL_PLAN_CONFIG_JSON?: string }): Promise<PlanCatalog> {
   const text = env.MONTRAL_PLAN_CONFIG_JSON;
   if (text === undefined || text.trim() === "") return buildPlanCatalog(BUILTIN_SANDBOX_CATALOG, "builtin");
-  if (text.length > 4 * 1024 * 1024) throw new PlanCatalogError(["(root): larger than 4 MiB"]);
+  if (text.length > 4 * 1024 * 1024) throw new PlanCatalogError(["(root): longer than 4,194,304 characters"]);
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -189,6 +180,8 @@ export async function loadPlanCatalog(env: { MONTRAL_PLAN_CONFIG_JSON?: string }
 
 /** One parsed catalog per document text (requests on Workers each build their entitlements). */
 const cache = new Map<string, Promise<PlanCatalog>>();
+/** An invalid catalog's failure is kept this long, so an outage does not re-parse a large document on every call. */
+const FAILURE_TTL_MS = 60_000;
 export function cachedPlanCatalog(env: { MONTRAL_PLAN_CONFIG_JSON?: string }): Promise<PlanCatalog> {
   const key = env.MONTRAL_PLAN_CONFIG_JSON ?? "";
   let hit = cache.get(key);
@@ -196,8 +189,8 @@ export function cachedPlanCatalog(env: { MONTRAL_PLAN_CONFIG_JSON?: string }): P
     if (cache.size > 4) cache.clear();
     hit = loadPlanCatalog(env);
     cache.set(key, hit);
-    // a failed load is not cached: the next request reports it again (and a corrected secret is picked up)
-    hit.catch(() => cache.delete(key));
+    // a failure is reported again for a minute, then the document is parsed anew (a corrected secret is picked up)
+    hit.catch(() => setTimeout(() => { if (cache.get(key) === hit) cache.delete(key); }, FAILURE_TTL_MS).unref?.());
   }
   return hit;
 }

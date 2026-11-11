@@ -24,10 +24,12 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
 - **A metering call fails at run time** (catalog or ledger unavailable). A metered deployment grants nothing:
   - scheduled checks are skipped and come due again;
   - browser checks do not run;
-  - notification emails are not sent.
+  - status-report and digest emails are not sent. Incident alert emails are still sent, because they are the product's
+    core promise, and they remain bounded by incident deduplication.
 
   Skipped work is never recorded as a check result. Heartbeat monitors cost nothing and are unaffected. The
-  self-hosted edition instead keeps monitoring and logs the gap.
+  self-hosted edition instead keeps monitoring and logs the gap. In both cases the log names the cause (catalog or
+  ledger) at most once a minute.
 - **A subscription names a plan that is not in the catalog.** The workspace gets the catalog's `defaultPlan`, and
   one warning is logged.
 - **Error messages** name the path of each problem (for example `plans.2.limits.credits`) but never a value found
@@ -39,11 +41,11 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
 {
   "schemaVersion": 1,
   "version": "2026-11-example",        // operator label; reported with a content hash as "label@hash"
-  "defaultPlan": "trial",               // the plan for workspaces without a valid subscription (the least one)
+  "defaultPlan": "free",                // the plan for workspaces without a valid subscription (the least one)
   "plans": [
     {
-      "id": "trial",                     // [a-z][a-z0-9_-]{0,31}; stored on subscriptions
-      "name": "Trial",
+      "id": "free",                      // [a-z][a-z0-9_-]{0,31}
+      "name": "Free",
       "limits": {
         "activeMonitors": 3,             // monitors that may be active at once
         "minIntervalSec": 840,           // fastest interval, 10–86400
@@ -51,20 +53,18 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
         "credits": 1000,                 // monthly outbound-check credits (one per regional check attempt)
         "emails": 10                     // monthly notification emails
       },
-      "features": [],                    // only features Montral enforces: "hideBranding"
-      "providerVariants": []             // billing provider variant ids that subscribe to this plan
+      "features": []                     // only features Montral enforces: "hideBranding"
     },
     {
-      "id": "team",
+      "id": "pro",                       // with billing enabled, the catalog must define "pro" and "business"
       "name": "Team",
       "limits": { "activeMonitors": 40, "minIntervalSec": 120, "regions": 2, "credits": 77000, "emails": 400 },
       "features": ["hideBranding"],
-      "price": { "amountMinor": 4321, "currency": "EUR", "interval": "month" },   // metadata only
-      "providerVariants": ["123456"]
+      "price": { "amountMinor": 4321, "currency": "EUR", "interval": "month" }    // metadata only
     }
   ],
   "overrides": [                         // per-workspace contracts (enterprise), optional
-    { "organizationId": "org_…", "plan": "team", "limits": { "credits": 150000 }, "note": "contract 2026-07" }
+    { "organizationId": "org_…", "plan": "pro", "limits": { "credits": 150000 }, "note": "contract 2026-07" }
   ]
 }
 ```
@@ -72,9 +72,15 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
 The numbers above are illustrative and describe no Montral offer.
 
 **Rules.** Every count is a non-negative integer of at most 2,000,000,000. "Unlimited" does not exist: a flat fee
-never implies unlimited checks, regions or notifications. Unknown fields are refused. Plan ids are unique. A
-provider variant maps to exactly one plan. `defaultPlan` and override plans must exist. Overrides replace the listed
-limits only.
+never implies unlimited checks, regions or notifications. Unknown fields are refused. Plan ids are unique.
+`defaultPlan` and override plans must exist. Overrides replace the listed limits only, and those limits keep applying
+when the workspace's subscription changes (an override without `plan` caps every plan the workspace moves to).
+Overrides may also raise limits; record why in `note`.
+
+**Billing.** While billing is enabled, subscriptions can name only the plan ids `pro` and `business`, so the catalog
+must define both; a catalog without them is refused (every metered call fails) rather than silently moving paying
+workspaces to the default plan. (A catalog-driven mapping of provider variants to plan ids is planned with the
+billing lifecycle work.)
 
 ## Changing plans and allowances
 

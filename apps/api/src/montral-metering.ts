@@ -3,7 +3,10 @@ import type { Bindings } from "./env";
 import type { Entitlements, Plan, CreditBalance } from "./entitlements";
 import { unmetered } from "./entitlements";
 import { billingReady } from "./montral-billing";
-import { cachedPlanCatalog, type PlanLimits } from "./plan-catalog";
+import { cachedPlanCatalog, PlanCatalogError, type PlanLimits } from "./plan-catalog";
+
+/** The plan ids the billing integration can store on a subscription (montral-billing.ts); a billed catalog must offer them. */
+export const BILLING_PLAN_IDS = ["pro", "business"] as const;
 
 export const meteringEnabled = (env: Bindings) => env.MONTRAL_METERING_ENABLED === "true";
 
@@ -187,6 +190,12 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   /** The workspace's effective plan and limits, read at the moment of use: a plan change or a reduced allowance applies at once. */
   async function effective(workspaceId: string) {
     const c = await catalog();
+    // A subscription can only name a plan billing knows; a catalog without those plans would quietly put every paying
+    // workspace on the default plan, so it is refused instead (fail closed, with the reason).
+    if (billingReady(env)) {
+      const missing = BILLING_PLAN_IDS.filter((id) => !c.plans.has(id));
+      if (missing.length) throw new PlanCatalogError([`plans: billing is enabled, so the catalog must define the plan ids ${BILLING_PLAN_IDS.join(", ")}`]);
+    }
     const r = c.resolve(workspaceId, await subscribedPlan(workspaceId));
     if (r.unknownPlan && !unknownPlanLogged) {
       unknownPlanLogged = true;

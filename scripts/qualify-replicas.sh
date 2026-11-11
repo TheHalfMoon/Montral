@@ -5,7 +5,8 @@
 #   - webhook captures sent concurrently through the balancer are stored exactly once each;
 #   - the client's address reaches the app through the balancer (rate limits and the audit log are per client);
 #   - a rolling restart (each replica in turn, SIGTERM) loses no request, reads or webhook writes, and stores no
-#     webhook twice;
+#     webhook twice; every restart serves reads and webhook writes while it is in progress (a negative control
+#     shows the gate rejects traffic that only happens after the restarts);
 #   - scheduled checks run once per interval in total, not once per replica (no duplicates, no starvation),
 #     including while replicas restart;
 #   - a failing monitor opens exactly one incident although every replica's scheduler sees it.
@@ -65,6 +66,39 @@ api() { # method path [json]
   curl "${args[@]}"
 }
 json() { python3 -c "import json,sys; print(json.load(sys.stdin)$1)"; }
+ok_count() { grep -c "^$2\$" "$1" 2>/dev/null || true; } # file code: successful responses recorded so far
+# Restart coverage gate. Each line of the windows file is "replica ok_reads_before ok_posts_before ok_reads_after
+# ok_posts_after", counted from just before that replica's restart until it is healthy again. Every restart must have
+# served at least one successful read and one accepted webhook POST while it was in progress; traffic that only
+# happens before or after the restarts does not count.
+restart_coverage_ok() {
+  local id rb pb ra pa n=0
+  while read -r id rb pb ra pa; do
+    n=$((n + 1))
+    (( ra > rb )) || { echo "no successful read while replica ${id:0:12} restarted (${rb} -> ${ra})" >&2; return 1; }
+    (( pa > pb )) || { echo "no accepted webhook POST while replica ${id:0:12} restarted (${pb} -> ${pa})" >&2; return 1; }
+  done < "$1"
+  (( n == replicas )) || { echo "restart windows recorded for ${n} of ${replicas} replicas" >&2; return 1; }
+}
+
+echo "== negative control: the restart coverage gate rejects traffic that only happens after the restarts"
+# A harness that sends nothing while replicas restart and everything afterwards: the counters do not move inside any
+# window, although the totals end up well above the overall floors.
+printf 'replica-a 0 0 0 0
+replica-b 0 0 0 0
+' > "$work/windows-after-only"
+if restart_coverage_ok "$work/windows-after-only" 2>/dev/null; then echo "coverage gate accepted after-restart-only traffic" >&2; exit 1; fi
+printf 'replica-a 10 4 30 12
+replica-b 30 12 30 20
+' > "$work/windows-no-read"
+if restart_coverage_ok "$work/windows-no-read" 2>/dev/null; then echo "coverage gate accepted a restart with no read" >&2; exit 1; fi
+printf 'replica-a 10 4 30 12
+' > "$work/windows-missing"
+if restart_coverage_ok "$work/windows-missing" 2>/dev/null; then echo "coverage gate accepted a missing restart window" >&2; exit 1; fi
+printf 'replica-a 10 4 30 12
+replica-b 35 14 60 25
+' > "$work/windows-good"
+restart_coverage_ok "$work/windows-good" || { echo "coverage gate rejected traffic during every restart" >&2; exit 1; }
 
 echo "== build the image and start ${replicas} replicas behind the load balancer"
 docker build -q -t montral:qualify . >/dev/null
@@ -110,6 +144,8 @@ started_epoch="$(psql "select extract(epoch from now())::bigint")"
 echo "== rolling restart under load: one replica at a time, no request lost"
 codes="$work/codes"
 posts="$work/posts"
+windows="$work/windows"
+: > "$codes"; : > "$posts"; : > "$windows"
 restart_inbox="$(api POST /api/hooks/inboxes '{"name":"Restart inbox"}')"
 restart_inbox_id="$(json "['id']" <<<"$restart_inbox")"
 restart_path="$(json "['path']" <<<"$restart_inbox")"
@@ -120,12 +156,15 @@ load_pid=$!
 post_pid=$!
 sleep 5
 for id in $(app_ids); do
+  before="$(ok_count "$codes" 200) $(ok_count "$posts" 202)"
   docker restart -t 20 "$id" >/dev/null
   wait_replicas
+  echo "$id $before $(ok_count "$codes" 200) $(ok_count "$posts" 202)" >> "$windows"
   sleep 5
 done
-# The floors below are about load during the restart, not about how fast the restarts were: keep the load running
-# after the last restart until both floors are reached (bounded), instead of failing when the restarts were quick.
+# The per-restart coverage gate (above) proves traffic while each replica restarted. The overall floors only make
+# the zero-failure and exactly-once checks below meaningful in size, so the load may keep running after the last
+# restart until they are reached (bounded) instead of failing when the restarts were quick.
 for _ in $(seq 1 120); do
   [[ $(wc -l < "$codes") -ge 100 && $(wc -l < "$posts") -ge 40 ]] && break
   sleep 1
@@ -139,6 +178,8 @@ post_total="$(wc -l < "$posts")"
 post_bad="$(grep -vc '^202$' "$posts" || true)"
 (( post_total >= 40 )) || { echo "only ${post_total} webhook posts during the rolling restart" >&2; exit 1; }
 (( post_bad == 0 )) || { echo "${post_bad} of ${post_total} webhook posts failed during the rolling restart: $(sort "$posts" | uniq -c | tr '\n' ' ')" >&2; exit 1; }
+restart_coverage_ok "$windows" || { echo "restart windows (replica reads_before posts_before reads_after posts_after):" >&2; cat "$windows" >&2; exit 1; }
+during="$(awk '{r += $4 - $2; p += $5 - $3} END {print r "|" p}' "$windows")"
 stored="$(psql "select count(*), count(distinct body) from montral_hook_event where inbox_id = '${restart_inbox_id}'")"
 [[ "$stored" == "${post_total}|${post_total}" ]] || { echo "webhooks during the restart (rows|distinct) ${stored}, expected ${post_total}|${post_total}" >&2; exit 1; }
 
@@ -166,4 +207,4 @@ incidents="$(psql "select count(*), count(*) filter (where resolved_at is null) 
 failing_runs="$(psql "select count(*) from check_result where monitor_id = '${failing_id}' and not ok")"
 (( failing_runs >= 3 && failing_runs <= 7 )) || { echo "failing monitor ran ${failing_runs} times" >&2; exit 1; }
 
-echo "REPLICAS_PASS: ${replicas} replicas behind nginx served ${served} distinct upstreams with one session; 60/60 concurrent webhook captures stored once; rolling restart lost 0 of ${total} reads and 0 of ${post_total} webhook posts (each stored once); client address attributed; ${window} s of scheduling: ${min_n}-${max_n} runs per 60 s monitor, minimum gap ${min_gap} s, all healthy; failing monitor: 1 incident from ${failing_runs} failed runs"
+echo "REPLICAS_PASS: ${replicas} replicas behind nginx served ${served} distinct upstreams with one session; 60/60 concurrent webhook captures stored once; rolling restart lost 0 of ${total} reads and 0 of ${post_total} webhook posts (each stored once; ${during%%|*} reads and ${during##*|} posts while a replica was restarting, every restart covered); client address attributed; ${window} s of scheduling: ${min_n}-${max_n} runs per 60 s monitor, minimum gap ${min_gap} s, all healthy; failing monitor: 1 incident from ${failing_runs} failed runs"

@@ -19,8 +19,8 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 ## 2. Work merged in this round (since `17f55c1`)
 
-Each pull request passed independent review with every finding fixed and every CI check green on its exact head before
-merging (reviews are agent reviews run in the engineering sessions; most are not posted on GitHub). Security-critical PRs
+Each pull request passed independent review and every CI check green on its exact head before merging; review
+findings were fixed before merge except the two GitHub comments described below, fixed afterwards (reviews are agent reviews run in the engineering sessions; most are not posted on GitHub). Security-critical PRs
 (#49, #52) went through repeated rounds until a reviewer cleared them. **Process gap:** on 2026-11-10 two review comments
 posted on GitHub by the parallel assistant (#63, #67) were not read before those PRs merged; both are fixed by follow-up
 PRs (#71, #70) and every merged PR's GitHub comments were then checked. The previously open gaps — fixes of #47 and #48
@@ -46,7 +46,7 @@ of the current code (ledger row 33); their findings were fixed in #64, whose fix
 | #64 | `f3165c4` | Security re-review follow-ups for #47, #48, #53: DB released before webhook delays on Workers; project-scoped on-call names; calendar-feed lockout; audit detail; keys pinned to a workspace revoked with the membership | 3 re-reviews (1 medium) + 1 review of the fix (1 medium, lows) — all fixed |
 | #65 | `25c8c65` | Two replicas behind nginx: overlay, CI qualification (sessions, client attribution, webhooks once, rolling restart, no duplicate checks, single incident) | 1 (1 high, 4 medium fixed) |
 | #66 | `3c1c67a` | Scripted browser-check step (`evaluate`, page context, returns `true`; owners/admins only; never with secrets) | 1 (1 medium, lows fixed) |
-| #67 | `b01e28e` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes. **A blocking review posted on GitHub before the merge (transitions not atomic) was missed; fixed afterwards in #70, closing issue #68** |
+| #67 | `375e867` | SCIM 2.0 provisioning and deprovisioning (Users), JIT gate, UI, docs, migration 0057 | 1 (2 high, 2 medium fixed) + 1 re-review of the fixes. **A blocking review posted on GitHub before the merge (transitions not atomic) was missed; fixed afterwards in #70, closing issue #68** |
 | #71 | `3e93722` | Charge and refund of a browser check booked at one instant (the missed #63 comment); a manual check that cannot be paid in full gives its partial grant back | 1 (1 medium pre-existing on main, fixed here) |
 | #70 | `65dd117` | Atomic SCIM transitions (closes issue #68): one transaction per change with the record locked, audit inside; SSO first sign-in re-checks the gate under the record lock; retryable 503 on deadlock | 2 (no medium+ in the diff; 1 medium on the SSO side and 1 deadlock found in the follow-up, both fixed); real-PostgreSQL failure-injection and lock tests |
 | #73 | `b01e28e` | Root causes of two intermittent load-qualification failures on main: memory overshoot was uncollected garbage (both servers now run with the 512 MB heap limit `docker-compose.yml` ships; RSS bound tightened 1024 → 850 MB; `/api/monitors` allocates about 40 % less); the post-recovery coalescing bound now applies to runs started after recovery, with in-flight results bounded separately (cause deduced, not observed) | 1 (1 high, 2 medium fixed); load passed 3/3 on the exact head |
@@ -182,5 +182,5 @@ client registration is unauthenticated (pre-existing; clients get nothing withou
 
 ## 11. Open pull requests not from this programme
 
-None. #45 (blocked Safari preflight) was closed as superseded by #62 after its remaining checklist was moved to ledger
+#72 (draft, by the parallel assistant) proposes wording that does not imply qualification of a head that was not requalified; this report now cites runs on the exact candidate `b01e28e`, so #72 is left to its author to close or rebase. #45 (blocked Safari preflight) was closed as superseded by #62 after its remaining checklist was moved to ledger
 row 36; #61 and #62 from the parallel assistant were reviewed and merged; #46, #51 and #57 were closed earlier.

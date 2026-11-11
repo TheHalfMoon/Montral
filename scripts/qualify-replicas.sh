@@ -93,6 +93,10 @@ replica-b 30 12 30 20
 ' > "$work/windows-no-read"
 if restart_coverage_ok "$work/windows-no-read" 2>/dev/null; then echo "coverage gate accepted a restart with no read" >&2; exit 1; fi
 printf 'replica-a 10 4 30 12
+replica-b 30 12 55 12
+' > "$work/windows-no-post"
+if restart_coverage_ok "$work/windows-no-post" 2>/dev/null; then echo "coverage gate accepted a restart with no webhook POST" >&2; exit 1; fi
+printf 'replica-a 10 4 30 12
 ' > "$work/windows-missing"
 if restart_coverage_ok "$work/windows-missing" 2>/dev/null; then echo "coverage gate accepted a missing restart window" >&2; exit 1; fi
 printf 'replica-a 10 4 30 12

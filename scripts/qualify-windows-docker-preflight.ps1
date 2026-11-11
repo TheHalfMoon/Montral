@@ -7,6 +7,7 @@ param(
     [ValidatePattern('^[A-Za-z]$')][string]$WorkspaceDrive = 'D',
     [ValidateRange(0, 10000)][int]$MinimumSystemFreeGB = 12,
     [ValidateRange(0, 10000)][int]$MinimumWorkspaceFreeGB = 15,
+    [ValidateRange(1, 30)][int]$WslTimeoutSeconds = 8,
     [switch]$Json
 )
 
@@ -54,13 +55,29 @@ try {
         $wslReady = $false
     } else {
         # Enumerate registered distributions only; no WSL machine is started.
+        # WSL service failures can hang enumeration indefinitely. Run the read-only
+        # command in a bounded job; never allow a hung WSL service to stall CI.
+        $wslJob = $null
         try {
-            $wslListing = & wsl.exe --list --quiet 2>&1
-            $wslReady = ($LASTEXITCODE -eq 0)
-            $wsl = if ($wslReady) { 'WSL distribution enumeration succeeded' } else { 'WSL distribution enumeration failed' }
+            $wslJob = Start-Job -ScriptBlock {
+                & wsl.exe --list --quiet 2>&1 | Out-Null
+                if ($LASTEXITCODE -ne 0) { throw 'WSL enumeration failed' }
+            }
+            if ($null -eq (Wait-Job -Job $wslJob -Timeout $WslTimeoutSeconds)) {
+                $wslReady = $false
+                $wsl = 'WSL distribution enumeration timed out'
+            } else {
+                $wslReady = ($wslJob.State -eq 'Completed')
+                $wsl = if ($wslReady) { 'WSL distribution enumeration succeeded' } else { 'WSL distribution enumeration failed' }
+            }
         } catch {
             $wslReady = $false
             $wsl = 'WSL distribution enumeration failed'
+        } finally {
+            if ($null -ne $wslJob) {
+                if ($wslJob.State -eq 'Running') { Stop-Job -Job $wslJob }
+                Remove-Job -Job $wslJob -Force
+            }
         }
     }
 

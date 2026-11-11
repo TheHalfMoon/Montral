@@ -32,7 +32,7 @@ Every CI gate below passed on GitHub Actions at `b01e28e` (`main` after #73). Ru
 
 **Unverified platform combinations (not gates for this candidate, stated so they are not assumed):** native Safari for
 the signed-in app, VoiceOver, and physical iOS Safari (ledger 36); Windows Docker Desktop / WSL 2 (installed on the
-development machine but not running; owner action, ledger 30); ARM64 Linux hosts for the Docker image; PostgreSQL
+development machine but not running; preflight blocked on low system-drive space, ledger 30); ARM64 Linux hosts for the Docker image; PostgreSQL
 versions other than 17 and 18.6; replicas on different hosts and rolling upgrades; real external SMTP/APNs delivery;
 SAML (not implemented, ledger 37).
 

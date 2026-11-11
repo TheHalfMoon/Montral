@@ -562,7 +562,7 @@ export const zh: Record<string, string> = {
   "That verification link is invalid or has expired. Send a new one.": "验证链接无效或已过期，请重新发送。",
   "Your email address is not verified yet. We use it for alerts and to help you recover your account.": "你的邮箱尚未验证。我们会用它发送告警，并在你需要时帮你找回账号。",
   "Send verification email": "发送验证邮件",
-  "Please verify your email address — we sent a link to {email}.": "请验证你的邮箱地址——验证链接已发送至 {email}。",
+  "Please verify your email address — check your inbox for the link we sent.": "请验证你的邮箱地址——请在收件箱中查看我们发送的验证链接。",
   "Verification email sent. Check your inbox.": "验证邮件已发送，请查收。",
   "Two-step verification": "两步验证",
   "Ask for a code from an authenticator app (Google Authenticator, 1Password, Authy…) when you sign in with your password.": "用密码登录时，需要再输入验证器应用（Google Authenticator、1Password、Authy 等）里的验证码。",

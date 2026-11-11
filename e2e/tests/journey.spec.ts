@@ -2,6 +2,19 @@
 // dashboard and skip link, a heartbeat monitor (never probes anything external), a public status page, a password
 // status page (locked form, wrong password refused, right password unlocks), and a webhook inbox.
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
+import type { Locator, Route } from "@playwright/test";
+
+/**
+ * Clicks a control only after showing it stays where it was first painted: content that appears late above it (for example
+ * the email verification bar) would move it under a click already on its way, for a person as for the test.
+ */
+async function clickWithoutLayoutShift(target: Locator) {
+  await expect(target).toBeVisible();
+  const painted = await target.boundingBox();
+  await target.page().waitForLoadState("networkidle");
+  expect(await target.boundingBox(), "the control moved after it was painted (layout shift)").toEqual(painted);
+  await target.click();
+}
 
 test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
 
@@ -61,7 +74,7 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
 
   await test.step("create a public status page in the UI", async () => {
     await page.goto("/app/status-pages");
-    await page.getByRole("button", { name: /Create a status page|New status page/ }).first().click();
+    await clickWithoutLayoutShift(page.getByRole("button", { name: /Create a status page|New status page/ }).first());
     const dialog = page.locator(".modal form");
     await dialog.getByLabel("Title").fill(`Public status ${who.id}`);
     await dialog.getByLabel("Slug").fill(publicSlug);
@@ -70,8 +83,12 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
   });
 
   await test.step("create a status page and protect it with a password in the UI", async () => {
+    // a slow account lookup: the email verification bar must still not push the page down once it arrives
+    const slowMe = async (route: Route) => { await new Promise((r) => setTimeout(r, 1_000)); await route.continue(); };
+    await page.route("**/api/me", slowMe);
     await page.goto("/app/status-pages");
-    await page.getByRole("button", { name: /Create a status page|New status page/ }).first().click();
+    await clickWithoutLayoutShift(page.getByRole("button", { name: /Create a status page|New status page/ }).first());
+    await page.unroute("**/api/me", slowMe);
     const dialog = page.locator(".modal form");
     await dialog.getByLabel("Title").fill(lockedTitle);
     await dialog.getByLabel("Slug").fill(lockedSlug);

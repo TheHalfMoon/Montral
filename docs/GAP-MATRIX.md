@@ -4,7 +4,8 @@ Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list
 at the end. **Y** yes, **N** no, **P** partial, **$** paid tier/add-on only,
 **?** not verified. Montral's column reflects `main` at `b01e28e` (2026-11-11), with the
-merging pull request in brackets, verified against the code, not marketing copy.
+merging pull request in brackets, verified against the code, not marketing copy. The SaaS sections below reflect `main`
+at `3fbc6e6` (after #74–#84).
 
 ## Matrix
 
@@ -76,6 +77,37 @@ merging pull request in brackets, verified against the code, not marketing copy.
 | Manual check abuse | per-workspace and per-process bounds, `manual-check-limit.e2e.test.ts` (#41) |
 | Audit log integrity | `audit.e2e.test.ts`: tenant isolation, secret redaction, append-only trigger incl. temp-table bypass (#39) |
 | Custom webhook responses | `montral-hook-response*.test.ts`: header injection, deny-list, text-only types, delay and concurrency bounds, manager-only, replay unaffected, no-op migration lock-free (#47, in review) |
+| Scheduler claim margin | `repo.test.ts`: a late claim never leaves the monitor due again within the tick (#74) |
+| Operator plane and suspension | `operator.e2e.test.ts`: keys/agents/no second factor/cross-origin refused; suspension blocks API, claims, webhooks, heartbeats, public pages; unsuspend restores (#76) |
+| Fail-closed metering | `plan-catalog.test.ts`, `entitlements.test.ts`, `montral-metering.e2e.test.ts`: invalid catalog or ledger error refuses metered work; 8 concurrent captures against a limit of 3 store exactly 3 (#75, #81) |
+| Billing lifecycle (sandbox) | `montral-billing.e2e.test.ts`: upgrade/downgrade, grace, recovered, refund, expired, reconciliation, stale and duplicate events; rolling-upgrade function compatibility (#77) |
+| Multi-region confirmation, probe drain | `regions-confirm.test.ts`, `probe-regions.e2e.test.ts` incl. operator write-route negative tests with rows compared before and after (#82) |
+| BYOC no-egress | `qualify-byoc.sh` `BYOC_PASS` on an internal Docker network, in-process connection recorder with canary (#79) |
+| Replica restart coverage | `qualify-replicas.sh`: each restart window needs a successful read and webhook POST; negative control (#80) |
+| Layout-shift-free clicks | `clickWithoutLayoutShift` in the journey and `cloud-usage.spec.ts` (#84, #83) |
+
+## SaaS delivery models (Montral) at `3fbc6e6`
+
+Community is self-hosted, free and unmetered; Montral Cloud is the multi-tenant SaaS with metering and billing
+(sandbox only); Enterprise BYOC runs the reference overlay in the customer's infrastructure. Release decisions per model
+are in `docs/RELEASE-GATES.md` §S. Commercial terms live in private operator configuration and are not part of the
+repository.
+
+| Capability | Community | Cloud | BYOC | Evidence / gap |
+|---|---|---|---|---|
+| Operator control plane (API) | Off by default | Y (API only) | Off (pinned empty) | #76, #82; no UI, no platform audit trail (ledger 63) |
+| Workspace suspension | n/a | Y (server-side) | n/a | #76; SCIM/Better Auth org endpoints not gated (ledger 60) |
+| Plan catalog (operator-supplied) | n/a (unmetered) | Y | n/a | #75, `docs/PLAN-CATALOG.md` (synthetic examples) |
+| Metering: check credits, emails | n/a | Y, fail closed | n/a | #75 |
+| Metering: webhook events, browser seconds | n/a | Y, fail closed | n/a | #81; replay and inbox count not metered (ledger 56) |
+| Per-plan status-page counts and feature gates | n/a | N (only `hideBranding`) | n/a | ledger 57 |
+| Plan interval below 60 s | n/a | N (API floor 60 s) | n/a | ledger 58 |
+| Billing lifecycle | n/a (off) | P (sandbox only; no live provider) | n/a | #77; provider behaviour unverified, no reconciliation job (ledger 64); `past_due_since` backfill (ledger 61) |
+| Multi-region confirmation and plan region cap | n/a (one region) | P (simulated probes) | n/a | #82; no deployed probes; credits for drained/unreachable regions (ledger 55); drain audit (ledger 54); digest gap (ledger 53) |
+| Onboarding checklist | Y | Y | Y | #83 |
+| Usage banner, meters, quota messages, suspended notice | n/a | Y (states mocked in e2e) | n/a | #83; late first-load banners (ledger 59) |
+| No-egress reference deployment | n/a | n/a | Y (reference) | #79; browser-side Google Fonts documented, not blocked |
+| Production hosting, email provider, payment provider, legal terms, external pen test | n/a | N | N (pen test, legal) | external blockers, `docs/RELEASE-GATES.md` §S.4 |
 
 ## Prioritised gaps
 
@@ -93,6 +125,10 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
 3. **Browser / multi-step checks**: declarative journeys in #52 (merged; `docs/evidence/2026-11-10-browser-checks.md`). A page script step was added in #66 (owners and admins, in the page of the isolated runner, never with secrets). Still missing against Checkly-style products: full Playwright test scripts running outside the page.
 4. **Custom webhook responses** (webhook.site parity): implemented in #47 (`docs/evidence/2026-11-10-webhook-responses.md`).
 5. **SMS / voice**: requires a paid provider; out of scope without owner approval.
+6. **SaaS follow-ups** (ledger rows 53–65): unchecked digest for non-browser monitors, drain audit, per-region credit
+   refunds, metering of webhook replay and inbox count, per-plan status-page and feature gates, sub-60 s plan intervals,
+   first-load banners, SCIM/SSO during suspension, `past_due_since` backfill, SSO JIT slug retry, operator UI, live
+   billing provider verification, probe registration and credentials.
 
 Grafana OnCall and other incident-response tools named in the brief are not yet in
 the table: their entries need the same primary-source verification before they are added.

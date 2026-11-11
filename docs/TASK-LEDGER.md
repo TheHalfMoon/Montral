@@ -67,8 +67,50 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 | 40 | Accepted low findings of #65–#67 reviews | P3 | SCIM transitions made atomic (one transaction, record locked, audit inside; SSO first sign-in re-checks the gate under the record lock) by #70, closing issue #68. Accepted with reasons: SCIM reactivation lifts an in-app removal of the same address (the provider is authoritative for assigned people); SCIM keeps deprovisioning while the SSO connection is disabled (intended: removal must keep working); SCIM DELETE of the owner's record is refused; invitations are not serialized with SCIM adds; the load balancer's `X-Montral-Upstream` header shows an internal address (documented, removable); per-process limits multiply with replicas (documented) |
 | 41 | Load qualification failed intermittently on main (RSS 1,028-1,078 MB > 1,024 MB in phase 4 at 9d96ba6, 3e93722, c1b7928; once 3 results in 10 s after recovery at 65dd117) | P1 | Done (#73, `b01e28e`): uncollected garbage, not retention (with the 512 MB heap limit, peak RSS 601-671 MB in run 42940634533 attempts 1-3 and 658.6 MB on main at `b01e28e`, run 42950068456; failing runs 42879433274, 42921654043, 42776206602, 42921692743); the shipped compose now sets the 512 MB heap limit that is qualified; RSS bound 850 MB; `/api/monitors` allocates about 40 % less; the 10-s coalescing bound applies to runs started after recovery (in-flight-at-recovery results bounded at one per monitor). **Correction:** the deduced cause was wrong; it recurred on main at `cc037bb` (run 42956388081) and the recorded timelines showed a scheduler bug (a re-claimed monitor left due again within seconds), fixed by never leaving a claimed monitor due again within the claim's tick (15 s margin). Load passed 3/3 on the PR head and on main at `b01e28e` |
 
+## SaaS stages merged on 2026-11-11 (Community / Cloud / BYOC)
+
+Each PR below passed every check on its exact head before merging and is covered by the requalification of `main` at
+`3fbc6e6` (`docs/RELEASE-GATES.md` §S.1). Billing is sandbox only. Commercial terms live in private operator
+configuration and are not part of the repository.
+
+| # | Item | Sev | Status |
+|---|---|---|---|
+| 42 | Scheduler: a re-claimed monitor could be left due again within the same tick (true cause of the load failure in row 41) | P1 | Done (#74, `103b9c2`): cadence kept only when the next due time is at least 15 s (half the 30 s tick) after `now()`; `repo.test.ts`; load passed 3/3 on the exact head |
+| 43 | SaaS stage 2: operator plan catalog and fail-closed metering | P1 | Done (#75, `3661d5e`): strict catalog schema from `MONTRAL_PLAN_CONFIG` / `MONTRAL_PLAN_CONFIG_JSON`, invalid catalog stops the server or fails every metered call; metered deployments fail closed on ledger errors, self-hosted unchanged; `docs/PLAN-CATALOG.md` (synthetic examples only) |
+| 44 | SaaS stage 1: operator control plane and workspace suspension | P1 | Done (#76, `fabf14c`): `/api/operator/*` for listed users with a session and second factor (keys and agent tokens refused); suspension enforced in the API, scheduler, alert claims, heartbeats, webhook receiver and public status pages; audit events in the customer's log; `docs/OPERATOR.md`. Limits in rows 60 and 63 |
+| 45 | SaaS stage 4: catalog-driven billing plans and subscription lifecycle (**sandbox**) | P1 | Done in sandbox (#77, `ce0bbfe`): variants mapped through the catalog, upgrade/downgrade, payment failed with grace, recovered, refunded, expired (terminal), reconciliation hook, audit rows without amounts or PII; additive `_v2` SQL functions for rolling upgrades; `docs/BILLING-SANDBOX.md`. Live provider behaviour unverified (row 64) |
+| 46 | Personal-workspace slug collisions failed sign-ups (found by #77's macOS CI) | P1 | Done (#78, `0762358`): 8-character CSPRNG suffix, bounded retry on the slug unique violation in `givePersonalWorkspace`. Owner review finding on the SSO JIT path still open (row 62) |
+| 47 | Enterprise BYOC reference deployment and no-egress qualification | P1 | Done as a **reference** (#79, `91b416b`): `docker-compose.byoc.yml`, `docs/BYOC.md` with cited outbound connections, `byoc` job in `montral-docker.yml` on an internal network (`BYOC_PASS`). Not commercially released |
+| 48 | Replica rolling-restart traffic floors measured restart speed (fast-runner false failure) | P2 | Done (#80, `d8d9c74`): per-replica restart windows must each contain a successful read and an accepted webhook POST; negative control rejects traffic only after the restarts; zero-failure and exactly-once assertions unchanged |
+| 49 | SaaS stage 3: meter webhook events and browser-check seconds | P1 | Done (#81, `f5f197f`): `webhook_events` and `browser_seconds` kinds, `montral_spend_usage_v2` (previous function left unchanged for old replicas), 429/402/503 refusals, refunds at the charge instant; concurrency e2e. Bounded accounting gaps documented in the PR; row 56 |
+| 50 | SaaS stage 6: multi-region incident confirmation, run-time plan region cap, probe health and drain | P1 | Done (#82, `770c009`): one failing region with others unavailable is confirmed from the scheduler's location; plan region cap applied when checks run (fail closed when metered); `probe_region_state`, operator probe list/drain/undrain with write-route negative tests. Simulated probes only; no deployed probe (RELEASE-GATES S5). Rows 53–55, 65 |
+| 51 | SaaS stage 5: onboarding checklist, usage alerts, quota messaging, suspended notice | P1 | Done (#83, `3fbc6e6`): checklist on every edition; banner, meters and quota messages only when `/api/usage` reports `metered: true`; suspended notice without reason or note; `cloud-usage.spec.ts` with axe on 5 projects (metered states mocked). Row 59 |
+| 52 | Email verification bar shifted the page under a click (root cause of a mobile-webkit flake) | P2 | Done (#84, `2f61460`): bar painted with the page once a tab has seen the account unverified (flag only, no address); `clickWithoutLayoutShift` in the journey with a delayed `/api/me` |
+
+## SaaS follow-ups (from the PR bodies and reviews of rows 42–52)
+
+| # | Item | Sev | Status |
+|---|---|---|---|
+| 53 | Unchecked non-browser monitors (multi-region monitors skipped because a metered plan could not be read) are marked on their page but not included in the unchecked digest email, which covers browser monitors only (#82 follow-up 7) | P2 | Open |
+| 54 | Drain audit: undrain clears `drained_by` instead of recording who lifted the drain; drain events have no platform-level audit trail, only a server log line (#82 follow-up 5) | P3 | Open |
+| 55 | Per-region credit refunds: credits are still charged for every region the plan allows, including regions drained or unreachable for that run; no per-region usage counters (#82 follow-up 3) | P2 | Open |
+| 56 | Webhook replay (outbound) and the inbox count are not metered; existing rate limits apply (#81 limitations) | P2 | Open |
+| 57 | Status-page counts and feature gates are not enforced per plan: the catalog's only enforced feature is `hideBranding`, and it has no status-page limit (`docs/PLAN-CATALOG.md`) | P2 | Open |
+| 58 | API minimum monitor interval is 60 s (`routes/monitors.ts` schema), while the catalog accepts `minIntervalSec` down to 10: a plan below 60 s cannot be honoured | P3 | Open |
+| 59 | First app page load in a tab can still show the verification bar and the usage banner late (nothing remembered yet in `sessionStorage`); once per tab (#84, #83 limitations) | P3 | Open, accepted for now |
+| 60 | SCIM provisioning (`/api/scim/v2`) and Better Auth `/api/auth/*` organization and API-key endpoints are not gated during suspension (a key created there is still refused by the API; SCIM stays open so the identity provider can deprovision, `docs/OPERATOR.md`); custom-domain rechecks still run with notices queued until unsuspension (#76 limitations). Decide which SCIM/SSO operations a suspension should block | P2 | Open |
+| 61 | `past_due_since` backfill: a subscription already `past_due` or with a failed payment before the #77 migration has no `past_due_since`, so it gets no grace and falls back to the default plan at once (fail closed) and shows no grace end. Sandbox only today; needs a backfill before any live data exists | P2 | Open |
+| 62 | Owner review on #78: the SSO JIT path (`sso-auth.ts`) calls `createPersonalWorkspace` once with `slugify` and does not retry a slug unique violation, so an SSO first sign-in can still fail on a collision (now improbable with the 8-character suffix) | P3 | Open |
+| 63 | Operator plane is API only (no UI); no self-service path for `payment` suspensions (billing is refused while suspended); no platform-level audit trail (#76, #83) | P3 | Open |
+| 64 | Billing against a real provider: invoice status values, clock comparability, plan-change reporting and event order were assumed from public docs; no scheduled reconciliation job; chargebacks/disputes not handled (#77 limitations) | P1 for Cloud | Blocked: needs a live provider sandbox store or merchant account (external) |
+| 65 | Probe registration through the operator API, per-probe credentials and a secret rotation window; customer-facing drained/confirmed/capped indicators (#82 follow-ups 1, 2, 4) | P2 | Open |
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.
+- Merchant account and payment provider credentials for Montral Cloud (row 64).
 - Third-party penetration test and screen-reader usability testing with real users.
-- Public hosting, DNS, TLS and multi-region infrastructure: deployment is not authorized.
+- Public hosting, DNS, TLS and multi-region infrastructure (hosting provider and paid infrastructure authorization):
+  deployment is not authorized.
+- Legal terms and privacy review (terms, privacy policy, DPA) for Cloud and BYOC.
+- Owner commercial decisions pending (no values are recorded in this repository).

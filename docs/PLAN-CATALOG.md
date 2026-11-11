@@ -104,6 +104,20 @@ may name either meter on its own.
 
 Both meters show on the Usage page and in `GET /api/usage` (`webhookEvents`, `browserSeconds`).
 
+**Release note (upgrading).** An existing operator catalog without `webhookEvents`/`browserSeconds` keeps loading, but
+from this release **every plan in it, paid plans included, gets the Free defaults above for both meters** until the
+operator adds the fields. Add them to each plan before (or right after) upgrading a metered deployment.
+
+**Known accounting gaps (bounded).**
+- A process killed between a browser check's reservation and its refund (crash, deploy, OOM) keeps that check's
+  reservation charged: at most one journey timeout's worth of seconds per check in flight. Nothing reconciles it later.
+- A webhook capture is charged before it is stored. If the process dies after the charge and before the insert (or the
+  refund after a failed insert fails too), the event stays charged although nothing was stored: at most one event per
+  request in flight.
+- A metering outage refuses browser checks without recording a result, but each refusal counts on the monitor's
+  deferral streak (reason "Usage metering unavailable"), so after 3 intervals the monitor is shown as unchecked and its
+  owners and admins are told.
+
 **Billing: provider variants.** `providerVariants` lists the billing provider's variant ids (Lemon Squeezy variant
 ids, written as decimal strings) that subscribe a workspace to the plan. Rules: each id is a positive decimal number of
 at most 24 digits; an id may appear only once in the whole catalog (one variant, one plan); the `defaultPlan` cannot

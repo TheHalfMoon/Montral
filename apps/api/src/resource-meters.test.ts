@@ -27,25 +27,27 @@ vi.mock("./browser-check", async (importOriginal) => {
   };
 });
 
-const { browserSecondsFor, checkMany, reserveBrowserSeconds, unusedBrowserSeconds, BROWSER_QUOTA_EXHAUSTED } = await import("./scheduler");
+const { browserSecondsFor, checkMany, reserveBrowserSeconds, unusedBrowserSeconds, BROWSER_METERING_UNAVAILABLE, BROWSER_QUOTA_EXHAUSTED } = await import("./scheduler");
 const { chargeWebhookEvent } = await import("./montral-hooks");
 
 afterEach(() => { next.length = 0; clock.t = 0; runMs = 0; launched = 0; vi.useRealTimers(); });
 
 const browserMonitor = (over: Partial<Monitor> = {}) => ({ id: "b1", organizationId: "o", projectId: "p", name: "Journey", type: "browser", target: "https://example.com/", regions: ["auto"], status: "up", consecutiveFailures: 0, consecutiveSlow: 0, failureThreshold: 3, slowThresholdMs: 5000, slowAlertAfter: 0, channelIds: [], paused: false, intervalSec: 300, uncheckedSince: null, browserSecretsVersion: 0, browser: { steps: [{ action: "goto", url: "https://example.com/" }], timeoutMs: 30_000, screenshot: "never" }, ...over }) as unknown as Monitor;
 
-function fake() {
+function fake(opts: { deferredSince?: Date; observationFails?: boolean } = {}) {
   const runs: NewBrowserRun[] = [];
   const checks: NewCheck[] = [];
   const notes: { id: string; reason: string }[] = [];
+  const marked: string[] = [];
+  let since: Date | undefined = opts.deferredSince;
   const repo = {
-    noteBrowserDeferral: async (id: string, _i: number, reason: string) => { notes.push({ id, reason }); return { deferredSince: new Date() }; },
-    clearBrowserDeferral: async () => {},
+    noteBrowserDeferral: async (id: string, _i: number, reason: string) => { notes.push({ id, reason }); since ??= new Date(); return { deferredSince: since }; },
+    clearBrowserDeferral: async () => { since = undefined; },
     recordBrowserRun: async (r: NewBrowserRun) => void runs.push(r),
     recentBrowserRunKinds: async () => [],
-    markUnchecked: async () => true,
+    markUnchecked: async (id: string) => { marked.push(id); return true; },
     clearUnchecked: async () => {},
-    recordObservation: async () => true,
+    recordObservation: async () => { if (opts.observationFails) throw new Error("database gone"); return true; },
     underMaintenance: async () => false,
     recordCheck: async (c: NewCheck) => void checks.push(c),
     recordRecoveryProgress: async () => ({ successes: 1, ready: true }),
@@ -54,7 +56,7 @@ function fake() {
     openIncidents: async () => [],
     logDeliveries: async () => {},
   } as unknown as Repo;
-  return { repo, runs, checks, notes };
+  return { repo, runs, checks, notes, marked };
 }
 
 /** A metered ledger in memory: per meter an allowance, every spend and refund with the instant it names. */
@@ -139,14 +141,15 @@ describe("browser checks against the browser-seconds allowance", () => {
     expect(log.filter((e) => e.op === "refund").map((e) => e.meter).sort()).toEqual(["browserSeconds", "credits"]);
   });
 
-  it("fails closed when the ledger fails: nothing runs, nothing is recorded, credits are given back", async () => {
-    const { repo, runs, notes } = fake();
+  it("fails closed when the ledger fails: nothing runs, no result is recorded, credits are given back, the streak grows", async () => {
+    const { repo, runs, checks, notes } = fake();
     const { entitlements, left } = ledger(100);
     entitlements.spendMeter = async () => { throw new Error("ledger down"); };
     await checkMany(repo, [browserMonitor()], entitlements, { now: () => clock.t });
     expect(launched).toBe(0);
     expect(runs).toEqual([]);
-    expect(notes).toEqual([]);
+    expect(checks).toEqual([]);
+    expect(notes).toEqual([{ id: "b1", reason: BROWSER_METERING_UNAVAILABLE }]);
     expect(left.credits).toBe(1000);
     // a malformed grant never authorizes a run either
     entitlements.spendMeter = async () => 31;
@@ -154,6 +157,39 @@ describe("browser checks against the browser-seconds allowance", () => {
     // an unmetered (fail-open) entitlement with a failing meter runs uncounted
     entitlements.spendMeter = async () => { throw new Error("ledger down"); };
     expect(await reserveBrowserSeconds("o", browserMonitor(), { ...entitlements, failClosed: false }, new Date())).toEqual({ ok: true, seconds: 0 });
+  });
+
+  it("a long metering outage marks the monitor unchecked instead of leaving it silently healthy", async () => {
+    const m = browserMonitor({ intervalSec: 300 });
+    // the credit ledger itself is down (the first metered call of a browser check)
+    const down = { ...ledger(100).entitlements, spendCredits: async () => { throw new Error("ledger down"); } };
+    // a streak that started less than 3 intervals ago: noted, not yet marked
+    const fresh = fake({ deferredSince: new Date(Date.now() - 2 * 300_000) });
+    await checkMany(fresh.repo, [m], down, { now: () => clock.t });
+    expect(fresh.notes).toEqual([{ id: "b1", reason: BROWSER_METERING_UNAVAILABLE }]);
+    expect(fresh.marked).toEqual([]);
+    // lasting 3 intervals: marked unchecked (which sends the managers' digest from housekeeping)
+    const old = fake({ deferredSince: new Date(Date.now() - 3 * 300_000 - 1_000) });
+    await checkMany(old.repo, [m], down, { now: () => clock.t });
+    expect(old.marked).toEqual(["b1"]);
+    expect(launched).toBe(0);
+    // a malformed credit grant counts the same way
+    const odd = fake();
+    await checkMany(odd.repo, [m], { ...ledger(100).entitlements, spendCredits: async () => 99 }, { now: () => clock.t });
+    expect(odd.notes).toEqual([{ id: "b1", reason: BROWSER_METERING_UNAVAILABLE }]);
+    // plain credit exhaustion keeps its old behaviour: nothing recorded
+    const broke = fake();
+    await checkMany(broke.repo, [m], ledger(100, 0).entitlements, { now: () => clock.t });
+    expect(broke.notes).toEqual([]);
+  });
+
+  it("gives every reserved second back when the check throws unexpectedly", async () => {
+    const { repo } = fake({ observationFails: true });
+    const { entitlements, left } = ledger(100);
+    runMs = 7_000;
+    await checkMany(repo, [browserMonitor()], entitlements, { now: () => clock.t });
+    expect(launched).toBe(1);
+    expect(left.browserSeconds).toBe(100);
   });
 
   it("self-hosted (no meter) runs browser checks exactly as before", async () => {

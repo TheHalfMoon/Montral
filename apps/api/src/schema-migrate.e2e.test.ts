@@ -30,10 +30,10 @@ describe.skipIf(!connection)("multi-replica Montral migrations on PostgreSQL", (
         SELECT proname FROM pg_proc
         WHERE proname IN ('montral_create_hook_inbox',
           'montral_capture_hook_event', 'montral_capture_hook_event_v2', 'montral_reserve_billing_intent_v2',
-          'montral_billing_apply', 'montral_spend_usage')
+          'montral_billing_apply', 'montral_spend_usage', 'montral_spend_usage_v2')
         ORDER BY proname
       `);
-      expect(funcs.map(f => f.proname)).toHaveLength(6);
+      expect(funcs.map(f => f.proname)).toHaveLength(7);
       // A fresh install has only the current billing functions. The previous release's
       // montral_reserve_billing_intent / montral_apply_billing_event are never created (nor dropped) by this release.
       const legacy = await dbs[0].query<{ proname: string }>(

@@ -47,15 +47,47 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     for (const name of await legacyUsageKindChecks(db)) {
       await db.query(`ALTER TABLE montral_usage DROP CONSTRAINT IF EXISTS ${quoteIdent(name)}`);
     }
-    await db.query(`ALTER TABLE montral_usage ADD CONSTRAINT ${KIND_CHECK} CHECK (kind IN (${KIND_LIST}))`);
+    // NOT VALID then VALIDATE: the new check is in force for every write at once, and existing rows are checked in a
+    // separate step (all rows hold 'credits' or 'emails', which it admits).
+    await db.query(`ALTER TABLE montral_usage ADD CONSTRAINT ${KIND_CHECK} CHECK (kind IN (${KIND_LIST})) NOT VALID`);
+    await db.query(`ALTER TABLE montral_usage VALIDATE CONSTRAINT ${KIND_CHECK}`);
   }
+  // Rolling upgrades and rollbacks: previous-release replicas keep running (and restarting) while this one migrates,
+  // and each restart re-creates their montral_spend_usage. This release therefore leaves that function exactly as the
+  // previous release defines it (two kinds) and calls only montral_spend_usage_v2 below. Both take the same advisory
+  // lock key per (workspace, period, kind), so old and new replicas spending the same kind serialize with each other.
   await db.query(`
     CREATE OR REPLACE FUNCTION montral_spend_usage(
       p_org text, p_start timestamptz, p_kind text, p_count integer, p_limit integer
     ) RETURNS integer LANGUAGE plpgsql AS $montral$
     DECLARE previous integer := 0; granted integer := 0;
     BEGIN
-      IF p_count < 0 OR p_limit < 0 OR p_kind NOT IN (${KIND_LIST})
+      IF p_count < 0 OR p_limit < 0 OR p_kind NOT IN ('credits','emails')
+        THEN RAISE EXCEPTION 'invalid usage request';
+      END IF;
+      IF p_count = 0 THEN RETURN 0; END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':' || p_kind,0));
+      SELECT used INTO previous FROM montral_usage
+        WHERE organization_id=p_org AND period_start=p_start AND kind=p_kind FOR UPDATE;
+      granted := GREATEST(0,LEAST(p_count,p_limit-COALESCE(previous,0)));
+      IF granted > 0 THEN
+        INSERT INTO montral_usage(organization_id,period_start,kind,used)
+          VALUES(p_org,p_start,p_kind,granted)
+        ON CONFLICT (organization_id,period_start,kind)
+          DO UPDATE SET used=montral_usage.used + EXCLUDED.used;
+      END IF;
+      RETURN granted;
+    END;
+    $montral$
+  `);
+  // The current spend function: every ledger kind, including the resource meters. Same body otherwise.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_spend_usage_v2(
+      p_org text, p_start timestamptz, p_kind text, p_count integer, p_limit integer
+    ) RETURNS integer LANGUAGE plpgsql AS $montral$
+    DECLARE previous integer := 0; granted integer := 0;
+    BEGIN
+      IF p_count IS NULL OR p_limit IS NULL OR p_count < 0 OR p_limit < 0 OR p_kind IS NULL OR p_kind NOT IN (${KIND_LIST})
         THEN RAISE EXCEPTION 'invalid usage request';
       END IF;
       IF p_count = 0 THEN RETURN 0; END IF;
@@ -249,7 +281,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     const { start } = calendarMonthUtc(validAt(at));
     const { limits } = await effective(org);
     const rows = await database.query<{ granted: number }>(
-      "SELECT montral_spend_usage($1::text,$2::timestamptz,$3::text,$4::integer,$5::integer) AS granted",
+      "SELECT montral_spend_usage_v2($1::text,$2::timestamptz,$3::text,$4::integer,$5::integer) AS granted",
       [org, start.toISOString(), kind, count, limitOf(limits, kind)],
     );
     return Math.max(0, Math.min(count, Number(rows[0]?.granted ?? 0)));

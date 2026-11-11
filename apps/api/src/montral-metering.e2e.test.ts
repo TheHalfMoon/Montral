@@ -74,7 +74,50 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     const { org } = await signup();
     await db!.query("INSERT INTO montral_usage(organization_id,period_start,kind,used) VALUES($1,$2::timestamptz,'browser_seconds',1)", [org, calendarMonthUtc().start.toISOString()]);
     await expect(db!.query("INSERT INTO montral_usage(organization_id,period_start,kind,used) VALUES($1,$2::timestamptz,'anything',1)", [org, calendarMonthUtc().start.toISOString()])).rejects.toThrow();
-    await expect(db!.query("SELECT montral_spend_usage($1::text,$2::timestamptz,'anything'::text,1,5)", [org, calendarMonthUtc().start.toISOString()])).rejects.toThrow(/invalid usage request/);
+    await expect(db!.query("SELECT montral_spend_usage_v2($1::text,$2::timestamptz,'anything'::text,1,5)", [org, calendarMonthUtc().start.toISOString()])).rejects.toThrow(/invalid usage request/);
+    // the previous release's function is left exactly as it was: two kinds only
+    await expect(db!.query("SELECT montral_spend_usage($1::text,$2::timestamptz,'webhook_events'::text,1,5)", [org, calendarMonthUtc().start.toISOString()])).rejects.toThrow(/invalid usage request/);
+    expect(await db!.query("SELECT montral_spend_usage_v2($1::text,$2::timestamptz,'webhook_events'::text,1,5) AS granted", [org, calendarMonthUtc().start.toISOString()])).toEqual([{ granted: 1 }]);
+  });
+
+  it("keeps metering webhooks and browser seconds after a previous-release replica re-creates its spend function", async () => {
+    // exactly what the previous release's migration runs on every restart (main before the resource meters)
+    await db!.query(`
+      CREATE OR REPLACE FUNCTION montral_spend_usage(
+        p_org text, p_start timestamptz, p_kind text, p_count integer, p_limit integer
+      ) RETURNS integer LANGUAGE plpgsql AS $montral$
+      DECLARE previous integer := 0; granted integer := 0;
+      BEGIN
+        IF p_count < 0 OR p_limit < 0 OR p_kind NOT IN ('credits','emails')
+          THEN RAISE EXCEPTION 'invalid usage request';
+        END IF;
+        IF p_count = 0 THEN RETURN 0; END IF;
+        PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':' || p_kind,0));
+        SELECT used INTO previous FROM montral_usage
+          WHERE organization_id=p_org AND period_start=p_start AND kind=p_kind FOR UPDATE;
+        granted := GREATEST(0,LEAST(p_count,p_limit-COALESCE(previous,0)));
+        IF granted > 0 THEN
+          INSERT INTO montral_usage(organization_id,period_start,kind,used)
+            VALUES(p_org,p_start,p_kind,granted)
+          ON CONFLICT (organization_id,period_start,kind)
+            DO UPDATE SET used=montral_usage.used + EXCLUDED.used;
+        END IF;
+        RETURN granted;
+      END;
+      $montral$
+    `);
+    const { org, call } = await signup();
+    const { id, path } = await inbox(call);
+    const env = metered({ webhookEvents: 1, browserSeconds: 40 });
+    expect((await capture(path, env)).status).toBe(202);
+    expect((await capture(path, env)).status).toBe(429);
+    expect(await stored(id)).toBe(1);
+    const e = createMontralEntitlements(db!, env);
+    expect(await reserveBrowserSeconds(org, { browser: { steps: [], timeoutMs: 30_000 } } as never, e, new Date())).toEqual({ ok: true, seconds: 30 });
+    expect(await e.spendCredits(org, 2)).toBe(2);
+    // an old replica spending credits through its own function shares the ledger and the limit
+    expect(await db!.query("SELECT montral_spend_usage($1::text,$2::timestamptz,'credits'::text,500,100) AS granted", [org, calendarMonthUtc().start.toISOString()])).toEqual([{ granted: 98 }]);
+    expect(await e.spendCredits(org, 1)).toBe(0);
   });
 
   it("charges one webhook event per capture before storing; exhausted answers 429 until the next month and stores nothing", async () => {

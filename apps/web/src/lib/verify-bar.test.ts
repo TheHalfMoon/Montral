@@ -17,8 +17,13 @@ describe("email verification bar", () => {
   it("forgets the account once it is verified, and remembers a dismissal", () => {
     const store = memory();
     verifyBarStorage(store).setPending(true);
+    verifyBarStorage(store).dismiss();
+    expect(verifyBarAtFirstPaint(verifyBarStorage(store)).dismissed).toBe(true);
     verifyBarStorage(store).setPending(false);
-    expect(verifyBarAtFirstPaint(verifyBarStorage(store)).pending).toBe(false);
+    expect(verifyBarAtFirstPaint(verifyBarStorage(store))).toEqual({ pending: false, dismissed: false });
+    // A later unverified account in the same tab must not inherit the prior dismissal.
+    verifyBarStorage(store).setPending(true);
+    expect(verifyBarAtFirstPaint(verifyBarStorage(store))).toEqual({ pending: true, dismissed: false });
     verifyBarStorage(store).dismiss();
     expect(verifyBarAtFirstPaint(verifyBarStorage(store)).dismissed).toBe(true);
   });

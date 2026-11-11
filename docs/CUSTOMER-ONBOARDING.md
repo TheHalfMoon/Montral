@@ -76,8 +76,10 @@ shell replaces the page with a notice (`Suspended.tsx`): the workspace is suspen
 webhook capture and public status pages are paused, everything resumes when the suspension is lifted, contact support.
 It never shows the reason or the operator's note (the API does not reveal them) and does not link to billing, which is
 also refused while suspended. A refusal counts only for the workspace the request was made in (a late answer from the
-previous workspace cannot flag a new one); switching workspace clears the notice, and so does a later workspace call
-that succeeds (the suspension was lifted).
+previous workspace cannot flag a new one). Switching workspace clears the notice. While it shows, no page is mounted to
+make workspace calls, so the shell re-checks with one `GET /api/me` (no cache) every 60 seconds while the tab is visible
+(and once when a hidden tab becomes visible again); the first success, meaning the operator lifted the suspension,
+clears the notice and the page loads again. Any other successful workspace call clears it the same way.
 
 ## Tests
 
@@ -93,6 +95,8 @@ that succeeds (the suspension was lifted).
 
 - Hiding the checklist is per browser; another browser or device shows it again until the steps are done.
 - The banner reads usage when the app loads, on workspace switches and after a quota refusal; it does not poll.
+- Signing out forgets what the tab remembered for that account (the banner's last notice and dismissal, and the
+  verification bar's flags), so the next account to sign in in the same tab never sees the previous one's notices.
 - On the first load of a tab (nothing remembered yet) the banner still appears once usage arrives; revisits paint it with
   the page. When usage drops back under 80 % the remembered banner disappears, which moves content up, never down.
 - An email allowance used up raises the banner and the meter, but no refusal reaches the web app: alert emails past the

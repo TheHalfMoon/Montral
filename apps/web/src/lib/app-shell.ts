@@ -1,5 +1,7 @@
 // App shell behaviour: menus, sign-out and sidebar counts. Delegated and bound once: the DOM is swapped on soft
 // navigation but `document` survives.
+import { forgetAccountTabState } from "./tab-state";
+
 declare global {
   interface Window { __montralApp?: boolean }
 }
@@ -27,6 +29,7 @@ if (!window.__montralApp) {
       return;
     }
     if (el.closest(".signout")) {
+      forgetAccountTabState();
       void fetch("/api/auth/sign-out", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" })
         .then(() => { location.href = (/^\/zh-Hans(\/|$)/.test(location.pathname) ? "/zh-Hans" : "") + "/login"; });
       return;

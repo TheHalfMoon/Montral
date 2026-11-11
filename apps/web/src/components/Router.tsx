@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { armCache, isSuspended } from "../lib/api";
+import { armCache, isSuspended, recheckSuspension, SUSPENSION_RECHECK_MS } from "../lib/api";
+import { pollWhileVisible } from "../lib/poll";
 import { NAV_LABEL, isSamePage, pageKey, resolveRoute } from "../lib/routes";
 import { t } from "../lib/i18n";
 import { lp, stripLocale } from "../lib/locale-path";
@@ -148,6 +149,9 @@ export default function Router() {
       document.removeEventListener("click", onClick);
     };
   }, []);
+
+  // while suspended no page is mounted to make workspace calls: re-check now and then so lifting it clears the notice
+  useEffect(() => (suspended ? pollWhileVisible(() => { void recheckSuspension(); }, SUSPENSION_RECHECK_MS) : undefined), [suspended]);
 
   const hit = resolveRoute(path);
   if (!hit) return <p className="muted">{t("Page not found.")} <a href={lp("/app")}>{t("← Monitors")}</a></p>;

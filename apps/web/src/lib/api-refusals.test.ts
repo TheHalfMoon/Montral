@@ -75,4 +75,21 @@ describe("API refusals the shell reacts to", () => {
     expect(isSuspended()).toBe(false);
     expect(events).toEqual(["montral:suspended", "montral:unsuspended"]);
   });
+
+  it("while suspended, the periodic re-check (no-store /me) clears the notice on its first success, not on a refusal", async () => {
+    vi.stubGlobal("fetch", answer(403, { error: "suspended", code: "workspace_suspended" }));
+    const { api, isSuspended, recheckSuspension, SUSPENSION_RECHECK_MS } = await import("./api");
+    await expect(api.monitors()).rejects.toBeTruthy();
+    expect(SUSPENSION_RECHECK_MS).toBe(60_000);
+    // still suspended: the re-check is refused, nothing changes and nothing throws
+    await recheckSuspension();
+    expect(isSuspended()).toBe(true);
+    const ok = answer(200, { userId: "u" });
+    vi.stubGlobal("fetch", ok);
+    await recheckSuspension();
+    expect(ok).toHaveBeenCalledWith("/api/me", expect.objectContaining({ cache: "no-store" }));
+    expect(isSuspended()).toBe(false);
+    expect(events).toEqual(["montral:suspended", "montral:unsuspended"]);
+  });
 });
+

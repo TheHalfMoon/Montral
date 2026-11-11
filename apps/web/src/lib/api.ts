@@ -191,6 +191,14 @@ function noteSuspension(path: string, asked: number, refused: boolean) {
   }
 }
 
+/** Interval of the suspended-workspace re-check (only while the tab is visible). */
+export const SUSPENSION_RECHECK_MS = 60_000;
+/**
+ * One cheap workspace call while the notice shows, past every cache: its success (the operator lifted the suspension)
+ * clears the notice through the same path as any other successful call; a refusal changes nothing.
+ */
+export const recheckSuspension = (): Promise<void> => fetchJson<unknown>("/me", { cache: "no-store" }).then(() => {}, () => {});
+
 /** An API refusal: `code` and the rest of the body let the UI explain plan limits (HTTP 402) instead of just printing the message. */
 export class ApiError extends Error {
   status: number;

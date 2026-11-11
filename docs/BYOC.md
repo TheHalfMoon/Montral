@@ -120,11 +120,10 @@ updates, domain reliability reporting, sync, crash upload, phishing detection an
 ### The end user's browser
 
 These are requests the **user's browser** makes when it loads Montral pages; they leave from the user's device, not from
-the server, and the BYOC job reports but does not block them:
+the server, and the BYOC job does not block them. Montral does not load remote font stylesheets; the pages use fonts already available on the client's device:
 
 | Destination | When | How to disable |
 | --- | --- | --- |
-| `fonts.googleapis.com` / `fonts.gstatic.com` (`apps/web/src/layouts/Base.astro:27-28`, allowed by the CSP in `apps/web/astro.config.mjs:54`) | Every page | **No setting today.** Block at the egress proxy (pages fall back to system fonts) or change the layout in a fork. Listed under "not yet provided". |
 | `favicon.im` (`apps/web/src/lib/brand.ts:8`, used at `apps/web/src/pages/status/[slug].astro:79`) | A public status page that has a website link set shows that site's logo | Leave the status page's website link empty. |
 | `challenges.cloudflare.com` (`apps/web/src/components/AuthForm.tsx:24`) | Sign-up form, only with Turnstile keys set | Leave `TURNSTILE_*` unset. |
 | `plausible.io` or `PLAUSIBLE_SRC` (`apps/web/src/pages/ou-analytics.js.ts:15-16`) | Only with `PLAUSIBLE_DOMAIN` set | Leave `PLAUSIBLE_DOMAIN` unset (the default). |
@@ -196,7 +195,7 @@ browser worker and Chromium); a connect without a host is logged as `localhost` 
 the Node process only, so the internal network (no route out) is the second, independent control.
 
 It prints `BYOC_PASS` with these facts. **Documented only, not verified by that job**: the custom-domain and SSO
-domain re-check timer (5 minutes; the run is shorter and has no such domains), the browser-runner's own behaviour, the end-user-browser requests (it only reports whether the HTML references Google Fonts), the replicas and
+domain re-check timer (5 minutes; the run is shorter and has no such domains), the browser-runner's own behaviour, the end-user-browser requests (the recorder cannot observe the client's device), the replicas and
 browser overlays combined with BYOC, a real managed PostgreSQL service, and every feature that is off in the run
 (SMTP, SSO, GitHub, APNs, probes, DNS and domain monitors).
 
@@ -205,7 +204,7 @@ browser overlays combined with BYOC, a real managed PostgreSQL service, and ever
 - No managed upgrade channel or update service: upgrades are pulled and built by the customer (`/docs/self-host#upgrade`).
 - No published or signed container images, SBOM or provenance attestation: the customer builds the image from source.
 - No license server or license key: none is needed (section intro).
-- No way to self-host the web fonts by configuration: the pages load Google Fonts from the user's browser.
+- The pages use the end user's local system font stack; no external font provider is required.
 - No `*_FILE` secret variables (Docker secrets must be injected as environment variables by the customer's tooling).
 - No time-boxed support membership: invitations expire, memberships must be removed by hand.
 - No egress allow-list inside the app beyond the private-address guard: restrict outbound traffic with the customer's

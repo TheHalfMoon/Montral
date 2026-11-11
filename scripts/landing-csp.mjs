@@ -17,9 +17,9 @@ const check = process.argv.includes("--check");
 const policy = (hash) => [
   "default-src 'self'",
   `script-src 'self' 'sha256-${hash}'`,
-  // inline style attributes (the sample uptime bars) and the Google Fonts stylesheet
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
+  // Inline style attributes (for example, the sample uptime bars).
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
   "img-src 'self' data:",
   "connect-src 'self'",
   "object-src 'none'",

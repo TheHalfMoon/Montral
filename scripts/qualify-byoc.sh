@@ -138,7 +138,8 @@ if docker exec "$cid" wget -q -T 5 -O /dev/null http://1.1.1.1/ 2>/dev/null; the
 echo "== app over HTTP from inside the network: sign-up, heartbeat, webhook inbox, ping monitor, audit export"
 html="$(http -fsS "$base/")"
 grep -q '<html' <<<"$html" || fail "web app did not serve HTML"
-browser_fonts=no; grep -q 'fonts.googleapis.com' <<<"$html" && browser_fonts=yes
+browser_fonts=no; grep -Eq 'fonts\.(googleapis|gstatic)\.com' <<<"$html" && browser_fonts=yes
+if [[ "$browser_fonts" != "no" ]]; then echo "BYOC_FAIL: served HTML references an external font provider" >&2; exit 1; fi
 api GET /api/config | grep '"auth"' >/dev/null || fail "/api/config missing auth section"
 email="byoc-$(openssl rand -hex 6)@example.com"
 password="byoc-$(openssl rand -hex 12)"
@@ -265,4 +266,4 @@ done
 control="$(docker logs "$cid" 2>&1 | grep -oE '"host":"www[.](cloudflare|gstatic|apple)[.]com"' | sort -u | sed 's/"host"://; s/"//g' | tr '\n' ' ')"
 echo "negative control: the default self-check attempted ${control}(unreachable on the internal network)"
 
-echo "BYOC_PASS: internal-only network (no route to public names or IPs); app healthy on the BYOC overlay with the customer's own PostgreSQL via DATABASE_URL (bundled postgres off), self-check off, operators none, read-only root filesystem, cap_drop ALL, no-new-privileges, user node; sign-up, heartbeat monitor pinged and up, webhook inbox event stored, loopback ping monitor up, audit CSV export (${audit_rows} rows) with monitor.create and hook_inbox.create; data survived app container recreation; a scheduler tick checked a monitor failing at network level; egress recorder: ${facts}; negative control with the default SELFCHECK_URLS: recorder saw ${control}(so it would catch the self-check); served HTML references Google Fonts for the end user's browser: ${browser_fonts} (browser-side, see docs/BYOC.md)"
+echo "BYOC_PASS: internal-only network (no route to public names or IPs); app healthy on the BYOC overlay with the customer's own PostgreSQL via DATABASE_URL (bundled postgres off), self-check off, operators none, read-only root filesystem, cap_drop ALL, no-new-privileges, user node; sign-up, heartbeat monitor pinged and up, webhook inbox event stored, loopback ping monitor up, audit CSV export (${audit_rows} rows) with monitor.create and hook_inbox.create; data survived app container recreation; a scheduler tick checked a monitor failing at network level; egress recorder: ${facts}; negative control with the default SELFCHECK_URLS: recorder saw ${control}(so it would catch the self-check); served HTML references external font services: ${browser_fonts} (expected no; browser-side validation remains separately scoped, see docs/BYOC.md)"

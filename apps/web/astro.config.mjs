@@ -51,7 +51,7 @@ export default defineConfig({
       directives: ["object-src 'none'", "base-uri 'self'"],
       // Cloudflare Turnstile is the only third-party script (the sign-up challenge, when configured)
       scriptDirective: { resources: ["'self'", "https://challenges.cloudflare.com"], hashes: inlineScriptHashes },
-      styleDirective: { resources: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"] },
+      styleDirective: { resources: ["'self'", "'unsafe-inline'"] },
     },
   },
   server: { port: 4321 },

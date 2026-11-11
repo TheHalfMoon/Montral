@@ -19,6 +19,13 @@ export interface Entitlements {
     at: Date; channelId: string;
   }): Promise<boolean>;
   /**
+   * What a failed metering call means. Unset (self-hosted, unmetered): the work runs and the gap is logged, so a ledger
+   * outage never silences monitoring. True (a metered cloud deployment): nothing is granted, so a failing ledger or plan
+   * catalog can never let a workspace consume unmetered resources; skipped checks come due again and are never recorded
+   * as results.
+   */
+  failClosed?: boolean;
+  /**
    * Take `credits` for work that is about to run. Resolves with how many were granted, between 0 and `credits`:
    * fewer than asked means the allowance for the current period is used up and the rest must not run.
    *

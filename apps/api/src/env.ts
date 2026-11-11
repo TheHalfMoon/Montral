@@ -27,6 +27,10 @@ export type Bindings = {
   SSO_ALLOW_PRIVATE_IDP?: string;
   /** All billing is fail-closed and restricted to provider TEST MODE in the private preview. */
   MONTRAL_METERING_ENABLED?: string;
+  /** Node: path of the operator's plan catalog file (plan-catalog.ts); kept outside the repository. */
+  MONTRAL_PLAN_CONFIG?: string;
+  /** The plan catalog document itself (Workers secret; on Node filled from MONTRAL_PLAN_CONFIG). */
+  MONTRAL_PLAN_CONFIG_JSON?: string;
   /** Self-hosted development only: let webhook replay reach private addresses (never link-local or metadata). */
   MONTRAL_REPLAY_PRIVATE_TARGETS?: string;
   /** Staged owner-only evidence review: OFF by default, and metered edition only. No dispatch enabled. */

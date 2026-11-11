@@ -3,15 +3,7 @@ import type { Bindings } from "./env";
 import type { Entitlements, Plan, CreditBalance } from "./entitlements";
 import { unmetered } from "./entitlements";
 import { billingReady } from "./montral-billing";
-
-export type MontralTier = "free" | "pro" | "business";
-const TABLE: Record<MontralTier, {
-  name: string; monitors: number; interval: number; regions: number; credits: number; emails: number;
-}> = {
-  free: { name: "Free", monitors: 1, interval: 600, regions: 1, credits: 4500, emails: 20 },
-  pro: { name: "Pro", monitors: 5, interval: 300, regions: 2, credits: 50000, emails: 200 },
-  business: { name: "Business", monitors: 20, interval: 60, regions: 3, credits: 250000, emails: 1000 },
-};
+import { cachedPlanCatalog, type PlanLimits } from "./plan-catalog";
 
 export const meteringEnabled = (env: Bindings) => env.MONTRAL_METERING_ENABLED === "true";
 
@@ -169,8 +161,14 @@ export function calendarMonthUtc(now: Date = new Date()): { start: Date; end: Da
 export function createMontralEntitlements(database: Database, env: Bindings): Entitlements {
   if (!meteringEnabled(env)) return unmetered;
 
-  async function tier(workspaceId: string): Promise<MontralTier> {
-    if (!billingReady(env)) return "free";
+  // The plan catalog is operator configuration (plan-catalog.ts); an invalid one makes every metered call fail
+  // (fail closed) rather than fall back to a guess.
+  const catalog = () => cachedPlanCatalog(env);
+  let unknownPlanLogged = false;
+
+  /** The plan id of the workspace's valid subscription, or null (then the catalog's default plan applies). */
+  async function subscribedPlan(workspaceId: string): Promise<string | null> {
+    if (!billingReady(env)) return null;
     const rows = await database.query<{ plan: string; status: string; test_mode: boolean; ends_at: Date | null }>(
       "SELECT plan,status,test_mode,ends_at FROM montral_subscription WHERE organization_id=$1", [workspaceId],
     );
@@ -178,25 +176,35 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     // Fail closed without the test-mode merchant, a test-mode subscription,
     // or a bounded end date on cancellation. Never grant lifetime paid access
     // just because the cancellation/expiration webhook is delayed or lost.
-    if (!row || row.test_mode !== true) return "free";
+    if (!row || row.test_mode !== true) return null;
     if (row.status === "cancelled") {
-      if (!row.ends_at || new Date(row.ends_at).getTime() <= Date.now()) return "free";
+      if (!row.ends_at || new Date(row.ends_at).getTime() <= Date.now()) return null;
     } else if (!["active", "on_trial"].includes(row.status)) {
-      return "free";
+      return null;
     }
-    if (row.plan === "pro" || row.plan === "business") return row.plan;
-    return "free";
+    return typeof row.plan === "string" ? row.plan : null;
   }
+  /** The workspace's effective plan and limits, read at the moment of use: a plan change or a reduced allowance applies at once. */
+  async function effective(workspaceId: string) {
+    const c = await catalog();
+    const r = c.resolve(workspaceId, await subscribedPlan(workspaceId));
+    if (r.unknownPlan && !unknownPlanLogged) {
+      unknownPlanLogged = true;
+      console.warn("metering: a subscription names a plan that is not in the plan catalog; the default plan applies");
+    }
+    return r;
+  }
+  const limitOf = (limits: PlanLimits, kind: "credits" | "emails") => limits[kind];
   const validAt = (at?: Date) => (at && !Number.isNaN(at.getTime()) ? at : new Date());
   const spend = async (org: string, count: number, kind: "credits" | "emails", at?: Date) => {
     if (!Number.isSafeInteger(count) || count < 0) throw new Error("Invalid usage amount");
     if (count === 0) return 0;
     // the period is fixed before the plan lookup, so a refund naming the same instant hits the same month
     const { start } = calendarMonthUtc(validAt(at));
-    const limits = TABLE[await tier(org)];
+    const { limits } = await effective(org);
     const rows = await database.query<{ granted: number }>(
       "SELECT montral_spend_usage($1::text,$2::timestamptz,$3::text,$4::integer,$5::integer) AS granted",
-      [org, start.toISOString(), kind, count, limits[kind]],
+      [org, start.toISOString(), kind, count, limitOf(limits, kind)],
     );
     return Math.max(0, Math.min(count, Number(rows[0]?.granted ?? 0)));
   };
@@ -211,7 +219,8 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
   };
   const reserveEmailQuotaOnce = async (org: string, key: string): Promise<{ granted: boolean; newlyReserved: boolean }> => {
     if (typeof key !== "string" || key.length < 1 || key.length > 200) throw new Error("Invalid email quota reservation key");
-    const [limits, { start }] = [TABLE[await tier(org)], calendarMonthUtc()];
+    const { start } = calendarMonthUtc();
+    const { limits } = await effective(org);
     const rows = await database.query<{ granted: number; is_new: boolean }>(
       "SELECT granted,is_new FROM montral_spend_usage_once($1::text,$2::timestamptz,'emails',$3::text,$4::integer)",
       [org, start.toISOString(), key, limits.emails],
@@ -227,7 +236,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     if (!/^[0-9]{4}-(0[1-9]|1[0-2])$/.test(reportMonth) || !org || !userId)
       throw new Error("Invalid monthly outbox claim");
     const { start } = calendarMonthUtc();
-    const limits = TABLE[await tier(org)];
+    const { limits } = await effective(org);
     const rows = await database.query<{ result: string }>(
       "SELECT montral_claim_monthly_report_send($1::text,$2::text,$3::text,$4::timestamptz,$5::integer) AS result",
       [org, reportMonth, userId, start.toISOString(), limits.emails],
@@ -239,7 +248,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     return status;
   };
   const balance = async (org: string, kind: "credits" | "emails"): Promise<CreditBalance> => {
-    const limits = TABLE[await tier(org)];
+    const { limits } = await effective(org);
     const { start, end } = calendarMonthUtc();
     const rows = await database.query<{ used: number }>(
       "SELECT used FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind=$3",
@@ -248,17 +257,17 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     return { limit: limits[kind], used: Number(rows[0]?.used ?? 0), periodStart: start, periodEnd: end };
   };
   const plan = async (org: string): Promise<Plan> => {
-    const id = await tier(org);
-    const limits = TABLE[id];
+    const { plan: p, limits } = await effective(org);
     return {
-      id, name: limits.name, maxActiveMonitors: limits.monitors,
-      minIntervalSec: limits.interval, maxRegions: limits.regions,
-      hideBranding: id === "business",
+      id: p.id, name: p.name, maxActiveMonitors: limits.activeMonitors,
+      minIntervalSec: limits.minIntervalSec, maxRegions: limits.regions,
+      hideBranding: p.features.includes("hideBranding"),
       upgradeUrl: "/app/billing",
     };
   };
   return {
     ...unmetered,
+    failClosed: true,
     spendCredits: (org, count, at) => spend(org, count, "credits", at),
     refundCredits: (org, count, spentAt) => refund(org, count, spentAt),
     creditBalance: org => balance(org, "credits"),

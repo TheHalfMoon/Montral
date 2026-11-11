@@ -163,8 +163,10 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
   const allowed = new Set<string>();
   await Promise.all([...byWorkspace].map(async ([workspaceId, list]) => {
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
-    // a failing ledger must not silence monitoring: the checks run and the gap is only logged
-    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch(() => (console.error("credits unavailable"), wanted));
+    // A failing ledger: self-hosted (unmetered) runs the checks and logs the gap, so monitoring is never silenced; a
+    // metered deployment grants nothing (failClosed), so a ledger or catalog failure never runs unmetered checks. The
+    // skipped checks come due again; heartbeats (cost 0) are unaffected.
+    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch(() => (console.error("credits unavailable"), entitlements.failClosed ? 0 : wanted));
     // A malformed successful metering response must not overauthorize paid probes.
     // Zero-credit heartbeat monitors remain eligible, and an actual ledger outage
     // retains the existing monitoring-availability fallback above.
@@ -267,7 +269,8 @@ export async function reserveCredits(workspace: string, m: Monitor, entitlements
   const cost = creditCost(m);
   if (cost === 0) return 0;
   let granted: number;
-  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return 0; }
+  // a failing ledger: unmetered deployments run the check uncharged; a metered one does not run it (failClosed)
+  try { granted = await entitlements.spendCredits(workspace, cost, spentAt); } catch { console.error("credits unavailable"); return entitlements.failClosed ? null : 0; }
   if (!Number.isSafeInteger(granted) || granted < 0 || granted > cost) { console.error("credit allowance invalid"); return null; }
   if (granted < cost) {
     if (granted > 0) await refundCredits(workspace, granted, entitlements, spentAt);

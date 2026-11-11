@@ -79,6 +79,9 @@ services:
       BIND_HOST: ${BIND_HOST:-}
       # Explicitly opt in to provider TEST-MODE only; leave blank for the default OFF.
       MONTRAL_METERING_ENABLED: ${MONTRAL_METERING_ENABLED:-}
+      # operator plan catalog (path inside the container: mount the file read-only), or the document itself
+      MONTRAL_PLAN_CONFIG: ${MONTRAL_PLAN_CONFIG:-}
+      MONTRAL_PLAN_CONFIG_JSON: ${MONTRAL_PLAN_CONFIG_JSON:-}
       # Staged owner review, never active by default or as part of billing.
       MONTRAL_RECONCILIATION_ENABLED: ${MONTRAL_RECONCILIATION_ENABLED:-false}
       # Explicit emergency pause for NEW monthly report claims only.

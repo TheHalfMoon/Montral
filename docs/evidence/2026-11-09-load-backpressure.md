@@ -306,9 +306,11 @@ already-queued run when the queue refuses a newer claim.
 
 The deduction in the follow-up above (a check in flight at recovery) was wrong. On `main` at `cc037bb` (load run
 42956388081) 12 monitors had three results within 10 s from runs that all started after recovery. The timelines the
-qualification now records show why: a claim released under backpressure leaves the monitor due at the release time;
+qualification now records (5 of the 12 monitors) show why: a claim released under backpressure leaves the monitor due at the release time;
 when it is claimed again, `claimDue` advanced the next due time from that old time by one interval, which landed a
 fraction of a second after the claim, so the next claim round of the same tick claimed the monitor again (claims 2 s
-apart, starts 3 s apart). `claimDue` now keeps the cadence only when the advanced time is at least half an interval
-away and otherwise restarts from now, so no claim leaves the next run due within half an interval
-(`repo.test.ts`: "never leaves the next run due within half an interval of a claim").
+apart, starts 3 s apart). `claimDue` now keeps the cadence only when the advanced time is at least 15 s away (half the
+30 s scheduler tick) and otherwise restarts from now, so no claim leaves the monitor due again within the tick it was
+claimed in, while ordinary lateness still catches up on schedule (`repo.test.ts`: "never leaves the next run due
+within the claim's tick"). Of the 12 offending monitors, 5 have recorded timelines (the qualification keeps up to 5);
+all 5 show this pattern.

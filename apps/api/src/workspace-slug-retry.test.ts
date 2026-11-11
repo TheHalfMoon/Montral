@@ -11,8 +11,15 @@ describe("SSO first workspace slug retry", () => {
     expect(create.mock.calls).toEqual([["workspace-one"], ["workspace-two"]]);
   });
 
-  it("never retries unrelated unique constraints or database errors", async () => {
-    for (const error of [Object.assign(new Error("duplicate email"), { code: "23505", constraint: "user_email_key" }), Object.assign(new Error("connection lost"), { code: "08006" })]) {
+  it("never retries unrelated constraints, database errors, or thrown primitives", async () => {
+    const errors: unknown[] = [
+      Object.assign(new Error("duplicate email"), { code: "23505", constraint: "user_email_key" }),
+      Object.assign(new Error("another slug index"), { code: "23505", constraint: "other_slug_key" }),
+      Object.assign(new Error("connection lost"), { code: "08006" }),
+      null,
+      "database failure",
+    ];
+    for (const error of errors) {
       const create = vi.fn().mockRejectedValue(error);
       await expect(createWorkspaceWithSlugRetry(create, () => "slug")).rejects.toBe(error);
       expect(create).toHaveBeenCalledTimes(1);

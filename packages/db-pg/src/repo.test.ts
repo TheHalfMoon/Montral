@@ -993,6 +993,23 @@ describe.skipIf(!url)("lists across projects", () => {
     expect((await repo.listMonitors(orgId, [a, foreign])).map((m) => m.name)).toEqual(["in-a"]);
   });
 
+  it("lists each monitor's last 30 latencies of the day, oldest first, nulls kept, [] without results", async () => {
+    const [p] = await db.insert(schema.project).values({ organizationId: orgId, name: "Spark" }).returning({ id: schema.project.id });
+    const busy = await mon(orgId, p.id, "spark-busy");
+    const idle = await mon(orgId, p.id, "spark-idle");
+    const now = Date.now();
+    // 35 samples of the last day (the oldest five fall outside the 30 kept), one null, one older than a day
+    await db.insert(schema.checkResult).values([
+      ...Array.from({ length: 35 }, (_, i) => ({ monitorId: busy.id, ok: true, latencyMs: i === 33 ? null : i, checkedAt: new Date(now - (35 - i) * 60_000) })),
+      { monitorId: busy.id, ok: true, latencyMs: 999, checkedAt: new Date(now - 2 * 864e5) },
+    ]);
+    const listed = await repo.listMonitors(orgId, p.id);
+    expect(listed.map((m) => m.name)).toEqual(["spark-busy", "spark-idle"]);
+    expect(listed[0].spark).toEqual(Array.from({ length: 30 }, (_, k) => (k + 5 === 33 ? null : k + 5)));
+    expect(listed[1].id).toBe(idle.id);
+    expect(listed[1].spark).toEqual([]);
+  });
+
   it("lists incidents of several projects with their project, newest first", async () => {
     const ma = await mon(orgId, a, "ia");
     const mb = await mon(orgId, b, "ib");

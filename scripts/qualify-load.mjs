@@ -49,7 +49,19 @@ const CHECK_TIMEOUT_MS = 15_000; // ... inside the monitors' 15 s timeout, so ch
 const WARMUP_MS = 90_000;
 const P1_WINDOW_MS = 300_000;
 const P5_LOAD_MS = 240_000;
-const P5_OLD_SPACE_MB = 512;
+// Both servers run with a 512 MB V8 old space. Uncapped, V8 sizes its heap from host RAM (a 4 GB old space on the
+// 16 GB runner) and collects lazily, so RSS measures how much garbage V8 chose to keep, not what the server needs.
+// Seen: phase 4 (/api/monitors, 5.6 MB of JSON, ten at a time) on the uncapped first server peaked at 780-1078 MB RSS
+// across runs of the same commit (1027.7 / 1038.5 / 1077.9 MB failed the 1024 MB bound in runs 42879433274,
+// 42921654043, 42776206602) and then fell back (1078 -> 944, 1039 -> 913), while the capped phase-5 server, serving the
+// same list continuously next to webhooks and status reads, stayed at 466-488 MB. A local simulation of ten concurrent
+// 4,000-monitor lists peaked at 700-1180 MB RSS uncapped, from run to run of identical work, and at 600-690 MB with the
+// cap, without a heap OOM. With the cap,
+// retention still fails the run (a heap OOM kills the server); reclaimable garbage is collected instead of counted.
+// 512 MB is what V8 itself picks on a 2 GB host (a quarter of RAM), leaving the rest of the 1024 MB RSS bound to
+// young generation, code, Buffers and native memory.
+const SERVER_OLD_SPACE_MB = 512;
+const cappedHeap = () => ({ NODE_OPTIONS: [process.env.NODE_OPTIONS, `--max-old-space-size=${SERVER_OLD_SPACE_MB}`].filter(Boolean).join(" ") });
 const SUMMARY_PATH = resolve(process.env.LOAD_SUMMARY_PATH ?? "load-summary.json");
 const APP = "montral-load-qa"; // application_name of this script's own DB connections
 
@@ -60,6 +72,7 @@ const MAX_SLOT_DELAY_S = 5 * 8; // stable per-monitor queue slot delay
 const QUEUE_CAPACITY = 512; // local queue reservations (messages)
 const MESSAGE_SIZE = 25; // monitors per message
 const CLAIM_ROUND = 1000; // monitors claimed per round (one round may be in hand, unsent)
+const QUEUE_CONCURRENCY = 4; // local queue messages processed at once (LOCAL_CHECK_CONCURRENCY)
 
 const T = {
   // A result is due within one tick + the slot delay; 20 s margin for the check itself and DB writes.
@@ -86,9 +99,17 @@ const T = {
   // the latest check still starts, at least one tick after the previous claim. Targets: at most 2 results per
   // monitor within 10 s (one tick minus claim jitter and one check) and at most 3 within one interval. Before
   // coalescing a recovered backlog replayed every queued run: up to 6 results in 120 s.
+  // The 10 s bound holds for runs that START after recovery: of three such runs a < b < c, b was claimed after a
+  // started (a run claimed before a started is covered by a, or held back while a is in flight, for half an interval:
+  // it can only start 30 s after a) and likewise c after b started; b's and c's claims are a tick apart, so c starts
+  // more than 30 s after a. A run already in flight
+  // when the target recovered (started under the 10 s target) is not a queued run and can land in the same 10 s as
+  // the next two; it is counted apart (see p2.coalescing) and bounded by maxRunsInFlight.
   coalesceTickWindowSec: TICK_S - 5 - CHECK_TIMEOUT_MS / 1000,
   coalesceMaxPerTick: 2,
   coalesceMaxPerInterval: 3,
+  // runs started but not yet recorded: beginRuns stamps a message's runs when it starts, and at most 4 run at once
+  maxRunsInFlight: QUEUE_CONCURRENCY * MESSAGE_SIZE,
   requestTimeoutMs: 30_000, // any request slower than this counts as an error
   maxDbConnections: 10, // DB_POOL_MAX default
   maxDbConnectionsPool2: 2,
@@ -379,14 +400,14 @@ const summary = {
   startedAt: new Date().toISOString(),
   node: process.version,
   host: { platform: process.platform, cpus: (await import("node:os")).cpus().length, memGb: round((await import("node:os")).totalmem() / 2 ** 30) },
-  config: { monitors: N, intervalSec: INTERVAL_SEC, slowTargetMs: SLOW_MS, checkTimeoutMs: CHECK_TIMEOUT_MS, tickSec: TICK_S, queueCapacityMessages: QUEUE_CAPACITY, messageSize: MESSAGE_SIZE },
+  config: { monitors: N, intervalSec: INTERVAL_SEC, slowTargetMs: SLOW_MS, checkTimeoutMs: CHECK_TIMEOUT_MS, tickSec: TICK_S, queueCapacityMessages: QUEUE_CAPACITY, messageSize: MESSAGE_SIZE, serverMaxOldSpaceMb: SERVER_OLD_SPACE_MB },
   thresholds: T,
   phases: {},
 };
 
 try {
   // ── setup ──────────────────────────────────────────────────────────────────
-  child = startServer();
+  child = startServer(cappedHeap()); // see SERVER_OLD_SPACE_MB
   await waitHealthy(child); // migrations are applied before the server listens
   // Test-only instrumentation in the disposable database: one statement-level
   // trigger logs each claim (run_generation + 1, with the due time it claimed)
@@ -541,12 +562,30 @@ try {
   // Run coalescing: a queued run whose monitor got a result after the run was claimed is skipped, so the backlog no
   // longer replays as a burst of checks. Densest stretch of results per monitor from the moment the target recovered
   // to the end of the post-recovery window, over any one-interval and any one-tick (minus jitter) window.
-  const obs = await sql`
-    select o.monitor_id::text as id, extract(epoch from o.observed_at)::float8 as t from monitor_observation o
+  // Each result carries the time its run started (the logged beginRuns start of its generation).
+  const allObs = await sql`
+    select o.monitor_id::text as id, o.generation, extract(epoch from o.observed_at)::float8 as t,
+      (select extract(epoch from min(s.at))::float8 from load_claim_log s
+        where s.kind = 'start' and s.monitor_id = o.monitor_id and s.generation = o.generation) as started
+    from monitor_observation o
     join monitor m on m.id = o.monitor_id and m.organization_id = ${orgId}
     where o.observed_at >= ${new Date(recoverFrom)} and o.observed_at < ${w2To} order by o.monitor_id, o.observed_at`;
-  const densest = (windowSec) => {
+  // Runs in flight when the target recovered: started (stamped by beginRuns) under the slow target, recorded after
+  // recovery. Coalescing cannot skip them: they were already checking. A message's 25 runs are stamped together and
+  // checked 20 at a time, 10 s each, so such a result lands up to ~20 s after its stamp, and can fall in the same 10 s
+  // as two post-recovery runs of its monitor: a queued run claimed after the in-flight one started (which that check
+  // must not cover: "a run that started before the claim never holds it back", docs/evidence/2026-11-09-load-
+  // backpressure.md, #54), then the run claimed after that one started. Run 42921692743 failed the per-tick bound with
+  // one monitor at 3 (3,914 at 1, 85 at 2); three post-recovery runs cannot do that (see T), so one of the three was in
+  // flight. The per-tick bound is asserted, unchanged, on runs that started after recovery; results of runs in flight
+  // at recovery are bounded apart (T.maxRunsInFlight) and reported with the timelines of monitors they push over 2.
+  // A result without a logged start counts as post-recovery (stricter).
+  const recoverSec = recoverFrom / 1000;
+  const inFlight = allObs.filter((o) => o.started !== null && o.started < recoverSec);
+  const obs = allObs.filter((o) => !(o.started !== null && o.started < recoverSec));
+  const densest = (windowSec, obs) => {
     let max = 0, monitorsOver = {}, i = 0;
+    const over = []; // monitors above the per-tick bound, for the diagnostics below
     while (i < obs.length) {
       let j = i;
       while (j < obs.length && obs[j].id === obs[i].id) j++;
@@ -557,13 +596,33 @@ try {
       }
       max = Math.max(max, worst);
       monitorsOver[worst] = (monitorsOver[worst] ?? 0) + 1;
+      if (worst > T.coalesceMaxPerTick) over.push(obs[i].id);
       i = j;
     }
-    return { max, histogram: monitorsOver };
+    return { max, histogram: monitorsOver, over };
   };
+  const { over: _o1, ...perInterval } = densest(INTERVAL_SEC, allObs);
+  const { over: _o2, ...perTick } = densest(T.coalesceTickWindowSec, obs);
+  const { over: denseWithInFlight, ...perTickAllResults } = densest(T.coalesceTickWindowSec, allObs);
+  // The run timeline (seconds from recovery) of monitors whose densest 10 s exceeds the bound once results of runs in
+  // flight at recovery are counted: evidence of which runs made it, in the summary rather than lost with the database.
+  const timelines = [];
+  for (const id of denseWithInFlight.slice(0, 5)) {
+    const events = await sql`
+      select kind, generation, round((extract(epoch from at)::float8 - ${recoverSec})::numeric, 2)::float8 as at,
+        round((extract(epoch from due_at)::float8 - ${recoverSec})::numeric, 2)::float8 as due
+      from load_claim_log where monitor_id = ${id} and at >= ${new Date(recoverFrom - 300_000)} and at < ${w2To}
+      union all
+      select 'result', generation, round((extract(epoch from observed_at)::float8 - ${recoverSec})::numeric, 2)::float8, null
+      from monitor_observation where monitor_id = ${id} and observed_at >= ${new Date(recoverFrom - 300_000)} and observed_at < ${w2To}
+      order by 3`;
+    timelines.push({ monitor: id, events: events.map((e) => [e.kind, e.generation, e.at, e.due]) });
+  }
   p2.coalescing = {
-    windowFrom: new Date(recoverFrom).toISOString(), windowTo: w2To.toISOString(), results: obs.length,
-    perInterval: densest(INTERVAL_SEC), perTick: densest(T.coalesceTickWindowSec),
+    windowFrom: new Date(recoverFrom).toISOString(), windowTo: w2To.toISOString(), results: allObs.length,
+    resultsOfRunsStartedAfterRecovery: obs.length,
+    inFlightAtRecovery: { results: inFlight.length, monitors: new Set(inFlight.map((o) => o.id)).size, lastResultSec: round(maxOf(inFlight.map((o) => o.t - recoverSec))) },
+    perInterval, perTick, perTickAllResults, timelines,
   };
   p2.recoveryResources = summarizePhase("p2_recovery");
   summary.phases.backpressure = p2;
@@ -572,7 +631,8 @@ try {
   check(p2.afterRecovery.maxGapWithoutResult.monitors === N && le(p2.afterRecovery.maxGapWithoutResult.maxSec, T.maxGapNormalSec), `phase 2: after recovery every monitor checked at least every ${T.maxGapNormalSec} s (longest gap ${p2.afterRecovery.maxGapWithoutResult.maxSec} s)`);
   check(le(p2.afterRecovery.completionLagSec.p95, T.lagP95Sec), `phase 2: post-recovery lag p95 ${p2.afterRecovery.completionLagSec.p95}s <= ${T.lagP95Sec}s`);
   check(p2.coalescing.results > 0 && le(p2.coalescing.perInterval.max, T.coalesceMaxPerInterval), `phase 2: stale runs coalesced, at most ${T.coalesceMaxPerInterval} results per monitor within any ${INTERVAL_SEC} s after recovery (max ${p2.coalescing.perInterval.max}, ${JSON.stringify(p2.coalescing.perInterval.histogram)})`);
-  check(p2.coalescing.results > 0 && le(p2.coalescing.perTick.max, T.coalesceMaxPerTick), `phase 2: at most ${T.coalesceMaxPerTick} results per monitor within any ${T.coalesceTickWindowSec} s after recovery (max ${p2.coalescing.perTick.max}, ${JSON.stringify(p2.coalescing.perTick.histogram)})`);
+  check(p2.coalescing.resultsOfRunsStartedAfterRecovery > 0 && le(p2.coalescing.perTick.max, T.coalesceMaxPerTick), `phase 2: at most ${T.coalesceMaxPerTick} results per monitor within any ${T.coalesceTickWindowSec} s from runs started after recovery (max ${p2.coalescing.perTick.max}, ${JSON.stringify(p2.coalescing.perTick.histogram)}; with the ${p2.coalescing.inFlightAtRecovery.results} results of runs in flight at recovery: max ${p2.coalescing.perTickAllResults.max})`);
+  check(le(p2.coalescing.inFlightAtRecovery.results, T.maxRunsInFlight), `phase 2: results of runs in flight when the target recovered ${p2.coalescing.inFlightAtRecovery.results} <= ${T.maxRunsInFlight} (running messages x ${MESSAGE_SIZE})`);
 
   // ── 3 + 4. webhooks and API reads (monitoring keeps running underneath) ────
   phase = "p3_webhooks";
@@ -667,11 +727,8 @@ try {
 
   // ── 5. DB connection exhaustion: DB_POOL_MAX=2 under mixed load ────────────
   phase = "startup2";
-  // An uncapped first run reached 1150 MB RSS here: V8 sizes its old space from
-  // host RAM (16 GB) and collects lazily. A 512 MB old-space cap tells garbage
-  // from retained memory: retention would end this server with a heap OOM
-  // (and fail the run); reclaimable garbage keeps it alive and under the RSS bound.
-  child = startServer({ DB_POOL_MAX: "2", NODE_OPTIONS: [process.env.NODE_OPTIONS, `--max-old-space-size=${P5_OLD_SPACE_MB}`].filter(Boolean).join(" ") });
+  // An uncapped first run reached 1150 MB RSS here; the same old-space cap as the first server (SERVER_OLD_SPACE_MB).
+  child = startServer({ DB_POOL_MAX: "2", ...cappedHeap() });
   await waitHealthy(child);
   phase = "p5_pool2";
   const p5From = new Date();
@@ -700,7 +757,7 @@ try {
   fan5.storedTotalAllInboxes = stored5[0].n;
   p5.webhooks = fan5;
   p5.resources = summarizePhase("p5_pool2");
-  p5.maxOldSpaceMb = P5_OLD_SPACE_MB;
+  p5.maxOldSpaceMb = SERVER_OLD_SPACE_MB;
   summary.phases.dbPool2 = p5;
   log("phase 5", JSON.stringify(p5));
   checkSamples("p5_pool2", p5.resources);

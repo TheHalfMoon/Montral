@@ -33,6 +33,12 @@ describe.skipIf(!url)("monitor request permissions", () => {
       expect(mon.status).toBe(201);
       const path = `/monitors/${mon.body.id}`;
       expect((await call(member.cookie, "GET", path)).body.headers).toEqual({ Authorization: MASK });
+      // the list masks the same way and keeps the scheduler's run-coalescing bookkeeping out of the API
+      const listedBy = async (cookie: string) => (await call(cookie, "GET", "/monitors")).body.find((m: any) => m.id === mon.body.id);
+      expect((await listedBy(member.cookie)).headers).toEqual({ Authorization: MASK });
+      const ownerView = await listedBy(owner.cookie);
+      expect(ownerView).toMatchObject({ headers: { Authorization: "Bearer fixture-only" }, browserSecrets: {}, spark: [], uptime24h: null });
+      for (const k of ["checkedThroughGeneration", "checkedStartedAt", "runStartedThroughGeneration", "runStartedAt", "deferredSince", "browserSecretsVersion"]) expect(ownerView).not.toHaveProperty(k);
       for (const patch of [
         { target: "https://8.8.8.8/health" }, { method: "POST" },
         { headers: { Authorization: MASK, Host: "example.com" } },

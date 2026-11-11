@@ -442,20 +442,22 @@ export function createRepo(db: Db): Repo {
           .where(and(eq(schema.monitor.organizationId, orgId), inArray(schema.monitor.projectId, ids)))
           .groupBy(schema.monitor.id)
           .orderBy(schema.monitor.name),
-        // last 30 latency samples per monitor, for the list sparkline
-        rows<{ monitor_id: string; latency_ms: number | null }>(
+        // last 30 latency samples per monitor (oldest first), for the list sparkline: aggregated in PostgreSQL to one row
+        // per monitor. One row per sample made up to 30 x N driver rows per request (120,000 for 4,000 monitors), each
+        // with its own copy of the monitor id, only to be regrouped here. json (not an int[]): the client runs with
+        // fetch_types: false, so it parses json but would hand back an array type as text.
+        rows<{ monitor_id: string; spark: (number | null)[] }>(
           db.execute(sql`
-            select monitor_id, latency_ms from (
+            select monitor_id, json_agg(latency_ms order by rn desc) as spark from (
               select r.monitor_id, r.latency_ms, row_number() over (partition by r.monitor_id order by r.checked_at desc) rn
               from check_result r join monitor m on m.id = r.monitor_id
               where m.organization_id = ${orgId} and m.project_id in (${sql.join(ids.map((i) => sql`${i}::uuid`), sql`, `)}) and r.checked_at >= ${since.toISOString()}::timestamptz
-            ) x where rn <= 30 order by monitor_id, rn desc`),
+            ) x where rn <= 30 group by monitor_id`),
         ),
       ]);
-      const spark = new Map<string, (number | null)[]>();
-      for (const r of series) (spark.get(r.monitor_id) ?? spark.set(r.monitor_id, []).get(r.monitor_id)!).push(r.latency_ms);
-      return list.map(({ m, total, okCount, avgLatency }) => ({
-        ...m,
+      const spark = new Map(series.map((r) => [r.monitor_id, r.spark] as const));
+      // the row objects are this query's own: extend them in place rather than copying every monitor once more
+      return list.map(({ m, total, okCount, avgLatency }) => Object.assign(m, {
         uptime24h: total ? Math.round((okCount / total) * 10000) / 100 : null,
         avgLatency24h: avgLatency,
         spark: spark.get(m.id) ?? [],

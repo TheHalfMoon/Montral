@@ -250,6 +250,32 @@ builds ten of these at once. They are scheduler-only state and are no longer
 returned. In the final run the response is 5.43 MB and RSS is back within the
 range of main.
 
+### Follow-up (2026-11-11): intermittent failures on main
+- **`p4_reads` RSS above 1,024 MB** (1,027.7 / 1,038.5 / 1,077.9 MB in runs
+  42879433274, 42921654043, 42776206602; passing runs 780-936 MB on the same
+  workload). The peaks fell back within seconds (1,078 to 944 MB) and the
+  heap-capped phase-5 server, which serves the same list continuously, stayed
+  at 466-488 MB: garbage that the uncapped heap (4 GB on the 16 GB runner)
+  had not collected, not retention. Both servers of the qualification now run
+  with the same 512 MB old-space cap; a retention would end in a heap OOM and
+  fail the run. `GET /api/monitors` also allocates less per request: the
+  sparkline samples are aggregated in PostgreSQL (one row per monitor instead
+  of up to 30) and the list is copied once instead of two to three times (in a
+  local simulation, about 40 % less allocated per 4,000-monitor list).
+- **3 results for one monitor within 10 s after recovery** (run 42921692743,
+  1 of 4,000 monitors). Three runs that start after recovery cannot do this
+  (their starts are more than 30 s apart under the rules above), so one was a
+  check already in flight when the target recovered: a queued run claimed
+  after it started is not covered by it ("a run that started before the claim
+  never holds it back"), and the run claimed after that one started always
+  starts. The per-10 s bound of 2 is now asserted on runs that start after
+  recovery; results of runs in flight at recovery are counted apart (at most
+  4 messages x 25 runs) and the timelines of monitors they push to 3 are kept
+  in the summary. `run-coalescing.e2e.test.ts` reproduces the interleaving.
+  The "at most 2 results per minute" in the final report is a measurement of
+  one run: the asserted bound is 3 per interval (runs 42921654043 and
+  42921692743 reached 3).
+
 ### Rejected alternative (#51)
 Starting only the newest claimed generation. When a run starts after the next
 claim, every run is superseded before it starts, and the monitor is never

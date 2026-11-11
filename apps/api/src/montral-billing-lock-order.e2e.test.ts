@@ -141,18 +141,31 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
           WHERE table_schema = current_schema() AND table_name='montral_hook_inbox' AND column_name='response'
         UNION ALL SELECT 'montral_hook_event.response_status' FROM information_schema.columns
           WHERE table_schema = current_schema() AND table_name='montral_hook_event' AND column_name='response_status'
+        UNION ALL SELECT 'montral_subscription.' || column_name FROM information_schema.columns
+          WHERE table_schema = current_schema() AND table_name='montral_subscription'
+            AND column_name IN ('payment_state','payment_updated_at','past_due_since')
+        UNION ALL SELECT 'constraint:' || conname FROM pg_constraint
+          WHERE conrelid IN (to_regclass('montral_billing_intent'), to_regclass('montral_subscription'))
+            AND conname IN ('montral_billing_intent_plan_check','montral_billing_intent_plan_format','montral_subscription_plan_format')
         `)).map(x => x.item).sort(); // sorted here: SQL ORDER BY follows the cluster's collation ('.' vs '_' differs on macOS)
       const complete = [
         "montral_billing_intent.consumed_at", "montral_billing_intent_pending",
         "montral_hook_event_expiry", "montral_hook_event_recent", "montral_hook_inbox_scope",
         "montral_hook_inbox.response", "montral_hook_event.response_status",
         "montral_subscription.ends_at",
+        "montral_subscription.payment_state", "montral_subscription.payment_updated_at", "montral_subscription.past_due_since",
+        "constraint:montral_billing_intent_plan_format", "constraint:montral_subscription_plan_format",
       ].sort();
       expect(await shape()).toEqual(complete);
 
       // Simulate a pre-upgrade schema that needs DDL on BOTH billing tables.
       await fresh.query("ALTER TABLE montral_subscription DROP COLUMN ends_at");
       await fresh.query("DROP INDEX montral_billing_intent_pending");
+      // ...and the pre-lifecycle billing schema: the fixed plan CHECK, no plan format checks, no payment state.
+      await fresh.query("ALTER TABLE montral_billing_intent DROP CONSTRAINT montral_billing_intent_plan_format");
+      await fresh.query("ALTER TABLE montral_billing_intent ADD CONSTRAINT montral_billing_intent_plan_check CHECK (plan IN ('pro','business'))");
+      await fresh.query(`ALTER TABLE montral_subscription DROP CONSTRAINT montral_subscription_plan_format,
+        DROP COLUMN payment_state, DROP COLUMN payment_updated_at, DROP COLUMN past_due_since`);
       // ...and on both webhook tables (configurable responses): the upgrade adds them back, inbox before event.
       await fresh.query("ALTER TABLE montral_hook_event DROP COLUMN response_status");
       await fresh.query("ALTER TABLE montral_hook_inbox DROP COLUMN response");

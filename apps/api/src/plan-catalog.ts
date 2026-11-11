@@ -17,6 +17,8 @@ export const PLAN_CATALOG_SCHEMA_VERSION = 1;
 /** Upper bound for every count and allowance: far beyond any real plan, well inside PostgreSQL's integer for usage. */
 const MAX_COUNT = 2_000_000_000;
 const PLAN_ID = /^[a-z][a-z0-9_-]{0,31}$/;
+/** A provider variant id: a positive decimal number written as a string (Lemon Squeezy variant ids are integers). */
+const PROVIDER_VARIANT = /^[1-9][0-9]{0,23}$/;
 
 const count = z.number().int().min(0).max(MAX_COUNT);
 const limitsSchema = z.object({
@@ -46,6 +48,11 @@ const planSchema = z.object({
   /** features this plan includes; only features Montral enforces are accepted (see FEATURES) */
   features: z.array(z.enum(["hideBranding"])).max(16).default([]),
   price: priceSchema.optional(),
+  /**
+   * The billing provider's variant ids that subscribe a workspace to this plan (numeric strings, unique across plans).
+   * Optional: a catalog without any variants uses the environment fallback (LEMONSQUEEZY_VARIANT_PRO/_BUSINESS).
+   */
+  providerVariants: z.array(z.string().regex(PROVIDER_VARIANT)).max(16).optional(),
 }).strict();
 
 const overrideSchema = z.object({
@@ -73,6 +80,16 @@ const catalogSchema = z.object({
     ids.add(p.id);
   });
   if (!ids.has(c.defaultPlan)) ctx.addIssue({ code: "custom", path: ["defaultPlan"], message: "names no plan" });
+  // a variant subscribes to exactly one plan, and the default plan (what a workspace without a subscription gets) is
+  // never sold: a purchase must always move a workspace off it
+  const variants = new Set<string>();
+  c.plans.forEach((p, i) => {
+    if (p.id === c.defaultPlan && p.providerVariants?.length) ctx.addIssue({ code: "custom", path: ["plans", i, "providerVariants"], message: "the default plan cannot have provider variants" });
+    p.providerVariants?.forEach((v, j) => {
+      if (variants.has(v)) ctx.addIssue({ code: "custom", path: ["plans", i, "providerVariants", j], message: "duplicate provider variant" });
+      variants.add(v);
+    });
+  });
   const orgs = new Set<string>();
   c.overrides.forEach((o, i) => {
     if (o.plan !== undefined && !ids.has(o.plan)) ctx.addIssue({ code: "custom", path: ["overrides", i, "plan"], message: "names no plan" });
@@ -93,6 +110,10 @@ export type PlanCatalog = {
   source: "builtin" | "operator";
   defaultPlan: CatalogPlan;
   plans: ReadonlyMap<string, CatalogPlan>;
+  /** true when any plan lists provider variants: billing then maps variants to plans through this catalog only */
+  hasProviderVariants: boolean;
+  /** the plan a provider variant subscribes to (null: the catalog does not sell this variant) */
+  planForVariant(variantId: string): CatalogPlan | null;
   /** the effective plan and limits of a workspace whose subscription names `planId` (null: no valid subscription) */
   resolve(organizationId: string, planId: string | null): { plan: CatalogPlan; limits: PlanLimits; unknownPlan: boolean };
 };
@@ -141,7 +162,11 @@ export function parsePlanCatalog(raw: unknown): PlanCatalogDocument {
 
 export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCatalog["source"]): Promise<PlanCatalog> {
   // frozen: callers share these objects, and a catalog never changes after it was built
-  const frozen = doc.plans.map((p) => Object.freeze({ ...p, limits: Object.freeze({ ...p.limits }), features: Object.freeze([...p.features]) }) as CatalogPlan);
+  const frozen = doc.plans.map((p) => Object.freeze({
+    ...p, limits: Object.freeze({ ...p.limits }), features: Object.freeze([...p.features]),
+    ...(p.providerVariants ? { providerVariants: Object.freeze([...p.providerVariants]) } : {}),
+  }) as CatalogPlan);
+  const byVariant = new Map(frozen.flatMap((p) => (p.providerVariants ?? []).map((v) => [v, p] as const)));
   const plans = new Map(frozen.map((p) => [p.id, p] as const));
   const overrides = new Map(doc.overrides.map((o) => [o.organizationId, o] as const));
   const defaultPlan = plans.get(doc.defaultPlan)!;
@@ -152,6 +177,8 @@ export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCat
     source,
     defaultPlan,
     plans,
+    hasProviderVariants: byVariant.size > 0,
+    planForVariant: (variantId) => byVariant.get(variantId) ?? null,
     resolve(organizationId, planId) {
       const override = overrides.get(organizationId);
       const named = planId === null ? null : plans.get(planId) ?? null;

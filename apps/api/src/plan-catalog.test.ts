@@ -81,6 +81,35 @@ describe("plan catalog", () => {
     await expect(loadPlanCatalog({ MONTRAL_PLAN_CONFIG_JSON: JSON.stringify(doc({ defaultPlan: "nope" })) })).rejects.toBeInstanceOf(PlanCatalogError);
   });
 
+  it("maps provider variants to plans, validating format, uniqueness and the unsold default plan", async () => {
+    // backward compatible: a v1 catalog without variants still loads, and maps nothing
+    const plain = await buildPlanCatalog(parsePlanCatalog(doc()), "operator");
+    expect(plain.hasProviderVariants).toBe(false);
+    expect(plain.planForVariant("901")).toBeNull();
+    const sold = await buildPlanCatalog(parsePlanCatalog(doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: ["901", "902"] }), plan("team", 3, { providerVariants: ["903"] })] })), "operator");
+    expect(sold.hasProviderVariants).toBe(true);
+    expect(sold.planForVariant("901")?.id).toBe("beta");
+    expect(sold.planForVariant("902")?.id).toBe("beta");
+    expect(sold.planForVariant("903")?.id).toBe("team");
+    expect(sold.planForVariant("904")).toBeNull();
+    expect(sold.planForVariant("0903")).toBeNull();
+    expect(() => { (sold.plans.get("team")!.providerVariants as string[]).push("905"); }).toThrow();
+    const cases: [unknown, RegExp][] = [
+      [doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: ["901"] }), plan("team", 3, { providerVariants: ["901"] })] }), /plans\.2\.providerVariants\.0: duplicate provider variant/],
+      [doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: ["901", "901"] })] }), /plans\.1\.providerVariants\.1: duplicate provider variant/],
+      [doc({ plans: [plan("alpha", 1, { providerVariants: ["901"] })] }), /plans\.0\.providerVariants: the default plan cannot have provider variants/],
+      [doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: ["abc"] })] }), /plans\.1\.providerVariants\.0/],
+      [doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: ["0"] })] }), /plans\.1\.providerVariants\.0/],
+      [doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: [901] })] }), /plans\.1\.providerVariants\.0/],
+      [doc({ plans: [plan("alpha", 1), plan("beta", 2, { providerVariants: "901" })] }), /plans\.1\.providerVariants/],
+    ];
+    for (const [raw, rule] of cases) {
+      const found = issues(raw);
+      expect(found.join("; ")).toMatch(rule);
+      expect(found.join(" ")).not.toMatch(/901|abc/);
+    }
+  });
+
   it("caches a valid catalog per document and keeps reporting an invalid one", async () => {
     const env = { MONTRAL_PLAN_CONFIG_JSON: JSON.stringify(doc()) };
     expect(await cachedPlanCatalog(env)).toBe(await cachedPlanCatalog(env));

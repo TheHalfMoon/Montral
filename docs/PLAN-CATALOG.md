@@ -56,15 +56,16 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
       "features": []                     // only features Montral enforces: "hideBranding"
     },
     {
-      "id": "pro",                       // with billing enabled, the catalog must define "pro" and "business"
+      "id": "team",
       "name": "Team",
       "limits": { "activeMonitors": 40, "minIntervalSec": 120, "regions": 2, "credits": 77000, "emails": 400 },
       "features": ["hideBranding"],
+      "providerVariants": ["900001", "900002"],  // billing provider variant ids that subscribe to this plan (optional)
       "price": { "amountMinor": 4321, "currency": "EUR", "interval": "month" }    // metadata only
     }
   ],
   "overrides": [                         // per-workspace contracts (enterprise), optional
-    { "organizationId": "org_…", "plan": "pro", "limits": { "credits": 150000 }, "note": "contract 2026-07" }
+    { "organizationId": "org_…", "plan": "team", "limits": { "credits": 150000 }, "note": "contract 2026-07" }
   ]
 }
 ```
@@ -77,10 +78,29 @@ never implies unlimited checks, regions or notifications. Unknown fields are ref
 when the workspace's subscription changes (an override without `plan` caps every plan the workspace moves to).
 Overrides may also raise limits; record why in `note`.
 
-**Billing.** While billing is enabled, subscriptions can name only the plan ids `pro` and `business`, so the catalog
-must define both; a catalog without them is refused (every metered call fails) rather than silently moving paying
-workspaces to the default plan. (A catalog-driven mapping of provider variants to plan ids is planned with the
-billing lifecycle work.)
+**Billing: provider variants.** `providerVariants` lists the billing provider's variant ids (Lemon Squeezy variant
+ids, written as decimal strings) that subscribe a workspace to the plan. Rules: each id is a positive decimal number of
+at most 24 digits; an id may appear only once in the whole catalog (one variant, one plan); the `defaultPlan` cannot
+list variants (it is what a workspace without a subscription gets, so it is never sold). The field is optional, and a
+catalog without it stays valid (schema version 1 is unchanged for existing catalogs).
+
+- **Catalog-driven (any plan lists `providerVariants`).** Billing maps every signed provider event's variant to a plan
+  through the catalog. A test checkout can be opened for every plan that lists at least one variant (it uses the
+  plan's first variant); any other plan id is refused (400). A `subscription_updated` event naming another plan's
+  variant moves the workspace to that plan (upgrade or downgrade), in provider order. An event naming a variant no
+  plan lists is refused as unmatched (409) and changes nothing. `LEMONSQUEEZY_VARIANT_PRO`/`_BUSINESS` are ignored.
+- **Environment fallback (no plan lists variants, e.g. the built-in sandbox catalog).** `LEMONSQUEEZY_VARIANT_PRO` and
+  `LEMONSQUEEZY_VARIANT_BUSINESS` map to the plan ids `pro` and `business`, so the catalog must define both; a
+  catalog without them is refused (every metered call fails) rather than silently moving paying workspaces to the
+  default plan.
+
+Removing a variant from the catalog does not move existing subscribers: their stored plan id stays until the provider
+sends a newer event. Removing a plan does: a subscription naming a plan the catalog no longer has gets the default
+plan (see Failure behaviour).
+
+**Prices.** `price` is metadata. `GET /api/billing/plans` returns it only when the deployment sets
+`MONTRAL_BILLING_SHOW_PRICES=true` (off by default: no price field at all), so prices stay private until the owner
+publishes them.
 
 ## Changing plans and allowances
 

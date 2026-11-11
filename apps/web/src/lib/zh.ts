@@ -835,4 +835,12 @@ export const zh: Record<string, string> = {
   "You were removed from this workspace. Ask an owner or admin to invite you again.": "你已被移出此工作区。请让所有者或管理员重新邀请你。",
   "TXT record not found at the last check": "上次检查时未找到 TXT 记录",
   "Verification withdrawn: the TXT record is gone": "验证已撤销：TXT 记录已不存在",
+
+  // billing plans (test mode)
+  "per month": "每月", "per year": "每年",
+  "A payment was refunded: paid access is no longer active.": "一笔付款已退款：付费权益已失效。",
+  "Payment past due. Paid access continues until": "付款逾期。付费权益保留至",
+  "Payment past due: paid access is paused until a payment succeeds.": "付款逾期：付费权益已暂停，付款成功后恢复。",
+  "No plans are offered for checkout.": "目前没有可结账的套餐。",
+  "Checkout unavailable": "暂不可结账",
 };

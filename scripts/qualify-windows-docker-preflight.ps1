@@ -23,15 +23,32 @@ function Check-DockerDaemon {
     if ($null -eq (Get-Command docker -ErrorAction SilentlyContinue)) {
         return @{ ok = $false; detail = 'Docker CLI not found' }
     }
-    # Never start Docker here; unavailable daemon is a blocker.
+    # Do not inherit DOCKER_HOST or the selected context: they can point to a
+    # remote daemon. Only the local Docker Desktop Linux named pipe is allowed.
+    $pipe = '\\.\pipe\dockerDesktopLinuxEngine'
+    if (-not [System.IO.File]::Exists($pipe)) {
+        return @{ ok = $false; detail = 'Local Docker Desktop Linux pipe unavailable' }
+    }
+    $job = $null
     try {
-        $info = & docker info --format '{{.ServerVersion}}' 2>&1
-        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace([string]$info)) {
-            return @{ ok = $true; detail = 'Docker engine responds' }
+        $job = Start-Job -ScriptBlock {
+            & docker --host 'npipe:////./pipe/dockerDesktopLinuxEngine' info --format '{{.ServerVersion}}' 2>&1
+            if ($LASTEXITCODE -ne 0) { throw 'Local Docker Desktop Linux engine unavailable' }
         }
-        return @{ ok = $false; detail = 'Docker engine not running or inaccessible' }
+        if ($null -eq (Wait-Job -Job $job -Timeout 8)) {
+            return @{ ok = $false; detail = 'Local Docker Desktop Linux engine timed out' }
+        }
+        if ($job.State -ne 'Completed') {
+            return @{ ok = $false; detail = 'Local Docker Desktop Linux engine unavailable' }
+        }
+        return @{ ok = $true; detail = 'Local Docker Desktop Linux engine responds' }
     } catch {
-        return @{ ok = $false; detail = 'Docker engine not running or inaccessible' }
+        return @{ ok = $false; detail = 'Local Docker Desktop Linux engine unavailable' }
+    } finally {
+        if ($null -ne $job) {
+            if ($job.State -eq 'Running') { Stop-Job -Job $job }
+            Remove-Job -Job $job -Force
+        }
     }
 }
 

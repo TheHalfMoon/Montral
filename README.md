@@ -49,7 +49,7 @@ This repository contains the Montral product source, configuration, deployment,
 tests and documentation. Duplicate historical source snapshots are not bundled.
 The CI source-integrity check verifies that the application packages use the
 Montral namespace and that no obsolete vendor source tree is tracked.
-The applicable license notices are retained under `LICENSE` and `legal/`.
+The Montral license is in LICENSE.
 
 ## Before launch
 

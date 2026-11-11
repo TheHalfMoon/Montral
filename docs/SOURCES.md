@@ -8,6 +8,5 @@ implementation is under `apps/`, `packages/`, and the Montral deployment
 and tooling directories. CI validates the source identity with
 `python3 scripts/verify_sources.py` and the active branding guard.
 
-License notices associated with the distributed code are kept in `LICENSE`
-and `legal/`. Historical archived qualifications refer to the repository
+The Montral license is in LICENSE. Historical archived qualifications refer to the repository
 state at the time they were recorded; they are not current build requirements.

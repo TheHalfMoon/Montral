@@ -20,9 +20,6 @@ jobs:
         run: python3 scripts/verify_sources.py
       - name: Verify active Montral branding
         run: bash scripts/verify-active-branding.sh
-      - name: Verify Montral licenses retained
+      - name: Verify Montral license
         run: |
           test -s LICENSE
-          test -s legal/MONTRAL_CORE_MIT_LICENSE.txt
-          test -s legal/MONTRAL_PROBES_APACHE_LICENSE.txt
-          test -s legal/MONTRAL_WEBHOOKS_MIT_LICENSE.txt

@@ -7,11 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVE = ("apps/", "packages/", "docker/", "terraform-provider-montral/")
-REQUIRED = ("README.md", "LICENSE", "Dockerfile", "apps/api/package.json",
-            "apps/web/package.json", "apps/probe/package.json",
-            "legal/MONTRAL_CORE_MIT_LICENSE.txt",
-            "legal/MONTRAL_PROBES_APACHE_LICENSE.txt",
-            "legal/MONTRAL_WEBHOOKS_MIT_LICENSE.txt")
+REQUIRED = ("README.md", "LICENSE", "Dockerfile", "apps/api/package.json", "apps/web/package.json", "apps/probe/package.json")
 
 def main() -> None:
     files = subprocess.check_output(

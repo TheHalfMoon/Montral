@@ -2,7 +2,7 @@
 
 Active apps, package names, runtime signals, REST/MCP metadata, OAuth references, page titles, favicons, PWA icons, Open Graph images and navigation use **Montral**.
 
-The Montral application and packages are the only active source tree; duplicate historical snapshots are removed. Applicable legal license text stays in `LICENSE` and `legal/`.
+Only the Montral application and packages are maintained; duplicate historical source snapshots are removed. Montral licensing is defined in LICENSE.
 
 ## Verified active brand work
 

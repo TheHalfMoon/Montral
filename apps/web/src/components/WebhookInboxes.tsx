@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { api, ApiError, type HookInbox, type HookEvent, type HookResponse, type HookResponseContentType } from "../lib/api";
+import { formatResetDate, webhookInboxQuotaNotice, type WebhookInboxQuotaNotice } from "../lib/usage-alerts";
 
 const CONTENT_TYPES: HookResponseContentType[] = ["text/plain", "application/json", "application/xml", "text/xml", "text/csv"];
 const BODYLESS = new Set([204, 205, 304]);
@@ -125,6 +126,7 @@ export default function WebhookInboxes() {
   const [fresh, setFresh] = useState<string>("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [quota, setQuota] = useState<WebhookInboxQuotaNotice | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [method, setMethod] = useState("");
   const [query, setQuery] = useState("");
@@ -137,6 +139,21 @@ export default function WebhookInboxes() {
     setInboxes(list);
   }
   useEffect(() => { load().catch((e) => setError((e as Error).message)); }, []);
+  useEffect(() => {
+    // On scope switches, discard a stale allowance before requesting the new workspace's.
+    let generation = 0;
+    const refresh = () => {
+      const current = ++generation;
+      api.usage().then((usage) => {
+        if (current === generation) setQuota(webhookInboxQuotaNotice(usage));
+      }).catch(() => { if (current === generation) setQuota(null); });
+    };
+    const onScope = () => { generation++; setQuota(null); refresh(); };
+    refresh();
+    window.addEventListener("montral:scope", onScope);
+    window.addEventListener("montral:usage", refresh);
+    return () => { generation++; window.removeEventListener("montral:scope", onScope); window.removeEventListener("montral:usage", refresh); };
+  }, []);
   const fetchEvents = async (before?: string): Promise<void> => {
     if (!selected) return;
     const seq = ++fetchSeq.current;
@@ -184,6 +201,14 @@ export default function WebhookInboxes() {
     <div className="ph">
       <div><h1>{t("Webhooks")}</h1><p className="muted">{t("Create an inbox, capture HTTP requests, and inspect their payloads. Seven-day retention; up to 32 KiB per event.")}</p></div>
     </div>
+    {quota && <section className="card sect" role="status" data-webhook-quota="exhausted" style={{ marginBottom: 18 }}>
+      <b>{t("Webhook event quota used up")}</b>
+      <p className="muted">{t("New webhook requests are refused until {date} (UTC).").replace("{date}", formatResetDate(quota.resetsAt, document.documentElement.lang))}</p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <a className="btn sm" href="/app/usage">{t("View usage")}</a>
+        {quota.upgradeUrl && <a className="btn sm primary" href={quota.upgradeUrl}>{t("Upgrade plan")}</a>}
+      </div>
+    </section>}
     <form className="card sect" style={{ display: "flex", gap: 12, alignItems: "end", marginBottom: 18 }} onSubmit={create}>
       <label className="fld" style={{ flex: 1 }}>{t("Inbox name")}
         <input className="in" required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} placeholder={t("Payment events")} />

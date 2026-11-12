@@ -6,7 +6,7 @@ import { HTTPException } from "hono/http-exception";
 import { createAuth, currentSession, NATIVE_CALLBACK, signupDisabled, slugify, turnstile } from "./auth";
 import { connectionString, type AppEnv } from "./env";
 import { mountMcp } from "./mcp-route";
-import { rejectInAllProjects, requireOrg, ssoAllowsPrincipal } from "./middleware";
+import { isManager, rejectInAllProjects, requireOrg, ssoAllowsPrincipal } from "./middleware";
 import { alertLog, settings } from "./routes/alert-log";
 import { auditEvents } from "./routes/audit";
 import { channels } from "./routes/channels";
@@ -380,7 +380,8 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     if (!credits && !emails && !plan) return c.json({ metered: false });
     // when the allowances reset: every meter of this preview counts the calendar month in UTC
     const periodEnd = (credits ?? emails ?? webhookEvents ?? browserSeconds)?.periodEnd ?? allowanceResetUtc();
-    return c.json({ metered: true, ...(credits ?? {}), periodEnd, credits, emails, webhookEvents, browserSeconds, plan, activeMonitors });
+    const canManageBilling = await isManager(c);
+    return c.json({ metered: true, ...(credits ?? {}), periodEnd, credits, emails, webhookEvents, browserSeconds, plan, activeMonitors, canManageBilling });
   });
   // where checks can run from on this deployment, and how many of those one monitor may use under the workspace's plan (null: no limit)
   authed.get("/regions", async (c) => {

@@ -40,7 +40,7 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     expect(response.status).toBe(200);
     const cookie = response.headers.getSetCookie().map((x) => x.split(";")[0]).join("; ");
     const me = await app.fetch(new Request(ORIGIN + "/api/me", { headers: { cookie } }), base as never);
-    const user = await me.json() as { organization: { id: string } };
+    const user = await me.json() as { userId: string; organization: { id: string } };
     const call = async (method: string, path: string, body?: unknown, env: Bindings = base) => {
       const res = await app.fetch(new Request(ORIGIN + "/api" + path, {
         method, headers: { origin: ORIGIN, cookie, "content-type": "application/json" },
@@ -48,7 +48,7 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
       }), env as never);
       return { status: res.status, headers: res.headers, body: await res.json().catch(() => null) as any };
     };
-    return { cookie, org: user.organization.id, call };
+    return { cookie, org: user.organization.id, userId: user.userId, call };
   }
   async function inbox(call: Awaited<ReturnType<typeof signup>>["call"]) {
     const created = await call("POST", "/hooks/inboxes", { name: "Meter inbox" });
@@ -138,7 +138,7 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     expect(await used(org, "webhook_events")).toBe(2);
     // the usage API reports the meter
     const usage = await call("GET", "/usage", undefined, env);
-    expect(usage.body).toMatchObject({ metered: true, webhookEvents: { limit: 2, used: 2 }, browserSeconds: { used: 0 } });
+    expect(usage.body).toMatchObject({ metered: true, canManageBilling: true, webhookEvents: { limit: 2, used: 2 }, browserSeconds: { used: 0 } });
   });
 
   it("never captures more than the allowance under concurrent requests", async () => {
@@ -223,6 +223,25 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     expect(tried.status).toBe(200);
     expect(await used(org, "credits")).toBe(0);
     expect(await used(org, "browser_seconds")).toBe(0);
+  });
+
+  it("exposes billing permission to the owner but not a member of the same metered workspace", async () => {
+    const owner = await signup();
+    const member = await signup();
+    await db!.query(`INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES($1,$2,$3,'member',now())`,
+      [crypto.randomUUID(), owner.org, member.userId]);
+    const response = await app.fetch(new Request(ORIGIN + "/api/auth/organization/set-active", {
+      method: "POST", headers: { origin: ORIGIN, cookie: member.cookie, "content-type": "application/json" },
+      body: JSON.stringify({ organizationId: owner.org }),
+    }), base as never);
+    expect(response.status).toBe(200);
+    const changed = response.headers.getSetCookie().map((c) => c.split(";")[0]).join("; ");
+    const cookie = changed || member.cookie;
+    const env = metered({ webhookEvents: 2 });
+    const res = await app.fetch(new Request(ORIGIN + "/api/usage", { headers: { origin: ORIGIN, cookie } }), env as never);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ metered: true, canManageBilling: false });
+    expect((await owner.call("GET", "/usage", undefined, env)).body).toMatchObject({ metered: true, canManageBilling: true });
   });
 
   it("GET /usage tells a metered workspace each meter and when they reset; self-hosted answers only metered: false", async () => {

@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
-import { rm } from "node:fs/promises";
+import { cleanupBrowserProfile } from "./browser-profile-cleanup.mjs";
 import WebSocket from "../apps/api/node_modules/ws/index.js";
 import postgres from "../packages/db-pg/node_modules/postgres/src/index.js";
 
@@ -411,7 +411,9 @@ try {
   browserCompleted = true;
 } finally {
   ws?.close();
-  if (chrome && chrome.exitCode === null && chrome.signalCode === null) chrome.kill("SIGTERM");
+  // Chromium may write into its profile for a short time after SIGTERM,
+  // especially on macOS ARM64. Stop and reap exactly our child before
+  // deleting its disposable profile, with bounded ENOTEMPTY retries.
   let shutdownFailed = false;
   // The browser fixture is a real Node process using an isolated PostgreSQL
   // database. A successful user journey must also demonstrate clean SIGTERM
@@ -433,10 +435,7 @@ try {
   } else if (browserCompleted) {
     shutdownFailed = true;
   }
-  for (const child of [chrome, api]) {
-    if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-  }
-  await pause(250);
-  await rm(chromeProfile, { recursive: true, force: true });
+  if (api && api.exitCode === null && api.signalCode === null) api.kill("SIGKILL");
+  await cleanupBrowserProfile(chrome, chromeProfile);
   if (shutdownFailed) throw new Error("Node SIGTERM did not finish cleanly within the bounded shutdown deadline");
 }

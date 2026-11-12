@@ -187,6 +187,16 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
       await fresh.query("ALTER TABLE montral_hook_inbox DROP COLUMN response");
       const org = "lock-order-upgrade-" + randomUUID();
       await fresh.query("INSERT INTO organization(id,name,slug,created_at) VALUES($1,'Synthetic lock order',$1,NOW())", [org]);
+      // A genuine legacy subscription already in past_due before the
+      // payment-state columns existed must get its saved status timestamp,
+      // not a new period starting at migration time.
+      const oldOrg = "legacy-pastdue-" + randomUUID();
+      const oldClock = "2026-11-04T12:00:00.000Z";
+      await fresh.query("INSERT INTO organization(id,name,slug,created_at) VALUES($1,'Legacy past due',$1,NOW())", [oldOrg]);
+      await fresh.query(`INSERT INTO montral_subscription
+        (organization_id,provider_id,variant_id,plan,status,test_mode,provider_updated_at)
+        VALUES ($1,$2,'101','pro','past_due',true,$3)`,
+      [oldOrg, randomUUID(), oldClock]);
       // The upgrade must wait for montral_subscription BEFORE it locks
       // montral_billing_intent, so the reservation completes and commits,
       // and the migration then finishes. Old SQL: 40P01 here.
@@ -195,6 +205,45 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
       expect(result.reserved).toBe(true);
       expect(await shape()).toEqual(complete);
       expect(await legacyBodies()).toEqual(legacyBefore);
+      const upgradedPastDue = await fresh.query<{ past_due_since: Date | null }>(
+        "SELECT past_due_since FROM montral_subscription WHERE organization_id=$1", [oldOrg]);
+      expect(upgradedPastDue[0]?.past_due_since && new Date(upgradedPastDue[0].past_due_since).toISOString()).toBe(oldClock);
+
+      // Re-run against the *already current* schema, as happens at startup.
+      // Each row is synthetic; no provider or payment calls are made.
+      const activeSince = "2026-11-07T09:00:00.000Z";
+      const paidSince = "2026-11-10T09:00:00.000Z";
+      const earlyFailure = "2026-11-03T10:00:00.000Z";
+      const cases = [
+        { status: "active", failed: "failed", paidAt: activeSince, expected: activeSince },
+        { status: "active", failed: "failed", paidAt: null, expected: null },
+        { status: "past_due", failed: "paid", paidAt: paidSince, expected: null },
+        { status: "past_due", failed: "failed", paidAt: earlyFailure, expected: earlyFailure },
+        { status: "past_due", failed: null, paidAt: null, expected: oldClock, testMode: false },
+        { status: "past_due", failed: "failed", paidAt: activeSince, expected: earlyFailure, preexisting: earlyFailure },
+      ] as const;
+      const ids: string[] = [];
+      for (const entry of cases) {
+        const account = "grace-backfill-" + randomUUID();
+        ids.push(account);
+        await fresh.query("INSERT INTO organization(id,name,slug,created_at) VALUES($1,'Synthetic grace',$1,NOW())", [account]);
+        await fresh.query(`INSERT INTO montral_subscription
+          (organization_id,provider_id,variant_id,plan,status,test_mode,provider_updated_at,
+           payment_state,payment_updated_at,past_due_since)
+          VALUES ($1,$2,'101','pro',$3,$4,$5,$6,$7,$8)`,
+        [account, randomUUID(), entry.status, "testMode" in entry ? entry.testMode : true,
+          oldClock, entry.failed, entry.paidAt, "preexisting" in entry ? entry.preexisting : null]);
+      }
+      await fresh.migrateEdition!(async tx => montralEdition.migrate!(tx));
+      const snapshots = await fresh.query<{ organization_id: string; past_due_since: Date | null }>(
+        "SELECT organization_id,past_due_since FROM montral_subscription WHERE organization_id = ANY($1::text[])", [ids]);
+      const byId = new Map(snapshots.map((r) => [r.organization_id, r.past_due_since ? new Date(r.past_due_since).toISOString() : null]));
+      for (const [i, entry] of cases.entries()) expect(byId.get(ids[i])).toBe(entry.expected);
+      // Idempotency: later restarts never move the first-failure clock.
+      await fresh.migrateEdition!(async tx => montralEdition.migrate!(tx));
+      const afterRepeat = await fresh.query<{ organization_id: string; past_due_since: Date | null }>(
+        "SELECT organization_id,past_due_since FROM montral_subscription WHERE organization_id = ANY($1::text[])", [ids]);
+      expect(new Map(afterRepeat.map((r) => [r.organization_id, r.past_due_since ? new Date(r.past_due_since).toISOString() : null]))).toEqual(byId);
     } finally {
       await fresh?.close(5);
       try {

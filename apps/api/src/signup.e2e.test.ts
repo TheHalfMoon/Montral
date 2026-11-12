@@ -5,14 +5,17 @@ import { createApp } from "./app";
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests).
 const url = process.env.TEST_DATABASE_URL;
 const ORIGIN = "http://localhost:8787";
-const base = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron" };
+// This test runs alongside many E2E account signups against one shared DB. A
+// synthetic, trusted test ingress gives its own IP quota bucket; production
+// unknown-client fallback and signup limits are not modified or bypassed.
+const base = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron", TRUST_PROXY: "true" };
 
 describe.skipIf(!url)("closed registration", () => {
   const app = createApp(openDatabase);
   const raw = (env: object, path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
   const signUp = (env: object, email: string) =>
     raw(env, "/api/auth/sign-up/email", {
-      method: "POST", headers: { "content-type": "application/json" },
+      method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "198.51.100.203" },
       body: JSON.stringify({ email, password: "correct horse battery", name: "Ada" }),
     });
   const closed = { ...base, DISABLE_SIGNUP: "true" };

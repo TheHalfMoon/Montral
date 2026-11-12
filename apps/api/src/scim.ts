@@ -180,6 +180,24 @@ function refuseSuspendedScim(): never {
   throw new ScimError(403, "Workspace suspended: only deprovisioning is allowed");
 }
 
+/**
+ * Suspended workspaces permit access revocation, not an identity/metadata
+ * change disguised as a deactivation. Identity providers commonly send full
+ * PUT records or PATCH echoes with active=false, so unchanged values may be
+ * present; omitted values must NEVER be cleared during a suspension.
+ */
+function suspendedDeactivation(row: Row, f: Fields): Fields {
+  if (f.active !== false) refuseSuspendedScim();
+  const updates: Array<[string | null | undefined, string | null]> = [
+    [f.externalId, row.external_id],
+    [f.displayName, row.display_name],
+    [f.givenName, row.given_name],
+    [f.familyName, row.family_name],
+  ];
+  if (updates.some(([incoming, saved]) => incoming !== undefined && incoming !== saved)) refuseSuspendedScim();
+  return { active: false };
+}
+
 function inTransaction<T>(c: Context<AppEnv>, work: (query: Query) => Promise<T>): Promise<T> {
   const database = c.get("database");
   // fail closed: SCIM changes are never applied step by step
@@ -389,8 +407,8 @@ export const scimApi = new Hono<AppEnv>()
     const saved = await inTransaction(c, async (query) => {
       const suspended = await scimMutationSuspended(query, c.get("orgId"));
       const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
-      if (suspended && f.active !== false) refuseSuspendedScim();
       if (body.userName !== undefined && userNameOf(body.userName) !== row.user_name) throw new ScimError(400, "userName cannot be changed; delete the user and create the new address", "mutability");
+      if (suspended) return save(query, c.env, row, suspendedDeactivation(row, f));
       // a replace: attributes left out are cleared; `active` has no default (RFC 7643), so leaving it out keeps it
       return save(query, c.env, row, { externalId: f.externalId ?? null, displayName: f.displayName ?? null, givenName: f.givenName ?? null, familyName: f.familyName ?? null, active: f.active ?? row.active });
     });
@@ -404,8 +422,7 @@ export const scimApi = new Hono<AppEnv>()
       const suspended = await scimMutationSuspended(query, c.get("orgId"));
       const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
       const fields = patchFields(body, row);
-      if (suspended && fields.active !== false) refuseSuspendedScim();
-      return save(query, c.env, row, fields);
+      return save(query, c.env, row, suspended ? suspendedDeactivation(row, fields) : fields);
     });
     return json(c, resource(c.env, saved));
   })

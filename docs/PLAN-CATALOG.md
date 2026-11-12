@@ -50,7 +50,7 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
       "name": "Free",
       "limits": {
         "activeMonitors": 3,             // monitors that may be active at once
-        "minIntervalSec": 840,           // fastest interval, 10–86400
+        "minIntervalSec": 840,           // fastest interval, 60–86400 (API floor; sub-minute intervals are not supported)
         "regions": 1,                    // regions per monitor, 1–64
         "credits": 1000,                 // monthly outbound-check credits (one per regional check attempt)
         "emails": 10,                    // monthly notification emails

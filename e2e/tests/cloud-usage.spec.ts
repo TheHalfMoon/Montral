@@ -19,6 +19,8 @@ const quota = (used: number, limit: number) => ({ used, limit, periodStart: new 
 const syntheticUsage = (over: Record<string, unknown>) => ({
   metered: true, periodEnd: nextUtcMonth(), limit: 2000, used: 10, periodStart: quota(0, 1).periodStart,
   credits: quota(10, 2000), emails: quota(0, 10), webhookEvents: quota(0, 100), browserSeconds: quota(0, 100), activeMonitors: 1,
+  // Synthetic sign-up is the owner; member variants explicitly override this flag.
+  canManageBilling: true,
   plan: { id: "synthetic", name: "Synthetic plan", maxActiveMonitors: 3, minIntervalSec: 120, maxRegions: 1, upgradeUrl: "/app/billing" },
   ...over,
 });
@@ -90,6 +92,22 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await expect(page.getByRole("region", { name: "Finish setting up" })).toHaveCount(0);
   });
 
+  await test.step("metered ordinary member: inbox warning has a reset date but no billing actions", async () => {
+    await answerUsage(page, syntheticUsage({ webhookEvents: quota(100, 100), canManageBilling: false }));
+    await page.goto("/app/hooks");
+    const warning = page.locator("[data-webhook-quota=exhausted]");
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText("New webhook requests are refused until");
+    await expect(warning.getByRole("link", { name: "View usage" })).toHaveAttribute("href", "/app/usage");
+    await expect(warning.getByRole("link", { name: "Upgrade plan" })).toHaveCount(0);
+    await expect(page.locator("[data-usage-alert=exhausted]").getByRole("link", { name: "Upgrade plan" })).toHaveCount(0);
+    await page.goto("/app/usage");
+    await expect(page.getByRole("heading", { level: 2, name: "Synthetic plan" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Change plan" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Manage billing" })).toHaveCount(0);
+    await page.unroute(isUsage);
+  });
+
   await test.step("metered, near the limit: a banner links to usage and billing; the meters show the state", async () => {
     await answerUsage(page, syntheticUsage({ webhookEvents: quota(85, 100) }));
     await page.goto("/app");
@@ -154,6 +172,16 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await expect(notice.getByRole("link", { name: "View usage" })).toHaveAttribute("href", "/app/usage");
     await expect(page.getByText("No credits left this period")).toHaveCount(0);
     await checkA11y(page, testInfo, "quota-refusal");
+
+    // The same HTTP refusal must not offer a Billing action to a regular member.
+    await page.unroute(isUsage);
+    await answerUsage(page, syntheticUsage({ credits: quota(2000, 2000), canManageBilling: false }));
+    await page.goto(`/app/monitors/${monitorId}`);
+    await clickWithoutLayoutShift(page.getByRole("button", { name: "Check now" }));
+    const memberNotice = page.locator("[data-quota-code=credits_exhausted]");
+    await expect(memberNotice).toContainText("The allowance resets on");
+    await expect(memberNotice).not.toContainText("upgrade your plan");
+    await expect(memberNotice.getByRole("link", { name: "Upgrade plan" })).toHaveCount(0);
     await page.unroute(isMonitor);
     await page.unroute(isCheck);
   });

@@ -869,4 +869,7 @@ export const zh: Record<string, string> = {
   "Contact support to resolve it. You can still switch to another workspace from the workspace menu.": "请联系支持团队处理。你仍可以通过工作区菜单切换到其他工作区。",
   "Webhook event quota used up": "Webhook 事件配额已用尽",
   "New webhook requests are refused until {date} (UTC).": "新的 Webhook 请求会被拒绝，直到 {date}（UTC）配额重置。",
+  "There are not enough checks left this period for this check. The allowance resets on {date}.": "本周期剩余的检查额度不足，无法执行此次检查。额度将在 {date} 重置。",
+  "There is not enough browser check time left this period for this check. It resets on {date}.": "本周期剩余的浏览器检查时间不足，额度将在 {date} 重置。",
+  "This workspace's webhook events for this period are used up. New requests are refused until {date}.": "此工作区本周期的 Webhook 事件额度已用尽。新的请求会被拒绝，直到 {date}。",
 };

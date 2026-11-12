@@ -36,6 +36,8 @@ export const ROUTES: Route[] = [
   { re: /^\/app\/usage$/, name: "Usage", key: "usage", title: "Plan & usage", data: () => ["/usage", "/monitors"] },
   { re: /^\/app\/settings$/, name: "Settings", key: "settings", title: "Settings", data: () => [] },
   { re: /^\/app\/audit-log$/, name: "AuditLog", key: "audit-log", title: "Audit log", data: () => [] },
+  // Unlinked platform-only console. Server requires a fresh operator MFA browser session for every API call.
+  { re: /^\/app\/operator$/, name: "OperatorConsole", key: "settings", title: "Platform operations", data: () => [] },
   // Unlinked, staged workspace-owner tool; the API stays OFF unless explicitly configured.
   { re: /^\/app\/mail-review$/, name: "MailReview", key: "settings", title: "Monthly mail review", data: () => [] },
 ];

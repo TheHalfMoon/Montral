@@ -239,13 +239,13 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
       }
       await fresh.migrateEdition!(async tx => montralEdition.migrate!(tx));
       const snapshots = await fresh.query<{ organization_id: string; past_due_since: Date | null }>(
-        "SELECT organization_id,past_due_since FROM montral_subscription WHERE organization_id = ANY($1::text[])", [ids]);
+        `SELECT organization_id,past_due_since FROM montral_subscription WHERE organization_id IN (${ids.map((_, i) => `$${i + 1}`).join(",")})`, ids);
       const byId = new Map(snapshots.map((r) => [r.organization_id, r.past_due_since ? new Date(r.past_due_since).toISOString() : null]));
       for (const [i, entry] of cases.entries()) expect(byId.get(ids[i])).toBe(entry.expected);
       // Idempotency: later restarts never move the first-failure clock.
       await fresh.migrateEdition!(async tx => montralEdition.migrate!(tx));
       const afterRepeat = await fresh.query<{ organization_id: string; past_due_since: Date | null }>(
-        "SELECT organization_id,past_due_since FROM montral_subscription WHERE organization_id = ANY($1::text[])", [ids]);
+        `SELECT organization_id,past_due_since FROM montral_subscription WHERE organization_id IN (${ids.map((_, i) => `$${i + 1}`).join(",")})`, ids);
       expect(new Map(afterRepeat.map((r) => [r.organization_id, r.past_due_since ? new Date(r.past_due_since).toISOString() : null]))).toEqual(byId);
     } finally {
       await fresh?.close(5);

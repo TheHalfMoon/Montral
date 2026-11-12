@@ -939,6 +939,8 @@ export interface Repo {
   getStatusPage(orgId: string, id: string, scope: Scope): Promise<StatusPage | null>;
   slugTaken(slug: string): Promise<boolean>;
   createStatusPage(orgId: string, projectId: string, p: NewStatusPage): Promise<StatusPage>;
+  /** Atomically enforce a workspace-wide page cap even with concurrent requests across projects/replicas. */
+  createStatusPageWithinLimit(orgId: string, projectId: string, p: NewStatusPage, maxPages: number): Promise<StatusPage | null>;
   updateStatusPage(id: string, patch: StatusPagePatch): Promise<void>;
   deleteStatusPage(id: string): Promise<void>;
   pageComponents(pageId: string): Promise<{ monitorId: string; groupName: string }[]>;

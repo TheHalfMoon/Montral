@@ -1693,6 +1693,20 @@ export function createRepo(db: Db): Repo {
       const [page] = await db.insert(schema.statusPage).values({ ...p, organizationId: orgId, projectId }).returning();
       return page;
     },
+    async createStatusPageWithinLimit(orgId, projectId, p, maxPages) {
+      if (!Number.isSafeInteger(maxPages) || maxPages < 0) throw new Error("Invalid status page cap");
+      return db.transaction(async (tx) => {
+        // Same lock for all projects and all app replicas in this workspace; count
+        // and insert must be one transaction to prevent simultaneous overbooking.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"status-page:" + orgId}))`);
+        const [used] = await tx.select({ n: sql<number>`count(*)::int` }).from(schema.statusPage)
+          .where(eq(schema.statusPage.organizationId, orgId));
+        if (Number(used?.n ?? 0) >= maxPages) return null;
+        const [page] = await tx.insert(schema.statusPage)
+          .values({ ...p, organizationId: orgId, projectId }).returning();
+        return page;
+      });
+    },
     async updateStatusPage(id, patch) {
       if (Object.keys(patch).length) await db.update(schema.statusPage).set(patch).where(eq(schema.statusPage.id, id));
     },

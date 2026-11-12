@@ -75,6 +75,17 @@ export function usageAlert(u: Usage | null | undefined, now: Date = new Date()):
   return null;
 }
 
+export type WebhookInboxQuotaNotice = { resetsAt: Date; upgradeUrl: string | null };
+
+/** A page-local warning for refused incoming webhook requests. Only metered workspaces with a
+ * positive, exhausted webhook quota get it. Links to Billing are role-gated by the server. */
+export function webhookInboxQuotaNotice(u: Usage | null | undefined, now: Date = new Date()): WebhookInboxQuotaNotice | null {
+  if (!u || !u.metered || !u.webhookEvents || meterLevel(u.webhookEvents).state !== "exhausted") return null;
+  const upgradeUrl = u.canManageBilling === true
+    ? (sameOriginPath(u.plan?.upgradeUrl) ? u.plan.upgradeUrl : "/app/billing") : null;
+  return { resetsAt: resetDate(u, now), upgradeUrl };
+}
+
 /** A key that changes when the banner would say something new, so a dismissal hides only what was dismissed. */
 export const alertKey = (a: UsageAlert) => `${a.state}:${a.meters.join(",")}:${a.resetsAt.toISOString().slice(0, 10)}`;
 

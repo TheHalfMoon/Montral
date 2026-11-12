@@ -144,6 +144,67 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     }
   });
 
+  it("refuses a late capture racing with operator suspension, including the legacy SQL entrypoint", async () => {
+    const a = await account();
+    const made = await a("POST", "/inboxes", { name: "Suspension race" });
+    expect(made.status).toBe(201);
+    const { id, path } = made.body as { id: string; path: string };
+    const token = path.split("/").at(-1)!;
+    const hash = await fingerprint(token);
+    const [inbox] = await database!.query<{ organization_id: string }>(
+      "SELECT organization_id FROM montral_hook_inbox WHERE id=$1", [id]);
+    const orgId = inbox.organization_id;
+    const event = (index: number) => [
+      id, hash, crypto.randomUUID(), "POST", "text/plain", "{}", `suspended-body-${index}`,
+    ];
+    let release!: () => void;
+    let signalStarted!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    const started = new Promise<void>((resolve) => { signalStarted = resolve; });
+    let suspension: Promise<void> | undefined;
+    let waiter: Promise<{ result: unknown | null }[]> | undefined;
+    try {
+      // Matches the operator suspension lock ordering. The final capture
+      // must not commit after this operator transaction has committed.
+      suspension = database!.transaction!(async (query) => {
+        await query.query("SELECT id FROM organization WHERE id=$1 FOR UPDATE", [orgId]);
+        await query.query("INSERT INTO workspace_suspension(organization_id,reason) VALUES ($1,'operator')", [orgId]);
+        signalStarted();
+        await hold;
+      });
+      await Promise.race([started, suspension.then(() => { throw new Error("Suspension transaction ended before lock"); })]);
+      // A request already past the handler's first suspension check, and
+      // through its body read, now enters the database capture function.
+      waiter = database!.query<{ result: unknown | null }>(
+        "SELECT montral_capture_hook_event_v2($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS result",
+        event(1),
+      );
+      // Give the concurrent query a chance to reach its organization row lock
+      // before the operator commits. The eventual no-event check is the
+      // deterministic assertion, independent of the wait timing.
+      await new Promise<void>((resolve) => setTimeout(resolve, 70));
+      release();
+      await suspension;
+      expect((await waiter)[0]?.result).toBeNull();
+      const old = await database!.query<{ accepted: boolean }>(
+        "SELECT montral_capture_hook_event($1::uuid,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb,$7::text) AS accepted",
+        event(2),
+      );
+      expect(old[0]?.accepted).toBe(false);
+      const refused = await submit(path, "no receipt after suspend");
+      expect(refused.status).toBe(403);
+      const rows = await database!.query<{ id: string }>(
+        "SELECT id FROM montral_hook_event WHERE inbox_id=$1", [id]);
+      expect(rows).toHaveLength(0);
+    } finally {
+      release();
+      if (suspension) await suspension.catch(() => {});
+      if (waiter) await waiter.catch(() => {});
+      await database!.query("DELETE FROM workspace_suspension WHERE organization_id=$1", [orgId]);
+      await database!.query("DELETE FROM montral_hook_inbox WHERE id=$1", [id]);
+    }
+  }, 30_000);
+
   it("keeps the per-inbox 250-event cap under real simultaneous PostgreSQL inserts", async () => {
     const a = await account();
     const created = await a("POST", "/inboxes", { name: "Burst resilience" });

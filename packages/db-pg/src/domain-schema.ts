@@ -28,6 +28,13 @@ export const incidentUpdateVisibility = pgEnum("incident_update_visibility", ["p
 export const incidentSeverity = pgEnum("incident_severity", ["minor", "major"]);
 export const channelType = pgEnum("channel_type", ["email", "slack", "telegram", "webhook", "pagerduty", "lark", "push", "discord", "teams", "ntfy", "googlechat", "mattermost", "gotify", "pushover"]);
 
+/** Per-user, per-workspace onboarding dismissal. Counts/step completion are derived live. */
+export const onboardingDismissal = pgTable("onboarding_dismissal", {
+  organizationId: text("organization_id").notNull().references(() => organization.id, { onDelete: "cascade" }),
+  userId: text("user_id").notNull().references(() => user.id, { onDelete: "cascade" }),
+  dismissedAt: timestamp("dismissed_at", { withTimezone: true }).notNull().defaultNow(),
+}, (t) => [primaryKey({ name: "onboarding_dismissal_pk", columns: [t.organizationId, t.userId] })]);
+
 /** A project groups monitors, status pages, channels and maintenance inside one workspace (organization). */
 export const project = pgTable(
   "project",

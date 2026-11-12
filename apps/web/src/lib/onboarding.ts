@@ -1,7 +1,8 @@
 /**
  * First-run checklist on the Monitors dashboard. Every step's state is derived from the workspace's real data (monitors,
  * alert channels, status pages), never from stored progress flags; only "hide this checklist" is remembered, in the
- * browser, per workspace.
+ * browser, per workspace. The dashboard now uses a per-user, per-workspace server record;
+ * the legacy storage helpers below are retained only for old clients/tests and are not read by the current UI.
  */
 
 export type OnboardingCounts = { monitors: number; channels: number; statusPages: number };

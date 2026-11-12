@@ -353,6 +353,8 @@ export const api = {
   /** Without `region` the monitor's own check runs and is recorded; with it one request is sent from there and only returned. */
   checkNow: (id: string, region?: string) => req<SpotCheck>(`/monitors/${id}/check`, { method: "POST", ...(region ? { body: JSON.stringify({ region }) } : {}) }),
   me: () => req<{ userId: string; organization: { id: string; name: string }; projectId: string; user: { name: string; email: string; locale: string | null; emailVerified?: boolean; twoFactorEnabled?: boolean | null } | null }>("/me"),
+  onboardingDismissed: () => req<{ dismissed: boolean }>("/onboarding/dismissal"),
+  dismissOnboarding: () => req<{ dismissed: boolean }>("/onboarding/dismissal", { method: "POST" }),
   setLocale: (locale: "en" | "zh-CN") => req<{ locale: string }>("/me/locale", { method: "PATCH", body: JSON.stringify({ locale }) }),
   counts: () => req<Record<string, number>>("/counts"),
   usage: () => req<Usage>("/usage"),

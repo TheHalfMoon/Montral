@@ -867,4 +867,5 @@ export const zh: Record<string, string> = {
   "Scheduled checks, alerts, webhook capture and public status pages are paused.": "定时检查、告警、Webhook 捕获和公开状态页均已暂停。",
   "Everything resumes as soon as the suspension is lifted.": "暂停解除后，一切将立即恢复。",
   "Contact support to resolve it. You can still switch to another workspace from the workspace menu.": "请联系支持团队处理。你仍可以通过工作区菜单切换到其他工作区。",
+  "Could not save onboarding preference. Please try again.": "无法保存入门清单偏好，请重试。",
 };

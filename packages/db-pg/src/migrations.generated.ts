@@ -304,5 +304,10 @@ export const MIGRATIONS: { tag: string; when: number; sql: string }[] = [
     "tag": "0060_probe_region_operator_audit",
     "when": 1794460366340,
     "sql": "CREATE TABLE \"probe_region_drain_event\" (\n\t\"id\" bigserial PRIMARY KEY NOT NULL,\n\t\"region\" text NOT NULL,\n\t\"action\" text NOT NULL,\n\t\"operator_id\" text NOT NULL,\n\t\"note\" text,\n\t\"created_at\" timestamp with time zone DEFAULT now() NOT NULL,\n\tCONSTRAINT \"probe_region_drain_event_action_chk\" CHECK (\"probe_region_drain_event\".\"action\" in ('drain', 'undrain')),\n\tCONSTRAINT \"probe_region_drain_event_region_chk\" CHECK (char_length(\"probe_region_drain_event\".\"region\") between 1 and 24),\n\tCONSTRAINT \"probe_region_drain_event_note_chk\" CHECK (\"probe_region_drain_event\".\"note\" is null or char_length(\"probe_region_drain_event\".\"note\") <= 200)\n);\n--> statement-breakpoint\nALTER TABLE \"probe_region_state\" ADD COLUMN \"last_undrained_at\" timestamp with time zone;--> statement-breakpoint\nALTER TABLE \"probe_region_state\" ADD COLUMN \"last_undrained_by\" text;--> statement-breakpoint\nCREATE INDEX \"probe_region_drain_event_region_id_idx\" ON \"probe_region_drain_event\" USING btree (\"region\",\"id\");"
+  },
+  {
+    "tag": "0061_onboarding_dismissal",
+    "when": 1794464304047,
+    "sql": "CREATE TABLE \"onboarding_dismissal\" (\n\t\"organization_id\" text NOT NULL,\n\t\"user_id\" text NOT NULL,\n\t\"dismissed_at\" timestamp with time zone DEFAULT now() NOT NULL,\n\tCONSTRAINT \"onboarding_dismissal_pk\" PRIMARY KEY(\"organization_id\",\"user_id\")\n);\n--> statement-breakpoint\nALTER TABLE \"onboarding_dismissal\" ADD CONSTRAINT \"onboarding_dismissal_organization_id_organization_id_fk\" FOREIGN KEY (\"organization_id\") REFERENCES \"public\".\"organization\"(\"id\") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint\nALTER TABLE \"onboarding_dismissal\" ADD CONSTRAINT \"onboarding_dismissal_user_id_user_id_fk\" FOREIGN KEY (\"user_id\") REFERENCES \"public\".\"user\"(\"id\") ON DELETE cascade ON UPDATE no action;"
   }
 ];

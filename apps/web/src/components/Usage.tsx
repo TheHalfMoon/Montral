@@ -43,7 +43,7 @@ export default function Usage() {
   const perMonth = (m: Monitor) => (m.type === "heartbeat" || m.status === "paused" ? 0 : Math.round((30 * 86400) / Math.max(1, m.intervalSec)));
   const top = [...monitors].map((m) => ({ m, n: perMonth(m) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 5);
   const total = monitors.reduce((s, m) => s + perMonth(m), 0);
-  const upgradeUrl = plan?.upgradeUrl;
+  const upgradeUrl = u.canManageBilling === true ? plan?.upgradeUrl : undefined;
   const capPct = plan?.maxActiveMonitors ? Math.min(100, Math.round((activeMonitors / plan.maxActiveMonitors) * 100)) : 0;
   return (
     <>
@@ -56,10 +56,10 @@ export default function Usage() {
               <h2>{plan.name}</h2>
               <small className="muted">{t("Next reset")} {formatResetDate(resetDate(u), lang())} (UTC)</small>
             </div>
-            <div className="plan-actions">
+            {u.canManageBilling === true && <div className="plan-actions">
               {plan.manageUrl && <a className="btn" href={plan.manageUrl}>{t("Manage billing")}</a>}
               {plan.upgradeUrl && <a className="btn primary" href={plan.upgradeUrl}>{t("Change plan")}</a>}
-            </div>
+            </div>}
           </section>
         )}
         <div className="meters">

@@ -125,6 +125,8 @@ export type Usage =
   | { metered: false }
   | {
       metered: true;
+      /** Whether the current workspace role may access owner/admin billing actions. */
+      canManageBilling?: boolean;
       /** when every allowance resets (the start of the next UTC month in this preview) */
       periodEnd?: string;
       credits: Quota | null;

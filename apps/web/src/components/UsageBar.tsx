@@ -15,18 +15,21 @@ import { alertKey, formatResetDate, joinMeters, METER_LABEL, usageAlert, usageBa
 export default function UsageBar() {
   const [alert, setAlert] = useState<UsageAlert | null>(() => usageBarStorage().read());
   const [hidden, setHidden] = useState<string | null>(() => usageBarStorage().dismissed());
+  // A remembered alert must never imply the current workspace role can open Billing.
+  const [canManageBilling, setCanManageBilling] = useState(false);
   useEffect(() => {
     // answered by the shell's early read of /usage (lib/api.ts prefetch), so this costs no request of its own
     const load = () => {
       api.usage().then((u) => {
         const next = usageAlert(u);
+        setCanManageBilling(u.metered && u.canManageBilling === true);
         usageBarStorage().write(next);
         setAlert(next);
         if (!next) setHidden(null);
       }).catch(() => {});
     };
     // another workspace: what this tab remembered belonged to the previous one
-    const onScope = () => { usageBarStorage().write(null); setAlert(null); setHidden(null); load(); };
+    const onScope = () => { usageBarStorage().write(null); setAlert(null); setHidden(null); setCanManageBilling(false); load(); };
     load();
     // a quota refusal: read the allowances again
     window.addEventListener("montral:usage", load);
@@ -45,7 +48,7 @@ export default function UsageBar() {
       <span className="usage-bar-t">{text.replace("{meters}", meters).replace("{date}", date)}</span>
       <span className="usage-bar-a">
         <a className="btn sm" href="/app/usage">{t("View usage")}</a>
-        <a className="btn sm primary" href={alert.upgradeUrl}>{t("Upgrade plan")}</a>
+        {canManageBilling && <a className="btn sm primary" href={alert.upgradeUrl}>{t("Upgrade plan")}</a>}
         <button className="icon-btn" aria-label={t("Dismiss")} onClick={() => { const k = alertKey(alert); usageBarStorage().dismiss(k); setHidden(k); }}>×</button>
       </span>
     </div>

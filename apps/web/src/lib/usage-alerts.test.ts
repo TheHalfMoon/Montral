@@ -3,7 +3,7 @@ import type { Quota, Usage } from "./api";
 import { zh } from "./zh";
 import {
   alertKey, formatResetDate, isQuotaCode, joinMeters, METER_LABEL, meterLevel, nextUtcMonthStart, QUOTA_CODES, QUOTA_MESSAGE, quotaRefusal,
-  resetDate, usageAlert, usageBarStorage, usageMeters,
+  resetDate, usageAlert, usageBarStorage, usageMeters, webhookInboxQuotaNotice,
 } from "./usage-alerts";
 
 // Synthetic allowances only: no figure here describes a real plan.
@@ -56,6 +56,28 @@ describe("usageAlert", () => {
     const out = usageAlert(metered({ emails: q(10, 10) }), NOW)!;
     expect(alertKey(near)).not.toBe(alertKey(out));
     expect(alertKey(near)).toBe(alertKey(usageAlert(metered({ emails: q(9, 10) }), NOW)!));
+  });
+});
+
+describe("webhookInboxQuotaNotice", () => {
+  it("shows no inbox warning on self-hosted, unset, non-exhausted or zero-limit quotas", () => {
+    expect(webhookInboxQuotaNotice({ metered: false }, NOW)).toBeNull();
+    expect(webhookInboxQuotaNotice(null, NOW)).toBeNull();
+    expect(webhookInboxQuotaNotice(metered({ webhookEvents: null }), NOW)).toBeNull();
+    expect(webhookInboxQuotaNotice(metered({ webhookEvents: q(99, 100) }), NOW)).toBeNull();
+    expect(webhookInboxQuotaNotice(metered({ webhookEvents: q(0, 0) }), NOW)).toBeNull();
+  });
+  it("exposes a reset warning to members without exposing billing actions", () => {
+    expect(webhookInboxQuotaNotice(metered({ webhookEvents: q(100, 100), canManageBilling: false }), NOW))
+      .toEqual({ resetsAt: new Date(END), upgradeUrl: null });
+    expect(webhookInboxQuotaNotice(metered({ webhookEvents: q(120, 100) }), NOW)?.upgradeUrl).toBeNull();
+  });
+  it("lets an explicitly authorized manager see an internal billing path only", () => {
+    expect(webhookInboxQuotaNotice(metered({ webhookEvents: q(100, 100), canManageBilling: true }), NOW))
+      .toEqual({ resetsAt: new Date(END), upgradeUrl: "/app/billing" });
+    const hostile = metered({ webhookEvents: q(100, 100), canManageBilling: true,
+      plan: { id: "synthetic", name: "Synthetic plan", maxActiveMonitors: 3, minIntervalSec: 120, upgradeUrl: "https://external.example/" } });
+    expect(webhookInboxQuotaNotice(hostile, NOW)?.upgradeUrl).toBe("/app/billing");
   });
 });
 

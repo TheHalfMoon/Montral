@@ -56,7 +56,8 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
         "emails": 10,                    // monthly notification emails
         "webhookEvents": 300,            // optional: monthly webhook requests the inbox receiver captures
         "browserSeconds": 1200,          // optional: monthly browser-check runtime, in seconds
-        "statusPages": 2                // optional: maximum status pages in this workspace, across projects
+        "statusPages": 2,               // optional: maximum status pages in this workspace, across projects
+        "webhookInboxes": 3             // optional: max webhook inboxes across all workspace projects
       },
       "features": []                     // only features Montral enforces: "hideBranding"
     },
@@ -91,6 +92,18 @@ Deleting a page frees a slot. A plan downgrade never deletes existing pages or h
 refuses new pages until the count falls below the new cap, with HTTP 402 `status_page_limit`.
 Overrides may set or clear a cap only by replacing the `statusPages` numeric value; to restore unlimited behavior,
 remove the field from the catalog entirely (not `null`). The self-hosted Community edition remains unlimited.
+
+**Webhook inbox cap (`webhookInboxes`).** Optional workspace-wide *storage count* limit, not a monthly usage
+meter. Absent preserves existing behavior: up to **10 inboxes per project**, with no additional workspace cap,
+including Community and older operator catalogs. When present, an integer from 0 through 2,000,000,000 bounds
+all inboxes in the workspace, across projects. A zero value disallows new inboxes. Counts are serialized under a
+PostgreSQL workspace advisory lock, including concurrent requests on multiple app replicas. Reaching this workspace
+limit returns HTTP 402 `webhook_inbox_limit`; the existing project-level 10-inbox limit still returns 409.
+Deleting an inbox frees capacity; downgrading does not delete existing inboxes or their events. Remove the field
+(not `null`) to restore legacy behavior. During a **rolling upgrade**, wait until all older replicas have been
+replaced before enabling a non-null workspace limit: older app instances cannot supply the new limit argument,
+although the database retains compatibility with their five-argument creation function.
+This does not meter outbound webhook replay; the bounded replay endpoint remains subject to its existing rate limits.
 
 **Resource meters (`webhookEvents`, `browserSeconds`).** Both are optional, so a catalog written before they existed
 stays valid without edits. An absent meter is **never unlimited**: it gets the built-in conservative default

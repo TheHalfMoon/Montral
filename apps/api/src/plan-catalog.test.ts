@@ -69,6 +69,29 @@ describe("plan catalog", () => {
     expect(catalog.resolve("org-x", null).limits.statusPages).toBe(0);
   });
 
+  it("optionally caps webhook inboxes across projects, including zero and per-workspace overrides", async () => {
+    const limited = plan("beta", 2222, { limits: {
+      activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 2222, emails: 7, webhookInboxes: 3,
+    } });
+    const catalog = await buildPlanCatalog(parsePlanCatalog(doc({
+      plans: [plan("alpha", 111), limited],
+      overrides: [{ organizationId: "org-x", plan: "beta", limits: { webhookInboxes: 0 } }],
+    })), "operator");
+    expect(catalog.resolve("legacy", null).limits.webhookInboxes).toBeUndefined();
+    expect(catalog.resolve("legacy", "beta").limits.webhookInboxes).toBe(3);
+    expect(catalog.resolve("org-x", null).limits.webhookInboxes).toBe(0);
+  });
+
+  it("rejects invalid webhook-inbox caps in plan definitions and overrides", () => {
+    const limits = { activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 5, emails: 7 };
+    for (const value of [-1, 1.5, null, "unlimited", 2_000_000_001]) {
+      expect(issues(doc({ plans: [plan("alpha", 5, { limits: { ...limits, webhookInboxes: value } })] })).join("; "))
+        .toContain("plans.0.limits.webhookInboxes");
+    }
+    expect(issues(doc({ overrides: [{ organizationId: "org-x", limits: { webhookInboxes: -1 } }] })).join("; "))
+      .toContain("overrides.0.limits.webhookInboxes");
+  });
+
   it("rejects invalid status-page caps in plans and overrides", () => {
     const limits = { activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 5, emails: 7 };
     expect(issues(doc({ plans: [plan("alpha", 5, { limits: { ...limits, statusPages: -1 } })] })).join("; ")).toContain("plans.0.limits.statusPages");

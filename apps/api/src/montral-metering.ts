@@ -342,6 +342,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
       id: p.id, name: p.name, maxActiveMonitors: limits.activeMonitors,
       minIntervalSec: limits.minIntervalSec, maxRegions: limits.regions,
       maxStatusPages: limits.statusPages ?? null,
+      maxWebhookInboxes: limits.webhookInboxes ?? null,
       hideBranding: p.features.includes("hideBranding"),
       upgradeUrl: "/app/billing",
     };

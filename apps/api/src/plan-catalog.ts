@@ -34,6 +34,8 @@ const limitsSchema = z.object({
   emails: count,
   /** Optional total status pages across every project in the workspace. Absent keeps legacy unlimited behavior. */
   statusPages: count.optional(),
+  /** Optional maximum inboxes across all projects in the workspace. Absent preserves legacy 10-per-project only. */
+  webhookInboxes: count.optional(),
   /**
    * monthly webhook requests the public receiver captures (one per stored event). Optional for compatibility with
    * catalogs written before it existed: absent means METER_DEFAULTS.webhookEvents (the built-in Free value), never
@@ -114,7 +116,7 @@ const catalogSchema = z.object({
 /** Limits as written in a catalog (the optional meters may be absent). */
 export type PlanLimitsInput = z.infer<typeof limitsSchema>;
 /** Limits as enforced: every meter has a number (absent optional meters filled from METER_DEFAULTS). */
-export type PlanLimits = Required<Omit<PlanLimitsInput, "statusPages">> & Pick<PlanLimitsInput, "statusPages">;
+export type PlanLimits = Required<Omit<PlanLimitsInput, "statusPages" | "webhookInboxes">> & Pick<PlanLimitsInput, "statusPages" | "webhookInboxes">;
 export type PlanFeature = z.infer<typeof planSchema>["features"][number];
 export type CatalogPlan = z.infer<typeof planSchema>;
 export type PlanCatalogDocument = z.infer<typeof catalogSchema>;

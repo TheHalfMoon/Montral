@@ -274,6 +274,10 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
     ) RETURNS uuid LANGUAGE plpgsql AS $montral$
     DECLARE existing_count integer;
     BEGIN
+      -- Lock the workspace first to coordinate with the new optional
+      -- workspace-wide cap while old app replicas still call this legacy
+      -- five-argument function. Lock ordering must match v2.
+      PERFORM pg_advisory_xact_lock(hashtextextended('montral:hook-inbox-org:' || p_org, 0));
       PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_project, 0));
       SELECT COUNT(*) INTO existing_count FROM montral_hook_inbox
         WHERE organization_id = p_org AND project_id = p_project;
@@ -281,6 +285,43 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
       INSERT INTO montral_hook_inbox(id,organization_id,project_id,name,token_hash)
       VALUES (p_id,p_org,p_project,p_name,p_hash);
       RETURN p_id;
+    END;
+    $montral$
+  `);
+  // New replicas use a six-argument function to enforce an *optional* plan
+  // cap across projects. Preserve the legacy five-argument function for
+  // rolling upgrades; both acquire the same workspace->project locks.
+  // Do not activate a workspace cap until every old app replica is upgraded:
+  // old callers have no cap argument, though they still respect 10/project.
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_create_hook_inbox_v2(
+      p_id uuid, p_org text, p_project text, p_name text, p_hash text,
+      p_max integer
+    ) RETURNS TABLE(created_id uuid, failure text) LANGUAGE plpgsql AS $montral$
+    DECLARE project_count integer; workspace_count integer;
+    BEGIN
+      IF p_max IS NOT NULL AND p_max < 0 THEN
+        RAISE EXCEPTION 'invalid inbox cap';
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended('montral:hook-inbox-org:' || p_org, 0));
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_project, 0));
+      SELECT COUNT(*) INTO project_count FROM montral_hook_inbox
+        WHERE organization_id=p_org AND project_id=p_project;
+      IF project_count >= 10 THEN
+        RETURN QUERY SELECT NULL::uuid, 'project_limit'::text;
+        RETURN;
+      END IF;
+      IF p_max IS NOT NULL THEN
+        SELECT COUNT(*) INTO workspace_count FROM montral_hook_inbox
+          WHERE organization_id=p_org;
+        IF workspace_count >= p_max THEN
+          RETURN QUERY SELECT NULL::uuid, 'workspace_limit'::text;
+          RETURN;
+        END IF;
+      END IF;
+      INSERT INTO montral_hook_inbox(id,organization_id,project_id,name,token_hash)
+      VALUES (p_id,p_org,p_project,p_name,p_hash);
+      RETURN QUERY SELECT p_id, NULL::text;
     END;
     $montral$
   `);
@@ -446,14 +487,20 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     const scope = [c.get("orgId"), c.get("projectId")];
     const id = crypto.randomUUID();
     const token = Array.from(crypto.getRandomValues(new Uint8Array(32)), b => b.toString(16).padStart(2, "0")).join("");
-    // The database function acquires its lock THEN counts under a fresh statement
-    // snapshot in the same transaction; this is safe with multiple Workers/Node
-    // instances using independent PostgreSQL connections.
-    const created = await db.query<{ id: string | null }>(
-      "SELECT montral_create_hook_inbox($1::uuid,$2::text,$3::text,$4::text,$5::text) AS id",
-      [id, ...scope, parsed.data.name, await fingerprint(token)],
+    // The database function serializes count+insert using workspace, then
+    // project advisory locks, so two projects or app replicas cannot bypass
+    // either the optional plan cap or the pre-existing hard 10/project limit.
+    const plan = await c.get("entitlements").plan(c.get("orgId"));
+    const maxInboxes = plan?.maxWebhookInboxes ?? null;
+    const created = await db.query<{ created_id: string | null; failure: string | null }>(
+      "SELECT created_id,failure FROM montral_create_hook_inbox_v2($1::uuid,$2::text,$3::text,$4::text,$5::text,$6::integer)",
+      [id, ...scope, parsed.data.name, await fingerprint(token), maxInboxes],
     );
-    if (!created[0]?.id) return c.json({ error: "Inbox limit reached" }, 409);
+    if (created[0]?.failure === "workspace_limit") {
+      return c.json({ error: "Workspace webhook inbox allowance reached", code: "webhook_inbox_limit", limit: maxInboxes,
+        plan: plan?.id, upgradeUrl: plan?.upgradeUrl }, 402);
+    }
+    if (!created[0]?.created_id) return c.json({ error: "Inbox limit reached" }, 409);
     // the secret receiver path is never recorded
     await audit(c, "hook_inbox.create", { type: "hook_inbox", id }, auditChanges({ name: parsed.data.name }));
     return c.json({ id, name: parsed.data.name, path: `/api/hooks/receive/${id}/${token}`, warning: "This secret URL is shown only once. Treat it like a password." }, 201);

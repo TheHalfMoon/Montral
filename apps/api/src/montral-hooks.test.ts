@@ -16,9 +16,16 @@ function fixture(allowReceipt = true, earlyDatabaseRelease?: boolean, opts: Fixt
     close: async () => { closed.push(Date.now()); },
     query: async (sql: string, args: unknown[] = []): Promise<Record<string, unknown>[]> => {
       if (sql.includes("montral_create_hook_inbox")) {
-        if (inboxes.filter(i => i.organization_id === args[1] && i.project_id === args[2]).length >= 10) return [{ id: null }];
-        inboxes.push({ id: String(args[0]), organization_id: String(args[1]), project_id: String(args[2]), name: String(args[3]), token_hash: String(args[4]) });
-        return [{ id: String(args[0]) }];
+        const v2 = sql.includes("montral_create_hook_inbox_v2");
+        const id = String(args[0]);
+        const projectCount = inboxes.filter(i => i.organization_id === args[1] && i.project_id === args[2]).length;
+        const workspaceCount = inboxes.filter(i => i.organization_id === args[1]).length;
+        if (projectCount >= 10) return v2 ? [{ created_id: null, failure: "project_limit" }] : [{ id: null }];
+        if (v2 && args[5] !== null && args[5] !== undefined && workspaceCount >= Number(args[5])) {
+          return [{ created_id: null, failure: "workspace_limit" }];
+        }
+        inboxes.push({ id, organization_id: String(args[1]), project_id: String(args[2]), name: String(args[3]), token_hash: String(args[4]) });
+        return v2 ? [{ created_id: id, failure: null }] : [{ id }];
       }
       if (sql.startsWith("SELECT id,name,created_at")) return inboxes.filter((i) => i.organization_id === args[0] && i.project_id === args[1]).map((i) => ({ id: i.id, name: i.name, created_at: new Date() }));
       if (sql.startsWith("SELECT id FROM montral_hook_inbox")) return inboxes.filter((i) => i.id === args[0] && i.organization_id === args[1] && i.project_id === args[2]).map((i) => ({ id: i.id }));
@@ -108,6 +115,37 @@ describe("Montral webhook security", () => {
     expect(sameHash(await fingerprint(secret), await fingerprint("cd".repeat(32)))).toBe(false);
     expect(sameHash("bad", "bad")).toBe(false);
   });
+  it("enforces optional workspace-wide inbox cap without leaking receiver secrets", async () => {
+    const entitlements: Entitlements = {
+      ...unmetered,
+      plan: async () => ({
+        id: "synthetic", name: "Synthetic", maxActiveMonitors: 4, minIntervalSec: 120,
+        maxWebhookInboxes: 2, upgradeUrl: "/app/billing",
+      }),
+    };
+    const f = fixture(true, undefined, { entitlements });
+    const create = (name: string) => f.app.request("/api/hooks/inboxes", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name }),
+    });
+    const first = await create("First");
+    expect(first.status).toBe(201);
+    const firstId = (await first.json() as { id: string }).id;
+    f.setProject("project-b");
+    expect((await create("Second")).status).toBe(201);
+    const denied = await create("Third");
+    expect(denied.status).toBe(402);
+    const body = await denied.json() as Record<string, unknown>;
+    expect(body).toMatchObject({ code: "webhook_inbox_limit", limit: 2, plan: "synthetic" });
+    expect(body).not.toHaveProperty("path");
+    expect(body).not.toHaveProperty("token");
+    expect(f.inboxes).toHaveLength(2);
+    // Deleting in one project frees a slot for a different project.
+    f.setProject("project-a");
+    expect((await f.app.request(`/api/hooks/inboxes/${firstId}`, { method: "DELETE" })).status).toBe(204);
+    f.setProject("project-b");
+    expect((await create("Replacement")).status).toBe(201);
+  });
+
   it("captures only safe headers, excluding authorization and cookies", () => {
     expect(capturedHeaders(new Headers({ authorization: "Bearer secret", cookie: "a=1", "x-event-type": "push", "content-type": "application/json" }))).toEqual({ "content-type": "application/json", "x-event-type": "push" });
   });

@@ -107,6 +107,43 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
     expect((await a("GET", "/inboxes")).body.inboxes).toHaveLength(10);
   });
 
+  it("atomically enforces an optional workspace inbox cap across two projects and many connections", async () => {
+    const org = `hook-cap-${crypto.randomUUID()}`;
+    const projects = [`hook-project-${crypto.randomUUID()}`, `hook-project-${crypto.randomUUID()}`];
+    const legacyOrg = `legacy-${crypto.randomUUID()}`;
+    const insert = async (index: number, cap: number | null, project = projects[index % 2]) => {
+      const [row] = await database!.query<{ created_id: string | null; failure: string | null }>(
+        "SELECT created_id,failure FROM montral_create_hook_inbox_v2($1::uuid,$2::text,$3::text,$4::text,$5::text,$6::integer)",
+        [crypto.randomUUID(), org, project, `QA inbox ${index}`, "b".repeat(64), cap],
+      );
+      return row;
+    };
+    try {
+      const results = await Promise.all(Array.from({ length: 16 }, (_, i) => insert(i, 3)));
+      expect(results.filter((r) => r.created_id !== null)).toHaveLength(3);
+      expect(results.filter((r) => r.failure === "workspace_limit")).toHaveLength(13);
+      const [count] = await database!.query<{ n: number }>(
+        "SELECT COUNT(*)::int AS n FROM montral_hook_inbox WHERE organization_id=$1", [org]);
+      expect(Number(count.n)).toBe(3);
+      // Deleting one inbox frees one workspace slot, even in another project.
+      const [deleted] = results.filter((r) => r.created_id !== null);
+      await database!.query("DELETE FROM montral_hook_inbox WHERE id=$1", [deleted.created_id]);
+      expect((await insert(17, 3)).created_id).toMatch(/^[0-9a-f-]{36}$/);
+      expect((await insert(18, 3)).failure).toBe("workspace_limit");
+      // The zero cap blocks new creation, including on a fresh project.
+      expect((await insert(19, 0, `fresh-${crypto.randomUUID()}`)).failure).toBe("workspace_limit");
+      // The historical five-argument function is preserved for rolling upgrade.
+      const [legacy] = await database!.query<{ id: string | null }>(
+        "SELECT montral_create_hook_inbox($1::uuid,$2::text,$3::text,$4::text,$5::text) AS id",
+        [crypto.randomUUID(), legacyOrg, projects[0], "Old client", "b".repeat(64)]);
+      expect(legacy.id).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      await database!.query("DELETE FROM montral_hook_inbox WHERE organization_id=$1", [org]);
+      // Old-client seeded org is unique and never part of the workspace-count assertion.
+      await database!.query("DELETE FROM montral_hook_inbox WHERE organization_id=$1", [legacyOrg]);
+    }
+  });
+
   it("keeps the per-inbox 250-event cap under real simultaneous PostgreSQL inserts", async () => {
     const a = await account();
     const created = await a("POST", "/inboxes", { name: "Burst resilience" });

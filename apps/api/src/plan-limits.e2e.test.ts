@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "./app";
 import type { Edition } from "./edition";
 import { unmetered } from "./entitlements";
+import { montralEdition } from "./montral-edition";
 
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests).
 const url = process.env.TEST_DATABASE_URL;
@@ -19,6 +20,16 @@ const small: Edition = {
 
 describe.skipIf(!url)("plan limits", () => {
   const app = createApp(openDatabase, { edition: small });
+  const hookApp = createApp(openDatabase, { edition: {
+    ...montralEdition,
+    entitlements: () => ({
+      ...unmetered,
+      plan: async () => ({
+        id: "small", name: "Small", maxActiveMonitors: 2, minIntervalSec: 300,
+        maxWebhookInboxes: 2, upgradeUrl: "https://example.com/upgrade",
+      }),
+    }),
+  } });
   const raw = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
 
   it("enforces status-page counts atomically across concurrent requests and restores capacity on delete", async () => {
@@ -52,7 +63,35 @@ describe.skipIf(!url)("plan limits", () => {
     expect(removed.status).toBe(204);
     expect((await create(9)).status).toBe(201);
     expect((await create(10)).status).toBe(402);
-  }, 60_000);
+
+    // Qualify the *HTTP* route against an optional workspace-wide webhook
+    // inbox limit. Reuse the same signed-in owner so auth suite rate limits
+    // are not consumed by another synthetic signup.
+    const hookRaw = (path: string, init: RequestInit = {}) =>
+      hookApp.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
+    expect((await hookRaw("/internal/migrate", { method: "POST", headers: { "x-cron-secret": "cron" } })).status).toBe(200);
+    const createInbox = (i: number) => hookRaw("/api/hooks/inboxes", {
+      method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ name: `limited inbox ${i}` }),
+    });
+    const inboxes = await Promise.all(Array.from({ length: 8 }, (_, i) => createInbox(i)));
+    expect(inboxes.filter((r) => r.status === 201)).toHaveLength(2);
+    const refused = inboxes.filter((r) => r.status === 402);
+    expect(refused).toHaveLength(6);
+    for (const r of refused) {
+      expect(await r.json()).toMatchObject({
+        code: "webhook_inbox_limit", limit: 2, plan: "small", upgradeUrl: "https://example.com/upgrade",
+      });
+    }
+    const createdInboxes = await Promise.all(inboxes.filter((r) => r.status === 201)
+      .map((r) => r.json() as Promise<{ id: string }>));
+    const inboxCount = await hookRaw("/api/hooks/inboxes", { headers: { cookie } });
+    expect((await inboxCount.json() as { inboxes: unknown[] }).inboxes).toHaveLength(2);
+    const removeInbox = await hookRaw(`/api/hooks/inboxes/${createdInboxes[0].id}`, { method: "DELETE", headers: { cookie } });
+    expect(removeInbox.status).toBe(204);
+    expect((await createInbox(9)).status).toBe(201);
+    expect((await createInbox(10)).status).toBe(402);
+  }, 90_000);
 
   it("refuses monitors and intervals beyond the plan, and lets paused monitors go free", async () => {
     await raw("/internal/migrate", { method: "POST", headers: { "x-cron-secret": "cron" } });

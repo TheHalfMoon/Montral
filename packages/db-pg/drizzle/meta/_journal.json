@@ -421,6 +421,13 @@
       "when": 1794386275851,
       "tag": "0059_probe_region_state",
       "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1794460366340,
+      "tag": "0060_probe_region_operator_audit",
+      "breakpoints": true
     }
   ]
 }

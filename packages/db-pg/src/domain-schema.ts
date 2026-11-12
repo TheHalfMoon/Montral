@@ -948,6 +948,9 @@ export const probeRegionState = pgTable(
     drainedAt: timestamp("drained_at", { withTimezone: true }),
     drainedBy: text("drained_by"),
     drainNote: text("drain_note"),
+    /** The operator who most recently lifted a drain (not cleared by a later drain). */
+    lastUndrainedAt: timestamp("last_undrained_at", { withTimezone: true }),
+    lastUndrainedBy: text("last_undrained_by"),
     lastAnswerAt: timestamp("last_answer_at", { withTimezone: true }),
     lastUnreachableAt: timestamp("last_unreachable_at", { withTimezone: true }),
     lastUnreachableReason: text("last_unreachable_reason"),
@@ -958,6 +961,25 @@ export const probeRegionState = pgTable(
     check("probe_region_state_region_chk", sql`char_length(${t.region}) between 1 and 24`),
     check("probe_region_state_note_chk", sql`${t.drainNote} is null or char_length(${t.drainNote}) <= 200`),
     check("probe_region_state_reason_chk", sql`${t.lastUnreachableReason} is null or char_length(${t.lastUnreachableReason}) <= 120`),
+  ],
+);
+
+/** Append-only platform-operator actions, not tied to a customer workspace or project. */
+export const probeRegionDrainEvent = pgTable(
+  "probe_region_drain_event",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    region: text("region").notNull(),
+    action: text("action").notNull(),
+    operatorId: text("operator_id").notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("probe_region_drain_event_region_id_idx").on(t.region, t.id),
+    check("probe_region_drain_event_action_chk", sql`${t.action} in ('drain', 'undrain')`),
+    check("probe_region_drain_event_region_chk", sql`char_length(${t.region}) between 1 and 24`),
+    check("probe_region_drain_event_note_chk", sql`${t.note} is null or char_length(${t.note}) <= 200`),
   ],
 );
 

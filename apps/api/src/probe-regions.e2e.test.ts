@@ -100,6 +100,7 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     configureProbes({});
     if (monitorIds.length) await db!.query(`UPDATE monitor SET paused = true, next_check_at = now() + interval '30 days' WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [monitorIds.join(",")]);
     await db!.query(`DELETE FROM probe_region_state WHERE region = ANY(string_to_array($1::text, ','))`, [[...Object.keys(PROBES), "e2e-flip"].join(",")]);
+    await db!.query(`DELETE FROM probe_region_drain_event WHERE region = ANY(string_to_array($1::text, ','))`, [[...Object.keys(PROBES), "e2e-flip"].join(",")]);
     await db?.close(1);
     await new Promise<void>((resolve) => server.close(() => resolve()));
   });
@@ -269,6 +270,7 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     // a customer (not an operator) is refused like everyone else
     const customer = await account();
     expect((await opSend("/api/operator/probes", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
+    expect((await opSend("/api/operator/probes/e2e-west/audit", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
     const op = async (method: string, path: string, body?: unknown) => {
       const r = await opSend(`/api/operator${path}`, { method, headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
@@ -280,12 +282,19 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(ids).toEqual(expect.arrayContaining(Object.keys(PROBES)));
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-west")).toMatchObject({ configured: true, drained: false });
 
+    expect((await op("GET", "/probes/auto/audit")).status).toBe(404);
+    expect((await op("GET", "/probes/e2e-west/audit?limit=101")).status).toBe(400);
     expect((await op("POST", "/probes/auto/drain", {})).status).toBe(404);
     expect((await op("POST", "/probes/nowhere-else/drain", {})).status).toBe(404);
     expect((await op("POST", "/probes/e2e-west/drain", { note: "x".repeat(201) })).status).toBe(400);
     expect((await op("POST", "/probes/e2e-west/drain", { note: "Synthetic maintenance window" })).body).toEqual({ id: "e2e-west", drained: true });
     const drained = (await op("GET", "/probes")).body.regions.find((r: { id: string }) => r.id === "e2e-west");
     expect(drained).toMatchObject({ status: "drained", drained: true, drainNote: "Synthetic maintenance window", drainedBy: operator.userId });
+    const afterDrain = await op("GET", "/probes/e2e-west/audit?limit=1");
+    expect(afterDrain.status).toBe(200);
+    expect(afterDrain.body.region).toBe("e2e-west");
+    expect(afterDrain.body.events).toHaveLength(1);
+    expect(afterDrain.body.events[0]).toMatchObject({ region: "e2e-west", action: "drain", operatorId: operator.userId, note: "Synthetic maintenance window", createdAt: expect.any(String) });
 
     // the scheduler no longer asks the drained region
     const { call } = await account();
@@ -304,6 +313,13 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(spent[workspace] ?? 0).toBe(before);
 
     expect((await op("POST", "/probes/e2e-west/undrain")).body).toEqual({ id: "e2e-west", drained: false });
+    const undrained = (await op("GET", "/probes")).body.regions.find((r: { id: string }) => r.id === "e2e-west");
+    expect(undrained).toMatchObject({ drained: false, drainedBy: null, lastUndrainedBy: operator.userId, lastUndrainedAt: expect.any(String) });
+    const history = await op("GET", "/probes/e2e-west/audit");
+    expect(history.status).toBe(200);
+    expect(history.body.events.slice(0, 2).map((e: { action: string }) => e.action)).toEqual(["undrain", "drain"]);
+    expect(history.body.events[0]).toMatchObject({ operatorId: operator.userId, note: null });
+    expect((await op("GET", "/probes/e2e-west/audit?limit=1")).body.events).toHaveLength(1);
     reset();
     answers["e2e-north"] = { ok: true, statusCode: 200 };
     answers["e2e-west"] = { ok: true, statusCode: 200 };

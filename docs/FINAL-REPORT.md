@@ -1,5 +1,9 @@
 # Montral release-readiness report
 
+**Current integration status (2026-11-13): FULL PRODUCT NO-GO.** The latest inspected `main` baseline is `5096fdc` (PRs #106-#109 merged, each with 16/16 exact-head checks before merging). The combined 11-workflow push qualification was started, but this report does not claim it was green. Operator console PR #110 is separately pending exact-head qualification. The prior `3fbc6e6` candidate and its historical passing checks remain recorded below, not as current release authorization.
+
+Montral Cloud and Enterprise BYOC remain NO-GO pending external provider validation, authorized production infrastructure, legal/privacy review, resilience testing and independent security assessment. No release, tag, live payment, deployment or spend is authorized.
+
 **Status: ENGINEERING COMPLETE FOR THE AGREED CORE CAPABILITIES — PUBLICATION HOLD.**
 Nothing is released, deployed, packaged, published or tagged; that requires the owner's explicit authorization
 (`GREEN LIGHT MONTRAL`). A public repository is not release authorization. No paid service was enabled and no cost was

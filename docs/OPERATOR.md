@@ -1,8 +1,7 @@
 # Operator control plane
 
 Platform staff ("operators") of a hosted Montral deployment can look up workspaces and suspend or unsuspend them, and
-see and drain probe regions. This is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). There is no
-operator UI yet.
+see and drain probe regions. This is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). The unlinked platform console is at `/app/operator`, with per-request server verification of a browser session and a recent second-factor sign-in. This UI grants no new permissions.
 
 ## Who is an operator
 
@@ -141,12 +140,12 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
 
 ## Limitations
 
-- API only; there is no operator UI. Members of a suspended workspace see a dedicated notice in the web app instead
+- The unlinked operator console at `/app/operator` supports workspace and probe controls; the operator API still enforces authentication, MFA, rate limits and audit writes. Members of a suspended workspace see a dedicated notice in the web app instead
   of the page (what is paused, that nothing is deleted, to contact support; never the reason or note), triggered by
   the first `workspace_suspended` refusal; see [CUSTOMER-ONBOARDING.md](CUSTOMER-ONBOARDING.md#suspended-workspace).
   Members can still switch to another workspace from the workspace menu (the auth API).
-- Checks already queued when the suspension is written still run (at most one per monitor). Public status responses
-  may be served from the 30-second public cache for that long after suspending.
+- Previously queued checks are refused when a suspension is visible before monitor load or start (#109); already-started checks and some legacy tokenless in-flight messages can still race.
+- Montral-owned cached status responses are bypassed after a missing or suspended slug is detected (#107); already-delivered external browser/CDN responses may live until their original TTL.
 - A webhook body that started streaming before suspension is rechecked at the final PostgreSQL insert boundary. A
   capture takes an organization key-share lock that conflicts with the operator's suspension lock: if suspension
   commits first, the event is not stored. If the capture takes the lock first, it commits before suspension can

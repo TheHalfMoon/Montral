@@ -12,6 +12,7 @@ Montral currently has a hard limit of 10 webhook inboxes **per project**. A host
 
 ## Qualification
 - Plan-catalog unit tests: missing cap, positive cap, zero override, rejection of negative/fractional/null/text/out-of-range limits.
+- Initial hosted PostgreSQL 17/18 app CI at `b8ebc4e` exposed an outdated in-memory SQL fixture in `montral-hooks.test.ts`: it still returned the legacy `{ id }` shape for the new v2 function, causing dependent unit failures and 404s. Updated the fixture to model `{ created_id, failure }`, both cap reasons, and workspace counting; added a negative-control unit for cross-project capacity and secret-free 402 responses. Focused tests now pass 47/47 locally (API TypeScript PASS). Full DB-backed CI on the new commit remains mandatory.
 - PostgreSQL integration: 16 concurrent inserts across two projects under workspace cap 3 must yield exactly 3 successes and 13 `workspace_limit` responses; delete frees capacity; zero cap denies even a fresh project; old SQL function still works. Cleans up test rows.
 - HTTP integration: 8 concurrent manager-created inboxes under cap 2 must yield exactly 2 creations and 6 structured HTTP 402 responses. Delete one, create one more, and verify next is refused.
 - The existing HTTP regression still enforces 10 per project on uncapped Community.

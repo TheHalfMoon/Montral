@@ -15,6 +15,7 @@ import {
   type IncidentWithUpdates,
   type PushDevice,
   type Repo,
+  type MonitorType,
   type ImportResult,
   type Scope,
 } from "@montral/repo";
@@ -783,15 +784,18 @@ export function createRepo(db: Db): Repo {
       db.select({ kind: schema.browserCheckRun.kind, createdAt: schema.browserCheckRun.createdAt }).from(schema.browserCheckRun)
         .where(eq(schema.browserCheckRun.monitorId, monitorId)).orderBy(desc(schema.browserCheckRun.createdAt), desc(schema.browserCheckRun.id)).limit(Math.min(Math.max(limit, 1), BROWSER_RUNS_KEPT)),
     async pendingUncheckedDigests() {
-      const found = await rows<{ organization_id: string; id: string; name: string; project_id: string | null; reason: string | null }>(db.execute(sql`
-        select m.organization_id, m.id, m.name, m.project_id,
-          (select r.error from browser_check_run r where r.monitor_id = m.id order by r.created_at desc, r.id desc limit 1) as reason
+      const found = await rows<{ organization_id: string; id: string; name: string; project_id: string | null; type: MonitorType; reason: string | null }>(db.execute(sql`
+        select m.organization_id, m.id, m.name, m.project_id, m.type,
+          case when m.type = 'browser' then
+            (select r.error from browser_check_run r where r.monitor_id = m.id order by r.created_at desc, r.id desc limit 1)
+          else 'Scheduled check deferred because workspace plan information was unavailable'
+          end as reason
         from monitor m
-        where m.type = 'browser' and m.paused = false and m.unchecked_since is not null and m.unchecked_notified_at is null
+        where m.paused = false and m.unchecked_since is not null and m.unchecked_notified_at is null
           and not exists (select 1 from workspace_suspension ws where ws.organization_id = m.organization_id)
         order by m.organization_id, m.name limit 1000`));
-      const byOrg = new Map<string, { id: string; name: string; projectId: string | null; reason: string | null }[]>();
-      for (const r of found) (byOrg.get(r.organization_id) ?? byOrg.set(r.organization_id, []).get(r.organization_id)!).push({ id: r.id, name: r.name, projectId: r.project_id, reason: r.reason });
+      const byOrg = new Map<string, { id: string; name: string; projectId: string | null; reason: string | null; type: MonitorType }[]>();
+      for (const r of found) (byOrg.get(r.organization_id) ?? byOrg.set(r.organization_id, []).get(r.organization_id)!).push({ id: r.id, name: r.name, projectId: r.project_id, reason: r.reason, type: r.type });
       return [...byOrg].map(([organizationId, monitors]) => ({ organizationId, monitors }));
     },
     async noteBrowserDeferral(monitorId, intervalSec, reason) {

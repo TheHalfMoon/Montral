@@ -91,7 +91,7 @@ configuration and are not part of the repository.
 
 | # | Item | Sev | Status |
 |---|---|---|---|
-| 53 | Unchecked non-browser monitors (multi-region monitors skipped because a metered plan could not be read) are marked on their page but not included in the unchecked digest email, which covers browser monitors only (#82 follow-up 7) | P2 | Open |
+| 53 | Unchecked non-browser monitors (multi-region monitors skipped because a metered plan could not be read) are marked on their page but not included in the unchecked digest email, which covers browser monitors only (#82 follow-up 7) | P2 | Fix proposed (pending exact-head PostgreSQL CI): pending digest query now includes deferred non-browser monitors; grouped e-mail retains the existing workspace rate limit and project-scoped audit rows, with browser-only copy unchanged. Evidence: `docs/evidence/2026-11-12-nonbrowser-unchecked-digest.md` |
 | 54 | Drain audit: undrain clears `drained_by` instead of recording who lifted the drain; drain events have no platform-level audit trail, only a server log line (#82 follow-up 5) | P3 | Open |
 | 55 | Per-region credit refunds: credits are still charged for every region the plan allows, including regions drained or unreachable for that run; no per-region usage counters (#82 follow-up 3) | P2 | Open |
 | 56 | Webhook replay (outbound) and the inbox count are not metered; existing rate limits apply (#81 limitations) | P2 | Open |

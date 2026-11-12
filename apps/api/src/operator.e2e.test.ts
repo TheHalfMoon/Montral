@@ -335,6 +335,12 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     };
     const s = await seed(S);
     const t = await seed(T);
+    const [deferredHttp] = await db!.query<{ id: string }>(
+      `INSERT INTO monitor (organization_id, project_id, name, target, type, paused, next_check_at)
+       VALUES ($1, $2::uuid, 'Deferred customer API', 'https://example.com/health', 'http', false, now() + interval '30 days') RETURNING id`,
+      [T, t.project],
+    );
+    monitorIds.push(deferredHttp.id);
     try {
       await db!.query(`INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator')`, [S]);
       const at = (org: string) => (org === S ? "1970-01-01T00:00:00Z" : "1970-01-01T00:00:01Z");
@@ -400,11 +406,22 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
       expect(await claimedAt(noticeS)).toEqual({ claimed_at: null, status: "pending" });
       expect((await claimedAt(noticeT)).claimed_at).not.toBeNull();
 
-      // pendingUncheckedDigests: both browser monitors went unchecked; only the active workspace gets a digest
-      await db!.query(`UPDATE monitor SET unchecked_since = now(), unchecked_notified_at = NULL WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [`${s.monitor},${t.monitor}`]);
-      const digests = (await db!.repo.pendingUncheckedDigests!()).map((d) => d.organizationId);
-      expect(digests).toContain(T);
-      expect(digests).not.toContain(S);
+      // pendingUncheckedDigests: both browser monitors and the active non-browser monitor are unchecked.
+      // One workspace gets one digest containing all types; the suspended workspace stays excluded.
+      await db!.query(`UPDATE monitor SET unchecked_since = now(), unchecked_notified_at = NULL WHERE id = ANY(string_to_array($1::text, ',')::uuid[])`, [`${s.monitor},${t.monitor},${deferredHttp.id}`]);
+      const digests = await db!.repo.pendingUncheckedDigests!();
+      expect(digests.map((d) => d.organizationId)).toContain(T);
+      expect(digests.map((d) => d.organizationId)).not.toContain(S);
+      const active = digests.find((d) => d.organizationId === T)!;
+      expect(active.monitors.map((m) => m.id).sort()).toEqual([t.monitor, deferredHttp.id].sort());
+      expect(active.monitors.find((m) => m.id === deferredHttp.id)).toMatchObject({
+        name: "Deferred customer API", type: "http", reason: "Scheduled check deferred because workspace plan information was unavailable",
+      });
+      // A paused or already-notified monitor must not reappear in the digest.
+      await db!.query(`UPDATE monitor SET paused = true WHERE id = $1::uuid`, [deferredHttp.id]);
+      expect((await db!.repo.pendingUncheckedDigests!()).find((d) => d.organizationId === T)?.monitors.map((m) => m.id)).not.toContain(deferredHttp.id);
+      await db!.query(`UPDATE monitor SET paused = false, unchecked_notified_at = now() WHERE id = $1::uuid`, [deferredHttp.id]);
+      expect((await db!.repo.pendingUncheckedDigests!()).find((d) => d.organizationId === T)?.monitors.map((m) => m.id)).not.toContain(deferredHttp.id);
 
       // monthly reports, legacy and with recipients: both workspaces opted in; the first by id is the suspended one
       await db!.query(`INSERT INTO workspace_setting (organization_id, monthly_report) VALUES ($1, true), ($2, true)`, [S, T]);

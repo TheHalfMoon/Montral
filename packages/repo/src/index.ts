@@ -178,8 +178,8 @@ export type BrowserRun = {
   usedSecrets: boolean;
 };
 export type NewBrowserRun = Omit<BrowserRun, "id" | "createdAt" | "hasScreenshot" | "kind" | "usedSecrets"> & { screenshot?: Uint8Array | null; kind?: BrowserRun["kind"]; usedSecrets?: boolean; /** the monitor's browserSecretsVersion when the run started */ secretsVersion?: number };
-/** Browser monitors of one workspace that went unchecked and are not yet in a digest to its owners and admins. */
-export type UncheckedDigest = { organizationId: string; monitors: { id: string; name: string; projectId: string | null; reason: string | null }[] };
+/** Monitors of one workspace that went unchecked and are not yet in a digest to its owners and admins. */
+export type UncheckedDigest = { organizationId: string; monitors: { id: string; name: string; projectId: string | null; reason: string | null; type?: MonitorType }[] };
 export type NewCheck = { monitorId: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null; region?: string };
 /** One region's result of a run that was checked from several. */
 export type RegionResult = { region: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null; error?: string | null };

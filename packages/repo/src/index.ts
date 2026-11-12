@@ -695,9 +695,10 @@ export interface Repo {
    * the previous *scheduled* time (not the time the check finished), so a fixed cron tick never skips a whole interval.
    */
   claimDue(limit: number): Promise<Monitor[]>;
+  /** Load queued monitors, omitting workspaces suspended since they were leased. */
   monitorsByIds(ids: string[]): Promise<Monitor[]>;
   /**
-   * Mark claimed runs as started by their monotonic generation. Older generations are discarded, even after a newer
+   * Mark claimed runs as started by their monotonic generation. A suspended workspace may not start a queued run. Older generations are discarded, even after a newer
    * run; `token` is the leased deadline, retained for old messages and heartbeat validation.
    *
    * Stale runs are coalesced: a generation-based run is also not started (superseded: never checked or billed) when a

@@ -106,7 +106,7 @@ repository.
 | Multi-region confirmation and plan region cap | n/a (one region) | P (simulated probes) | n/a | #82; no deployed probes; credits for drained/unreachable regions (ledger 55); drain audit (ledger 54); digest gap (ledger 53) |
 | Onboarding checklist | Y | Y | Y | #83 |
 | Usage banner, meters, quota messages, suspended notice | n/a | Y (states mocked in e2e) | n/a | #83; late first-load banners (ledger 59) |
-| No-egress reference deployment | n/a | n/a | Y (reference) | #79; server process only; browser-side Google Fonts documented, not blocked (ledger 73); child processes and the browser-runner container not covered |
+| No-egress reference deployment | n/a | n/a | Y (reference) | #79; server process only; browser-side external font requests removed in #90 (ledger 73, CI pending); child processes and the browser-runner container not covered |
 | Production hosting, email provider, payment provider, legal terms, external pen test | n/a | N | N (pen test, legal) | external blockers, `docs/RELEASE-GATES.md` §S.4 |
 
 ## Prioritised gaps

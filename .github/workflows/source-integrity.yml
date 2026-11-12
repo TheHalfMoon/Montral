@@ -20,6 +20,10 @@ jobs:
         run: python3 scripts/verify_sources.py
       - name: Verify active Montral branding
         run: bash scripts/verify-active-branding.sh
+      - name: Verify no external font loads
+        run: |
+          node scripts/verify-no-remote-fonts.mjs --negative-control
+          node scripts/landing-csp.mjs --check
       - name: Verify Montral license
         run: |
           test -s LICENSE

@@ -111,7 +111,7 @@ configuration and are not part of the repository.
 | 70 | #76's PR body lists as a limitation that a session created before 2FA was enabled counts once 2FA is on (operator gate) | P2 | Superseded on `main`: the review fix in #76 added `operator_mfa_session`; `docs/OPERATOR.md` (operator identity, item 3) now requires a session created by a second-factor sign-in within 12 h, and the enrolling session is not recorded. Covered by `operator.e2e` and the #82 write-route negative tests |
 | 71 | Operator plane UI and drain events in a platform audit trail are covered by rows 54 and 63 | — | See rows 54, 63 |
 | 72 | Replica restart coverage test lows: a restart window ends when Docker reports the replica healthy, so it may include a few seconds after it is serving; the negative control exercises the gate, not where the snapshots are taken; an in-flight `curl` completing after `kill` may cause a false failure (#80) | P3 | Accepted for now |
-| 73 | BYOC: no setting to disable Google Fonts (loaded by the end user's browser; block at the egress proxy or fork the layout) (#79, `docs/BYOC.md` §10) | P3 | Open |
+| 73 | BYOC: avoid requests to external Google Fonts hosts in the end-user browser | P3 | Resolved by #90: Montral application, static landings and preview use system font fallback; CSP no longer allows the remote font hosts, and a negative-controlled source gate plus BYOC HTML check reject regressions. CI qualification pending. |
 
 ## External dependencies (cannot be closed in engineering)
 

@@ -84,7 +84,29 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     const dialog = page.locator(".modal form");
     await dialog.getByLabel("Title").fill(lockedTitle);
     await dialog.getByLabel("Slug").fill(lockedSlug);
-    await dialog.getByRole("button", { name: "Create", exact: true }).click();
+    // On narrow viewports the Slug label previously covered the Create button.
+    // Verify the real pointer target before submitting instead of force-clicking.
+    const create = dialog.getByRole("button", { name: "Create", exact: true });
+    await create.scrollIntoViewIfNeeded();
+    const clickTarget = await create.evaluate((button) => {
+      const bounds = button.getBoundingClientRect();
+      const target = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
+      return {
+        hittable: target === button || (target !== null && button.contains(target)),
+        bottom: bounds.bottom,
+        viewportHeight: window.innerHeight,
+      };
+    });
+    expect(clickTarget.hittable).toBe(true);
+    if (test.info().project.name.startsWith("mobile")) {
+      // A near-bottom action can be intercepted when the focused Slug field
+      // triggers Chromium's mobile viewport scroll during a real pointer click.
+      expect(clickTarget.bottom).toBeLessThan(clickTarget.viewportHeight - 48);
+    }
+    // Playwright's trial action performs the same scroll/pointer-interception
+    // checks as the real click without submitting the form.
+    await create.click({ trial: true });
+    await create.click();
     await expect(page).toHaveURL(/\/app\/status-pages\/[^/]+$/);
     await page.getByRole("radio", { name: "Password or share link" }).click();
     await expect(page.getByRole("radio", { name: "Password or share link" })).toHaveAttribute("aria-checked", "true");

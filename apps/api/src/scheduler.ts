@@ -693,21 +693,28 @@ export function shouldMarkUnchecked(recent: { kind: string; createdAt: Date }[],
 const escapeHtml = (v: string) => v.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" } as Record<string, string>)[c]);
 
 /**
- * One e-mail per workspace (to each owner and admin, within the workspace's e-mail allowance) listing its browser
- * monitors that went unchecked and why, in fixed words; at most UNCHECKED_DIGESTS_PER_HOUR per hour per workspace
+ * One e-mail per workspace (to each owner and admin, within the workspace's e-mail allowance) listing every
+ * monitor that went unchecked and why (browser runtime errors or deferred non-browser checks); at most UNCHECKED_DIGESTS_PER_HOUR per hour per workspace
  * (counted in the database, shared by every server). Monitors that go unchecked meanwhile wait for the next digest.
  * Every recipient is logged in the alert log (monitor.unchecked).
  */
 export async function sendUncheckedDigests(repo: Repo, entitlements: Entitlements = unmetered) {
   if (!repo.pendingUncheckedDigests || !repo.markUncheckedNotified) return;
   for (const d of await repo.pendingUncheckedDigests()) {
+    // Preserve the existing shared rate-limit key on upgrade; using a new key
+    // would allow a second digest within the same hour during a rolling deploy.
     if (!(await repo.withinLimit(`browser-unchecked-digest:${d.organizationId}`, UNCHECKED_DIGESTS_PER_HOUR, 3600))) continue;
     const emails = repo.managerEmails ? await repo.managerEmails(d.organizationId) : [];
     const granted = emails.length ? await entitlements.spendEmails(d.organizationId, emails.length).catch(() => (entitlements.failClosed ? 0 : emails.length)) : 0;
     const allowed = Number.isSafeInteger(granted) ? Math.max(0, Math.min(granted, emails.length)) : 0;
-    const names = d.monitors.map((m) => `- ${m.name}: ${m.reason ?? "browser check did not run"}`).join("\n");
-    const subject = d.monitors.length === 1 ? `${d.monitors[0].name}: browser checks are not running` : `${d.monitors.length} browser monitors are not being checked`;
-    const text = `These browser monitors have not been checked for a while and are shown as unchecked until a check runs again:\n\n${names}\n\nThe browser runtime's state is on each monitor's page. You get at most one such e-mail per hour for this workspace.`;
+    // Keep existing browser-only wording. A failed usage-plan read can also leave
+    // HTTP, TCP and other region-backed monitors unchecked; never call those browser monitors.
+    const browserOnly = d.monitors.every((m) => !m.type || m.type === "browser");
+    const kind = browserOnly ? "browser monitors" : "monitors";
+    const names = d.monitors.map((m) => `- ${m.name}: ${m.reason ?? ((!m.type || m.type === "browser") ? "browser check did not run" : "check did not run")}`).join("\n");
+    const subject = d.monitors.length === 1 ? `${d.monitors[0].name}: ${browserOnly ? "browser checks" : "checks"} are not running` : `${d.monitors.length} ${kind} are not being checked`;
+    const details = browserOnly ? "The browser runtime's state is on each monitor's page." : "Details are on each monitor's page.";
+    const text = `These ${kind} have not been checked for a while and are shown as unchecked until a check runs again:\n\n${names}\n\n${details} You get at most one such e-mail per hour for this workspace.`;
     const html = `<p>${escapeHtml(text).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</p>`;
     // the e-mail (to managers, who see every project) lists everything; the alert log gets one row per project, naming
     // only that project's monitors, so a member scoped to one project never reads another project's monitor names
@@ -724,7 +731,8 @@ export async function sendUncheckedDigests(repo: Repo, entitlements: Entitlement
     const rows = [];
     for (const [projectId, mons] of byProject) {
       const summary = mons.map((m) => `${m.name} (${m.reason ?? "did not run"})`).join(", ").slice(0, 400);
-      const base = { organizationId: d.organizationId, projectId, channelId: null, channelName: "Owners and admins (email)", channelType: "email", kind: "monitor.unchecked", incidentId: null, monitorName: mons.length === 1 ? mons[0].name : `${mons.length} browser monitors` };
+      const projectHasNonBrowser = mons.some((m) => m.type && m.type !== "browser");
+      const base = { organizationId: d.organizationId, projectId, channelId: null, channelName: "Owners and admins (email)", channelType: "email", kind: "monitor.unchecked", incidentId: null, monitorName: mons.length === 1 ? mons[0].name : `${mons.length} ${projectHasNonBrowser ? "monitors" : "browser monitors"}` };
       for (const o of outcomes) rows.push({ ...base, ok: o.status === "sent", status: o.status, error: o.error, statusMessage: `${o.label}; unchecked: ${summary}` });
     }
     await repo.logDeliveries(rows);

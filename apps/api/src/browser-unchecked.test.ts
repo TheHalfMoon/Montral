@@ -370,6 +370,40 @@ describe("digest to owners and admins", () => {
     expect(`${p2.statusMessage} ${p2.monitorName}`).not.toMatch(/Checkout|Login/);
   });
 
+  it("includes non-browser plan deferrals in the manager digest and keeps project audit rows isolated", async () => {
+    configureEmail({ EMAIL_FROM: "alerts@example.com" } as never);
+    const sent: { subject: string; text: string }[] = [];
+    setMailTransport(async (mail) => void sent.push(mail));
+    const deliveries: Partial<AlertDelivery>[] = [];
+    const notified: string[] = [];
+    const mixed: UncheckedDigest = { organizationId: "o", monitors: [
+      { id: "b", type: "browser", name: "Checkout journey", projectId: "p1", reason: RUNNER_UNREACHABLE },
+      { id: "h", type: "http", name: "Customer API", projectId: "p1", reason: "Scheduled check deferred because workspace plan information was unavailable" },
+      { id: "t", type: "tcp", name: "Private database", projectId: "p2", reason: "Scheduled check deferred because workspace plan information was unavailable" },
+    ] };
+    const repo = {
+      pendingUncheckedDigests: async () => [mixed],
+      markUncheckedNotified: async (ids: string[]) => { notified.push(...ids); },
+      withinLimit: async () => true,
+      managerEmails: async () => ["owner@example.com"],
+      logDeliveries: async (rows: Partial<AlertDelivery>[]) => void deliveries.push(...rows),
+    } as unknown as Repo;
+    await sendUncheckedDigests(repo);
+    expect(sent).toHaveLength(1);
+    expect(sent[0].subject).toBe("3 monitors are not being checked");
+    for (const m of mixed.monitors) expect(sent[0].text).toContain(m.name);
+    expect(sent[0].text).not.toContain("These browser monitors");
+    expect(notified).toEqual(["b", "h", "t"]);
+    expect(deliveries).toHaveLength(2);
+    const p1 = deliveries.find((row) => row.projectId === "p1")!;
+    const p2 = deliveries.find((row) => row.projectId === "p2")!;
+    expect(p1.monitorName).toBe("2 monitors");
+    expect(p1.statusMessage).toContain("Customer API");
+    expect(p1.statusMessage).not.toContain("Private database");
+    expect(p2.statusMessage).toContain("Private database");
+    expect(p2.statusMessage).not.toContain("Customer API");
+  });
+
   it("respects the workspace's e-mail allowance", async () => {
     const sent: string[] = [];
     configureEmail({ EMAIL_FROM: "alerts@example.com" } as never);

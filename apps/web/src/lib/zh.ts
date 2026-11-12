@@ -873,4 +873,8 @@ export const zh: Record<string, string> = {
   "There are not enough checks left this period for this check. The allowance resets on {date}.": "本周期剩余的检查额度不足，无法执行此次检查。额度将在 {date} 重置。",
   "There is not enough browser check time left this period for this check. It resets on {date}.": "本周期剩余的浏览器检查时间不足，额度将在 {date} 重置。",
   "This workspace's webhook events for this period are used up. New requests are refused until {date}.": "此工作区本周期的 Webhook 事件额度已用尽。新的请求会被拒绝，直到 {date}。",
+  "Drained": "已暂停",
+  "Plan limit": "方案限制",
+  "Region is drained and not being checked": "此区域已由运维人员暂停，不再执行检查",
+  "Region is not checked under the current plan": "当前方案不检查此区域",
 };

@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { ago, api, type Channel, type CheckResult, type Incident, type Monitor, type RegionStat, type SpotCheck } from "../lib/api";
 import { pollWhileVisible } from "../lib/poll";
 import { groupRuns } from "../lib/runs";
+import { regionRunState } from "../lib/regions";
 import { MonitorForm } from "./Monitors";
 import QuotaNotice, { type QuotaRefusal } from "./QuotaNotice";
 import { quotaRefusal } from "../lib/usage-alerts";
@@ -23,6 +24,8 @@ export default function MonitorDetail({ id }: { id: string }) {
   // an allowance used up (hosted edition): explained with its reset date and an upgrade link instead of the raw error
   const [quota, setQuota] = useState<QuotaRefusal | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
+  const [drainedIds, setDrainedIds] = useState<string[]>([]);
+  const [maxPerMonitor, setMaxPerMonitor] = useState<number | null>(null);
   // the answer to the last single-region request, shown under the regions table
   const [spot, setSpot] = useState<{ region: string; run: NonNullable<SpotCheck["result"]> } | null>(null);
   const [spotFrom, setSpotFrom] = useState("");
@@ -42,12 +45,18 @@ export default function MonitorDetail({ id }: { id: string }) {
   const load = () => api.monitor(id).then((d) => { adoptProject(d.projectId); setM(d as Detail); });
   useEffect(() => {
     load().then(() => api.channels().then(setChannels)).catch(() => {});
-    api.regions().then((r) => setNames(Object.fromEntries(r.regions.map((x) => [x.id, x.name])))).catch(() => {});
-    return pollWhileVisible(load, 10000);
+    const loadRegions = () => api.regions().then((r) => {
+      setNames(Object.fromEntries(r.regions.map((x) => [x.id, x.name])));
+      setDrainedIds(r.regions.filter((x) => x.drained).map((x) => x.id));
+      setMaxPerMonitor(r.maxPerMonitor);
+    }).catch(() => {});
+    void loadRegions();
+    return pollWhileVisible(() => { void load().catch(() => {}); void loadRegions(); }, 10000);
   }, [id]);
   if (!m) return <p className="muted">{t("Loading…")}</p>;
 
   const configured = m.regions?.length ? m.regions : ["auto"];
+  const drained = new Set(drainedIds);
   // a multi-region check records one row per region at the same moment: the chart and the table treat those as one run
   const runs = groupRuns(m.results, configured);
   const chrono = [...runs].reverse();
@@ -165,16 +174,23 @@ export default function MonitorDetail({ id }: { id: string }) {
           {probable && (multi || places.length > 1) && (
             <div className="card cc">
               <div className="cc-h"><h3>{t("Regions")}</h3><span className="faint" style={{ fontSize: 13 }}>{t("last 24 h")}</span></div>
-              {stats.map((s) => (
-                <div className="rr reg" key={s.region} title={s.last?.error ?? undefined}>
-                  <i className={`dot ${s.last ? (s.last.ok ? "up" : "down") : "n"}`} aria-label={s.last ? (s.last.ok ? t("OK") : t("Failed")) : undefined} />
-                  <span className="reg-n">{regionName(s.region)}</span>
+              {stats.map((s) => {
+                const mode = regionRunState(configured, s.region, maxPerMonitor, drained);
+                const note = mode === "drained" ? t("Region is drained and not being checked")
+                  : mode === "plan-capped" ? t("Region is not checked under the current plan") : null;
+                return <div className="rr reg" key={s.region} title={note ?? s.last?.error ?? undefined}>
+                  <i className={`dot ${mode === "active" && s.last ? (s.last.ok ? "up" : "down") : "n"}`}
+                    aria-label={note ?? (s.last ? (s.last.ok ? t("OK") : t("Failed")) : undefined)} />
+                  <span className="reg-n">{regionName(s.region)}
+                    {mode === "drained" && <small className="faint"> · {t("Drained")}</small>}
+                    {mode === "plan-capped" && <small className="faint"> · {t("Plan limit")}</small>}
+                  </span>
                   <span className="mono reg-v">
                     <b>{s.uptime24h == null ? "—" : `${s.uptime24h}%`}</b>
                     <small>{s.avgLatency24h == null ? "—" : `${s.avgLatency24h} ms`}</small>
                   </span>
-                </div>
-              ))}
+                </div>;
+              })}
               {places.length > 1 && (
                 <div className="spot">
                   <span className="faint">{t("Test once from")}</span>

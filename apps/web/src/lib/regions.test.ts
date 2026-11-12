@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { regionLocked, toggleRegion } from "./regions";
+import { regionLocked, regionRunState, toggleRegion } from "./regions";
 
 describe("toggleRegion", () => {
   it("replaces auto with the first region picked", () => {
@@ -17,6 +17,29 @@ describe("toggleRegion", () => {
   it("falls back to auto when the last one is switched off", () => {
     expect(toggleRegion(["us-east"], "us-east", 3)).toEqual(["auto"]);
     expect(toggleRegion(["us-east", "eu-central"], "us-east", 3)).toEqual(["eu-central"]);
+  });
+});
+
+describe("regionRunState", () => {
+  it("shows a drained probe without confusing its historical uptime with a current check", () => {
+    const configured = ["us-east", "eu-central"];
+    const drained = new Set(["eu-central"]);
+    expect(regionRunState(configured, "eu-central", null, drained)).toBe("drained");
+    expect(regionRunState(configured, "us-east", null, drained)).toBe("active");
+    expect(regionRunState(configured, "auto", null, drained)).toBe("historical");
+  });
+  it("marks regions beyond a downgraded plan cap even when also drained", () => {
+    const configured = ["us-east", "eu-central", "ap-southeast"];
+    const drained = new Set(["eu-central", "ap-southeast"]);
+    expect(regionRunState(configured, "us-east", 1, drained)).toBe("active");
+    expect(regionRunState(configured, "eu-central", 1, drained)).toBe("plan-capped");
+    expect(regionRunState(configured, "ap-southeast", 1, drained)).toBe("plan-capped");
+    expect(regionRunState(configured, "eu-central", 2, drained)).toBe("drained");
+  });
+  it("does not label scheduler auto as drained, and preserves old unconfigured history", () => {
+    expect(regionRunState(["auto"], "auto", 1, new Set(["auto"]))).toBe("active");
+    expect(regionRunState(["us-east"], "eu-central", null, new Set(["eu-central"]))).toBe("historical");
+    expect(regionRunState(["us-east", "us-east", "eu-central"], "eu-central", 1, new Set())).toBe("plan-capped");
   });
 });
 

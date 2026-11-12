@@ -91,4 +91,43 @@ test("operator console is denied by default and confirms every synthetic state c
   await expect(probes.getByRole("button", { name: "Drain", exact: true })).toBeVisible();
   expect(posted[3]?.path).toBe("/probes/synthetic-east/undrain");
   await checkA11y(page, testInfo, "operator-console-synthetic");
+
+  // A successful search begun under the old session must not reopen an operator UI after
+  // a concurrent request proves that the session has lost operator access.
+  let releaseDenied!: () => void;
+  let releaseSearch!: () => void;
+  const deniedGate = new Promise<void>((resolve) => { releaseDenied = resolve; });
+  const searchGate = new Promise<void>((resolve) => { releaseSearch = resolve; });
+  await page.route((url) => url.pathname.startsWith("/api/operator/"), async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/operator/probes") {
+      await deniedGate;
+      return answer(route, 403, { error: "private server denial" });
+    }
+    if (url.pathname === "/api/operator/workspaces" && url.searchParams.get("q") === "delayed") {
+      await searchGate;
+      return answer(route, 200, { workspaces: [workspace()], next: null });
+    }
+    return route.fallback();
+  });
+  await probes.getByRole("button", { name: "Refresh regions" }).click();
+  await page.getByRole("textbox", { name: "Search workspaces" }).fill("delayed");
+  const requested = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname === "/api/operator/workspaces" && url.searchParams.get("q") === "delayed";
+  });
+  await page.getByRole("button", { name: "Search", exact: true }).click();
+  await requested;
+  releaseDenied();
+  await expect(page.getByRole("heading", { name: "Operator access denied" })).toBeVisible();
+  const oldResponse = page.waitForResponse((res) => {
+    const url = new URL(res.url());
+    return url.pathname === "/api/operator/workspaces" && url.searchParams.get("q") === "delayed";
+  });
+  releaseSearch();
+  await oldResponse;
+  await page.waitForTimeout(100);
+  await expect(page.getByRole("heading", { name: "Operator access denied" })).toBeVisible();
+  await expect(page.getByText("Synthetic Platform")).toHaveCount(0);
+  await expect(page.getByText("private server denial")).toHaveCount(0);
 });

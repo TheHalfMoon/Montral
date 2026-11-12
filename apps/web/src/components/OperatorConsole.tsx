@@ -20,6 +20,8 @@ export default function OperatorConsole() {
   const [detailLoading, setDetailLoading] = useState(false);
   const selectedRef = useRef<string | null>(null);
   const requestSeq = useRef(0);
+  // A denied operator session must never be re-opened by an older in-flight success.
+  const accessRevoked = useRef(false);
   const [reason, setReason] = useState<SuspensionReason>("operator");
   const [note, setNote] = useState("");
   const [confirmation, setConfirmation] = useState("");
@@ -31,6 +33,9 @@ export default function OperatorConsole() {
 
   function failure(e: unknown) {
     if (e instanceof OperatorRequestError && e.status === 403) {
+      accessRevoked.current = true;
+      requestSeq.current++;
+      selectedRef.current = null;
       setAccess("denied");
       setRows([]); setNext(null); setDetail(null); setRegions([]);
       return "Operator access is unavailable. Sign in with password and a fresh second factor.";
@@ -39,56 +44,62 @@ export default function OperatorConsole() {
   }
 
   async function refresh(q: string, cursor?: string) {
+    if (accessRevoked.current) return;
     const seq = ++requestSeq.current;
     setBusy(true); setError(""); setFeedback("");
     try {
       const data = await operatorApi.listWorkspaces(q, cursor);
-      if (seq !== requestSeq.current) return;
+      if (seq !== requestSeq.current || accessRevoked.current) return;
       setAccess("ok"); setRows(data.workspaces); setNext(data.next); setApplied(q);
     } catch (e) {
-      if (seq !== requestSeq.current) return;
+      if (seq !== requestSeq.current || accessRevoked.current) return;
       setError(failure(e));
       if (!(e instanceof OperatorRequestError && e.status === 403) && access === "loading") setAccess("error");
     } finally { if (seq === requestSeq.current) setBusy(false); }
   }
 
   async function refreshRegions() {
-    try { setRegions((await operatorApi.probes()).regions); setProbesError(""); }
-    catch (e) { setProbesError(failure(e)); }
+    if (accessRevoked.current) return;
+    try {
+      const loaded = await operatorApi.probes();
+      if (!accessRevoked.current) { setRegions(loaded.regions); setProbesError(""); }
+    } catch (e) { if (!accessRevoked.current) setProbesError(failure(e)); }
   }
 
   useEffect(() => {
     let alive = true;
     operatorApi.listWorkspaces().then(async (data) => {
-      if (!alive) return;
+      if (!alive || accessRevoked.current) return;
       setRows(data.workspaces); setNext(data.next); setAccess("ok");
-      try { const probes = await operatorApi.probes(); if (alive) setRegions(probes.regions); }
-      catch { if (alive) setProbesError("Probe regions could not be loaded."); }
+      try { const probes = await operatorApi.probes(); if (alive && !accessRevoked.current) setRegions(probes.regions); }
+      catch { if (alive && !accessRevoked.current) setProbesError("Probe regions could not be loaded."); }
     }).catch((e) => { if (alive) { setError(failure(e)); setAccess(e instanceof OperatorRequestError && e.status === 403 ? "denied" : "error"); } });
     return () => { alive = false; requestSeq.current++; };
   }, []);
 
   async function selectWorkspace(id: string) {
+    if (accessRevoked.current) return;
     selectedRef.current = id;
     setDetail(null); setDetailLoading(true); setError(""); setFeedback(""); setConfirmation(""); setNote("");
     try {
       const data = await operatorApi.workspace(id);
-      if (selectedRef.current === id) setDetail(data);
-    } catch (e) { if (selectedRef.current === id) setError(failure(e)); }
-    finally { if (selectedRef.current === id) setDetailLoading(false); }
+      if (selectedRef.current === id && !accessRevoked.current) setDetail(data);
+    } catch (e) { if (selectedRef.current === id && !accessRevoked.current) setError(failure(e)); }
+    finally { if (selectedRef.current === id && !accessRevoked.current) setDetailLoading(false); }
   }
 
   async function changeWorkspace(e: SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!detail || busy || !operatorActionConfirmed(detail.slug, confirmation, note, 500)) return;
+    if (accessRevoked.current || !detail || busy || !operatorActionConfirmed(detail.slug, confirmation, note, 500)) return;
     const id = detail.id;
     setBusy(true); setError(""); setFeedback("");
     try {
       if (detail.suspended) await operatorApi.unsuspend(id);
       else await operatorApi.suspend(id, reason, note);
+      if (accessRevoked.current) return;
       setConfirmation(""); setNote("");
       const fresh = await operatorApi.workspace(id);
-      if (selectedRef.current === id) setDetail(fresh);
+      if (selectedRef.current === id && !accessRevoked.current) setDetail(fresh);
       setRows((old) => old.map((w) => w.id === id ? { ...w, suspended: fresh.suspended } : w));
       setFeedback(fresh.suspended ? "Workspace suspension recorded." : "Workspace suspension lifted.");
     } catch (err) { setError(failure(err)); }
@@ -96,11 +107,12 @@ export default function OperatorConsole() {
   }
 
   async function changeRegion(region: OperatorRegion) {
-    if (busy || !operatorActionConfirmed(region.id, probeConfirm, probeNote, 200)) return;
+    if (accessRevoked.current || busy || !operatorActionConfirmed(region.id, probeConfirm, probeNote, 200)) return;
     setBusy(true); setError(""); setFeedback("");
     try {
       if (region.drained) await operatorApi.undrain(region.id);
       else await operatorApi.drain(region.id, probeNote);
+      if (accessRevoked.current) return;
       setProbeEditing(null); setProbeConfirm(""); setProbeNote("");
       await refreshRegions();
       setFeedback(region.drained ? "Probe region undrained." : "Probe region drained.");

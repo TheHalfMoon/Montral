@@ -27,6 +27,7 @@ test("operator console is denied by default and confirms every synthetic state c
 
   let suspended = false;
   let drained = false;
+  let denyProbeOnFirstMock = true;
   const posted: { path: string; body: Record<string, unknown> }[] = [];
   const workspace = () => ({
     id: "synthetic-org-1", name: "Synthetic Platform", slug: "synthetic-platform",
@@ -56,10 +57,18 @@ test("operator console is denied by default and confirms every synthetic state c
       ...workspace(), suspension: suspended ? { reason: "operator", note: null, suspendedBy: "synthetic",
         suspendedAt: "2026-01-01T00:00:00.000Z" } : null, usage: { credits: null, emails: null },
     });
-    if (path === "/probes") return answer(route, 200, { auto: { monitors: 0 }, regions: [region()] });
+    if (path === "/probes") return denyProbeOnFirstMock
+      ? answer(route, 403, { error: "private operator configuration" })
+      : answer(route, 200, { auto: { monitors: 0 }, regions: [region()] });
     return answer(route, 404, { error: "Not found" });
   });
 
+  // The first mocked workspace list succeeds, but the operator loses MFA before the probes read.
+  // The UI must revoke access and erase the already loaded workspace list, not merely warn about probes.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Operator access denied" })).toBeVisible();
+  await expect(page.getByText("Synthetic Platform")).toHaveCount(0);
+  denyProbeOnFirstMock = false;
   await page.reload();
   await expect(page.getByRole("heading", { name: "Platform operations" })).toBeVisible();
   await page.getByRole("button", { name: /Synthetic Platform/ }).click();

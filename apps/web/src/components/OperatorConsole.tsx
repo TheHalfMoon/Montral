@@ -72,7 +72,7 @@ export default function OperatorConsole() {
       if (!alive || accessRevoked.current) return;
       setRows(data.workspaces); setNext(data.next); setAccess("ok");
       try { const probes = await operatorApi.probes(); if (alive && !accessRevoked.current) setRegions(probes.regions); }
-      catch { if (alive && !accessRevoked.current) setProbesError("Probe regions could not be loaded."); }
+      catch (e) { if (alive && !accessRevoked.current) setProbesError(failure(e)); }
     }).catch((e) => { if (alive) { setError(failure(e)); setAccess(e instanceof OperatorRequestError && e.status === 403 ? "denied" : "error"); } });
     return () => { alive = false; requestSeq.current++; };
   }, []);

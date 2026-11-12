@@ -75,6 +75,13 @@ describe("plan catalog", () => {
     }
   });
 
+  it("refuses plan intervals below the API-supported 60-second floor, including overrides", () => {
+    const tooFast = { activeMonitors: 3, minIntervalSec: 10, regions: 1, credits: 5, emails: 7 };
+    expect(issues(doc({ plans: [plan("alpha", 5, { limits: tooFast })] })).join("; ")).toMatch(/plans\.0\.limits\.minIntervalSec/);
+    expect(issues(doc({ overrides: [{ organizationId: "o", limits: { minIntervalSec: 10 } }] })).join("; ")).toMatch(/overrides\.0\.limits\.minIntervalSec/);
+    expect(() => parsePlanCatalog(doc({ plans: [plan("alpha", 5, { limits: { ...tooFast, minIntervalSec: 60 } })] }))).not.toThrow();
+  });
+
   it("names the same content with the same hash whatever the key order, and a change with another", async () => {
     const a = await buildPlanCatalog(parsePlanCatalog(doc()), "operator");
     const reverseKeys = (v: unknown): unknown => Array.isArray(v) ? v.map(reverseKeys) : v && typeof v === "object" ? Object.fromEntries(Object.entries(v).reverse().map(([k, x]) => [k, reverseKeys(x)])) : v;

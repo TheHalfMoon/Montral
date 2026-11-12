@@ -331,6 +331,32 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
     await db.query(`ALTER TABLE montral_subscription ADD CONSTRAINT montral_subscription_plan_format
       CHECK (plan ~ '^[a-z][a-z0-9_-]{0,31}$')`);
   }
+  // Older subscriptions can predate the past_due_since column or a prior
+  // migration can have left it NULL. Recover the earliest *recorded* failure
+  // clock, never NOW(): a restart must not manufacture a fresh grace period.
+  // If an invoice failure has no timestamp and no past_due subscription status,
+  // leave NULL (fail closed). Paid/refunded and non-test subscriptions are not
+  // eligible for this preview-only backfill. The conditional UPDATE takes no
+  // row locks on healthy subscriptions and is idempotent on every restart.
+  await db.query(`
+    UPDATE montral_subscription SET past_due_since =
+      CASE
+        WHEN status = 'past_due' AND payment_state = 'failed'
+          THEN LEAST(provider_updated_at, payment_updated_at)
+        WHEN status = 'past_due' THEN provider_updated_at
+        ELSE payment_updated_at
+      END
+    WHERE test_mode = true AND past_due_since IS NULL
+      AND status IN ('active', 'on_trial', 'past_due')
+      AND (status = 'past_due' OR payment_state = 'failed')
+      AND payment_state IS DISTINCT FROM 'refunded'
+      -- Use NULL-safe predicates: legacy records have payment_state=NULL,
+      -- and NOT(NULL) is NULL in SQL, not TRUE. A recorded successful
+      -- payment newer than the status is the only excluded paid case.
+      AND (status <> 'past_due' OR payment_state IS DISTINCT FROM 'paid'
+        OR (payment_updated_at IS NOT NULL AND payment_updated_at < provider_updated_at))
+      AND (status = 'past_due' OR payment_updated_at IS NOT NULL)
+  `);
   // An earlier checkout preview (before the previous release) exposed a
   // seven-argument SQL function that no supported release calls any more.
   await db.query("DROP FUNCTION IF EXISTS montral_apply_billing_event(text,text,text,text,text,timestamptz,uuid)");

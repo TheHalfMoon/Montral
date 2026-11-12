@@ -168,17 +168,25 @@ function meteringFailed(e: unknown) {
   console.error(`metering unavailable: ${e instanceof PlanCatalogError ? "the plan catalog is invalid" : "the usage ledger could not be reached"}; metered checks are being skipped`);
 }
 
-export async function withinCredits(monitors: Monitor[], entitlements: Entitlements, onPlanSkipped?: (skipped: Monitor[]) => Promise<unknown>): Promise<Monitor[]> {
+export async function withinCredits(
+  monitors: Monitor[], entitlements: Entitlements,
+  onPlanSkipped?: (skipped: Monitor[]) => Promise<unknown>,
+  onReserved?: (monitor: Monitor, credits: number, chargedAt: Date) => void,
+): Promise<Monitor[]> {
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of monitors) byWorkspace.set(m.organizationId, [...(byWorkspace.get(m.organizationId) ?? []), m]);
   const allowed = new Map<string, Monitor>();
   await Promise.all([...byWorkspace].map(async ([workspaceId, due]) => {
     const list = await withinPlanRegions(due, workspaceId, entitlements, onPlanSkipped);
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
+    const chargedAt = new Date();
+    let actuallyCharged = false;
     // A failing ledger: self-hosted (unmetered) runs the checks and logs the gap, so monitoring is never silenced; a
     // metered deployment grants nothing (failClosed), so a ledger or catalog failure never runs unmetered checks. The
     // skipped checks come due again; heartbeats (cost 0) are unaffected. The log names the cause for the operator.
-    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted).catch((e) => (meteringFailed(e), entitlements.failClosed ? 0 : wanted));
+    const granted = wanted === 0 ? 0 : await entitlements.spendCredits(workspaceId, wanted, chargedAt)
+      .then((n) => { actuallyCharged = true; return n; })
+      .catch((e) => (meteringFailed(e), entitlements.failClosed ? 0 : wanted));
     // A malformed successful metering response must not overauthorize paid probes.
     // Zero-credit heartbeat monitors remain eligible, and an actual ledger outage
     // retains the existing monitoring-availability fallback above.
@@ -190,8 +198,15 @@ export async function withinCredits(monitors: Monitor[], entitlements: Entitleme
       if (cost <= left) {
         left -= cost;
         allowed.set(m.id, m);
+        // A self-hosted ledger outage runs checks unmetered: do not refund a charge
+        // that was never booked. Successful metered reservations can be settled
+        // after the actual region checks have returned.
+        onReserved?.(m, actuallyCharged ? cost : 0, chargedAt);
       }
     }
+    // An allowance can grant part of a batch that cannot cover the next full
+    // monitor. Return the unused remainder, instead of silently charging it.
+    if (actuallyCharged && valid && left > 0) await refundCredits(workspaceId, left, entitlements, chargedAt);
   }));
   return monitors.flatMap((m) => (allowed.has(m.id) ? [allowed.get(m.id)!] : []));
 }
@@ -210,16 +225,26 @@ export type CheckManyOptions = { browserBudgetMs?: number; now?: () => number };
 
 export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements, opts: CheckManyOptions = {}) {
   // Browser monitors are charged one by one just before their journey is launched (browserTask), the rest up front.
+  const regionReservations = new Map<string, { credits: number; chargedAt: Date }>();
   const browser = due.filter((m) => m.type === "browser");
   // a multi-region monitor skipped because a metered plan could not be read counts on its deferral streak
-  const others = await withinCredits(due.filter((m) => m.type !== "browser"), entitlements, (skipped) => Promise.all(skipped.map((m) => step("plan deferral", () => notePlanDeferral(repo, m)))));
+  const others = await withinCredits(
+    due.filter((m) => m.type !== "browser"), entitlements,
+    (skipped) => Promise.all(skipped.map((m) => step("plan deferral", () => notePlanDeferral(repo, m)))),
+    (m, credits, chargedAt) => regionReservations.set(m.id, { credits, chargedAt }),
+  );
   if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
   // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and
   // third due browser monitors would wait at that gate and be deferred every cycle; instead each workspace's browser
   // monitors form one task that checks them one after another, within BROWSER_TASK_BUDGET_MS. Every other check is its
   // own task.
   // a rejected error can hold private targets or tokens: only the monitor id is logged
-  const tasks: (() => Promise<void>)[] = others.map((m) => () => checkOne(repo, m, entitlements, true).then(() => {}, () => console.error(`check failed for ${m.id}`)));
+  const tasks: (() => Promise<void>)[] = others.map((m) => () => checkOne(repo, m, entitlements, true, async (measured) => {
+    const reservation = regionReservations.get(m.id);
+    if (!reservation || reservation.credits === 0) return;
+    const refund = unusedRegionCredits(reservation.credits, measured);
+    if (refund > 0) await refundCredits(m.organizationId, refund, entitlements, reservation.chargedAt);
+  }).then(() => {}, () => console.error(`check failed for ${m.id}`)));
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of browser) (byWorkspace.get(m.organizationId) ?? byWorkspace.set(m.organizationId, []).get(m.organizationId)!).push(m);
   for (const [workspace, list] of byWorkspace) tasks.push(() => browserTask(repo, workspace, list, entitlements, opts));
@@ -435,13 +460,27 @@ export async function deferBrowserCheck(repo: Repo, m: Monitor, reason: string, 
 /** Has a deferral streak lasted BROWSER_UNCHECKED_AFTER of the monitor's intervals? */
 export const deferredTooLong = (since: Date, intervalSec: number, now = Date.now()) => now - since.getTime() >= BROWSER_UNCHECKED_AFTER * intervalSec * 1000;
 
-export async function checkOne(repo: Repo, m: Monitor, entitlements: Entitlements = unmetered, scheduled = false): Promise<CheckResultKind> {
+/** Credits for planned regions that did not produce a probe result. The scheduler's local
+ * fallback/confirmation is a real check and counts once, without exceeding the reservation. */
+export function unusedRegionCredits(reserved: number, measured: Pick<Measured, "results">): number {
+  if (!Number.isSafeInteger(reserved) || reserved <= 0) return 0;
+  return Math.max(0, reserved - Math.min(reserved, measured.results.length));
+}
+
+export async function checkOne(
+  repo: Repo, m: Monitor, entitlements: Entitlements = unmetered, scheduled = false,
+  onMeasured?: (measured: Measured) => Promise<void>,
+): Promise<CheckResultKind> {
   // a due heartbeat monitor means no ping arrived in time
   const measured: Measured =
     m.type === "heartbeat"
       ? { out: { ok: false, error: "Heartbeat missed" } as CheckOutcome, results: [{ region: "auto", ok: false, error: "Heartbeat missed" }], note: undefined as string | undefined }
       : await measure(m, repo);
   const out = measured.out;
+  // Settle the reserved region credits at their original charge timestamp after
+  // the probes have returned. A thrown measurement remains charged conservatively:
+  // network attempts may have run and their outcome is unknown.
+  if (onMeasured) await onMeasured(measured);
   // A browser check that did not happen (capacity full, runner unreachable or refusing, Chromium not starting, no report)
   // says nothing about the target, but it must not leave the monitor silently blind: it is recorded as a visible run,
   // and after BROWSER_UNCHECKED_AFTER in a row the monitor is marked unchecked and its owners and admins are told, once

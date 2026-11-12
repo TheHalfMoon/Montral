@@ -57,10 +57,12 @@ const cookiesOf = (r: Response, current = "") => {
 const plan = { maxRegions: 3 as number | null };
 /** Credits taken, per workspace (the allowance itself is unlimited here). */
 const spent: Record<string, number> = {};
+const refunded: Record<string, number> = {};
 const edition: Edition = {
   entitlements: () => ({
     ...unmetered,
     spendCredits: async (workspace: string, credits: number) => { spent[workspace] = (spent[workspace] ?? 0) + credits; return credits; },
+    refundCredits: async (workspace: string, credits: number) => { refunded[workspace] = (refunded[workspace] ?? 0) + credits; },
     plan: async () => ({ id: "test", name: "Test", maxActiveMonitors: 50, minIntervalSec: 60, maxRegions: plan.maxRegions }),
   }),
 };
@@ -172,6 +174,33 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     const [incident] = await incidents();
     expect(incident.evaluation_note).toContain("1 of 1 regions failed, 2 unavailable; confirmed from this location");
     targetStatus = 200;
+  });
+
+  it("refunds unreturned manual-check regions and spot checks at their original reservation", async () => {
+    const { call } = await account();
+    const m = await monitor(call, ["e2e-north", "e2e-south", "e2e-west"]);
+    const [{ organization_id: workspace }] = await db!.query<{ organization_id: string }>(
+      `SELECT organization_id FROM monitor WHERE id=$1::uuid`, [m.id],
+    );
+    const net = () => (spent[workspace] ?? 0) - (refunded[workspace] ?? 0);
+    reset();
+    targetStatus = 200;
+    answers["e2e-north"] = { ok: true, statusCode: 200 };
+    const before = net();
+    expect((await call("POST", `/monitors/${m.id}/check`)).status).toBe(200);
+    expect(net() - before).toBe(1); // one region returned; two did not
+    const beforeSpot = net();
+    const failedSpot = await call("POST", `/monitors/${m.id}/check`, { region: "e2e-west" });
+    expect(failedSpot.status).toBe(502);
+    expect(failedSpot.body).toMatchObject({ code: "probe_unreachable", region: "e2e-west" });
+    expect(net()).toBe(beforeSpot); // no result, so one-credit spot reservation is refunded
+    reset();
+    answers["e2e-north"] = { ok: true, statusCode: 200 };
+    answers["e2e-south"] = { ok: true, statusCode: 200 };
+    answers["e2e-west"] = { ok: true, statusCode: 200 };
+    const beforeAll = net();
+    expect((await call("POST", `/monitors/${m.id}/check`)).status).toBe(200);
+    expect(net() - beforeAll).toBe(3); // three real results, no refund
   });
 
   it("records last-seen health per probe region, without probe error details", async () => {

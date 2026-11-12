@@ -15,7 +15,7 @@ import { BROWSER_MIN_INTERVAL_SEC, browserCreationProblem, browserRuntimeHealth,
 import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secretRefs, type BrowserConfig } from "../browser-steps";
 import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
-import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds } from "../scheduler";
+import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds, unusedRegionCredits } from "../scheduler";
 import { DRAINED, drainedRegions, isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID, withinPlanRegions } from "../regions";
 
@@ -703,7 +703,11 @@ export const monitors = new Hono<AppEnv>()
         const started = Date.now();
         let result: Awaited<ReturnType<typeof checkOne>>;
         try {
-          result = await checkOne(repo, m, entitlements);
+          result = await checkOne(repo, m, entitlements, false, async (measured) => {
+            if (m.type === "browser") return; // browser refunds retain their own deferred/error rules
+            const unused = unusedRegionCredits(cost, measured);
+            if (unused > 0) await refundCredits(m.organizationId, unused, entitlements, spentAt);
+          });
         } catch (error) {
           await refundBrowserSeconds(m.organizationId, unusedBrowserSeconds(reserved, Date.now() - started, "error"), entitlements, spentAt);
           throw error;
@@ -715,7 +719,12 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ ok: true });
       }
       const run = await runInRegion(region, m, repo);
-      if ("unreachable" in run) return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
+      if ("unreachable" in run) {
+        // No verdict: the requested spot-check region did not run successfully.
+        // The earlier drain guard already refuses without spending any credits.
+        await refundCredits(m.organizationId, cost, c.get("entitlements"), spentAt);
+        return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
+      }
       return c.json({ ok: true, region, result: spotCheckResult(run.outcome) });
     } finally {
       release();

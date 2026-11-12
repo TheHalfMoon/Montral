@@ -1,4 +1,5 @@
 import type { Monitor, ProbeRegionState, Repo } from "@montral/repo";
+import type { Entitlements } from "./entitlements";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CheckOutcome } from "./checker";
 
@@ -11,7 +12,7 @@ vi.mock("./checker", async (importOriginal) => ({
 
 const { DRAINED, HEALTH_FLIP_MS, HEALTH_WRITE_MS, combine, confirmLocally, configureProbes, drainedRegions, measure, needsConfirmation, requiredFailures, resetProbeRegionCache, runInRegion } = await import("./probes");
 const { capRegions, planRegionCap, withinPlanRegions } = await import("./regions");
-const { notePlanDeferral, withinCredits } = await import("./scheduler");
+const { notePlanDeferral, withinCredits, checkMany, unusedRegionCredits } = await import("./scheduler");
 const { BROWSER_UNCHECKED_AFTER } = await import("./browser-check");
 
 const run = (region: string, ok: boolean, latencyMs = 100) => ({ region, outcome: { ok, statusCode: ok ? 200 : 503, latencyMs, error: ok ? undefined : "Expected 200, got 503" } });
@@ -304,6 +305,112 @@ describe("plan region cap at run time", () => {
     const { unmetered } = await import("./entitlements");
     const out = await withinCredits([three], unmetered);
     expect(out).toEqual([three]);
+  });
+});
+
+describe("scheduled region credit reconciliation", () => {
+  beforeEach(() => {
+    configureProbes({ PROBE_REGIONS: JSON.stringify(PROBES), PROBE_SECRET: "probe-secret-for-tests" });
+    resetProbeRegionCache();
+    for (const k of Object.keys(answers)) delete answers[k];
+    asked.length = 0;
+    local.calls = 0;
+    local.outcome = { ok: true, statusCode: 200, latencyMs: 30 };
+  });
+
+  const due = (extra: Partial<Monitor> = {}) => monitor({
+    status: "up", consecutiveFailures: 0, consecutiveSlow: 0,
+    failureThreshold: 3, slowThresholdMs: 5000, slowAlertAfter: 0,
+    paused: false, intervalSec: 300, channelIds: [], ...extra,
+  });
+
+  const repoFor = (states: Partial<ProbeRegionState>[] = []) => {
+    const { repo: probeRepo } = stateRepo(states);
+    return {
+      ...probeRepo,
+      recordObservation: async () => true,
+      underMaintenance: async () => false,
+      recordCheck: async () => {},
+      recordRegionResults: async () => {},
+      recordRecoveryProgress: async () => ({ successes: 1, ready: true }),
+      setMonitorState: async () => {},
+      hasOpenIncident: async () => false,
+      openIncidents: async () => [],
+      logDeliveries: async () => {},
+    } as unknown as Repo;
+  };
+
+  const meter = () => {
+    const records: { kind: "spend" | "refund"; n: number; at?: Date }[] = [];
+    const entitlements = {
+      failClosed: true, plan: async () => ({ maxRegions: 3 }),
+      spendCredits: async (_ws: string, n: number, at?: Date) => {
+        records.push({ kind: "spend" as const, n, at }); return n;
+      },
+      refundCredits: async (_ws: string, n: number, at?: Date) => {
+        records.push({ kind: "refund" as const, n, at });
+      },
+    };
+    return { entitlements: entitlements as unknown as Entitlements, records };
+  };
+
+  it("refunds unreturned and drained regions but counts a real probe result", async () => {
+    answers["us-east"] = { ok: true, statusCode: 200 };
+    const { entitlements, records } = meter();
+    await checkMany(repoFor([{ region: "eu-central", drained: true }]), [due()], entitlements);
+    expect(asked).toContain("us-east");
+    expect(asked).not.toContain("eu-central");
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["spend", 3], ["refund", 2]]);
+    expect(records[1].at).toBe(records[0].at);
+  });
+
+  it("charges one local fallback when all three remote regions fail", async () => {
+    const { entitlements, records } = meter();
+    await checkMany(repoFor(), [due()], entitlements);
+    expect(local.calls).toBe(1);
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["spend", 3], ["refund", 2]]);
+  });
+
+  it("counts local confirmation as an actual check without charging lost probes", async () => {
+    answers["us-east"] = { ok: false, statusCode: 503 };
+    local.outcome = { ok: true, statusCode: 200, latencyMs: 30 };
+    const { entitlements, records } = meter();
+    await checkMany(repoFor(), [due()], entitlements);
+    expect(local.calls).toBe(1);
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["spend", 3], ["refund", 1]]);
+  });
+
+  it("never refunds fictitious credits when self-hosted metering fails open", async () => {
+    answers["us-east"] = { ok: true, statusCode: 200 };
+    const { entitlements, records } = meter();
+    await checkMany(repoFor(), [due()], {
+      ...entitlements, failClosed: false, spendCredits: async () => { throw new Error("usage ledger unavailable"); },
+    });
+    expect(records).toEqual([]);
+  });
+
+  it("does not refund completed regions, and bounds refunds to actual reservations", async () => {
+    answers["us-east"] = { ok: true, statusCode: 200 };
+    answers["eu-central"] = { ok: true, statusCode: 200 };
+    answers["ap-southeast"] = { ok: true, statusCode: 200 };
+    const { entitlements, records } = meter();
+    await checkMany(repoFor(), [due()], entitlements);
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["spend", 3]]);
+    expect(unusedRegionCredits(3, { results: [{ region: "us-east", ok: true }, { region: "auto", ok: true }] })).toBe(1);
+    expect(unusedRegionCredits(1, { results: [{ region: "us-east", ok: true }, { region: "auto", ok: true }] })).toBe(0);
+    expect(unusedRegionCredits(0, { results: [] })).toBe(0);
+  });
+
+  it("returns a partial batch grant too small for the next monitor", async () => {
+    const { entitlements, records } = meter();
+    entitlements.spendCredits = async (_ws: string, n: number, at?: Date) => {
+      records.push({ kind: "spend", n: 3, at }); return Math.min(n, 3);
+    };
+    const allowed = await withinCredits([due({ regions: ["us-east", "eu-central"] }),
+      due({ id: "m2", regions: ["eu-central", "ap-southeast"] })], entitlements);
+    expect(allowed.map((m) => m.id)).toEqual(["m1"]);
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["spend", 3], ["refund", 1]]);
+    expect(records[1].at).toBe(records[0].at);
   });
 });
 

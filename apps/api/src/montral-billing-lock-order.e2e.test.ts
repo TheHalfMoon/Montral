@@ -222,7 +222,8 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
         // does not clear that later status, but must never reset its clock.
         { status: "past_due", failed: "paid", paidAt: earlyFailure, expected: oldClock },
         { status: "past_due", failed: "failed", paidAt: earlyFailure, expected: earlyFailure },
-        { status: "past_due", failed: null, paidAt: null, expected: oldClock, testMode: false },
+        // Non-test subscriptions must never be touched by this sandbox-only migration.
+        { status: "past_due", failed: null, paidAt: null, expected: null, testMode: false },
         { status: "past_due", failed: "failed", paidAt: activeSince, expected: earlyFailure, preexisting: earlyFailure },
       ] as const;
       const ids: string[] = [];

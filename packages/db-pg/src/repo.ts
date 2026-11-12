@@ -16,6 +16,7 @@ import {
   type PushDevice,
   type Repo,
   type MonitorType,
+  type ProbeRegionDrainEvent,
   type ImportResult,
   type Scope,
 } from "@montral/repo";
@@ -854,6 +855,7 @@ export function createRepo(db: Db): Repo {
       const rows = await db.select().from(schema.probeRegionState).orderBy(asc(schema.probeRegionState.region));
       return rows.map((r) => ({
         region: r.region, drained: r.drained, drainedAt: r.drainedAt, drainedBy: r.drainedBy, drainNote: r.drainNote,
+        lastUndrainedAt: r.lastUndrainedAt, lastUndrainedBy: r.lastUndrainedBy,
         lastAnswerAt: r.lastAnswerAt, lastUnreachableAt: r.lastUnreachableAt, lastUnreachableReason: r.lastUnreachableReason, unreachableSince: r.unreachableSince,
       }));
     },
@@ -879,8 +881,28 @@ export function createRepo(db: Db): Repo {
       const now = new Date();
       const set = drain.drained
         ? { drained: true, drainedAt: now, drainedBy: drain.by, drainNote: drain.note, updatedAt: now }
-        : { drained: false, drainedAt: null, drainedBy: null, drainNote: null, updatedAt: now };
-      await db.insert(t).values({ region, ...set }).onConflictDoUpdate({ target: t.region, set });
+        : { drained: false, drainedAt: null, drainedBy: null, drainNote: null,
+            lastUndrainedBy: drain.by, lastUndrainedAt: drain.by ? now : null, updatedAt: now };
+      // Platform audit and the live drain flag must commit together: no unlogged
+      // operator action can change scheduling and no phantom audit on failure.
+      await db.transaction(async (tx) => {
+        await tx.insert(t).values({ region, ...set }).onConflictDoUpdate({ target: t.region, set });
+        if (drain.by) {
+          await tx.insert(schema.probeRegionDrainEvent).values({
+            region, action: drain.drained ? "drain" : "undrain",
+            operatorId: drain.by, note: drain.drained ? drain.note : null,
+          });
+        }
+      });
+    },
+    async probeRegionDrainEvents(region, limit) {
+      const t = schema.probeRegionDrainEvent;
+      const safeLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
+      const records = await db.select().from(t).where(eq(t.region, region)).orderBy(desc(t.id)).limit(safeLimit);
+      return records.map((r): ProbeRegionDrainEvent => ({
+        id: r.id, region: r.region, action: r.action as ProbeRegionDrainEvent["action"],
+        operatorId: r.operatorId, note: r.note, createdAt: r.createdAt,
+      }));
     },
     async monitorsPerRegion() {
       const counted = await rows<{ region: string; n: number }>(db.execute(sql`select r as region, count(*)::int as n from monitor, unnest(monitor.regions) as r where monitor.paused = false group by r`));

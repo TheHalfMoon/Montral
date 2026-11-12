@@ -191,12 +191,25 @@ export interface ProbeRegionState {
   drainedAt: Date | null;
   drainedBy: string | null;
   drainNote: string | null;
+  /** Most recent operator who lifted a drain; audit history retains all earlier actions. */
+  lastUndrainedAt?: Date | null;
+  lastUndrainedBy?: string | null;
   /** The last time the probe answered a check (whatever the target's result). */
   lastAnswerAt: Date | null;
   lastUnreachableAt: Date | null;
   lastUnreachableReason: string | null;
   /** Since when every attempt to ask the probe failed; null once it answers again. */
   unreachableSince: Date | null;
+}
+
+/** A platform-operator probe action; accessible to MFA-verified operators only. */
+export interface ProbeRegionDrainEvent {
+  id: number;
+  region: string;
+  action: "drain" | "undrain";
+  operatorId: string;
+  note: string | null;
+  createdAt: Date;
 }
 
 /** A monitor's last day from one region, for the regions it has been checked from. */
@@ -749,6 +762,8 @@ export interface Repo {
   noteProbeHealth?(region: string, answered: boolean, reason?: string): Promise<void>;
   /** Drain or undrain a region: a drained region is not asked, and its monitors confirm from elsewhere. */
   setProbeRegionDrain?(region: string, drain: { drained: boolean; by: string | null; note: string | null }): Promise<void>;
+  /** Latest operator actions for a probe, newest first; never exposed to workspace members. */
+  probeRegionDrainEvents?(region: string, limit: number): Promise<ProbeRegionDrainEvent[]>;
   /** How many unpaused monitors list each region id. */
   monitorsPerRegion?(): Promise<Record<string, number>>;
   /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */

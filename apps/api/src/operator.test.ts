@@ -1,9 +1,22 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { AppEnv } from "./env";
-import { decodeOperatorCursor, encodeOperatorCursor, operatorIds, requireOperator } from "./operator";
+import { decodeOperatorCursor, encodeOperatorCursor, operatorIds, probeRegionView, requireOperator } from "./operator";
 import { recordMfaSignIn } from "./operator-mfa";
 import { anySuspended, authCallWorkspaces, isSuspensionReason, suspensionGuardsAuthPath, SUSPENSION_REASONS } from "./suspension";
+
+describe("operator region view", () => {
+  it("preserves the identity of the operator who lifted the last drain without mislabelling the current state", () => {
+    const lifted = new Date("2026-11-12T05:00:00Z");
+    const region = probeRegionView("eu-central", "EU Central", {
+      region: "eu-central", drained: false, drainedAt: null, drainedBy: null, drainNote: null,
+      lastUndrainedAt: lifted, lastUndrainedBy: "operator-1",
+      lastAnswerAt: null, lastUnreachableAt: null, lastUnreachableReason: null, unreachableSince: null,
+    }, 3);
+    expect(region).toMatchObject({ id: "eu-central", drained: false, drainedBy: null,
+      lastUndrainedAt: lifted.toISOString(), lastUndrainedBy: "operator-1", monitors: 3 });
+  });
+});
 
 describe("operatorIds", () => {
   it("reads a comma-separated list and treats unset or empty as no operators", () => {

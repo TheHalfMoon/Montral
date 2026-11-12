@@ -104,13 +104,15 @@ without the note.
 
 Remote check regions are deployment configuration (`PROBE_REGIONS`, `PROBE_SECRET`; see [EDGE-PROBE.md](EDGE-PROBE.md)).
 What the platform learns about them at run time is stored per region in `probe_region_state` (migration
-`0059_probe_region_state`, a new table only):
+`0059_probe_region_state`, augmented by `0060_probe_region_operator_audit`). Operator drain and undrain history is
+stored in an append-only `probe_region_drain_event` table in migration `0060`:
 
 | Endpoint | Does |
 | --- | --- |
 | `GET /api/operator/probes` | Every configured region, plus any region with stored state that is no longer configured (`configured: false`): `status` (`up`, `unreachable`, `drained` or `unknown`), `lastAnswerAt`, `lastUnreachableAt`, `lastUnreachableReason`, `unreachableSince`, the drain fields and how many unpaused monitors list the region. `auto.monitors` counts monitors on this deployment's own location. |
 | `POST /api/operator/probes/:id/drain` | Body `{"note"?: string}` (at most 200 characters). Only a configured region; `auto` cannot be drained. |
-| `POST /api/operator/probes/:id/undrain` | Puts a region back. Both write routes refuse a body that is not a JSON object (400) or is over 2 KiB (413); an empty body is fine. |
+| `POST /api/operator/probes/:id/undrain` | Puts a region back and saves `lastUndrainedBy` and `lastUndrainedAt`. Both write routes refuse a body that is not a JSON object (400) or is over 2 KiB (413); an empty body is fine. |
+| `GET /api/operator/probes/:id/audit?limit=50` | Latest 1 to 100 (default 50) drain and undrain actions in descending event ID order, with action, operator ID, timestamp and optional note. Customer sessions, API keys and non-MFA operator sessions get 403. |
 
 - **Health** is written by the scheduler as it asks probes (scheduled and manual checks, and spot checks): a probe that
   answers sets `lastAnswerAt` and ends an unreachable streak; one that cannot be asked sets `lastUnreachableAt`, the
@@ -128,8 +130,12 @@ What the platform learns about them at run time is stored per region in `probe_r
   guarantee against every false incident: when **every** region of a monitor is drained (or unreachable) and its target
   only accepts traffic from the probes, the fallback check from the deployment itself can fail and page, exactly as
   when all probes are unreachable. Spot checks from a drained region answer `502 probe_unreachable` and take no credit.
-- A drain is a platform action, not a customer change: it is logged as one server line
-  (`operator action: drain region=<id> operator=<user id>`) and is not written into any workspace audit log.
+- Drains and undrains are platform actions, not customer changes. The region state update and an append-only
+  `probe_region_drain_event` with the operator user ID, timestamp, action and drain note commit in **one transaction**;
+  a failed audit insert rolls the state change back. The latest operator to lift a drain is preserved on the state row.
+  The action is also logged as a server line (without the note), but not placed in any customer's audit log.
+  Only the verified platform operator API exposes the event history. Repeating an action records another operator
+  command; direct internal seed calls with no operator ID do not generate impersonated audit events.
 - Credentials: all probes share `PROBE_SECRET`. Rotating it is a coordinated redeploy of probes and API (there is no
   overlap window yet); drain a region while its probe is being replaced.
 
@@ -152,8 +158,10 @@ What the platform learns about them at run time is stored per region in `probe_r
   edition mounts behind `requireOrg`: the customer cannot settle the bill themselves while suspended. An operator has to
   unsuspend the workspace (for example after payment is arranged out of band). The payment provider's webhook
   (`/api/billing/lemon`) is not behind `requireOrg` and keeps being processed.
-- Operator actions are not written to a separate platform-level audit trail; the record is the customer's audit log
-  plus the server log line.
+- Workspace suspension actions are still recorded in the affected customer's audit log and the server log,
+  not in a general platform audit table. Probe drain/undrain actions now have their own append-only platform audit
+  history; the operator plane still has no unified audit history across all other actions.
 - Probe regions are still registered through `PROBE_REGIONS`: there is no API to add or remove one, no per-probe
-  credential and no secret rotation window. Credits are charged for every region a monitor's plan allows, including a
-  region that was drained or could not be asked for that run.
+  credential and no secret rotation window. Probe-region credits are reserved up front and unused credits from
+  regions that returned no result are refunded after measurement; there are no persistent customer-facing counters
+  of usage by region yet.

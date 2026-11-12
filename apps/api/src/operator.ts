@@ -139,6 +139,7 @@ export function probeRegionView(id: string, name: string | null, state: ProbeReg
   return {
     id, name: name ?? id, configured: name !== null, status, monitors,
     drained: state?.drained ?? false, drainedAt: iso(state?.drainedAt), drainedBy: state?.drainedBy ?? null, drainNote: state?.drainNote ?? null,
+    lastUndrainedAt: iso(state?.lastUndrainedAt), lastUndrainedBy: state?.lastUndrainedBy ?? null,
     lastAnswerAt: iso(state?.lastAnswerAt), lastUnreachableAt: iso(state?.lastUnreachableAt),
     lastUnreachableReason: state?.lastUnreachableReason ?? null, unreachableSince: iso(state?.unreachableSince),
   };
@@ -288,6 +289,18 @@ export const operatorApi = new Hono<AppEnv>()
       ],
     });
   })
+  // An MFA-verified platform operator can inspect an append-only history of drain / undrain actions.
+  // Customer roles and API keys are rejected by the requireOperator gate above.
+  .get("/probes/:id/audit", async (c) => {
+    const id = c.req.param("id");
+    if (!REGION_ID.test(id) || id === AUTO) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    if (!repo.probeRegionDrainEvents) return c.json({ error: "Probe region audit is not available on this backend" }, 501);
+    const limit = Number(c.req.query("limit") ?? 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
+    const events = await repo.probeRegionDrainEvents(id, limit);
+    return c.json({ region: id, events: events.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })) });
+  })
   // A drained region is not asked by the scheduler (within DRAIN_TTL_MS on every server); monitors that list it
   // confirm from their other regions or this location. Only a configured region can be drained; any can be undrained.
   .post("/probes/:id/drain", async (c) => {
@@ -315,7 +328,7 @@ export const operatorApi = new Hono<AppEnv>()
     if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
     // undrain takes no fields, but a malformed or oversized body is still refused rather than ignored
     await strictJsonObjectBody(c.req.raw, 2048);
-    await repo.setProbeRegionDrain(id, { drained: false, by: null, note: null });
+    await repo.setProbeRegionDrain(id, { drained: false, by: operatorId, note: null });
     resetProbeRegionCache();
     logProbeAction(operatorId, "undrain", id);
     return c.json({ id, drained: false });

@@ -5,6 +5,7 @@ import { auditChanges, recordAuditEvent, type Query } from "./audit";
 import { revokeKeysPinnedTo } from "./auth";
 import type { AppEnv, Bindings } from "./env";
 import { allow } from "./ratelimit";
+import { workspaceSuspended } from "./suspension";
 import { clearRemoval, connectionById, isOwnerRole, recordRemoval, type SsoConnection } from "./sso-store";
 
 /**
@@ -161,6 +162,24 @@ async function audit(query: Query, action: string, row: Row, values: Record<stri
  * Every SCIM change (record, membership, removal block, sessions, keys, audit) in one PostgreSQL transaction: it all
  * commits or none of it does. Backends without transactions (tests) run the same steps on the plain connection.
  */
+/**
+ * Serialize provisioning checks with an operator suspension, which locks the
+ * organization row first. This is checked INSIDE the mutation transaction,
+ * rather than at the SCIM bearer-token middleware, so a concurrent suspend
+ * cannot complete while a provisioning write is in flight.
+ *
+ * Return the suspension state; DELETE and changes to active=false are still
+ * allowed to revoke access, while creation and reactivation must fail closed.
+ */
+async function scimMutationSuspended(query: Query, orgId: string): Promise<boolean> {
+  await query("SELECT id FROM organization WHERE id = $1::text FOR UPDATE", [orgId]);
+  return workspaceSuspended(query, orgId);
+}
+
+function refuseSuspendedScim(): never {
+  throw new ScimError(403, "Workspace suspended: only deprovisioning is allowed");
+}
+
 function inTransaction<T>(c: Context<AppEnv>, work: (query: Query) => Promise<T>): Promise<T> {
   const database = c.get("database");
   // fail closed: SCIM changes are never applied step by step
@@ -346,6 +365,7 @@ export const scimApi = new Hono<AppEnv>()
     const domain = userName.slice(userName.lastIndexOf("@") + 1);
     if (!conn.domains?.includes(domain)) throw new ScimError(400, "The address is not in one of the workspace's verified single sign-on domains", "invalidValue");
     const created = await inTransaction(c, async (query) => {
+    if (await scimMutationSuspended(query, orgId)) refuseSuspendedScim();
     const [row] = await query<Row>(
       `INSERT INTO scim_user (organization_id, user_name, external_id, display_name, given_name, family_name, active)
        VALUES ($1::text, $2::text, $3::text, $4::text, $5::text, $6::text, $7::boolean)
@@ -367,7 +387,9 @@ export const scimApi = new Hono<AppEnv>()
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a SCIM User", "invalidSyntax");
     const f = fieldsOf(body);
     const saved = await inTransaction(c, async (query) => {
+      const suspended = await scimMutationSuspended(query, c.get("orgId"));
       const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
+      if (suspended && f.active !== false) refuseSuspendedScim();
       if (body.userName !== undefined && userNameOf(body.userName) !== row.user_name) throw new ScimError(400, "userName cannot be changed; delete the user and create the new address", "mutability");
       // a replace: attributes left out are cleared; `active` has no default (RFC 7643), so leaving it out keeps it
       return save(query, c.env, row, { externalId: f.externalId ?? null, displayName: f.displayName ?? null, givenName: f.givenName ?? null, familyName: f.familyName ?? null, active: f.active ?? row.active });
@@ -379,8 +401,11 @@ export const scimApi = new Hono<AppEnv>()
     const body = (await readBody(c)) as Record<string, unknown> | null;
     if (!body || typeof body !== "object" || Array.isArray(body)) throw new ScimError(400, "The body must be a PatchOp", "invalidSyntax");
     const saved = await inTransaction(c, async (query) => {
+      const suspended = await scimMutationSuspended(query, c.get("orgId"));
       const row = await lockRecord(query, c.get("orgId"), c.req.param("id"));
-      return save(query, c.env, row, patchFields(body, row));
+      const fields = patchFields(body, row);
+      if (suspended && fields.active !== false) refuseSuspendedScim();
+      return save(query, c.env, row, fields);
     });
     return json(c, resource(c.env, saved));
   })

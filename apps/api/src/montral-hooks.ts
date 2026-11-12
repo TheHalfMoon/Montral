@@ -339,6 +339,14 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
       FROM montral_hook_inbox
       WHERE id=p_inbox AND token_hash=p_hash FOR UPDATE;
       IF NOT FOUND THEN RETURN false; END IF;
+      -- Body streaming happens before this transaction. Synchronize this final
+      -- admission with operator suspension, which locks the organization row
+      -- FOR UPDATE before inserting workspace_suspension. No capture may commit
+      -- after that suspension commits. Protect old replicas calling v1 too.
+      PERFORM 1 FROM organization WHERE id=current_inbox.organization_id FOR KEY SHARE;
+      IF NOT FOUND THEN RETURN false; END IF;
+      IF EXISTS (SELECT 1 FROM workspace_suspension WHERE organization_id=current_inbox.organization_id)
+        THEN RETURN false; END IF;
       INSERT INTO montral_hook_event(
         id,inbox_id,organization_id,project_id,method,content_type,headers,body
       ) VALUES (
@@ -372,6 +380,14 @@ export async function migrateMontralHooks(db: Database): Promise<string[]> {
       FROM montral_hook_inbox
       WHERE id=p_inbox AND token_hash=p_hash FOR UPDATE;
       IF NOT FOUND THEN RETURN NULL; END IF;
+      -- The public handler checks suspension before reading the body, but a
+      -- suspension can be committed while that body is still streaming.
+      -- KEY SHARE conflicts with the operator's organization FOR UPDATE lock;
+      -- after it resolves, this fresh suspension read determines admission.
+      PERFORM 1 FROM organization WHERE id=current_inbox.organization_id FOR KEY SHARE;
+      IF NOT FOUND THEN RETURN NULL; END IF;
+      IF EXISTS (SELECT 1 FROM workspace_suspension WHERE organization_id=current_inbox.organization_id)
+        THEN RETURN NULL; END IF;
       chosen_status := COALESCE(
         (COALESCE(current_inbox.response->'methods'->p_method, current_inbox.response)->>'status')::smallint, 202);
       INSERT INTO montral_hook_event(

@@ -11,8 +11,8 @@ import { columnExists, relationExists } from "./schema-catalog";
 import { boundedDelay, buildConfiguredResponse, DelaySlots, parseHookResponseConfig, RESPONSE_LIMITS, responseVariant, type HookResponseConfig } from "./montral-hook-response";
 import { z } from "zod";
 import { WORKSPACE_SUSPENDED } from "./suspension";
-import type { Entitlements } from "./entitlements";
-import { calendarMonthUtc, secondsUntil } from "./montral-metering";
+import { allowanceResetsAt, type Entitlements } from "./entitlements";
+import { secondsUntil } from "./montral-metering";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOKEN = /^[0-9a-f]{64}$/;
@@ -381,12 +381,12 @@ export const WEBHOOK_QUOTA_EXHAUSTED = "webhook_quota_exhausted";
 export const METERING_UNAVAILABLE = "metering_unavailable";
 export type WebhookCharge =
   | { ok: true; charged: number }
-  | { ok: false; status: 429 | 503; body: { error: string; code: string }; retryAfter?: number };
+  | { ok: false; status: 429 | 503; body: { error: string; code: string; resetsAt?: string }; retryAfter?: number };
 
 /**
  * One captured webhook request against the workspace's monthly webhook-event allowance, taken at `spentAt`.
- * Self-hosted (no `spendMeter`): nothing is counted. Exhausted: 429 with the seconds until the next calendar month
- * (UTC). A ledger or plan-catalog failure: 503 when the deployment is metered (failClosed), otherwise the capture goes
+ * Self-hosted (no `spendMeter`): nothing is counted. Exhausted: 429 with the seconds until the meter's reported period end,
+ * falling back to calendar-month UTC when no reliable balance is available. A ledger or plan-catalog failure: 503 in a metered deployment (failClosed), otherwise capture goes
  * on uncounted. A malformed grant is never taken as permission.
  */
 export async function chargeWebhookEvent(entitlements: Entitlements, organizationId: string, spentAt: Date): Promise<WebhookCharge> {
@@ -401,10 +401,11 @@ export async function chargeWebhookEvent(entitlements: Entitlements, organizatio
   }
   if (granted === 1) return { ok: true, charged: 1 };
   if (granted !== 0) console.error("webhook event allowance invalid");
+  const resetsAt = await allowanceResetsAt(entitlements, organizationId, "webhookEvents", spentAt);
   return {
     ok: false, status: 429,
-    body: { error: "This workspace's webhook event allowance for the month is used up; nothing was captured.", code: WEBHOOK_QUOTA_EXHAUSTED },
-    retryAfter: secondsUntil(calendarMonthUtc(spentAt).end, new Date()),
+    body: { error: "This workspace's webhook event allowance for this period is used up; nothing was captured.", code: WEBHOOK_QUOTA_EXHAUSTED, resetsAt },
+    retryAfter: secondsUntil(new Date(resetsAt), new Date()),
   };
 }
 

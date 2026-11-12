@@ -146,8 +146,12 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   the first `workspace_suspended` refusal; see [CUSTOMER-ONBOARDING.md](CUSTOMER-ONBOARDING.md#suspended-workspace).
   Members can still switch to another workspace from the workspace menu (the auth API).
 - Checks already queued when the suspension is written still run (at most one per monitor). Public status responses
-  may be served from the 30-second public cache for that long after suspending. A webhook body that was being read when
-  the suspension was written is still stored.
+  may be served from the 30-second public cache for that long after suspending.
+- A webhook body that started streaming before suspension is rechecked at the final PostgreSQL insert boundary. A
+  capture takes an organization key-share lock that conflicts with the operator's suspension lock: if suspension
+  commits first, the event is not stored. If the capture takes the lock first, it commits before suspension can
+  commit. This applies to both capture SQL versions. Mid-flight refusals appear as a generic 404 and refund the
+  reserved webhook-event meter charge. Older app replicas must be upgraded before this guarantee applies.
 - Operators must sign in with email and password plus a second factor; operator accounts that only have GitHub or SSO
   sign-in cannot act as operators.
 - **SCIM 2.0** (`/api/scim/v2`) bearer authentication, metadata and user reads still work during a suspension. New

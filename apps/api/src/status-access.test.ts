@@ -21,6 +21,27 @@ function setup(allowed: boolean | "throw") {
 }
 
 describe("status access boundary", () => {
+  it("does not serve or cache missing/suspended public pages, including cached incidents", async () => {
+    const lookup = vi.fn(async () => null);
+    const app = new Hono<AppEnv>();
+    app.use("*", async (c, next) => {
+      c.set("repo", { statusPageBySlug: lookup } as never);
+      c.set("entitlements", unmetered);
+      await next();
+    });
+    app.route("/api/public/status", publicStatus);
+    for (const [suffix, expectedStatus] of [
+      ["/summary", 404], ["/incidents", 404], ["/badge.svg", 200],
+    ] as const) {
+      const response = await app.request(`/api/public/status/hidden-${crypto.randomUUID()}${suffix}`);
+      expect(response.status, suffix).toBe(expectedStatus);
+      expect(response.headers.get("cache-control"), suffix).toBe("private, no-store");
+      if (suffix === "/badge.svg") expect(await response.text()).toContain("unknown");
+      else expect(await response.text()).not.toContain("Private title");
+    }
+    expect(lookup).toHaveBeenCalled();
+  });
+
   it.each(["true", 1, {}])("rejects malformed page approvals %j", async (value) => {
     const { app } = setup(value as never);
     expect((await app.request("/api/public/status/acme/summary")).status).toBe(404);

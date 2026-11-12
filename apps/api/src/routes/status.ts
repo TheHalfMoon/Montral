@@ -448,7 +448,18 @@ async function statusAccess(c: Context<AppEnv>, next: () => Promise<void>) {
   if (!slug || slug === "_") return next();
   const page = await c.get("repo").statusPageBySlug(slug);
   const membersOnly = page?.visibility === "members" || page?.visibility === "password";
-  if (!policy && !membersOnly) return next();
+  if (!policy && !membersOnly) {
+    if (page) return next();
+    // An operator suspension hides the page from statusPageBySlug, but a
+    // previously warmed board/history could otherwise still be returned from
+    // this process or a shared edge cache. A missing page must bypass both
+    // caches, then send a private, non-cacheable response. Preserve the badge
+    // route's neutral "unknown" SVG for genuinely missing slugs.
+    c.set("statusResponsePrivate", true);
+    await next();
+    c.header("cache-control", "private, no-store");
+    return;
+  }
   // No shared response is safe for a restricted page, including not-found/errors.
   c.set("statusResponsePrivate", true);
   c.header("cache-control", "private, no-store");

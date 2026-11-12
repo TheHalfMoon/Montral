@@ -233,6 +233,49 @@ describe("webhook event charge", () => {
     expect(refused).toMatchObject({ status: 429, retryAfter: 60 });
   });
 
+  it("uses the actual renewal-aligned webhook meter period for Retry-After and resetsAt", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const now = new Date("2026-11-12T10:00:00.000Z");
+    const end = new Date("2026-11-15T12:30:00.000Z");
+    vi.setSystemTime(now);
+    let balanceReads = 0;
+    const entitlements: Entitlements = {
+      ...ledger(0).entitlements,
+      spendMeter: async () => 0,
+      meterBalance: async (_ws, meter) => {
+        expect(meter).toBe("webhookEvents");
+        balanceReads++;
+        return { limit: 5, used: 5, periodStart: new Date("2026-10-15T12:30:00.000Z"), periodEnd: end };
+      },
+    };
+    const denied = await chargeWebhookEvent(entitlements, "o", now);
+    expect(balanceReads).toBe(1);
+    expect(denied).toMatchObject({
+      ok: false, status: 429,
+      body: { code: "webhook_quota_exhausted", resetsAt: end.toISOString() },
+      retryAfter: Math.ceil((end.getTime() - now.getTime()) / 1000),
+    });
+  });
+
+  it("falls back to UTC month boundary when a meter balance fails or its end is stale", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-11-30T23:59:00.000Z"));
+    const fallback = "2026-12-01T00:00:00.000Z";
+    for (const meterBalance of [
+      async () => { throw new Error("read-only balance offline"); },
+      async () => ({ limit: 1, used: 1, periodStart: new Date("2026-10-01T00:00:00Z"), periodEnd: new Date("2026-11-15T00:00:00Z") }),
+    ]) {
+      const denied = await chargeWebhookEvent({
+        ...ledger(0).entitlements,
+        spendMeter: async () => 0,
+        meterBalance,
+      }, "o", new Date());
+      expect(denied).toMatchObject({
+        ok: false, status: 429, body: { resetsAt: fallback }, retryAfter: 60,
+      });
+    }
+  });
+
   it("fails closed with 503 when the ledger fails in a metered deployment, captures uncounted otherwise", async () => {
     const failing = { ...ledger(0).entitlements, spendMeter: async () => { throw new Error("ledger down"); } };
     expect(await chargeWebhookEvent(failing, "o", new Date())).toMatchObject({ ok: false, status: 503, body: { code: "metering_unavailable" } });

@@ -90,7 +90,9 @@ may name either meter on its own.
 
 - **`webhookEvents`**: one per request the public receiver (`/api/hooks/receive/…`) accepts, charged *before* the
   event is stored. When the allowance is used up the receiver answers **429** with code `webhook_quota_exhausted` and
-  `Retry-After` set to the seconds until the next period (00:00 UTC on the 1st), and stores nothing. A capture that
+  `Retry-After` set to the seconds until the **actual webhook-meter period end** reported by the edition,
+  plus an ISO `resetsAt` response field. The hosted preview still uses calendar months (00:00 UTC on the 1st);
+  when the balance is unavailable or stale the receiver falls back to that UTC boundary. It stores nothing. A capture that
   then stores nothing (the inbox was deleted meanwhile, or the database failed) gives its event back. The per-inbox
   rate limit still applies first, and a rate-limited request costs nothing.
 - **`browserSeconds`**: each browser check reserves its journey's configured total timeout (`browser.timeoutMs`,

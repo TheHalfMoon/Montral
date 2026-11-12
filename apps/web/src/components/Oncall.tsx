@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type Channel, type EscalationPolicy, type OncallLayer, type OncallMember, type OncallOverride, type OncallSchedule, type OncallShift, type PolicyStep } from "../lib/api";
 import { t } from "../lib/i18n";
 import { useBusy } from "../lib/use-busy";
+import { oncallOverrideRange } from "../lib/oncall-range";
 
 const DAY = 86_400_000;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -272,7 +273,10 @@ function Overrides({ schedule, members, me, manager, nameOf, onChanged }: { sche
   const [f, setF] = useState({ userId: me, startsAt: local(new Date()), endsAt: local(new Date(Date.now() + 8 * 3600_000)) });
   const [err, setErr] = useState("");
   const [busy, run] = useBusy();
-  const load = () => api.oncallOverrides(schedule.id, new Date().toISOString(), new Date(Date.now() + 90 * DAY).toISOString()).then(setItems).catch((e) => setErr((e as Error).message));
+  const load = () => {
+    const { from, to } = oncallOverrideRange();
+    return api.oncallOverrides(schedule.id, from, to).then(setItems).catch((e) => setErr((e as Error).message));
+  };
   useEffect(() => { load(); }, [schedule.id]);
   useEffect(() => { if (!f.userId && me) setF((x) => ({ ...x, userId: me })); }, [me]);
   const add = (e: React.SyntheticEvent) => {

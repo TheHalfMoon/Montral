@@ -23,3 +23,11 @@ A temporary, isolated Edge/Chromium harness loaded the **actual** `apps/web/src/
 The temporary harness is outside the repository. These checks are not a substitute for the real database-backed, multi-browser GitHub Actions journey. Requalify the full matrix on the exact fix commit before merging.
 
 No production deployment, paid services, secrets, private commercial configuration or release publication were changed.
+
+## Follow-up after Linux mobile Chromium failure at `d020eef`
+
+Hosted [cross-browser run 43123706767](https://github.com/TheHalfMoon/Montral/actions/runs/43123706767) still found 59/60 passed. The same mobile Chromium Create action failed in Playwright's **trial click**, so an earlier `document.elementFromPoint` check alone was insufficient. The retained trace shows an action target close to the bottom of a Pixel 7 viewport, at `y=796` or `819` (viewport `412×839`), and the focused Slug input repeatedly intercepted the action after auto-scroll.
+
+The new fix limits the change to this status-page Create dialog: it centers the short form instead of placing its actions at the mobile viewport's bottom edge. The controls remain in a separately scrollable field area, and Cancel/Create remain outside that scroll area. The real multi-browser E2E now asserts a clearance of more than 48 CSS pixels below Create on mobile, **before** the trial and real click; no force click, artificial blur, skipped project, or retry was introduced.
+
+A fresh isolated Microsoft Edge Playwright smoke test, using the actual stylesheet, a mobile touch context at Pixel 7's `412×839` viewport, and representative form markup, passed hit-test, trial click and one real form submission at each of: `412×839`, `320×568`, `375×667`, `393×852`, `800×600`, `1280×800`. On `412×839`, the Create button was at `y=518–558`, leaving ~281 CSS pixels to the bottom. This isolated test is indicative but does not replace the exact-head Linux Chromium CI journey.

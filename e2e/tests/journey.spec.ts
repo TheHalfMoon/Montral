@@ -88,12 +88,21 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     // Verify the real pointer target before submitting instead of force-clicking.
     const create = dialog.getByRole("button", { name: "Create", exact: true });
     await create.scrollIntoViewIfNeeded();
-    const hittable = await create.evaluate((button) => {
+    const clickTarget = await create.evaluate((button) => {
       const bounds = button.getBoundingClientRect();
       const target = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2);
-      return target === button || (target !== null && button.contains(target));
+      return {
+        hittable: target === button || (target !== null && button.contains(target)),
+        bottom: bounds.bottom,
+        viewportHeight: window.innerHeight,
+      };
     });
-    expect(hittable).toBe(true);
+    expect(clickTarget.hittable).toBe(true);
+    if (test.info().project.name.startsWith("mobile")) {
+      // A near-bottom action can be intercepted when the focused Slug field
+      // triggers Chromium's mobile viewport scroll during a real pointer click.
+      expect(clickTarget.bottom).toBeLessThan(clickTarget.viewportHeight - 48);
+    }
     // Playwright's trial action performs the same scroll/pointer-interception
     // checks as the real click without submitting the form.
     await create.click({ trial: true });

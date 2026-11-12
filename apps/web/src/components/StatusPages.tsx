@@ -64,7 +64,7 @@ function Create({ onClose }: { onClose: () => void }) {
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   }
   return (
-    <div className="modal" onClick={onClose}>
+    <div className="modal status-create-overlay" onClick={onClose}>
       <form className="card status-create-form" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2 style={{ fontSize: 30 }}>{t("New status page")}</h2>
         <div className="status-create-fields">

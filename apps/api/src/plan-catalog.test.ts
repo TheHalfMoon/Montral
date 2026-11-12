@@ -58,6 +58,24 @@ describe("plan catalog", () => {
     expect(() => parsePlanCatalog(BUILTIN_SANDBOX_CATALOG)).not.toThrow();
   });
 
+  it("optionally resolves workspace status-page caps, including zero, without limiting legacy plans", async () => {
+    const limited = plan("beta", 2222, { limits: { activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 2222, emails: 7, statusPages: 2 } });
+    const catalog = await buildPlanCatalog(parsePlanCatalog(doc({
+      plans: [plan("alpha", 111), limited],
+      overrides: [{ organizationId: "org-x", plan: "beta", limits: { statusPages: 0 } }],
+    })), "operator");
+    expect(catalog.resolve("other", null).limits.statusPages).toBeUndefined();
+    expect(catalog.resolve("other", "beta").limits.statusPages).toBe(2);
+    expect(catalog.resolve("org-x", null).limits.statusPages).toBe(0);
+  });
+
+  it("rejects invalid status-page caps in plans and overrides", () => {
+    const limits = { activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 5, emails: 7 };
+    expect(issues(doc({ plans: [plan("alpha", 5, { limits: { ...limits, statusPages: -1 } })] })).join("; ")).toContain("plans.0.limits.statusPages");
+    expect(issues(doc({ overrides: [{ organizationId: "org-x", limits: { statusPages: 1.2 } }] })).join("; ")).toContain("overrides.0.limits.statusPages");
+    expect(issues(doc({ plans: [plan("alpha", 5, { limits: { ...limits, statusPages: null } })] })).join("; ")).toContain("plans.0.limits.statusPages");
+  });
+
   it("refuses invalid resource meter limits, naming the path but never the value", () => {
     const limits = (extra: Record<string, unknown>) => ({ activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 5, emails: 7, ...extra });
     const cases: [unknown, RegExp][] = [

@@ -55,7 +55,8 @@ If neither is set, the built-in **sandbox** catalog applies: the preview limits 
         "credits": 1000,                 // monthly outbound-check credits (one per regional check attempt)
         "emails": 10,                    // monthly notification emails
         "webhookEvents": 300,            // optional: monthly webhook requests the inbox receiver captures
-        "browserSeconds": 1200           // optional: monthly browser-check runtime, in seconds
+        "browserSeconds": 1200,          // optional: monthly browser-check runtime, in seconds
+        "statusPages": 2                // optional: maximum status pages in this workspace, across projects
       },
       "features": []                     // only features Montral enforces: "hideBranding"
     },
@@ -81,6 +82,15 @@ never implies unlimited checks, regions or notifications. Unknown fields are ref
 `defaultPlan` and override plans must exist. Overrides replace the listed limits only, and those limits keep applying
 when the workspace's subscription changes (an override without `plan` caps every plan the workspace moves to).
 Overrides may also raise limits; record why in `note`.
+
+**Status-page cap (`statusPages`).** Optional, and absent means no page-count limit for backwards compatibility:
+existing catalogs and the built-in sandbox plan are unchanged. When set, it is an integer from 0 (no pages)
+through 2,000,000,000. The limit counts **all** pages across all projects in a workspace, including private
+pages; concurrent creation is serialized within one PostgreSQL transaction, including across app replicas.
+Deleting a page frees a slot. A plan downgrade never deletes existing pages or hides their public status; it only
+refuses new pages until the count falls below the new cap, with HTTP 402 `status_page_limit`.
+Overrides may set or clear a cap only by replacing the `statusPages` numeric value; to restore unlimited behavior,
+remove the field from the catalog entirely (not `null`). The self-hosted Community edition remains unlimited.
 
 **Resource meters (`webhookEvents`, `browserSeconds`).** Both are optional, so a catalog written before they existed
 stays valid without edits. An absent meter is **never unlimited**: it gets the built-in conservative default

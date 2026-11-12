@@ -13,13 +13,46 @@ const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-te
 const small: Edition = {
   entitlements: () => ({
     ...unmetered,
-    plan: async () => ({ id: "small", name: "Small", maxActiveMonitors: 2, minIntervalSec: 300, upgradeUrl: "https://example.com/upgrade" }),
+    plan: async () => ({ id: "small", name: "Small", maxActiveMonitors: 2, minIntervalSec: 300, maxStatusPages: 2, upgradeUrl: "https://example.com/upgrade" }),
   }),
 };
 
 describe.skipIf(!url)("plan limits", () => {
   const app = createApp(openDatabase, { edition: small });
   const raw = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
+
+  it("enforces status-page counts atomically across concurrent requests and restores capacity on delete", async () => {
+    await raw("/internal/migrate", { method: "POST", headers: { "x-cron-secret": "cron" } });
+    const signup = await raw("/api/auth/sign-up/email", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: `page-cap-${crypto.randomUUID()}@example.com`, password: "correct horse battery", name: "Page Limits QA" }),
+    });
+    expect(signup.status).toBe(200);
+    const cookie = signup.headers.getSetCookie().map((v) => v.split(";")[0]).join("; ");
+    const create = (index: number) => raw("/api/status-pages", {
+      method: "POST", headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({ slug: `p-cap-${crypto.randomUUID().slice(0, 8)}-${index}`, title: `Page ${index}` }),
+    });
+    // Without a workspace-wide PostgreSQL lock, simultaneous requests can all
+    // see the same pre-insert count and silently exceed the configured cap.
+    const responses = await Promise.all(Array.from({ length: 8 }, (_, i) => create(i)));
+    const successes = responses.filter((r) => r.status === 201);
+    const denied = responses.filter((r) => r.status === 402);
+    expect(successes).toHaveLength(2);
+    expect(denied).toHaveLength(6);
+    for (const r of denied) {
+      expect(await r.json()).toMatchObject({
+        code: "status_page_limit", limit: 2, plan: "small", upgradeUrl: "https://example.com/upgrade",
+      });
+    }
+    const pages = await Promise.all(successes.map((r) => r.json() as Promise<{ id: string }>));
+    const list = await raw("/api/status-pages", { headers: { cookie } });
+    expect((await list.json() as unknown[])).toHaveLength(2);
+    const removed = await raw(`/api/status-pages/${pages[0].id}`, { method: "DELETE", headers: { cookie } });
+    expect(removed.status).toBe(204);
+    expect((await create(9)).status).toBe(201);
+    expect((await create(10)).status).toBe(402);
+  }, 60_000);
 
   it("refuses monitors and intervals beyond the plan, and lets paused monitors go free", async () => {
     await raw("/internal/migrate", { method: "POST", headers: { "x-cron-secret": "cron" } });

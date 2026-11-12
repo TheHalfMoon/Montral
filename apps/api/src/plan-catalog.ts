@@ -25,7 +25,7 @@ const limitsSchema = z.object({
   /** monitors that may be active (not paused) at once */
   activeMonitors: count,
   /** fastest interval a monitor may use, in seconds */
-  minIntervalSec: z.number().int().min(10).max(86_400),
+  minIntervalSec: z.number().int().min(60).max(86_400),
   /** regions a monitor may check from at once */
   regions: z.number().int().min(1).max(64),
   /** monthly outbound-check credits (one per regional check attempt) */

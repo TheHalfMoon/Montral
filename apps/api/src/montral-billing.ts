@@ -350,8 +350,11 @@ export async function migrateMontralBilling(db: Database): Promise<string[]> {
       AND status IN ('active', 'on_trial', 'past_due')
       AND (status = 'past_due' OR payment_state = 'failed')
       AND payment_state IS DISTINCT FROM 'refunded'
-      AND NOT (status = 'past_due' AND payment_state = 'paid'
-        AND payment_updated_at >= provider_updated_at)
+      -- Use NULL-safe predicates: legacy records have payment_state=NULL,
+      -- and NOT(NULL) is NULL in SQL, not TRUE. A recorded successful
+      -- payment newer than the status is the only excluded paid case.
+      AND (status <> 'past_due' OR payment_state IS DISTINCT FROM 'paid'
+        OR (payment_updated_at IS NOT NULL AND payment_updated_at < provider_updated_at))
       AND (status = 'past_due' OR payment_updated_at IS NOT NULL)
   `);
   // An earlier checkout preview (before the previous release) exposed a

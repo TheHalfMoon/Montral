@@ -8,6 +8,7 @@ The preview edition introduced `past_due_since` for the first failed payment, bu
 - A `past_due` status uses its saved `provider_updated_at`. If an invoice failure has a separate saved `payment_updated_at`, use the earlier of those clocks, avoiding an artificially later grace start. An active/on-trial subscription whose last payment failed uses its saved `payment_updated_at` only.
 - Never use `NOW()` or migration time as the backfill clock. A failed invoice without any saved timestamp and without a `past_due` status remains NULL: the existing fail-closed behavior is preserved.
 - Exclude refunded payments, a `past_due` status superseded by a newer paid invoice, and all `test_mode=false` subscriptions. Never overwrite a previously set `past_due_since`.
+- Exact-head PostgreSQL 17/18 and macOS CI on the first PR commit caught a SQL three-valued-logic bug: `NOT (status='past_due' AND payment_state='paid' ...)` evaluated to `NULL` on legacy rows without a payment state, silently excluding them. Replaced it with NULL-safe `IS DISTINCT FROM` logic, retaining the paid-after-status exclusion. The E2E seed with a legacy NULL state detects this regression, and a paid-before-status control verifies the distinction.
 - The update is idempotent and conditional. Every restart may invoke the migrator without extending an expired grace window. No new table/column/DDL or provider calls.
 
 ## Verification

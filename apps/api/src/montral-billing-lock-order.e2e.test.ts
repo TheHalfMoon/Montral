@@ -218,6 +218,9 @@ describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () =
         { status: "active", failed: "failed", paidAt: activeSince, expected: activeSince },
         { status: "active", failed: "failed", paidAt: null, expected: null },
         { status: "past_due", failed: "paid", paidAt: paidSince, expected: null },
+        // A paid invoice older than the subscription's saved past_due status
+        // does not clear that later status, but must never reset its clock.
+        { status: "past_due", failed: "paid", paidAt: earlyFailure, expected: oldClock },
         { status: "past_due", failed: "failed", paidAt: earlyFailure, expected: earlyFailure },
         { status: "past_due", failed: null, paidAt: null, expected: oldClock, testMode: false },
         { status: "past_due", failed: "failed", paidAt: activeSince, expected: earlyFailure, preexisting: earlyFailure },

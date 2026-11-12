@@ -824,13 +824,43 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect(key.status, key.text).toBe(200);
     expect((await call("/api/monitors", { key: key.body.key })).status).toBe(200);
 
-    // deactivation (Entra ID sends the boolean as a string): membership, sessions and pinned keys end; SSO adds nothing back
-    const off = await scim(`/Users/${id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "Replace", path: "active", value: "False" }] } });
-    expect(off.status).toBe(200);
-    expect(off.body.active).toBe(false);
-    expect(await member(aliceId)).toBe(false);
-    expect(await q(`select 1 from session where user_id = $1`, [aliceId])).toHaveLength(0);
-    expect(await q(`select 1 from apikey where id = $1`, [key.body.id])).toHaveLength(0);
+    // An operator suspension rejects any SCIM grant/reactivation or metadata-only
+    // update, but keeps GET, deactivation and DELETE available for an IdP to
+    // promptly revoke access. The operator's private note never leaks to SCIM.
+    const removableAddress = `delete-during-suspension-${rand}@${domainB}`;
+    const removable = await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: removableAddress, active: true } });
+    expect(removable.status).toBe(201);
+    await q("INSERT INTO workspace_suspension(organization_id,reason,note) VALUES($1,'operator',$2)", [ownerB.orgId, "private incident note"]);
+    try {
+      const reads = await scim(`/Users/${id}`, { token });
+      expect(reads.status).toBe(200);
+      for (const denied of [
+        await scim("/Users", { method: "POST", token, body: { schemas: [USER], userName: `new-${rand}@${domainB}`, active: false } }),
+        await scim(`/Users/${id}`, { method: "PUT", token, body: { schemas: [USER], userName: alice, active: true } }),
+        await scim(`/Users/${id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "Replace", path: "displayName", value: "Should not change" }] } }),
+        await scim(`/Users/${id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "Replace", path: "active", value: true }] } }),
+      ]) {
+        expect(denied.status).toBe(403);
+        expect(denied.body).toMatchObject({ schemas: ["urn:ietf:params:scim:api:messages:2.0:Error"], status: "403" });
+        expect(JSON.stringify(denied.body)).not.toContain("private incident note");
+      }
+      expect((await scim(`/Users/${id}`, { token })).body).toMatchObject({ active: true });
+      expect((await scim("/Users", { token: "montral_scim_" + "0".repeat(64) })).status).toBe(401);
+
+      // Deactivation (Entra sends the boolean as a string) still signs the
+      // member out, revokes its pinned keys, and blocks SSO while suspended.
+      const off = await scim(`/Users/${id}`, { method: "PATCH", token, body: { schemas: [PATCH], Operations: [{ op: "Replace", path: "active", value: "False" }] } });
+      expect(off.status).toBe(200);
+      expect(off.body.active).toBe(false);
+      expect(await member(aliceId)).toBe(false);
+      expect(await q(`select 1 from session where user_id = $1`, [aliceId])).toHaveLength(0);
+      expect(await q(`select 1 from apikey where id = $1`, [key.body.id])).toHaveLength(0);
+      expect((await scim(`/Users/${removable.body.id}`, { method: "PUT", token, body: { schemas: [USER], userName: removableAddress, active: false } })).status).toBe(200);
+      expect((await scim(`/Users/${removable.body.id}`, { method: "DELETE", token })).status).toBe(204);
+      expect((await scim(`/Users/${removable.body.id}`, { token })).status).toBe(404);
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id=$1", [ownerB.orgId]);
+    }
     await sso(idpB, new Jar(), { email: alice }, { sub: "scim-alice", email: alice, email_verified: true });
     expect(await member(aliceId)).toBe(false);
 

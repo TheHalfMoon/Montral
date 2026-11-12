@@ -21,3 +21,15 @@ export function toggleRegion(current: string[], id: string, max: number): string
 export function regionLocked(current: string[], id: string, max: number): boolean {
   return max > 1 && !current.includes(id) && current.length >= max && !(current.length === 1 && current[0] === AUTO);
 }
+
+/** Current scheduler eligibility, not the historical success/failure result.
+ * On downgrades the first configured regions are retained, while later regions
+ * are skipped. A drained probe is never asked even if it remains configured. */
+export type RegionRunState = "active" | "plan-capped" | "drained" | "historical";
+export function regionRunState(configured: readonly string[], region: string, max: number | null, drained: ReadonlySet<string>): RegionRunState {
+  const index = [...new Set(configured)].indexOf(region);
+  if (index === -1) return "historical";
+  if (max !== null && index >= Math.max(1, max)) return "plan-capped";
+  if (region !== AUTO && drained.has(region)) return "drained";
+  return "active";
+}

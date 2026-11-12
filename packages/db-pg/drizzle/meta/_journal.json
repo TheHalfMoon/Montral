@@ -428,6 +428,13 @@
       "when": 1794460366340,
       "tag": "0060_probe_region_operator_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1794464304047,
+      "tag": "0061_onboarding_dismissal",
+      "breakpoints": true
     }
   ]
 }

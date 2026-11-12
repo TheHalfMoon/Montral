@@ -592,6 +592,8 @@ export interface AccountExport {
   user: { id: string; name: string; email: string; emailVerified: boolean; locale: string | null; twoFactorEnabled: boolean | null; createdAt: Date } | null;
   sessions: unknown[];
   workspaces: unknown[];
+  /** User-specific setup preferences, exported alongside their own account data. */
+  onboardingDismissals: { organizationId: string; dismissedAt: Date }[];
 }
 export interface PushDevice {
   id: string;
@@ -634,6 +636,9 @@ export interface Repo {
   organization(orgId: string): Promise<Organization | null>;
   userProfile(userId: string): Promise<UserProfile | null>;
   setUserLocale(userId: string, locale: string): Promise<void>;
+  /** This user's (not the whole team's) dashboard onboarding preference for this workspace. */
+  onboardingDismissed(userId: string, orgId: string): Promise<boolean>;
+  dismissOnboarding(userId: string, orgId: string): Promise<void>;
   /** Stored language of the account with this e-mail, if any. */
   localeByEmail(email: string): Promise<string | null>;
   /** Language of the workspace owner. */

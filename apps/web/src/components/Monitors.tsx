@@ -11,7 +11,7 @@ import { isAllProjects } from "../lib/scope";
 import { ProjectBadge, ProjectStrip, ScopeChip, useProjects } from "./AllProjects";
 import { draftsOf, JourneyEditor, journeyOf, SECRET_MASK, type StepDraft } from "./BrowserJourney";
 import OnboardingChecklist from "./Onboarding";
-import { dismissOnboarding, onboardingDismissed, showOnboarding } from "../lib/onboarding";
+import { showOnboarding } from "../lib/onboarding";
 
 const TYPE_LABEL: Record<Monitor["type"], string> = { http: "HTTP", tcp: "TCP", dns: "DNS", heartbeat: "CRON", postgres: "PG", mysql: "MYSQL", redis: "REDIS", websocket: "WS", domain: "DOMAIN", certificate: "CERT", ping: "PING", browser: "WEB" };
 
@@ -112,12 +112,29 @@ export default function Monitors() {
     if (everything) api.projectOverview().then(setOverview).catch(() => {});
   };
   useEffect(() => {
-    if (!everything) {
-      Promise.all([api.channels(), api.statusPages()]).then(([c, p]) => setSetup({ channels: c.length, pages: p.length })).catch(() => {});
-      api.me().then((m) => { setOrgId(m.organization.id); setHideSetup(onboardingDismissed(m.organization.id)); }).catch(() => {});
-    }
+    let generation = 0;
+    const loadSetup = () => {
+      const current = ++generation;
+      if (everything) return;
+      Promise.all([api.channels(), api.statusPages()])
+        .then(([channels, pages]) => { if (current === generation) setSetup({ channels: channels.length, pages: pages.length }); })
+        .catch(() => {});
+      // Do not reveal the compact checklist before its per-user server preference arrives:
+      // hiding it late after a refresh would cause a visible layout shift.
+      api.me().then(async (m) => {
+        const dismissed = await api.onboardingDismissed().then((r) => r.dismissed).catch(() => false);
+        if (current === generation) { setHideSetup(dismissed); setOrgId(m.organization.id); }
+      }).catch(() => {});
+    };
+    loadSetup();
+    const onScope = () => {
+      setOrgId(null); setSetup(null); setHideSetup(false);
+      loadSetup();
+    };
+    window.addEventListener("montral:scope", onScope);
     load();
-    return pollWhileVisible(load, 15000);
+    const stop = pollWhileVisible(load, 15000);
+    return () => { generation++; window.removeEventListener("montral:scope", onScope); stop(); };
   }, []);
   // ⌘K / Ctrl+K focuses the search box
   useEffect(() => {
@@ -261,7 +278,12 @@ export default function Monitors() {
           {setup && orgId !== null && showOnboarding({ monitors: all.length, channels: setup.channels, statusPages: setup.pages }, { allProjects: everything, dismissed: hideSetup }) && (
             <div className="onb-wrap onb-compact">
               <OnboardingChecklist counts={{ monitors: all.length, channels: setup.channels, statusPages: setup.pages }} onAddMonitor={() => setOpen(true)}
-                onDismiss={() => { dismissOnboarding(orgId); setHideSetup(true); }} />
+                onDismiss={() => {
+                  // Hide only after the preference commits, so a refresh cannot lose the choice.
+                  api.dismissOnboarding()
+                    .then(() => setHideSetup(true))
+                    .catch(() => setNote({ ok: false, text: t("Could not save onboarding preference. Please try again.") }));
+                }} />
             </div>
           )}
         </>

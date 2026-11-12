@@ -347,6 +347,19 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const [organization, user] = await Promise.all([repo.organization(c.get("orgId")), repo.userProfile(c.get("userId"))]);
     return c.json({ userId: c.get("userId"), user, organization, projectId: c.get("projectId") });
   });
+  // Onboarding dismissal is a personal preference scoped to the active workspace.
+  // API keys and OAuth agents cannot read/write a human browser's preference.
+  authed.get("/onboarding/dismissal", async (c) => {
+    if (c.get("workspaceGrant") !== null) return c.json({ error: "A signed-in session is required" }, 403);
+    c.header("cache-control", "private, no-store");
+    return c.json({ dismissed: await c.get("repo").onboardingDismissed(c.get("userId"), c.get("orgId")) });
+  });
+  authed.post("/onboarding/dismissal", async (c) => {
+    if (c.get("workspaceGrant") !== null) return c.json({ error: "A signed-in session is required" }, 403);
+    await c.get("repo").dismissOnboarding(c.get("userId"), c.get("orgId"));
+    c.header("cache-control", "private, no-store");
+    return c.json({ dismissed: true });
+  });
   // everything we hold about this user (GDPR export); workspace contents only for workspaces they own or administer
   // interactive sessions only: an API key or agent token (even a project-limited one) never gets the whole account
   authed.get("/me/export", async (c) => {

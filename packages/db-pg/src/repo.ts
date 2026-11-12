@@ -264,6 +264,18 @@ export function createRepo(db: Db): Repo {
     async setUserLocale(userId, locale) {
       await db.update(schema.user).set({ locale }).where(eq(schema.user.id, userId));
     },
+    async onboardingDismissed(userId, orgId) {
+      const [entry] = await db.select({ userId: schema.onboardingDismissal.userId })
+        .from(schema.onboardingDismissal)
+        .where(and(eq(schema.onboardingDismissal.userId, userId), eq(schema.onboardingDismissal.organizationId, orgId)))
+        .limit(1);
+      return !!entry;
+    },
+    async dismissOnboarding(userId, orgId) {
+      await db.insert(schema.onboardingDismissal)
+        .values({ userId, organizationId: orgId })
+        .onConflictDoNothing();
+    },
     async localeByEmail(email) {
       const [u] = await db.select({ locale: schema.user.locale }).from(schema.user).where(eq(schema.user.email, email.toLowerCase())).limit(1);
       return u?.locale ?? null;
@@ -303,10 +315,13 @@ export function createRepo(db: Db): Repo {
         });
       }
       const sessions = await q(sql`select ip_address, user_agent, created_at, expires_at from session where user_id = ${uid}`);
+      const onboardingDismissals = await db.select({ organizationId: schema.onboardingDismissal.organizationId, dismissedAt: schema.onboardingDismissal.dismissedAt })
+        .from(schema.onboardingDismissal).where(eq(schema.onboardingDismissal.userId, uid));
       return {
         user: u ? { id: u.id, name: u.name, email: u.email, emailVerified: u.emailVerified, locale: u.locale, twoFactorEnabled: u.twoFactorEnabled, createdAt: u.createdAt } : null,
         sessions,
         workspaces,
+        onboardingDismissals,
       };
     },
     async counts(o, p) {

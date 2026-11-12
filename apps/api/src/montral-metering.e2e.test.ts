@@ -129,7 +129,7 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     const refused = await capture(path, env);
     expect(refused.status).toBe(429);
     expect(refused.headers.get("cache-control")).toBe("private, no-store");
-    expect(await refused.json()).toMatchObject({ code: "webhook_quota_exhausted" });
+    expect(await refused.json()).toMatchObject({ code: "webhook_quota_exhausted", resetsAt: calendarMonthUtc().end.toISOString() });
     const retry = Number(refused.headers.get("retry-after"));
     const untilNext = Math.ceil((calendarMonthUtc().end.getTime() - Date.now()) / 1000);
     expect(retry).toBeGreaterThan(0);

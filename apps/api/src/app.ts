@@ -33,7 +33,7 @@ import { AuthBodyTimeoutError, limitedAuthBody } from "./auth-body-budget";
 import { limitedJsonBody } from "./json-body-budget";
 import { community, type Edition } from "./edition";
 import { migrateMontralSchema } from "./schema-migrate";
-import { availableRegions } from "./probes";
+import { availableRegions, drainedRegions } from "./probes";
 import { PROBE_TYPES } from "./regions";
 import { completeRecovery, runDueChecks } from "./scheduler";
 import { auditRetentionDays } from "./audit";
@@ -399,7 +399,10 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   // where checks can run from on this deployment, and how many of those one monitor may use under the workspace's plan (null: no limit)
   authed.get("/regions", async (c) => {
     const plan = await c.get("entitlements").plan(c.get("orgId"));
-    return c.json({ regions: availableRegions(), types: PROBE_TYPES, maxPerMonitor: plan?.maxRegions ?? null });
+    const drained = await drainedRegions(c.get("repo"));
+    // Only a public operational flag is sent; never disclose operator IDs, notes,
+    // probe URLs, credentials, or internal health errors to customer workspaces.
+    return c.json({ regions: availableRegions().map((r) => ({ ...r, drained: r.id !== "auto" && drained.has(r.id) })), types: PROBE_TYPES, maxPerMonitor: plan?.maxRegions ?? null });
   });
   // sidebar badges: one round trip, four counts
   authed.get("/counts", async (c) => {

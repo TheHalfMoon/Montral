@@ -1,7 +1,7 @@
 import { openDatabase } from "@montral/db-pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
-import { configureProbes } from "./probes";
+import { configureProbes, resetProbeRegionCache } from "./probes";
 import type { Edition } from "./edition";
 import { unmetered } from "./entitlements";
 
@@ -70,6 +70,29 @@ describe.skipIf(!url)("regions", () => {
     expect(r.status).toBe(200);
     expect(r.body.regions.map((x: { id: string }) => x.id)).toEqual(["auto", "us-east", "eu-central", "ap-southeast"]);
     expect(r.body).toMatchObject({ types: ["http", "tcp", "websocket"], maxPerMonitor: 2 });
+  });
+
+  it("exposes only a drained flag to workspace members, never operator notes or secrets", async () => {
+    const call = await signedIn();
+    const db = openDatabase(url!, { max: 2 });
+    try {
+      await db.repo.setProbeRegionDrain!("eu-central", { drained: true, by: null, note: "private operator note" });
+      resetProbeRegionCache();
+      const response = await call("GET", "/regions");
+      expect(response.status).toBe(200);
+      expect(response.body.regions.find((r: { id: string }) => r.id === "eu-central"))
+        .toMatchObject({ id: "eu-central", drained: true });
+      expect(response.body.regions.find((r: { id: string }) => r.id === "auto"))
+        .toMatchObject({ id: "auto", drained: false });
+      const json = JSON.stringify(response.body);
+      expect(json).not.toContain("private operator note");
+      expect(json).not.toContain("drainedBy");
+      expect(json).not.toContain("probe.test");
+    } finally {
+      await db.repo.setProbeRegionDrain!("eu-central", { drained: false, by: null, note: null });
+      resetProbeRegionCache();
+      await db.close(1);
+    }
   });
 
   it("puts no limit on the regions of one monitor in the community edition", async () => {

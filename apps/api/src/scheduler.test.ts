@@ -135,6 +135,26 @@ describe("queue delivery", () => {
     return { repo, ran };
   }
 
+  it("never bills or checks a suspended queued monitor, including a suspension after the initial read", async () => {
+    const monitor = http("suspended-queued");
+    const charged = vi.fn(async (_id: string, credits: number) => credits);
+    const entitlements: Entitlements = { ...unmetered, spendCredits: charged };
+    const read = vi.fn(async () => [] as Monitor[]);
+    const started = vi.fn(async () => [] as string[]);
+    const repo = { monitorsByIds: read, beginRuns: started } as unknown as Repo;
+    const msg: CheckMessage = { ids: [monitor.id], at: [at.toISOString()] };
+    await processCheckMessage(repo, msg, entitlements);
+    expect(read).toHaveBeenCalledOnce();
+    expect(started).not.toHaveBeenCalled();
+    expect(charged).not.toHaveBeenCalled();
+    // Simulate an operator suspension committing between the read and beginRuns:
+    // the repository's transactional start guard must refuse this generation.
+    read.mockResolvedValueOnce([monitor]);
+    await processCheckMessage(repo, msg, entitlements);
+    expect(started).toHaveBeenCalledOnce();
+    expect(charged).not.toHaveBeenCalled();
+  });
+
   it("bills and checks a redelivered message only once", async () => {
     const { repo } = consumerRepo([http("a"), http("b")]);
     let spent = 0;

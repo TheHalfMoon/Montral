@@ -160,6 +160,29 @@ describe.skipIf(!url)("monitors and maintenance", () => {
     expect((await repo.claimDue(1000)).filter((x) => x.id === m.id)).toHaveLength(0);
   });
 
+  it("suppresses previously queued checks when a workspace is suspended, then allows them after unsuspension", async () => {
+    const [m] = await seed(1);
+    await db.update(schema.monitor).set({ nextCheckAt: new Date(Date.now() - 5000) }).where(eq(schema.monitor.id, m.id));
+    const claimed = (await repo.claimDue(1000)).find((row) => row.id === m.id)!;
+    expect(claimed).toBeDefined();
+    expect(await repo.monitorsByIds([m.id])).toHaveLength(1);
+    const run = { id: m.id, token: claimed.nextCheckAt, generation: claimed.runGeneration! };
+    await db.insert(schema.workspaceSuspension).values({ organizationId: orgId, reason: "operator" });
+    try {
+      // Even a message leased before suspension must not be loaded or marked started.
+      expect(await repo.monitorsByIds([m.id])).toHaveLength(0);
+      expect(await repo.beginRuns([run])).toEqual([]);
+      expect(await repo.beginRuns([{ id: m.id, token: run.token }])).toEqual([]);
+      const [saved] = await db.select({ last: schema.monitor.lastRunGeneration }).from(schema.monitor).where(eq(schema.monitor.id, m.id));
+      expect(saved.last).toBe(0);
+    } finally {
+      await db.delete(schema.workspaceSuspension).where(eq(schema.workspaceSuspension.organizationId, orgId));
+    }
+    // The queued generation remains usable after the suspension is lifted.
+    expect(await repo.monitorsByIds([m.id])).toHaveLength(1);
+    expect(await repo.beginRuns([run])).toEqual([m.id]);
+  });
+
   it("dedupes interleaved claims without losing checks after an interval is shortened", async () => {
     const [m] = await seed(1);
     const claim = async (intervalSec: number) => {

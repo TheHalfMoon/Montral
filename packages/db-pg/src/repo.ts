@@ -723,7 +723,10 @@ export function createRepo(db: Db): Repo {
         )
         .returning(),
     async monitorsByIds(ids) {
-      return ids.length ? db.select().from(schema.monitor).where(inArray(schema.monitor.id, ids)) : [];
+      // Queued messages may arrive after an operator has suspended the workspace.
+      // Never hand suspended monitors to the network-check worker (including legacy messages without a lease token).
+      return ids.length ? db.select().from(schema.monitor)
+        .where(and(inArray(schema.monitor.id, ids), notSuspended(schema.monitor.organizationId))) : [];
     },
     async beginRuns(runs) {
       // The row lock serializes duplicate starts. Generations never move backwards when an interval is shortened.
@@ -737,7 +740,9 @@ export function createRepo(db: Db): Repo {
           const won = await db
             .update(schema.monitor)
             .set({ lastRunToken: token, ...(generation !== undefined ? { lastRunGeneration: generation, runStartedAt: sql`now()`, runStartedThroughGeneration: sql`${schema.monitor.runGeneration}` } : {}) })
-            .where(and(eq(schema.monitor.id, id), newer, generation === undefined ? undefined : coalesced(generation, token)))
+            .where(and(eq(schema.monitor.id, id), newer, generation === undefined ? undefined : coalesced(generation, token),
+              // A workspace may have been suspended after this message was loaded but before it began.
+              notSuspended(schema.monitor.organizationId)))
             .returning({ id: schema.monitor.id });
           return won.length ? id : null;
         }),

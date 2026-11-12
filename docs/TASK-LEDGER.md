@@ -113,6 +113,8 @@ configuration and are not part of the repository.
 | 72 | Replica restart coverage test lows: a restart window ends when Docker reports the replica healthy, so it may include a few seconds after it is serving; the negative control exercises the gate, not where the snapshots are taken; an in-flight `curl` completing after `kill` may cause a false failure (#80) | P3 | Accepted for now |
 | 73 | BYOC: avoid requests to external Google Fonts hosts in the end-user browser | P3 | Resolved by #90: Montral application, static landings and preview use system font fallback; CSP no longer allows the remote font hosts, and a negative-controlled source gate plus BYOC HTML check reject regressions. CI qualification pending. |
 
+| 74 | Browser on-call override GET intermittently returned 400 in WebKit: the UI used separate `Date.now()` calls for the `from` and `to` bounds of an exactly 90-day range, so clock drift exceeded the server's strict 90-day limit | P2 | Fix proposed, pending exact-head CI: compute both timestamps from one captured millisecond instant; deterministic unit tests include deliberately drifting clocks. Evidence: `docs/evidence/2026-11-12-oncall-range-boundary.md` |
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

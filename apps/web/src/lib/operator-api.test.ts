@@ -26,6 +26,15 @@ describe("operator console request isolation", () => {
     expect(init.cache).toBe("no-store");
   });
 
+  it("reads a probe audit without caching or unsafe URL interpolation", async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({ region: "east/west", events: [] }), { status: 200 }));
+    const api = makeOperatorApi(request as typeof fetch);
+    await expect(api.probeAudit("east/west")).resolves.toEqual({ region: "east/west", events: [] });
+    const [path, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+    expect(path).toBe("/api/operator/probes/east%2Fwest/audit?limit=50");
+    expect(init).toMatchObject({ credentials: "include", cache: "no-store", method: "GET", referrerPolicy: "no-referrer" });
+  });
+
   it("does not allow writes until the exact resource identifier is typed", () => {
     expect(operatorActionConfirmed("acme", "acme", "", 500)).toBe(true);
     expect(operatorActionConfirmed("acme", "Acme", "", 500)).toBe(false);

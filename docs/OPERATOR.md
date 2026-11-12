@@ -150,8 +150,13 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   the suspension was written is still stored.
 - Operators must sign in with email and password plus a second factor; operator accounts that only have GitHub or SSO
   sign-in cannot act as operators.
-- SCIM provisioning (`/api/scim/v2`) of the workspace keeps working, so the customer's identity provider can still
-  deprovision users during a suspension.
+- **SCIM 2.0** (`/api/scim/v2`) bearer authentication, metadata and user reads still work during a suspension. New
+  user provisioning (`POST /Users`) and reactivation or attribute-only updates (`PUT`/`PATCH` without `active=false`)
+  are refused with a SCIM-formatted 403. A provider may still deactivate an existing user (`PUT` or `PATCH` with
+  `active=false`) or delete an existing SCIM user record (`DELETE /Users/:id`), ending membership, sessions and pinned
+  keys. The suspended workspace's operator reason and note are never returned. SCIM writes lock the organization row
+  before inspecting suspension within their transaction, serialized with operator suspension. Historical read-only SCIM
+  data remains available for the provider to reconcile removals.
 - Custom-domain verification rechecks still run for the workspace's status pages (their notices are queued but not
   sent until unsuspension). Account mails (password reset, verification) are not affected.
 - A `payment` suspension blocks the whole workspace API, including the billing pages and checkout routes the hosted

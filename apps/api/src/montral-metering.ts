@@ -14,7 +14,9 @@ export type UsageKind = typeof USAGE_KINDS[number];
 /** The ledger kind of each resource meter. */
 export const METER_KIND: Readonly<Record<Meter, UsageKind>> = Object.freeze({ webhookEvents: "webhook_events", browserSeconds: "browser_seconds" });
 /** The plan limit that bounds each ledger kind. */
-const KIND_LIMIT: Readonly<Record<UsageKind, keyof PlanLimits>> = Object.freeze({ credits: "credits", emails: "emails", webhook_events: "webhookEvents", browser_seconds: "browserSeconds" });
+// Only resource meters have strictly numeric allowances. Optional statusPages
+// is a structural plan cap, not a monthly meter, and must never be a meter key.
+const KIND_LIMIT: Readonly<Record<UsageKind, "credits" | "emails" | "webhookEvents" | "browserSeconds">> = Object.freeze({ credits: "credits", emails: "emails", webhook_events: "webhookEvents", browser_seconds: "browserSeconds" });
 const KIND_LIST = USAGE_KINDS.map((k) => `'${k}'`).join(",");
 const KIND_CHECK = "montral_usage_kind_v2";
 
@@ -339,6 +341,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     return {
       id: p.id, name: p.name, maxActiveMonitors: limits.activeMonitors,
       minIntervalSec: limits.minIntervalSec, maxRegions: limits.regions,
+      maxStatusPages: limits.statusPages ?? null,
       hideBranding: p.features.includes("hideBranding"),
       upgradeUrl: "/app/billing",
     };

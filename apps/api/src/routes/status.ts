@@ -130,7 +130,15 @@ export const statusPages = new Hono<AppEnv>()
       const bad = thresholdsProblem(c, v.uptimeOkPct ?? 99.9, v.uptimeWarnPct ?? 98);
       if (bad) return bad;
       if (await repo.slugTaken(v.slug)) return c.json({ error: "That slug is already taken" }, 409);
-      const page = await repo.createStatusPage(c.get("orgId"), c.get("projectId"), { ...v, ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}) });
+      const plan = await c.get("entitlements").plan(c.get("orgId"));
+      const maxPages = plan?.maxStatusPages;
+      const data = { ...v, ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}) };
+      // The cap is workspace-wide, not project-wide. An advisory transaction lock
+      // makes the count and insert atomic even across concurrent app replicas.
+      const page = maxPages == null
+        ? await repo.createStatusPage(c.get("orgId"), c.get("projectId"), data)
+        : await repo.createStatusPageWithinLimit(c.get("orgId"), c.get("projectId"), data, maxPages);
+      if (!page) return c.json({ error: `The ${plan!.name} plan allows at most ${maxPages} status pages`, code: "status_page_limit", limit: maxPages, plan: plan!.id, upgradeUrl: plan!.upgradeUrl }, 402);
       await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
       await audit(c, "status_page.create", { type: "status_page", id: page.id, projectId: page.projectId }, auditChanges({ ...v, password, monitorIds, components }));
       return c.json(toClient(page), 201);

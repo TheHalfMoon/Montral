@@ -84,6 +84,8 @@ export type Plan = {
   minIntervalSec: number;
   /** Regions one monitor may check from (`auto` counts as one). Absent or null = no cap. */
   maxRegions?: number | null;
+  /** Total number of status pages across the workspace. Absent or null = no cap. */
+  maxStatusPages?: number | null;
   /** Whether a status page may hide Montral's name and mark. Absent = yes, like the other limits; an edition that sells it sets false on the plans without it. */
   hideBranding?: boolean;
   /** Where to start or change a subscription, and where to manage billing. Absent when the workspace cannot do it. */

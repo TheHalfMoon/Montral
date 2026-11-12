@@ -24,6 +24,7 @@ import ApiKeys from "./ApiKeys";
 import Settings from "./Settings";
 import AuditLog from "./AuditLog";
 import MailReview from "./MailReview";
+import OperatorConsole from "./OperatorConsole";
 import Usage from "./Usage";
 import { ChooseProject } from "./AllProjects";
 import { isAllProjects } from "../lib/scope";
@@ -83,6 +84,7 @@ function View({ name, params, title }: { name: string; params: string[]; title: 
     case "Settings": return <Settings />;
     case "AuditLog": return <AuditLog />;
     case "MailReview": return <MailReview />;
+    case "OperatorConsole": return <OperatorConsole />;
     case "Usage": return <Usage />;
     default: return null;
   }
@@ -155,6 +157,9 @@ export default function Router() {
 
   const hit = resolveRoute(path);
   if (!hit) return <p className="muted">{t("Page not found.")} <a href={lp("/app")}>{t("← Monitors")}</a></p>;
-  if (suspended) return <><Toaster /><SuspendedNotice /></>;
-  return <><Toaster /><VerifyBar /><UsageBar /><View key={`${path}#${scope}#${bump}`} name={hit.route.name} params={hit.params} title={hit.route.title} /></>;
+  // Operators must be able to lift a suspension even when their own active workspace is suspended.
+  // Never mount workspace-specific verification/usage notices inside the platform console.
+  const operatorPage = hit.route.name === "OperatorConsole";
+  if (suspended && !operatorPage) return <><Toaster /><SuspendedNotice /></>;
+  return <><Toaster />{!operatorPage && <><VerifyBar /><UsageBar /></>}<View key={`${path}#${scope}#${bump}`} name={hit.route.name} params={hit.params} title={hit.route.title} /></>;
 }

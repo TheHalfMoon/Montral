@@ -7,6 +7,8 @@ describe("resolveRoute", () => {
     expect(resolveRoute("/app/incidents")?.route.name).toBe("Incidents");
     expect(resolveRoute("/app/api-keys")?.route.key).toBe("api-keys");
     expect(resolveRoute("/app/mail-review")?.route.name).toBe("MailReview");
+    expect(resolveRoute("/app/operator")?.route.name).toBe("OperatorConsole");
+    expect(resolveRoute("/app/operator")?.route.data([])).toEqual([]);
   });
   it("ignores trailing slashes", () => {
     expect(resolveRoute("/app/")?.route.name).toBe("Monitors");

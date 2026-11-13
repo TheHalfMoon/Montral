@@ -609,6 +609,19 @@ html[lang="zh-CN"] h1{font-weight:700}
 .toast-x{border:0;background:none;color:var(--muted);font-size:20px;line-height:1;padding:0 2px;cursor:pointer}
 .verify-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:10px 14px;margin:0 0 16px;border:1px solid color-mix(in srgb,var(--accent) 35%,var(--line));background:color-mix(in srgb,var(--accent) 8%,var(--surface));border-radius:12px;font-size:14px}
 .verify-bar span{flex:1 1 240px}
+/* An alert that was unknown at first paint is out of flow. This is only for the first reveal:
+   known notices still render inline on future page loads. Never animate its position. */
+.verify-bar.late-notice,.usage-bar.late-notice{
+  position:fixed;inset-inline-end:16px;width:min(440px,calc(100vw - 32px));max-height:min(36vh,240px);
+  margin:0;overflow:auto;z-index:40;box-shadow:0 10px 34px rgba(0,0,0,.20)
+}
+.verify-bar.late-notice{top:calc(72px + env(safe-area-inset-top, 0px))}
+.usage-bar.late-notice{bottom:calc(16px + env(safe-area-inset-bottom, 0px))}
+@media (max-width:600px){
+  .verify-bar.late-notice,.usage-bar.late-notice{inset-inline:12px;width:auto;max-height:36vh}
+  .verify-bar.late-notice{top:calc(62px + env(safe-area-inset-top, 0px))}
+  .usage-bar.late-notice{bottom:calc(12px + env(safe-area-inset-bottom, 0px))}
+}
 .callout.backup{flex-direction:column;gap:10px}
 .backup-codes{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px 16px;width:100%}
 .backup-codes li{white-space:nowrap;user-select:all}

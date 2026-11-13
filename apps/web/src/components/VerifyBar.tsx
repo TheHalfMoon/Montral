@@ -10,9 +10,10 @@ import { verifyBarAtFirstPaint, verifyBarStorage } from "../lib/verify-bar";
  * It sits above the page, so appearing late would push the page down under a click already on its way (a button
  * pressed right after load would hit whatever moved there). Once an account is known to be unverified, this tab
  * remembers that much (a flag, never the address) and later loads paint the bar with the page.
+ * On a tab's first unknown-account paint, a late notification is fixed outside page flow rather than shifting actions.
  */
 export default function VerifyBar() {
-  const [state, setState] = useState(() => verifyBarAtFirstPaint(verifyBarStorage()));
+  const [state, setState] = useState(() => ({ ...verifyBarAtFirstPaint(verifyBarStorage()), late: false }));
   useEffect(() => {
     // back from the link in the verification email: say so, then tidy the address bar
     const q = new URLSearchParams(location.search);
@@ -25,12 +26,12 @@ export default function VerifyBar() {
     api.me().then((m) => {
       const pending = !!m.user && m.user.emailVerified === false;
       verifyBarStorage().setPending(pending);
-      setState((s) => ({ ...s, pending }));
+      setState((s) => ({ ...s, pending, late: s.late || (pending && !s.pending) }));
     }).catch(() => {});
   }, []);
   if (!state.pending || state.dismissed) return null;
   return (
-    <div className="verify-bar" role="alert">
+    <div className={`verify-bar${state.late ? " late-notice" : ""}`} role="alert">
       <span>{t("Please verify your email address — check your inbox for the link we sent.")}</span>
       <button className="icon-btn" aria-label={t("Dismiss")} onClick={() => { verifyBarStorage().dismiss(); setState((s) => ({ ...s, dismissed: true })); }}>×</button>
     </div>

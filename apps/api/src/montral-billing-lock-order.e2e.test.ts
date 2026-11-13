@@ -17,7 +17,18 @@ import { migrateMontralSchema } from "./schema-migrate";
  * Synchronization is by pg_locks observation with a bounded wait, never by
  * sleeping for a fixed time and hoping the other side got there.
  */
-const url = process.env.TEST_DATABASE_URL;
+// This suite mutates and repeatedly replaces schema functions while other API E2E
+// files run in parallel. Keep its catalog DDL off the shared test database to
+// reduce interference from unrelated concurrent schema/catalog writes. The shared
+// macOS runner saw "tuple concurrently updated" (run 43383241612); test
+// isolation is a hypothesis-driven repair, to be proven by hosted CI.
+const sharedUrl = process.env.TEST_DATABASE_URL;
+const isolatedName = "montral_test_lockorder_" + randomUUID().replaceAll("-", "");
+const url = sharedUrl ? (() => {
+  const target = new URL(sharedUrl);
+  target.pathname = "/" + isolatedName;
+  return target.href;
+})() : undefined;
 type Db = ReturnType<typeof openDatabase>;
 
 // Table-level modes that conflict with the ROW EXCLUSIVE lock a checkout's
@@ -29,13 +40,13 @@ const EDITION_TABLES = "'montral_billing_intent','montral_subscription','montral
 async function settleOrBlock(observer: Db, migration: Promise<unknown>, pid: () => number) {
   let settled = false;
   void migration.then(() => { settled = true; }, () => { settled = true; });
-  // Generous: waiting for another test file's edition advisory lock is progress, not a failure (it is not counted
-  // as "blocked" below), and that file may take a while to migrate the shared database.
+  // A bounded deadline is necessary even on a disposable database: a genuine
+  // broken lock order must not leave CI waiting indefinitely.
   const deadline = Date.now() + 60_000;
   while (!settled && Date.now() < deadline) {
     if (pid()) {
-      // Only relation locks: another test file may legitimately hold the
-      // edition advisory lock while it migrates the shared database.
+      // Only relation locks: an actual upgrade is allowed to wait for a
+      // checkout's lock, but an idempotent re-migration must not.
       const waiting = await observer.query(
         "SELECT 1 FROM pg_locks WHERE pid=$1 AND locktype='relation' AND NOT granted", [pid()]);
       if (waiting.length) return "blocked" as const;
@@ -80,10 +91,28 @@ async function interleave(target: string, observer: Db, org: string) {
   }
 }
 
-describe.skipIf(!url)("Montral billing migration lock order on PostgreSQL", () => {
+describe.skipIf(!sharedUrl)("Montral billing migration lock order on PostgreSQL", () => {
+  const owner = sharedUrl ? openDatabase(sharedUrl, { max: 1 }) : null;
   const db = url ? openDatabase(url, { max: 2 }) : null;
-  beforeAll(async () => { await migrateMontralSchema(db!, montralEdition); });
-  afterAll(async () => { await db?.close(1); });
+  beforeAll(async () => {
+    // Only this named, disposable local database may be created or dropped.
+    const source = new URL(sharedUrl!);
+    expect(["127.0.0.1", "localhost"]).toContain(source.hostname);
+    expect(source.pathname.slice(1)).toMatch(/^(?:montral_ci|montral_test_[a-z0-9_]+)$/);
+    await owner!.query('CREATE DATABASE "' + isolatedName + '"');
+    await migrateMontralSchema(db!, montralEdition);
+  }, 90_000);
+  afterAll(async () => {
+    try {
+      await db?.close(5);
+    } finally {
+      try {
+        await owner?.query('DROP DATABASE IF EXISTS "' + isolatedName + '" WITH (FORCE)');
+      } finally {
+        await owner?.close(5);
+      }
+    }
+  }, 30_000);
 
   it("a no-op edition re-migration takes no table lock that blocks checkouts or captures", async () => {
     const held = await db!.migrateEdition!(async tx => {

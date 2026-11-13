@@ -16,3 +16,8 @@ The known-state tab-memory fix in #83/#84 paints a previously remembered email-v
 
 ## Boundaries
 A fixed banner can temporarily cover a portion of a small viewport. It remains dismissible and scroll-bounded; this is preferable to silently shifting the target of a pointer action. First-load report and dynamic workspace scopes must pass exact-head hosted browser/a11y and web typecheck CI before merge. Full hosted product and BYOC release remain NO-GO.
+
+## Stale-session and workspace reply protection
+- A separate issue surfaced during review: a slow `/api/usage` request from a former workspace could otherwise restore its near-limit alert and billing-role flag after `montral:scope`. `UsageBar` now uses the same generation-token pattern already used on the webhook inbox page: any scope change, later refresh or unmount invalidates older responses before their state and session-tab memory writes.
+- `VerifyBar` now ignores an in-flight `/api/me` response after unmount, so leaving the authenticated app cannot re-store a stale unverified-email flag.
+- The pure request-token regression asserts latest-wins, scope invalidation and unmount suppression; the existing browser journeys still verify the visible account/quota flows. No new sensitive persistence.

@@ -15,6 +15,7 @@ import { verifyBarAtFirstPaint, verifyBarStorage } from "../lib/verify-bar";
 export default function VerifyBar() {
   const [state, setState] = useState(() => ({ ...verifyBarAtFirstPaint(verifyBarStorage()), late: false }));
   useEffect(() => {
+    let active = true;
     // back from the link in the verification email: say so, then tidy the address bar
     const q = new URLSearchParams(location.search);
     if (q.get("verified") || q.get("error")) {
@@ -24,10 +25,13 @@ export default function VerifyBar() {
       history.replaceState(null, "", location.pathname + (q.size ? `?${q}` : "") + location.hash);
     }
     api.me().then((m) => {
+      // A slow /me from a signed-out tab must not repopulate its verification flag.
+      if (!active) return;
       const pending = !!m.user && m.user.emailVerified === false;
       verifyBarStorage().setPending(pending);
       setState((s) => ({ ...s, pending, late: s.late || (pending && !s.pending) }));
     }).catch(() => {});
+    return () => { active = false; };
   }, []);
   if (!state.pending || state.dismissed) return null;
   return (

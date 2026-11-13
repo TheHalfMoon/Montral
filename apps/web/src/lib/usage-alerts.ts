@@ -7,6 +7,17 @@
  */
 import type { Quota, Usage } from "./api";
 
+/** Suppress a slow allowance response belonging to a superseded refresh, workspace or unmounted notice.
+ * Only the most recently issued token may persist a notice or a Billing-role flag. */
+export function usageRequestVersion() {
+  let current = 0;
+  return {
+    start: () => ++current,
+    isCurrent: (version: number) => version === current,
+    invalidate: () => { current++; },
+  };
+}
+
 /** From this share of an allowance the meter turns amber and the banner appears. */
 export const NEAR_LIMIT_PCT = 80;
 

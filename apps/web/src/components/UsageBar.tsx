@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
 import { t } from "../lib/i18n";
-import { alertKey, formatResetDate, joinMeters, METER_LABEL, usageAlert, usageBarStorage, type UsageAlert } from "../lib/usage-alerts";
+import { alertKey, formatResetDate, joinMeters, METER_LABEL, usageAlert, usageBarStorage, usageRequestVersion, type UsageAlert } from "../lib/usage-alerts";
 
 /**
  * Notice bar of the hosted edition: an allowance is at 80 % or more, or used up. Links to Plan & usage and Billing.
@@ -21,9 +21,13 @@ export default function UsageBar() {
   // A remembered alert must never imply the current workspace role can open Billing.
   const [canManageBilling, setCanManageBilling] = useState(false);
   useEffect(() => {
+    const version = usageRequestVersion();
     // answered by the shell's early read of /usage (lib/api.ts prefetch), so this costs no request of its own
     const load = () => {
+      const current = version.start();
       api.usage().then((u) => {
+        // An old workspace's response must not overwrite its successor's notice or role.
+        if (!version.isCurrent(current)) return;
         const next = usageAlert(u);
         setCanManageBilling(u.metered && u.canManageBilling === true);
         usageBarStorage().write(next);
@@ -32,12 +36,20 @@ export default function UsageBar() {
       }).catch(() => {});
     };
     // another workspace: what this tab remembered belonged to the previous one
-    const onScope = () => { usageBarStorage().write(null); setAlert(null); setHidden(null); setCanManageBilling(false); setFloatWhenLate(true); load(); };
+    const onScope = () => {
+      version.invalidate();
+      usageBarStorage().write(null); setAlert(null); setHidden(null); setCanManageBilling(false);
+      setFloatWhenLate(true); load();
+    };
     load();
     // a quota refusal: read the allowances again
     window.addEventListener("montral:usage", load);
     window.addEventListener("montral:scope", onScope);
-    return () => { window.removeEventListener("montral:usage", load); window.removeEventListener("montral:scope", onScope); };
+    return () => {
+      version.invalidate();
+      window.removeEventListener("montral:usage", load);
+      window.removeEventListener("montral:scope", onScope);
+    };
   }, []);
   if (!alert || hidden === alertKey(alert)) return null;
   const lang = document.documentElement.lang || undefined;

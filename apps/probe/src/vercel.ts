@@ -14,5 +14,5 @@ export default async function (req: IncomingMessage, res: ServerResponse) {
     res.end('{"error":"Request too large"}');
     return;
   }
-  await send(res, await handleProbe(request, { secret: process.env.PROBE_SECRET, region: process.env.VERCEL_REGION }));
+  await send(res, await handleProbe(request, { secret: process.env.PROBE_SECRET, previousSecret: process.env.PROBE_PREVIOUS_SECRET, previousExpiresAt: process.env.PROBE_PREVIOUS_SECRET_EXPIRES_AT, region: process.env.VERCEL_REGION }));
 }

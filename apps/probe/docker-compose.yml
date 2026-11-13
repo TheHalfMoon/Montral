@@ -19,6 +19,9 @@ services:
     restart: unless-stopped
     environment:
       PROBE_SECRET: ${PROBE_SECRET:?set PROBE_SECRET in .env (openssl rand -hex 32), the same value as on the API}
+      # Temporary rollover overlap: old signing key accepted only while the API is being rotated.
+      PROBE_PREVIOUS_SECRET: ${PROBE_PREVIOUS_SECRET:-}
+      PROBE_PREVIOUS_SECRET_EXPIRES_AT: ${PROBE_PREVIOUS_SECRET_EXPIRES_AT:-}
       # label returned by the health check; the name users see comes from the API's PROBE_REGIONS
       PROBE_REGION: ${PROBE_REGION:-}
       CHECK_USER_AGENT: ${CHECK_USER_AGENT:-}

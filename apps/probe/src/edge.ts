@@ -1,5 +1,5 @@
 import { HTTP_REQUEST_CAPABILITY, HTTP_METHODS, requestBodyProblem } from "../../api/src/http-request";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbe } from "../../api/src/probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbeWithRotation } from "../../api/src/probe-protocol";
 
 /**
  * A small, HTTP-only Cloudflare Worker probe. Reuses the request validation and
@@ -7,7 +7,7 @@ import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbe } from "../../api/src/p
  * its scheduled loop, keep a second incident database, or alert customers.
  * The Montral scheduler is the single source of truth for a check.
  */
-export type EdgeEnv = { PROBE_SECRET?: string; ALLOWED_HOSTS?: string; REGION?: string };
+export type EdgeEnv = { PROBE_SECRET?: string; PROBE_PREVIOUS_SECRET?: string; PROBE_PREVIOUS_SECRET_EXPIRES_AT?: string; ALLOWED_HOSTS?: string; REGION?: string };
 const json = (status: number, value: unknown) => new Response(JSON.stringify(value), {
   status, headers: { "content-type": "application/json", "cache-control": "no-store" },
 });
@@ -59,7 +59,7 @@ export async function handleEdgeProbe(request: Request, env: EdgeEnv, fetcher: t
   if (!env.PROBE_SECRET || env.PROBE_SECRET.length < 16 || !env.ALLOWED_HOSTS?.trim()) return json(503, { error: "Edge probe not configured" });
   const body = await readBytes(request, MAX_SIGNED_BODY);
   if (body === null) return json(413, { error: "Request too large" });
-  if (!await verifyProbe(env.PROBE_SECRET, {
+  if (!await verifyProbeWithRotation(env.PROBE_SECRET, env.PROBE_PREVIOUS_SECRET, env.PROBE_PREVIOUS_SECRET_EXPIRES_AT, {
     timestamp: request.headers.get(TIMESTAMP_HEADER),
     signature: request.headers.get(SIGNATURE_HEADER),
     body,

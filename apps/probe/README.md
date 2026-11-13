@@ -55,13 +55,25 @@ PROBE_SECRET=… PROBE_REGION=sao-paulo node apps/probe/dist/server.mjs
 
 | Variable | Meaning |
 |---|---|
-| `PROBE_SECRET` | Required. Shared with the API; requests without a valid signature are refused. |
+| `PROBE_SECRET` | Required. Current signing secret shared with the API; unsigned requests are refused. |
+| `PROBE_PREVIOUS_SECRET` | Optional. Older signing key accepted by probes **only** until the explicit UTC expiry below. Never set on the API. |
+| `PROBE_PREVIOUS_SECRET_EXPIRES_AT` | Required to activate the previous key. UTC timestamp formatted `YYYY-MM-DDTHH:mm:ssZ` (for example `2027-01-01T00:00:00Z`). If absent, malformed or elapsed, old signatures are refused. |
 | `PROBE_REGION` | Label returned by the health check. The name users see comes from the API's `PROBE_REGIONS`. |
 | `PORT`, `HOST` | Where to listen. Default `8787` on `0.0.0.0`. |
 | `CHECK_USER_AGENT` | User-Agent of HTTP checks. Set it to the same value as on the API so every region looks alike. |
 | `ALLOW_PRIVATE_TARGETS` | `true` lets this probe check private and internal addresses of the network it runs in. Off by default. Use it for a probe that lives inside the network you want to watch (an office, a home lab), and only there. |
 
 The server answers `SIGTERM` by finishing checks in flight, so `docker stop` is clean.
+
+### Staged signing-key rotation
+
+The API signs with exactly one `PROBE_SECRET`; probes can temporarily verify against the current and previous secrets. To rotate without a synchronized redeployment:
+
+1. First deploy every probe region and replica with the new `PROBE_SECRET`, the old `PROBE_PREVIOUS_SECRET` and a near-future UTC `PROBE_PREVIOUS_SECRET_EXPIRES_AT` deadline that comfortably covers rollout. The expiry is mandatory; missing or expired dates disable old-key verification. Keep the API signing with the old key. Verify a signed check on every region, not merely the unauthenticated health GET.
+2. After all probes have been upgraded, switch the API `PROBE_SECRET` to the new key. New signatures will verify, while requests signed by old API replicas can still be accepted during the overlap.
+3. After old API replicas and in-flight checks have drained, remove `PROBE_PREVIOUS_SECRET` from every probe. Never leave the old key enabled indefinitely.
+
+The previous-key setting belongs only on probes, including Node, Docker, Vercel or Cloudflare, and never changes the API signer. A probe without a primary key remains disabled regardless of a previous key. The timestamp check still rejects requests outside 60 seconds. The overlap **expires automatically** at the configured UTC deadline, but does not provide independent per-probe identities or remote revocation. A compromised old key remains valid until expiry or removal, whichever happens first. Keep keys in private deployment secrets, not in the repository or command history.
 
 ## Deploy to Vercel (several regions)
 

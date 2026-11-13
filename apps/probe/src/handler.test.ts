@@ -32,8 +32,27 @@ describe("probe handler", () => {
     expect((await handleProbe(await signed(check, { ts: Math.floor(Date.now() / 1000) - 600 }), { secret })).status).toBe(401);
   });
 
-  it("refuses everything when no secret is configured", async () => {
+  it("refuses everything when no secret is configured, even if an old secret is supplied", async () => {
     expect((await handleProbe(await signed(check), { secret: undefined })).status).toBe(503);
+    expect((await handleProbe(await signed(check), { secret: undefined, previousSecret: secret })).status).toBe(503);
+  });
+
+  it("accepts both signing keys only during explicit rollover and rejects stale or other signatures", async () => {
+    const next = "new-rotated-probe-signature-secret-2026";
+    const validUntil = new Date(Date.now() + 5 * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const expiredAt = new Date(Date.now() - 5_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const invalidCheck = { ...check, type: "not-supported" };
+    // A recognized signature reaches request validation (400); an invalid signature stays 401.
+    expect((await handleProbe(await signed(invalidCheck), { secret: next, previousSecret: secret, previousExpiresAt: validUntil })).status).toBe(400);
+    expect((await handleProbe(await signed(invalidCheck, { secret: next }), { secret: next, previousSecret: secret, previousExpiresAt: validUntil })).status).toBe(400);
+    expect((await handleProbe(await signed(invalidCheck, { secret: "unrelated-secret" }), { secret: next, previousSecret: secret, previousExpiresAt: validUntil })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck, { ts: Math.floor(Date.now() / 1000) - 601 }), { secret: next, previousSecret: secret, previousExpiresAt: validUntil })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck), { secret: next })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck), { secret: next, previousSecret: secret })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck), { secret: next, previousSecret: secret, previousExpiresAt: "not-a-date" })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck), { secret: next, previousSecret: secret, previousExpiresAt: "2027-02-30T12:00:00Z" })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck), { secret: next, previousSecret: secret, previousExpiresAt: expiredAt })).status).toBe(401);
+    expect((await handleProbe(await signed(invalidCheck, { secret: next }), { secret: next, previousSecret: secret, previousExpiresAt: expiredAt })).status).toBe(400);
   });
 
   it("only runs http, tcp and websocket checks", async () => {

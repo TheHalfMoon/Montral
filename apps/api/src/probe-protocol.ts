@@ -39,3 +39,29 @@ export async function verifyProbe(secret: string, o: { timestamp: string | null;
   if (Math.abs(now - ts) > MAX_SKEW_SEC) return false;
   return same(await signProbe(secret, ts, o.body), o.signature.toLowerCase());
 }
+
+/**
+ * Probe-side rotation overlap only. The API always signs with its single current PROBE_SECRET.
+ * A probe accepting the previous secret lets operators upgrade every probe first and then
+ * change the API signing secret without a synchronized outage. It never enables a probe
+ * whose primary secret is missing. The previous key also requires a strict UTC expiry;
+ * remove it after cutover even if the expiry has not been reached.
+ */
+export async function verifyProbeWithRotation(
+  currentSecret: string | undefined,
+  previousSecret: string | undefined,
+  previousExpiresAt: string | undefined,
+  request: Parameters<typeof verifyProbe>[1],
+): Promise<boolean> {
+  if (!currentSecret) return false;
+  if (await verifyProbe(currentSecret, request)) return true;
+  // Never accept an older key indefinitely. Operators must provide an unambiguous UTC
+  // expiry timestamp for the rollover; missing, malformed or elapsed windows fail closed.
+  if (!previousSecret || previousSecret === currentSecret
+    || !previousExpiresAt || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$/.test(previousExpiresAt)) return false;
+  const expiresMs = Date.parse(previousExpiresAt);
+  const nowMs = (request.nowSec ?? Math.floor(Date.now() / 1000)) * 1000;
+  if (!Number.isFinite(expiresMs) || expiresMs <= nowMs
+    || new Date(expiresMs).toISOString().replace(/\.000Z$/, "Z") !== previousExpiresAt) return false;
+  return verifyProbe(previousSecret, request);
+}

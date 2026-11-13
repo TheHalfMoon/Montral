@@ -119,6 +119,9 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
       expect(r.headers.get("cache-control")).toBe("no-store");
     };
     forbidden(await operatorCall(null, "/workspaces"));
+    forbidden(await operatorCall(null, "/audit"));
+    forbidden(await operatorCall(outsider.cookie, "/audit"));
+    forbidden(await operatorCall(null, "/audit", { headers: { "x-api-key": key.body.key } }));
     forbidden(await operatorCall(outsider.cookie, "/workspaces"));
     forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}`));
     forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}/suspension-history`));
@@ -329,6 +332,57 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect(history.text).not.toContain(NOTE);
     expect(history.text).not.toContain(operator.id);
     expect(history.text).not.toContain("owner_email");
+
+    // Unified, read-only platform timeline includes only *operator* events,
+    // with microsecond keyset pagination and no customer notes or unrelated activity.
+    const workspaceAudit = await operatorCall(opCookie, `/audit?source=workspace&q=${encodeURIComponent(owner.orgId)}&limit=1`);
+    expect(workspaceAudit.status).toBe(200);
+    expect(workspaceAudit.headers.get("cache-control")).toBe("no-store");
+    expect(workspaceAudit.body.events).toHaveLength(1);
+    expect(workspaceAudit.body.events[0]).toMatchObject({ source: "workspace", target: owner.orgId, operatorId: null, reason: "abuse" });
+    expect(workspaceAudit.body.next).toEqual(expect.any(String));
+    const nextAudit = await operatorCall(opCookie,
+      `/audit?source=workspace&q=${encodeURIComponent(owner.orgId)}&limit=1&cursor=${encodeURIComponent(workspaceAudit.body.next)}`);
+    expect(nextAudit.status).toBe(200);
+    expect(nextAudit.body.events).toHaveLength(1);
+    expect(nextAudit.body.events[0].id).not.toBe(workspaceAudit.body.events[0].id);
+    expect(nextAudit.body.next).toBeNull();
+    expect(workspaceAudit.text + nextAudit.text).not.toContain(NOTE);
+    expect(workspaceAudit.text + nextAudit.text).not.toContain(operator.id);
+    expect([workspaceAudit.body.events[0].action, nextAudit.body.events[0].action].sort())
+      .toEqual(["workspace.suspend", "workspace.unsuspend"]);
+
+    // Match the same safe target prefix in both audit sources to test a true UNION view.
+    const probeRegion = owner.orgId.slice(0, 16);
+    const probeNote = "private-probe-note-must-never-leak";
+    try {
+      await db!.query(`INSERT INTO probe_region_drain_event(region,action,operator_id,note)
+        VALUES ($1,'drain',$2,$3)`, [probeRegion, operator.id, probeNote]);
+      const platform = await operatorCall(opCookie, `/audit?source=probe&q=${probeRegion}&limit=5`);
+      expect(platform.status).toBe(200);
+      expect(platform.body.events).toHaveLength(1);
+      expect(platform.body.events[0]).toMatchObject({
+        source: "probe", target: probeRegion, action: "probe.drain", operatorId: operator.id, reason: null,
+      });
+      expect(platform.text).not.toContain(probeNote);
+      expect(platform.text).not.toContain(NOTE);
+      // A search for a private note returns nothing; only safe target IDs are searchable.
+      expect((await operatorCall(opCookie, `/audit?q=${probeNote}`)).body.events).toEqual([]);
+      const combined = await operatorCall(opCookie, `/audit?q=${probeRegion}&limit=5`);
+      expect(combined.status).toBe(200);
+      expect(combined.body.events).toHaveLength(3);
+      expect(combined.body.events.map((entry: { action: string }) => entry.action).sort())
+        .toEqual(["probe.drain", "workspace.suspend", "workspace.unsuspend"]);
+      expect(combined.text).not.toContain(probeNote);
+      expect(combined.text).not.toContain(NOTE);
+      expect((await operatorCall(opCookie, `/audit?source=workspace&q=${probeRegion}`)).body.events).toHaveLength(2);
+      for (const bad of ["/audit?source=other", "/audit?limit=0", "/audit?limit=101",
+        "/audit?limit=1.5", "/audit?cursor=not-a-cursor", "/audit?q=" + "x".repeat(101)]) {
+        expect((await operatorCall(opCookie, bad)).status, bad).toBe(400);
+      }
+    } finally {
+      await db!.query("DELETE FROM probe_region_drain_event WHERE region=$1", [probeRegion]);
+    }
     expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspension-history?limit=1`)).body.events).toHaveLength(1);
     for (const badLimit of ["0", "51", "-1", "1.5", "not-a-number"]) {
       expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspension-history?limit=${badLimit}`)).status).toBe(400);

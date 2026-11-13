@@ -46,6 +46,28 @@ export function decodeOperatorCursor(raw: string): { at: string; id: string } | 
   }
 }
 
+const OPERATOR_AUDIT_CURSOR_AT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}$/;
+/** A keyset cursor over two distinct, existing append-only audit sources. */
+export function encodePlatformAuditCursor(at: string, source: "workspace" | "probe", id: string): string {
+  return b64url(JSON.stringify([at, source, id]));
+}
+export function decodePlatformAuditCursor(raw: string): { at: string; source: "workspace" | "probe"; id: string } | null {
+  if (!/^[A-Za-z0-9_-]{1,512}$/.test(raw)) return null;
+  try {
+    const parsed: unknown = JSON.parse(atob(raw.replace(/-/g, "+").replace(/_/g, "/")));
+    if (!Array.isArray(parsed) || parsed.length !== 3) return null;
+    const [at, source, id] = parsed;
+    const parsedTime = typeof at === "string" && OPERATOR_AUDIT_CURSOR_AT.test(at)
+      ? Date.parse(at.slice(0, 19) + "Z") : NaN;
+    if (!Number.isFinite(parsedTime) || new Date(parsedTime).toISOString().slice(0, 19) !== at.slice(0, 19)
+      || (source !== "workspace" && source !== "probe")
+      || typeof id !== "string"
+      || (source === "workspace" ? !UUID.test(id) : !/^[1-9]\d{0,18}$/.test(id))) return null;
+    return { at, source, id };
+  } catch { return null; }
+}
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const deny = (c: Context) => {
   c.header("cache-control", "no-store");
   return c.json({ error: "Forbidden" }, 403);
@@ -177,6 +199,75 @@ function recordOperatorAudit(query: Query, orgId: string, action: string, reason
 
 export const operatorApi = new Hono<AppEnv>()
   .use("*", requireOperator)
+  /** Read-only, bounded unified platform timeline from existing operator actions.
+   * Other customer audit rows and private operator notes are excluded entirely.
+   * No new writer or migration: source actions stay committed transactionally.
+   */
+  .get("/audit", async (c) => {
+    const limitRaw = c.req.query("limit");
+    const limit = limitRaw === undefined ? 50 : Number(limitRaw);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
+    const source = c.req.query("source") ?? "all";
+    if (source !== "all" && source !== "workspace" && source !== "probe")
+      return c.json({ error: "source must be all, workspace or probe" }, 400);
+    const q = (c.req.query("q") ?? "").trim();
+    if (q.length > 100) return c.json({ error: "q must be at most 100 characters" }, 400);
+    const rawCursor = c.req.query("cursor");
+    const cursor = rawCursor ? decodePlatformAuditCursor(rawCursor) : null;
+    if (rawCursor && !cursor) return c.json({ error: "Invalid cursor" }, 400);
+    const params: unknown[] = [];
+    const filters: string[] = [];
+    if (source !== "all") {
+      params.push(source);
+      filters.push(`source = $${params.length}::text`);
+    }
+    if (q) {
+      params.push(likeContains(q.toLowerCase()));
+      filters.push(`lower(target) LIKE $${params.length}::text`);
+    }
+    if (cursor) {
+      params.push(cursor.at, cursor.source, cursor.id);
+      const n = params.length;
+      filters.push(`(created_at AT TIME ZONE 'UTC', source, id) < ($${n - 2}::timestamp, $${n - 1}::text, $${n}::text)`);
+    }
+    params.push(limit + 1);
+    const rows = await c.get("database").query<{
+      source: "workspace" | "probe"; id: string; action: string; target: string;
+      operator_id: string | null; reason: string | null;
+      created_at: Date | string; cursor_at: string;
+    }>(`
+      WITH actions AS (
+        SELECT 'workspace'::text AS source, a.id::text AS id,
+          a.action, a.organization_id::text AS target,
+          NULL::text AS operator_id, a.changes->'values'->>'reason' AS reason,
+          a.created_at
+        FROM audit_event a
+        WHERE a.actor_type='system' AND a.actor_label='Montral operator'
+          AND a.target_type='workspace' AND a.target_id=a.organization_id
+          AND a.action IN ('workspace.suspend','workspace.unsuspend')
+        UNION ALL
+        SELECT 'probe'::text AS source, p.id::text AS id,
+          ('probe.' || p.action)::text AS action, p.region::text AS target,
+          p.operator_id::text AS operator_id, NULL::text AS reason, p.created_at
+        FROM probe_region_drain_event p
+        WHERE p.action IN ('drain','undrain')
+      )
+      SELECT source,id,action,target,operator_id,reason,created_at,
+        to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') AS cursor_at
+      FROM actions
+      ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
+      ORDER BY created_at DESC, source DESC, id DESC LIMIT $${params.length}::int
+    `, params);
+    const more = rows.length > limit;
+    const shown = more ? rows.slice(0, limit) : rows;
+    const last = shown[shown.length - 1];
+    return c.json({ events: shown.map((r) => ({
+      source: r.source, id: r.id, action: r.action, target: r.target,
+      // Workspace operator identity was never stored in its customer audit log.
+      operatorId: r.operator_id, reason: r.reason,
+      createdAt: new Date(r.created_at).toISOString(),
+    })), next: more && last ? encodePlatformAuditCursor(last.cursor_at, last.source, last.id) : null });
+  })
   .get("/workspaces", async (c) => {
     const q = (c.req.query("q") ?? "").trim();
     if (q.length > 100) return c.json({ error: "q must be at most 100 characters" }, 400);

@@ -57,7 +57,7 @@ db="$("${compose[@]}" ps -q postgres)"
 
 echo "== the runner holds no app secrets"
 env_lines="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$runner")"
-if grep -E '^(DATABASE_URL|BETTER_AUTH_SECRET|POSTGRES_PASSWORD|SMTP_|RESEND_API_KEY|CRON_SECRET|PROBE_SECRET)' <<<"$env_lines"; then
+if grep -E '^(DATABASE_URL|BETTER_AUTH_SECRET|POSTGRES_PASSWORD|SMTP_|RESEND_API_KEY|CRON_SECRET|PROBE_SECRET|PROBE_SECRETS)' <<<"$env_lines"; then
   echo "the runner container has app secrets in its environment" >&2; exit 1
 fi
 grep -q '^BROWSER_RUNNER_TOKEN=' <<<"$env_lines" || { echo "runner has no BROWSER_RUNNER_TOKEN" >&2; exit 1; }

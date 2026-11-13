@@ -63,6 +63,8 @@ services:
       # remote probes for multi-region checks (apps/probe): JSON of region id -> URL, and the secret both sides share
       PROBE_REGIONS: ${PROBE_REGIONS:-}
       PROBE_SECRET: ${PROBE_SECRET:-}
+      # Optional dedicated signing keys by region, stored only in private deployment secrets.
+      PROBE_SECRETS: ${PROBE_SECRETS:-}
       # iOS push notifications (APNs); all four needed, see /docs/self-host#apns
       APNS_KEY: ${APNS_KEY:-}
       APNS_KEY_ID: ${APNS_KEY_ID:-}

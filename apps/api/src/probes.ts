@@ -11,7 +11,8 @@ import { AUTO, REGION_ID, REGION_NAMES, effectiveRegions } from "./regions";
  * and answers with its outcome. Which regions exist is deployment configuration:
  *
  *   PROBE_REGIONS = {"us-east":"https://probe.example.app/api/probe/us-east","eu-central":{"url":"…","name":"Frankfurt"}}
- *   PROBE_SECRET  = shared secret the probes verify requests with
+ *   PROBE_SECRET  = legacy default HMAC signing secret for unlisted regions
+ *   PROBE_SECRETS = optional private JSON object of region id to dedicated signing secret
  *
  * Nothing configured means only `auto` (the scheduler's own location), exactly as before.
  */
@@ -19,6 +20,8 @@ export type ProbeRegion = { id: string; name: string; url: string };
 
 let regions = new Map<string, ProbeRegion>();
 let secret = "";
+/** Private per-region credentials; never included in region listings or health. */
+let regionSecrets = new Map<string, string>();
 let configured: string | undefined;
 
 /** Parses `PROBE_REGIONS`. Entries that cannot be used are reported in `problems` and left out. */
@@ -47,17 +50,45 @@ export function parseProbeRegions(raw: string | undefined): { regions: ProbeRegi
   return { regions: out, problems };
 }
 
-/** Env values are constant per deployment, so a module-level config is safe in a Worker isolate; parsed once. */
-export function configureProbes(env: { PROBE_REGIONS?: string; PROBE_SECRET?: string }) {
+/** Parse private credentials separately from PROBE_REGIONS so names and URLs can remain public.
+ * Any malformed/unexpected entry invalidates the *entire* override config: falling
+ * back to the shared secret would silently undo the isolation an operator intended.
+ * No error includes any secret values or untrusted region keys. */
+export function parseProbeSecrets(raw: string | undefined, knownRegions: readonly ProbeRegion[]): { secrets: Map<string, string>; error?: string } {
+  if (raw === undefined || raw === "") return { secrets: new Map() };
+  if (!raw.trim()) return { secrets: new Map(), error: "PROBE_SECRETS is blank whitespace" };
+  let value: unknown;
+  try { value = JSON.parse(raw); } catch { return { secrets: new Map(), error: "PROBE_SECRETS is not valid JSON" }; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { secrets: new Map(), error: "PROBE_SECRETS must be an object" };
+  const entries = Object.entries(value as Record<string, unknown>);
+  const known = new Set(knownRegions.map((r) => r.id));
+  if (entries.length > 100 || entries.some(([id, key]) =>
+    !known.has(id) || typeof key !== "string" || key.length < 16 || key.length > 4096 || key.trim() !== key
+  )) return { secrets: new Map(), error: "PROBE_SECRETS has invalid region keys or credentials" };
+  return { secrets: new Map(entries as [string, string][]) };
+}
+
+/** Env values are constant per deployment, so a module-level config is safe in a Worker isolate. */
+export function configureProbes(env: { PROBE_REGIONS?: string; PROBE_SECRET?: string; PROBE_SECRETS?: string }) {
   capable.clear();
-  const key = `${env.PROBE_REGIONS ?? ""}\u0000${env.PROBE_SECRET ?? ""}`;
+  const key = `${env.PROBE_REGIONS ?? ""}\u0000${env.PROBE_SECRET ?? ""}\u0000${env.PROBE_SECRETS ?? ""}`;
   if (key === configured) return;
   configured = key;
   const parsed = parseProbeRegions(env.PROBE_REGIONS);
   for (const p of parsed.problems) console.warn(`probes: ${p}`);
+  const overrides = parseProbeSecrets(env.PROBE_SECRETS, parsed.regions);
   secret = env.PROBE_SECRET?.trim() ?? "";
-  if (parsed.regions.length && !secret) console.warn("probes: PROBE_REGIONS is set but PROBE_SECRET is not; regions stay disabled");
-  regions = new Map(secret ? parsed.regions.map((r) => [r.id, r] as const) : []);
+  regionSecrets = overrides.secrets;
+  if (overrides.error) {
+    // Fail closed even if PROBE_SECRET exists: an invalid PROBE_SECRETS must not silently
+    // downgrade a region to the global key. Never log values of either secret.
+    console.warn(`probes: ${overrides.error}; all remote regions disabled`);
+    regions = new Map();
+    return;
+  }
+  regions = new Map(parsed.regions.filter((r) => regionSecrets.has(r.id) || !!secret).map((r) => [r.id, r] as const));
+  if (parsed.regions.length && regions.size < parsed.regions.length)
+    console.warn("probes: regions without PROBE_SECRET or a dedicated PROBE_SECRETS entry are disabled");
 }
 
 /** The regions a monitor may use here, `auto` first. */
@@ -144,7 +175,7 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
   if (!probe) return { region, unreachable: NOT_CONFIGURED };
   // a drained region is not asked at all: its monitors confirm from their other regions (see `measure`)
   if ((await drainedRegions(repo)).has(region)) return { region, unreachable: DRAINED };
-  const run = await askProbe(probe, input);
+  const run = await askProbe(probe, input, regionSecrets.get(region) ?? secret);
   // capability gaps say nothing about the probe's health; anything else is a sign of life, or of trouble
   if ("outcome" in run) noteHealth(repo, region, true);
   else if (!run.unreachable.startsWith("Probe upgrade required")) noteHealth(repo, region, false, run.unreachable);
@@ -201,7 +232,7 @@ export function resetProbeRegionCache() {
   healthWritten.clear();
 }
 
-async function askProbe(probe: ProbeRegion, input: CheckInput): Promise<RegionRun> {
+async function askProbe(probe: ProbeRegion, input: CheckInput, signingSecret: string): Promise<RegionRun> {
   const region = probe.id;
   const body = JSON.stringify({
     type: input.type, target: input.target, method: input.method, expectedStatus: input.expectedStatus, timeoutMs: input.timeoutMs,
@@ -237,7 +268,7 @@ async function askProbe(probe: ProbeRegion, input: CheckInput): Promise<RegionRu
     const res = await fetch(probe.url, {
       method: "POST",
       redirect: "manual",
-      headers: { "content-type": "application/json", [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: await signProbe(secret, ts, body) },
+      headers: { "content-type": "application/json", [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: await signProbe(signingSecret, ts, body) },
       body,
       signal: replySignal,
     });

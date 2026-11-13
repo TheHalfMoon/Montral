@@ -41,7 +41,7 @@ For a **local disposable environment only**, configure `DATABASE_URL` and `BETTE
 
 ### Optional Cloudflare probe
 
-The Worker source is `apps/probe/src/edge.ts`, built with `pnpm --filter @montral/probe build:edge`; the example config is `apps/probe/wrangler.edge.jsonc`. **No Worker is deployed by CI.** To enable one, privately provision its `PROBE_SECRET` and explicit `ALLOWED_HOSTS`, build/deploy it separately, and configure `PROBE_REGIONS` on the scheduler with the shared secret. It runs only signed on-demand HTTP checks; the single Montral scheduler retains ownership of monitoring state.
+The Worker source is `apps/probe/src/edge.ts`, built with `pnpm --filter @montral/probe build:edge`; the example config is `apps/probe/wrangler.edge.jsonc`. **No Worker is deployed by CI.** To enable one, privately provision its `PROBE_SECRET` and explicit `ALLOWED_HOSTS`, build/deploy it separately, and configure `PROBE_REGIONS` on the scheduler with a matching signing key (a shared `PROBE_SECRET`, or optional private per-region `PROBE_SECRETS` override). It runs only signed on-demand HTTP checks; the single Montral scheduler retains ownership of monitoring state.
 
 ## Montral source identity
 

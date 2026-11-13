@@ -3,7 +3,7 @@
 // status page (locked form, wrong password refused, right password unlocks), and a webhook inbox.
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
 import type { Route } from "@playwright/test";
-import { clickWithoutLayoutShift } from "../support/layout";
+import { clickWithoutLayoutShift, expectNoLayoutShift } from "../support/layout";
 
 test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
 
@@ -34,17 +34,18 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
       sessionStorage.removeItem("montral_verify_dismissed");
     });
     const slowMe = async (route: Route) => { await new Promise((resolve) => setTimeout(resolve, 750)); await route.continue(); };
-    await page.route((url) => url.pathname === "/api/me", slowMe);
+    const isMe = (url: URL) => url.pathname === "/api/me";
+    await page.route(isMe, slowMe);
     try {
       await page.goto("/app");
       const first = page.locator(".verify-bar.late-notice");
       await expect(first).toBeVisible();
       await expect(first).toHaveCSS("position", "fixed");
       await expect(first.getByRole("button", { name: "Dismiss" })).toBeVisible();
-      await clickWithoutLayoutShift(page.getByRole("button", { name: /Add your first monitor|New monitor/ }).first());
+      await expectNoLayoutShift(page.getByRole("button", { name: /Add your first monitor|New monitor/ }).first());
       await checkA11y(page, testInfo, "first-load-verify-notice");
     } finally {
-      await page.unroute((url) => url.pathname === "/api/me", slowMe);
+      await page.unroute(isMe, slowMe);
     }
     await page.reload();
     await expect(page.locator(".verify-bar:not(.late-notice)")).toBeVisible();

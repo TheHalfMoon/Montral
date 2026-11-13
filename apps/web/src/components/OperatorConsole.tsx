@@ -1,10 +1,43 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import {
   operatorApi, operatorActionConfirmed, OperatorRequestError,
-  type OperatorRegion, type OperatorProbeAuditEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
+  type OperatorRegion, type OperatorProbeAuditEvent, type OperatorSuspensionEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
 } from "../lib/operator-api";
 
 const REASONS: SuspensionReason[] = ["operator", "abuse", "payment", "legal"];
+
+
+/** Read-only history scoped to the selected workspace; unmounting cancels stale result rendering. */
+function WorkspaceSuspensionHistory({ orgId, revision, onFailure }: {
+  orgId: string; revision: number; onFailure: (e: unknown) => string;
+}) {
+  const [events, setEvents] = useState<OperatorSuspensionEvent[] | null>(null);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let alive = true;
+    setEvents(null); setError("");
+    operatorApi.suspensionHistory(orgId).then((data) => {
+      if (alive) setEvents(data.events);
+    }).catch((e) => {
+      if (alive) setError(onFailure(e));
+    });
+    return () => { alive = false; };
+  }, [orgId, revision]);
+  return <section aria-label="Workspace suspension history" style={{ marginTop: 16 }}>
+    <h3>Suspension history</h3>
+    {error ? <p role="alert">{error}</p> : events === null ? <p role="status">Loading suspension history...</p> :
+      events.length === 0 ? <p className="muted">No suspension actions recorded within audit retention.</p> :
+      <div style={{ overflowX: "auto" }}><table className="usage-tbl">
+        <thead><tr><th>When</th><th>Action</th><th>Reason</th></tr></thead>
+        <tbody>{events.map((event) => <tr key={event.id}>
+          <td>{new Date(event.createdAt).toLocaleString()}</td>
+          <td>{event.action === "workspace.suspend" ? "Suspended" : "Suspension lifted"}</td>
+          <td>{event.reason ?? "Not recorded"}</td>
+        </tr>)}</tbody>
+      </table></div>}
+    <p className="muted">Retained workspace audit events only. Private operator notes are not included.</p>
+  </section>;
+}
 
 /** Unlinked platform console: all requests are protected by session + fresh second-factor checks on the server. */
 export default function OperatorConsole() {
@@ -18,6 +51,7 @@ export default function OperatorConsole() {
   const [feedback, setFeedback] = useState("");
   const [detail, setDetail] = useState<OperatorWorkspaceDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [historyRevision, setHistoryRevision] = useState(0);
   const selectedRef = useRef<string | null>(null);
   const requestSeq = useRef(0);
   // A denied operator session must never be re-opened by an older in-flight success.
@@ -87,7 +121,7 @@ export default function OperatorConsole() {
   async function selectWorkspace(id: string) {
     if (accessRevoked.current) return;
     selectedRef.current = id;
-    setDetail(null); setDetailLoading(true); setError(""); setFeedback(""); setConfirmation(""); setNote("");
+    setDetail(null); setHistoryRevision(0); setDetailLoading(true); setError(""); setFeedback(""); setConfirmation(""); setNote("");
     try {
       const data = await operatorApi.workspace(id);
       if (selectedRef.current === id && !accessRevoked.current) setDetail(data);
@@ -106,7 +140,9 @@ export default function OperatorConsole() {
       if (accessRevoked.current) return;
       setConfirmation(""); setNote("");
       const fresh = await operatorApi.workspace(id);
-      if (selectedRef.current === id && !accessRevoked.current) setDetail(fresh);
+      if (selectedRef.current === id && !accessRevoked.current) {
+        setDetail(fresh); setHistoryRevision((n) => n + 1);
+      }
       setRows((old) => old.map((w) => w.id === id ? { ...w, suspended: fresh.suspended } : w));
       setFeedback(fresh.suspended ? "Workspace suspension recorded." : "Workspace suspension lifted.");
     } catch (err) { setError(failure(err)); }
@@ -208,6 +244,7 @@ export default function OperatorConsole() {
             {busy ? "Recording..." : detail.suspended ? "Lift suspension" : "Suspend workspace"}
           </button></div>
         </form>
+        <WorkspaceSuspensionHistory key={detail.id} orgId={detail.id} revision={historyRevision} onFailure={failure} />
       </section>}
 
       <section className="card sect" aria-label="Probe region controls">

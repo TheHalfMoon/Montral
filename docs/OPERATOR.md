@@ -37,6 +37,7 @@ there is no shared "unknown address" bucket, so nobody can lock operators out by
 | --- | --- |
 | `GET /api/operator/workspaces?q=&limit=&cursor=` | Workspaces, newest first: id, name, slug, creation time, member count, the first owner's email, monitor count, whether it is suspended, and the plan id (null when the deployment has no plans). `q` matches name, slug, exact id, or a member's email (case-insensitive substring). `limit` is 1–100 (default 50); `next` is an opaque cursor. |
 | `GET /api/operator/workspaces/:id` | The same fields, plus the suspension (reason, note, operator user id, time) and the current period's credit and email usage when the deployment meters usage (null otherwise). |
+| `GET /api/operator/workspaces/:id/suspension-history?limit=20` | Up to 50 newest retained workspace suspension/unsuspension audit events (default 20), including action, safe reason and timestamp. Does **not** return notes, operator identity, unrelated customer activity or other workspaces' audit logs. |
 
 Operators **cannot** see, through this API: monitor targets, headers or bodies, alert channels and their settings,
 incidents, status page contents, webhook payloads, API keys, member lists beyond the count and first owner email, or
@@ -44,6 +45,9 @@ the workspace's audit log. They cannot sign in as a customer, change a workspace
 delete anything.
 
 ## Suspending a workspace
+
+The unlinked console also shows each selected workspace's retained suspension history. It reuses append-only `audit_event` records already written atomically with the suspend/unsuspend mutation; no extra migrations or writes are needed. Every read requires the same allowlisted browser operator session and fresh MFA. The response intentionally has no operator ID or private suspension note. This is not a unified platform audit: it covers only workspace suspension decisions within the configured audit retention, not all platform actions.
+
 
 `POST /api/operator/workspaces/:id/suspend` with `{"reason": "abuse" | "payment" | "legal" | "operator", "note"?: string}`
 (note at most 500 characters, visible only to operators). Suspending an already suspended workspace replaces its reason

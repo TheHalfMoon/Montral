@@ -28,12 +28,10 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
   });
 
   await test.step("first-tab email verification notice does not move dashboard controls", async () => {
-    // Simulate a newly signed-in tab without a previously remembered account status.
+    // A fresh browser tab shares the login cookie but has no verification notice session state.
+    // Clearing the existing tab's sessionStorage races with its already-mounted VerifyBar effect.
     // The email is synthetic; force an unverified /api/me response for this isolated first-paint regression.
-    await page.evaluate(() => {
-      sessionStorage.removeItem("montral_verify_pending");
-      sessionStorage.removeItem("montral_verify_dismissed");
-    });
+    const firstTab = await context.newPage();
     const slowMe = async (route: Route) => {
       const real = await route.fetch();
       const data = await real.json() as { user?: Record<string, unknown> | null };
@@ -43,23 +41,24 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
         body: JSON.stringify({ ...data, user: { ...data.user, emailVerified: false } }) });
     };
     const isMe = (url: URL) => url.pathname === "/api/me";
-    await page.route(isMe, slowMe);
+    await firstTab.route(isMe, slowMe);
     try {
-      await page.goto("/app");
-      const first = page.locator(".verify-bar.late-notice");
+      await firstTab.goto("/app");
+      const first = firstTab.locator(".verify-bar.late-notice");
       await expect(first).toBeVisible();
       await expect(first).toHaveCSS("position", "fixed");
       await expect(first.getByRole("button", { name: "Dismiss" })).toBeVisible();
-      await expectNoLayoutShift(page.getByRole("button", { name: /Add your first monitor|New monitor/ }).first());
-      await checkA11y(page, testInfo, "first-load-verify-notice");
+      await expectNoLayoutShift(firstTab.getByRole("button", { name: /Add your first monitor|New monitor/ }).first());
+      await checkA11y(firstTab, testInfo, "first-load-verify-notice");
     } finally {
-      await page.unroute(isMe, slowMe);
+      await firstTab.unroute(isMe, slowMe);
     }
     // The next navigation uses real account state: only genuinely unverified accounts get an inline banner.
-    const actual = await (await page.request.get("/api/me")).json() as { user?: { emailVerified?: boolean } | null };
-    await page.reload();
-    if (actual.user?.emailVerified === false) await expect(page.locator(".verify-bar:not(.late-notice)")).toBeVisible();
-    else await expect(page.locator(".verify-bar")).toHaveCount(0);
+    const actual = await (await firstTab.request.get("/api/me")).json() as { user?: { emailVerified?: boolean } | null };
+    await firstTab.reload();
+    if (actual.user?.emailVerified === false) await expect(firstTab.locator(".verify-bar:not(.late-notice)")).toBeVisible();
+    else await expect(firstTab.locator(".verify-bar")).toHaveCount(0);
+    await firstTab.close();
   });
 
   await test.step("dashboard renders and the skip link moves to the main content", async () => {

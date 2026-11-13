@@ -1,7 +1,7 @@
 # Operator control plane
 
 Platform staff ("operators") of a hosted Montral deployment can look up workspaces and suspend or unsuspend them, and
-see and drain probe regions. This is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). The unlinked platform console is at `/app/operator`, with per-request server verification of a browser session and a recent second-factor sign-in. This UI grants no new permissions.
+see and drain probe regions. This is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). The unlinked platform console is at `/app/operator`, with per-request server verification of a browser session and a recent second-factor sign-in. Its new Platform audit section (proposed pending CI) exposes the same bounded search/filter/cursor controls from `GET /api/operator/audit`; no data is prefetched before the operator session is admitted, and results are discarded on unmount or access denial. This UI grants no new permissions.
 
 ## Who is an operator
 

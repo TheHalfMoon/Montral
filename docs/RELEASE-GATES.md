@@ -1,13 +1,15 @@
 # Montral release gates
 
 Publication of any kind (tag, GitHub release, Docker image, npm package, Terraform provider, deployment) requires the
-owner's explicit `GREEN LIGHT MONTRAL`. This file has three parts: the **current self-hosted release-candidate gates**,
-each verified at the candidate revision (§A), the **SaaS release gates per delivery model** — Community, Montral Cloud
+owner's explicit `GREEN LIGHT MONTRAL`. This file has three parts: the **historical self-hosted candidate gates**,
+verified at the named historical revisions (§A), the **SaaS release gates per delivery model** — Community, Montral Cloud
 and Enterprise BYOC (§S), and the **historical production/SaaS gate log** below, kept for traceability (§B).
 
-## A. Self-hosted Docker release candidate — mandatory gates at `b01e28e` (2026-11-11)
+**Latest engineering revision (2026-11-13):** `main@b624cfe` includes merged #113–#116, each with 16/16 exact-head PR checks green. The final integrated main push CI is still being qualified and must complete before this revision can become a release candidate. All tables below retain **historical** release-gate evidence; in particular `3fbc6e6` is a previously qualified candidate, not the currently validated publication artifact. Community needs explicit owner `GREEN LIGHT MONTRAL`. Cloud and Enterprise BYOC remain NO-GO for external security, provider, legal and production readiness gates.
 
-**Candidate revision update:** Community would ship from current `main` at **`3fbc6e6`**, which supersedes `b01e28e` as the candidate. All ten workflows succeeded at `3fbc6e6` (§S.1), re-running every CI gate below (G1–G11, G14) on that exact commit; the table keeps the `b01e28e` evidence for traceability. G12–G13 at `3fbc6e6`: §S.1 review table and S7. G15 is unchanged (physical Safari, public landing at `dc02d02`).
+## A. Historical self-hosted Docker release candidate — mandatory gates at `b01e28e` (2026-11-11)
+
+**Historical candidate revision:** `3fbc6e6` superseded `b01e28e` as the previously qualified Community candidate; it is no longer current `main`. All ten workflows succeeded at `3fbc6e6` (§S.1), re-running every CI gate below (G1–G11, G14) on that exact commit; the table keeps the `b01e28e` evidence for traceability. G12–G13 at `3fbc6e6`: §S.1 review table and S7. G15 is unchanged (physical Safari, public landing at `dc02d02`).
 
 Every CI gate below passed on GitHub Actions at `b01e28e` (`main` after #73). Run ids are links on
 `https://github.com/TheHalfMoon/Montral/actions/runs/<id>`.

@@ -56,8 +56,8 @@ process.env.API_ORIGIN ||= `http://127.0.0.1:${port}`;
 process.env.MONTRAL_STATUS_DOMAINS = "node";
 
 // The plan catalog of a metered deployment is operator configuration kept out of the repository (plan-catalog.ts). The
-// file is read once here; an unreadable or invalid one stops the server instead of metering with a guess. Only the
-// catalog's label and content hash are logged, never its plans' prices or allowances.
+// file is read once here; an unreadable or invalid one stops the server instead of metering with a guess.
+// Logs contain only safe catalog metadata and missing-field paths, never plan names, prices or allowances.
 if (env.MONTRAL_METERING_ENABLED === "true" && env.MONTRAL_PLAN_CONFIG?.trim()) {
   if (env.MONTRAL_PLAN_CONFIG_JSON?.trim()) throw new Error("Set either MONTRAL_PLAN_CONFIG or MONTRAL_PLAN_CONFIG_JSON, not both");
   try {

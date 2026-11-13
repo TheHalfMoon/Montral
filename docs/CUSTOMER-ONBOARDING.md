@@ -52,6 +52,12 @@ In this preview every meter counts the calendar month in UTC, so `periodEnd` is 
   reset date, upgrade path; no usage figures) and paints it with the page; usage then confirms, updates or clears it,
   and the memory is cleared once usage is back under 80 % or the workspace changes. Usage is read once per load: the
   shell's early `/usage` read answers both the Plan & usage nav entry and the banner.
+  When a tab has **no remembered notice** and the API first reports a near/exhausted limit, the banner instead appears
+  as a fixed, bounded notice outside document flow (dismissible, screen-reader status). This avoids shifting buttons
+  that have already painted. Revisited known notices still appear inline. The email-verification warning uses the
+  same first-tab rule (fixed, screen-reader alert) and remembers only the unverified flag, never the email address.
+  The fixed notices may cover content temporarily on a small display; their close buttons are keyboard-accessible,
+  max height is limited, and safe-area insets are observed. They do not change entitlement or auth decisions.
 
 ## Quota refusals
 

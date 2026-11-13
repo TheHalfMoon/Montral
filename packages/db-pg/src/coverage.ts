@@ -32,18 +32,20 @@ async function appendObservation(db: Db, snapshot: Monitor, result: { ok: boolea
   // Capture completion before waiting on the lock: database congestion must not extend freshness.
   const completedAt = new Date();
   return db.transaction(async (tx) => {
-    const [current] = await tx.select().from(schema.monitor).where(eq(schema.monitor.id, snapshot.id)).for("update");
-    if (!current || current.paused || (!options.heartbeatPing && current.coverageRevision !== (snapshot.coverageRevision ?? 0))) return null;
-    if (options.heartbeatPing && current.type !== "heartbeat") return null;
-    // A check may have begun before an operator suspended its workspace. Lock the organization
-    // FOR KEY SHARE before testing suspension: the operator's suspend transaction first locks
-    // the same organization FOR UPDATE. Whichever commits first wins, so a completed suspension
-    // cannot be followed by a stale observation (or heartbeat), even from a running probe.
-    // KEY SHARE is compatible with ordinary non-key organization updates and parallel checks.
+    // Lock order matters: organization first, then monitor. The operator's suspension route
+    // locks the organization FOR UPDATE before inserting its row, and deleting a workspace
+    // also takes the organization lock before cascading into monitors. KEY SHARE conflicts
+    // with FOR UPDATE but stays compatible with ordinary writes and other monitoring checks.
+    // Whichever commit wins, an in-flight result cannot be persisted after a suspension.
     const [workspace] = await tx.execute<{ id: string }>(
-      sql`select id from organization where id = ${current.organizationId} for key share`,
+      sql`select id from organization where id = ${snapshot.organizationId} for key share`,
     );
     if (!workspace) return null;
+    const [current] = await tx.select().from(schema.monitor).where(eq(schema.monitor.id, snapshot.id)).for("update");
+    // A stale or forged snapshot must never let us check another workspace's monitor.
+    if (!current || current.organizationId !== snapshot.organizationId || current.paused
+      || (!options.heartbeatPing && current.coverageRevision !== (snapshot.coverageRevision ?? 0))) return null;
+    if (options.heartbeatPing && current.type !== "heartbeat") return null;
     const [suspended] = await tx.execute<{ present: number }>(
       sql`select 1 as present from workspace_suspension where organization_id = ${current.organizationId}`,
     );

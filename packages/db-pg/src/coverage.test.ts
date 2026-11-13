@@ -65,6 +65,19 @@ describe.skipIf(!url)("bounded observation time coverage", () => {
     expect(await repo.recordHeartbeatObservation(heartbeat)).not.toBeNull();
   });
 
+  it("does not accept a monitor snapshot falsely attributed to another workspace", async () => {
+    const m = await monitor();
+    const other = `coverage-fence-${crypto.randomUUID()}`;
+    await db.insert(schema.organization).values({ id: other, name: "Other workspace", slug: other, createdAt: new Date() });
+    try {
+      expect(await repo.recordObservation({ ...m, organizationId: other }, { ok: true })).toBe(false);
+      expect(await db.select().from(schema.monitorObservation).where(eq(schema.monitorObservation.monitorId, m.id))).toHaveLength(0);
+      expect(await repo.recordObservation(m, { ok: true })).toBe(true);
+    } finally {
+      await db.delete(schema.organization).where(eq(schema.organization.id, other));
+    }
+  });
+
   it("serializes observation completion against the operator's organization lock", async () => {
     const m = await monitor({ runGeneration: 1 });
     let openLock!: () => void;

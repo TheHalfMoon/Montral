@@ -1,5 +1,8 @@
 # Montral release gates
 
+**Current integrated-main qualification (2026-11-13):** `main@af7071aa14bdccad79e4c8e9fdfe7136f35de270` includes merged PRs #118 (bounded probe HMAC rotation), #119 (isolated PostgreSQL billing lock-order test), and #120 (per-region HMAC signing credentials). GitHub Actions **push** runs for this exact commit completed **11/11 workflows successfully**: app CI (PostgreSQL 17/18), macOS ARM64, load, browsers, cross-browser/accessibility, Docker Compose, Terraform, Windows prerequisite safety, source integrity, upgrade/rollback/DR, and failover. This is hosted CI evidence, **not** physical Windows Docker QA or production/provider qualification. No release/tag/deployment is authorized. Community publication remains HOLD pending `GREEN LIGHT MONTRAL`; Cloud and Enterprise BYOC remain NO-GO pending independent security/legal review, real providers and authorized infrastructure. Historical candidate tables below remain historical.
+
+
 Publication of any kind (tag, GitHub release, Docker image, npm package, Terraform provider, deployment) requires the
 owner's explicit `GREEN LIGHT MONTRAL`. This file has three parts: the **historical self-hosted candidate gates**,
 verified at the named historical revisions (§A), the **SaaS release gates per delivery model** — Community, Montral Cloud

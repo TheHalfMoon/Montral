@@ -1,5 +1,8 @@
 # Montral feature and competitor gap matrix
 
+**Current integrated-main qualification (2026-11-13):** `main@af7071aa14bdccad79e4c8e9fdfe7136f35de270` includes merged PRs #118 (bounded probe HMAC rotation), #119 (isolated PostgreSQL billing lock-order test), and #120 (per-region HMAC signing credentials). GitHub Actions **push** runs for this exact commit completed **11/11 workflows successfully**: app CI (PostgreSQL 17/18), macOS ARM64, load, browsers, cross-browser/accessibility, Docker Compose, Terraform, Windows prerequisite safety, source integrity, upgrade/rollback/DR, and failover. This is hosted CI evidence, **not** physical Windows Docker QA or production/provider qualification. No release/tag/deployment is authorized. Community publication remains HOLD pending `GREEN LIGHT MONTRAL`; Cloud and Enterprise BYOC remain NO-GO pending independent security/legal review, real providers and authorized infrastructure. Historical candidate tables below remain historical.
+
+
 **Baseline notice (2026-11-13):** The comparison tables below are **historical capability snapshots** (`b01e28e`/`3fbc6e6`), not a live release-readiness statement. The newer `main@b624cfe` also includes restricted operator console and suspension history (#110–#112), suspended-workspace SSO controls (#113), first-tab notice layout stability (#114), legacy catalog resource-meter warnings (#115), and in-flight observation/heartbeat suspension fencing (#116). All four latest PRs passed 16/16 exact-head checks each; final integrated-main push CI must still complete. For current release gates and unresolved external blockers, see `TASK-LEDGER.md`, `FINAL-REPORT.md` and `RELEASE-GATES.md`.
 
 Maintained during development. Competitor facts were gathered on 2026-11-08 from

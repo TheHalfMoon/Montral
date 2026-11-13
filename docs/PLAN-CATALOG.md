@@ -130,8 +130,15 @@ may name either meter on its own.
 Both meters show on the Usage page and in `GET /api/usage` (`webhookEvents`, `browserSeconds`).
 
 **Release note (upgrading).** An existing operator catalog without `webhookEvents`/`browserSeconds` keeps loading, but
-from this release **every plan in it, paid plans included, gets the Free defaults above for both meters** until the
-operator adds the fields. Add them to each plan before (or right after) upgrading a metered deployment.
+**every plan in it, paid plans included, gets the Free defaults above for both meters** until the
+operator adds the fields. Add them to each plan before upgrading a metered deployment.
+
+Montral now emits `MONTRAL_CATALOG_IMPLICIT_METERS` when a loaded operator catalog omits either meter in a plan.
+The warning includes the catalog's content hash and only configuration paths such as `plans.1.limits.browserSeconds`;
+it does **not** log plan ids, private prices, contract notes or allowance values. On Node it appears during startup;
+in a Workers deployment it appears when that configured catalog is first loaded. The built-in sandbox catalog does
+not produce this warning. Older catalogs remain valid and retain their conservative limits, so this is an
+**operator correction notice, not proof of production billing readiness**.
 
 **Known accounting gaps (bounded).**
 - A process killed between a browser check's reservation and its refund (crash, deploy, OOM) keeps that check's

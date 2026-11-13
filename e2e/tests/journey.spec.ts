@@ -32,10 +32,12 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     // Clearing the existing tab's sessionStorage races with its already-mounted VerifyBar effect.
     // The email is synthetic; force an unverified /api/me response for this isolated first-paint regression.
     const firstTab = await context.newPage();
+    let interceptedMe = 0;
     const slowMe = async (route: Route) => {
       const real = await route.fetch();
       const data = await real.json() as { user?: Record<string, unknown> | null };
       if (!data.user) throw new Error("expected a signed-in user from /api/me");
+      interceptedMe += 1;
       await new Promise((resolve) => setTimeout(resolve, 750));
       await route.fulfill({ response: real, contentType: "application/json",
         body: JSON.stringify({ ...data, user: { ...data.user, emailVerified: false } }) });
@@ -46,6 +48,7 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
       await firstTab.goto("/app");
       const first = firstTab.locator(".verify-bar.late-notice");
       await expect(first).toBeVisible();
+      expect(interceptedMe, "the synthetic signed-in /api/me response must be consumed").toBeGreaterThan(0);
       await expect(first).toHaveCSS("position", "fixed");
       await expect(first.getByRole("button", { name: "Dismiss" })).toBeVisible();
       await expectNoLayoutShift(firstTab.getByRole("button", { name: /Add your first monitor|New monitor/ }).first());

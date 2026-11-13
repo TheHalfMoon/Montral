@@ -121,6 +121,8 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     forbidden(await operatorCall(null, "/workspaces"));
     forbidden(await operatorCall(outsider.cookie, "/workspaces"));
     forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}`));
+    forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}/suspension-history`));
+    forbidden(await operatorCall(null, `/workspaces/${owner.orgId}/suspension-history`, { headers: { "x-api-key": key.body.key } }));
     forbidden(await operatorCall(outsider.cookie, `/workspaces/${owner.orgId}/suspend`, { method: "POST", body: { reason: "abuse" } }));
     expect(await db!.query(`SELECT 1 FROM workspace_suspension WHERE organization_id = $1`, [owner.orgId])).toHaveLength(0);
     // listed, but no two-factor authentication yet
@@ -312,6 +314,29 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     }
     expect(audit.text).not.toContain(NOTE);
     expect(audit.text).not.toContain(operator.id);
+
+    // Operator-only read of the same retained, privacy-scrubbed workspace actions.
+    const history = await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspension-history?limit=2`);
+    expect(history.status).toBe(200);
+    expect(history.headers.get("cache-control")).toBe("no-store");
+    expect(history.body.workspaceId).toBe(owner.orgId);
+    expect(history.body.events).toHaveLength(2);
+    expect(history.body.events.map((e: { action: string }) => e.action).sort()).toEqual(["workspace.suspend", "workspace.unsuspend"]);
+    for (const action of history.body.events) {
+      expect(action).toMatchObject({ reason: "abuse" });
+      expect(new Date(action.createdAt).toISOString()).toBe(action.createdAt);
+    }
+    expect(history.text).not.toContain(NOTE);
+    expect(history.text).not.toContain(operator.id);
+    expect(history.text).not.toContain("owner_email");
+    expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspension-history?limit=1`)).body.events).toHaveLength(1);
+    for (const badLimit of ["0", "51", "-1", "1.5", "not-a-number"]) {
+      expect((await operatorCall(opCookie, `/workspaces/${owner.orgId}/suspension-history?limit=${badLimit}`)).status).toBe(400);
+    }
+    expect((await operatorCall(opCookie, "/workspaces/does-not-exist/suspension-history")).status).toBe(404);
+    const untouchedHistory = await operatorCall(opCookie, `/workspaces/${other.orgId}/suspension-history`);
+    expect(untouchedHistory.status).toBe(200);
+    expect(untouchedHistory.body.events).toEqual([]);
     // nothing about the operator plane reached the other workspace's log
     expect((await other.as("/audit-events?action=workspace")).body.events).toEqual([]);
   });

@@ -151,7 +151,7 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   of the page (what is paused, that nothing is deleted, to contact support; never the reason or note), triggered by
   the first `workspace_suspended` refusal; see [CUSTOMER-ONBOARDING.md](CUSTOMER-ONBOARDING.md#suspended-workspace).
   Members can still switch to another workspace from the workspace menu (the auth API).
-- Previously queued checks are refused when a suspension is visible before monitor load or start (#109); already-started checks and some legacy tokenless in-flight messages can still race.
+- Previously queued checks are refused when a suspension is visible before monitor load or start (#109). A proposed in-flight observation fence (pending CI) locks the organization row `FOR KEY SHARE` inside the result transaction before checking suspension; the operator's `FOR UPDATE` suspension lock serializes the two. Once suspension commits, even an already-started check or heartbeat cannot persist a new observation on the updated backend. The external probe may already have run and consumed credits before suspension, and an already-claimed alert delivery or legacy/older replica may still race. This is not cancellation of an outbound request.
 - Montral-owned cached status responses are bypassed after a missing or suspended slug is detected (#107); already-delivered external browser/CDN responses may live until their original TTL.
 - A webhook body that started streaming before suspension is rechecked at the final PostgreSQL insert boundary. A
   capture takes an organization key-share lock that conflicts with the operator's suspension lock: if suspension

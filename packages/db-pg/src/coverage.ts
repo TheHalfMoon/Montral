@@ -35,6 +35,19 @@ async function appendObservation(db: Db, snapshot: Monitor, result: { ok: boolea
     const [current] = await tx.select().from(schema.monitor).where(eq(schema.monitor.id, snapshot.id)).for("update");
     if (!current || current.paused || (!options.heartbeatPing && current.coverageRevision !== (snapshot.coverageRevision ?? 0))) return null;
     if (options.heartbeatPing && current.type !== "heartbeat") return null;
+    // A check may have begun before an operator suspended its workspace. Lock the organization
+    // FOR KEY SHARE before testing suspension: the operator's suspend transaction first locks
+    // the same organization FOR UPDATE. Whichever commits first wins, so a completed suspension
+    // cannot be followed by a stale observation (or heartbeat), even from a running probe.
+    // KEY SHARE is compatible with ordinary non-key organization updates and parallel checks.
+    const [workspace] = await tx.execute<{ id: string }>(
+      sql`select id from organization where id = ${current.organizationId} for key share`,
+    );
+    if (!workspace) return null;
+    const [suspended] = await tx.execute<{ present: number }>(
+      sql`select 1 as present from workspace_suspension where organization_id = ${current.organizationId}`,
+    );
+    if (suspended) return null;
     const generation = options.generation;
     if (generation !== undefined && (!Number.isSafeInteger(generation) || generation <= 0 || generation > current.runGeneration || generation <= current.coverageGeneration)) return null;
     const at = await coverageTime(tx, current.id, completedAt);

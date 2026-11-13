@@ -60,8 +60,10 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
 - **Workspace API**: every request that acts in the workspace (`requireOrg` in `apps/api/src/middleware.ts`) gets
   `403 {"error": "...", "code": "workspace_suspended"}`: sessions, API keys and OAuth/MCP agents alike, reads and writes.
   This includes the workspace's own audit log and `/api/me` while that workspace is the active one.
-- **Checks**: the scheduler does not claim the workspace's monitors (`claimDue`), so no checks run and no credits are
-  used.
+- **Checks**: the scheduler does not claim or start **new** runs for suspended workspaces (`claimDue`, `beginRuns`).
+  A check already running when suspension begins may still finish its outbound request and consume the credits
+  reserved before suspension. On updated instances, its observation is refused if suspension has already committed;
+  this does not cancel an external request or undo an existing meter charge.
 - **Heartbeats**: pings to the workspace's heartbeat URLs get the same 403 and record nothing.
 - **Workspace changes through Better Auth** (`/api/auth/*`, which does not pass `requireOrg`): inviting or accepting
   invitations, renaming, changing roles, removing members, deleting the workspace, and creating or changing API keys
@@ -151,7 +153,7 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   of the page (what is paused, that nothing is deleted, to contact support; never the reason or note), triggered by
   the first `workspace_suspended` refusal; see [CUSTOMER-ONBOARDING.md](CUSTOMER-ONBOARDING.md#suspended-workspace).
   Members can still switch to another workspace from the workspace menu (the auth API).
-- Previously queued checks are refused when a suspension is visible before monitor load or start (#109); already-started checks and some legacy tokenless in-flight messages can still race.
+- Previously queued checks are refused when a suspension is visible before monitor load or start (#109). A proposed in-flight observation fence (pending CI) locks the organization row `FOR KEY SHARE` inside the result transaction before checking suspension; the operator's `FOR UPDATE` suspension lock serializes the two. Once suspension commits, even an already-started check or heartbeat cannot persist a new observation on the updated backend. The external probe may already have run and consumed credits before suspension, and an already-claimed alert delivery or legacy/older replica may still race. This is not cancellation of an outbound request.
 - Montral-owned cached status responses are bypassed after a missing or suspended slug is detected (#107); already-delivered external browser/CDN responses may live until their original TTL.
 - A webhook body that started streaming before suspension is rechecked at the final PostgreSQL insert boundary. A
   capture takes an organization key-share lock that conflicts with the operator's suspension lock: if suspension

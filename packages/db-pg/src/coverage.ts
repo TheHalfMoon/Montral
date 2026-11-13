@@ -32,9 +32,24 @@ async function appendObservation(db: Db, snapshot: Monitor, result: { ok: boolea
   // Capture completion before waiting on the lock: database congestion must not extend freshness.
   const completedAt = new Date();
   return db.transaction(async (tx) => {
+    // Lock order matters: organization first, then monitor. The operator's suspension route
+    // locks the organization FOR UPDATE before inserting its row, and deleting a workspace
+    // also takes the organization lock before cascading into monitors. KEY SHARE conflicts
+    // with FOR UPDATE but stays compatible with ordinary writes and other monitoring checks.
+    // Whichever commit wins, an in-flight result cannot be persisted after a suspension.
+    const [workspace] = await tx.execute<{ id: string }>(
+      sql`select id from organization where id = ${snapshot.organizationId} for key share`,
+    );
+    if (!workspace) return null;
     const [current] = await tx.select().from(schema.monitor).where(eq(schema.monitor.id, snapshot.id)).for("update");
-    if (!current || current.paused || (!options.heartbeatPing && current.coverageRevision !== (snapshot.coverageRevision ?? 0))) return null;
+    // A stale or forged snapshot must never let us check another workspace's monitor.
+    if (!current || current.organizationId !== snapshot.organizationId || current.paused
+      || (!options.heartbeatPing && current.coverageRevision !== (snapshot.coverageRevision ?? 0))) return null;
     if (options.heartbeatPing && current.type !== "heartbeat") return null;
+    const [suspended] = await tx.execute<{ present: number }>(
+      sql`select 1 as present from workspace_suspension where organization_id = ${current.organizationId}`,
+    );
+    if (suspended) return null;
     const generation = options.generation;
     if (generation !== undefined && (!Number.isSafeInteger(generation) || generation <= 0 || generation > current.runGeneration || generation <= current.coverageGeneration)) return null;
     const at = await coverageTime(tx, current.id, completedAt);

@@ -1,5 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDb, createRepo, eq, schema } from "./index";
+import { createDb, createRepo, eq, schema, sql } from "./index";
 
 const url = process.env.DATABASE_URL;
 const db = url ? createDb(url, { max: 4 }) : undefined!;
@@ -45,6 +45,64 @@ describe.skipIf(!url)("bounded observation time coverage", () => {
     const r = (await repo.timeCoverage(orgId, m.id, null, 7, at(150)))!;
     expect(r.states.up).toBe(70000); expect(r.states.paused).toBe(50000);
     expect(r.states.unknown).toBe(r.totalMs - 120000);
+  });
+
+  it("refuses an in-flight result and heartbeat after workspace suspension, then resumes safely", async () => {
+    const m = await monitor({ runGeneration: 1 });
+    const heartbeat = await monitor({ type: "heartbeat" });
+    await db.insert(schema.workspaceSuspension).values({ organizationId: orgId, reason: "operator" });
+    try {
+      // These snapshots were taken before the operator suspended this workspace.
+      expect(await repo.recordObservation(m, { ok: false }, { generation: 1 })).toBe(false);
+      expect(await repo.recordObservation(m, { ok: true })).toBe(false);
+      expect(await repo.recordHeartbeatObservation(heartbeat)).toBeNull();
+      expect(await db.select().from(schema.monitorObservation).where(eq(schema.monitorObservation.monitorId, m.id))).toHaveLength(0);
+      expect(await db.select().from(schema.monitorObservation).where(eq(schema.monitorObservation.monitorId, heartbeat.id))).toHaveLength(0);
+    } finally {
+      await db.delete(schema.workspaceSuspension).where(eq(schema.workspaceSuspension.organizationId, orgId));
+    }
+    expect(await repo.recordObservation(m, { ok: true }, { generation: 1 })).toBe(true);
+    expect(await repo.recordHeartbeatObservation(heartbeat)).not.toBeNull();
+  });
+
+  it("does not accept a monitor snapshot falsely attributed to another workspace", async () => {
+    const m = await monitor();
+    const other = `coverage-fence-${crypto.randomUUID()}`;
+    await db.insert(schema.organization).values({ id: other, name: "Other workspace", slug: other, createdAt: new Date() });
+    try {
+      expect(await repo.recordObservation({ ...m, organizationId: other }, { ok: true })).toBe(false);
+      expect(await db.select().from(schema.monitorObservation).where(eq(schema.monitorObservation.monitorId, m.id))).toHaveLength(0);
+      expect(await repo.recordObservation(m, { ok: true })).toBe(true);
+    } finally {
+      await db.delete(schema.organization).where(eq(schema.organization.id, other));
+    }
+  });
+
+  it("serializes observation completion against the operator's organization lock", async () => {
+    const m = await monitor({ runGeneration: 1 });
+    let openLock!: () => void;
+    let releaseLock!: () => void;
+    const locked = new Promise<void>((resolve) => { openLock = resolve; });
+    const release = new Promise<void>((resolve) => { releaseLock = resolve; });
+    const suspend = db.transaction(async (tx) => {
+      // Mirrors the operator suspension route: lock organization FOR UPDATE first.
+      await tx.execute(sql`select id from organization where id = ${orgId} for update`);
+      openLock();
+      await release;
+      await tx.insert(schema.workspaceSuspension).values({ organizationId: orgId, reason: "operator" });
+    });
+    await locked;
+    const observation = repo.recordObservation(m, { ok: false }, { generation: 1 });
+    try {
+      releaseLock();
+      await suspend;
+      expect(await observation).toBe(false);
+      expect(await db.select().from(schema.monitorObservation).where(eq(schema.monitorObservation.monitorId, m.id))).toHaveLength(0);
+    } finally {
+      releaseLock();
+      await suspend;
+      await db.delete(schema.workspaceSuspension).where(eq(schema.workspaceSuspension.organizationId, orgId));
+    }
   });
 
   it("orders pause fences after observations even across a backwards application clock", async () => {

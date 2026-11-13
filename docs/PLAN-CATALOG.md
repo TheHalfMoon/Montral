@@ -103,7 +103,7 @@ Deleting an inbox frees capacity; downgrading does not delete existing inboxes o
 (not `null`) to restore legacy behavior. During a **rolling upgrade**, wait until all older replicas have been
 replaced before enabling a non-null workspace limit: older app instances cannot supply the new limit argument,
 although the database retains compatibility with their five-argument creation function.
-This does not meter outbound webhook replay; the bounded replay endpoint remains subject to its existing rate limits.
+This does not bill or cap outbound webhook replay. A proposed operational counter (pending exact-head CI) separately records an accepted replay attempt in PostgreSQL before the outbound network operation, with manager-only `GET /api/hooks/replay-usage`. The returned `attempts` count is a decimal string for the UTC month, and `billable: false`. A 502/504 outcome can be ambiguous, so the attempt is **not** refunded or automatically retried. This counter is not a pricing/plan limit and the existing replay rate limits still apply.
 
 **Resource meters (`webhookEvents`, `browserSeconds`).** Both are optional, so a catalog written before they existed
 stays valid without edits. An absent meter is **never unlimited**: it gets the built-in conservative default

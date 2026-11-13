@@ -564,6 +564,48 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await sso(idpA, new Jar(), { email }, user)).location).toBe(`${origin}/app`);
   });
 
+  it("refuses suspended-workspace SSO at start and callback, keeps JIT membership closed, and does not affect other tenants", async () => {
+    const email = `suspended-sso-${rand}@${domainA}`;
+    const user = { sub: `suspended-sub-${rand}`, email, email_verified: true };
+    const jar = new Jar();
+    const begun = await call("/api/auth/sso/start", { method: "POST", body: { email }, jar });
+    expect(begun.status).toBe(200);
+    const cb = new URL(idpA.authorize(begun.body.url, user).callback);
+    const beforeTokens = idpA.requests.filter((v) => v.path.startsWith("/token")).length;
+    const privateNote = "private synthetic operator note: never return to SSO callers";
+    try {
+      await q(`INSERT INTO workspace_suspension (organization_id, reason, note)
+               VALUES ($1::text, 'legal', $2::text)`, [ownerA.orgId, privateNote]);
+      // Starting a new flow cannot reveal which tenant is suspended, or even create a flow.
+      const refusedStart = await call("/api/auth/sso/start", { method: "POST", body: { email }, jar: new Jar() });
+      expect(refusedStart.status).toBe(404);
+      expect(refusedStart.text).not.toContain(privateNote);
+      const [{ slug }] = await q<{ slug: string }>("SELECT slug FROM organization WHERE id = $1::text", [ownerA.orgId]);
+      const refusedSlug = await call("/api/auth/sso/start", { method: "POST", body: { workspace: slug }, jar: new Jar() });
+      expect(refusedSlug.status).toBe(404);
+      expect(refusedSlug.text).not.toContain(privateNote);
+
+      // A flow started before the suspension must not exchange its code or create a user.
+      const rejected = await call(cb.pathname + cb.search, { jar });
+      expect(rejected.status).toBe(302);
+      expect(failure(rejected.location ?? "")).toBe("connection_disabled");
+      expect(rejected.text).not.toContain(privateNote);
+      expect(idpA.requests.filter((v) => v.path.startsWith("/token")).length).toBe(beforeTokens);
+      expect(await userIdOf(email)).toBe(null);
+
+      // Workspace B uses a distinct provider. Its normal sign-in must remain possible.
+      const other = `other-active-${rand}@${domainB}`;
+      expect((await sso(idpB, new Jar(), { email: other },
+        { sub: `active-sub-${rand}`, email: other, email_verified: true })).location).toBe(`${origin}/app`);
+      expect(await userIdOf(other)).not.toBe(null);
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1::text", [ownerA.orgId]);
+    }
+    // The old callback was consumed; after unsuspension, a fresh SSO flow provisions normally.
+    expect((await sso(idpA, new Jar(), { email }, user)).location).toBe(`${origin}/app`);
+    expect(await userIdOf(email)).not.toBe(null);
+  });
+
   it("with SSO required, members sign in only through it; the owner keeps password sign-in as break-glass", async () => {
     const dana = await signUp("dana", `dana-${rand}@${domainA}`);
     const danaUser = { sub: "dana-sub", email: dana.email, email_verified: true };

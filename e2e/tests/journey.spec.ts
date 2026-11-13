@@ -3,9 +3,10 @@
 // status page (locked form, wrong password refused, right password unlocks), and a webhook inbox.
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
 import type { Route } from "@playwright/test";
-import { clickWithoutLayoutShift } from "../support/layout";
+import { clickWithoutLayoutShift, expectNoLayoutShift } from "../support/layout";
 
-test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL });
+// The app may install a service worker; all synthetic /api/me reads here must reach Playwright routing.
+test.use({ baseURL: process.env.MONTRAL_E2E_BASE_URL, serviceWorkers: "block" });
 
 test("signed-in journey: monitors, status pages, password page, webhook inbox", async ({ page, context, request, baseURL, guard, browserName }, testInfo) => {
   test.setTimeout(180_000);
@@ -24,6 +25,43 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await form.locator("input[autocomplete=new-password]").fill("correct horse battery staple");
     await form.getByRole("button", { name: "Create account" }).click();
     await expect(page).toHaveURL(/\/app$/, { timeout: 30_000 });
+  });
+
+  await test.step("first-tab email verification notice does not move dashboard controls", async () => {
+    // A fresh browser tab shares the login cookie but has no verification notice session state.
+    // Clearing the existing tab's sessionStorage races with its already-mounted VerifyBar effect.
+    // The email is synthetic; force an unverified /api/me response for this isolated first-paint regression.
+    const firstTab = await context.newPage();
+    let interceptedMe = 0;
+    const slowMe = async (route: Route) => {
+      const real = await route.fetch();
+      const data = await real.json() as { user?: Record<string, unknown> | null };
+      if (!data.user) throw new Error("expected a signed-in user from /api/me");
+      interceptedMe += 1;
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      await route.fulfill({ response: real, contentType: "application/json",
+        body: JSON.stringify({ ...data, user: { ...data.user, emailVerified: false } }) });
+    };
+    const isMe = (url: URL) => url.pathname === "/api/me";
+    await firstTab.route(isMe, slowMe);
+    try {
+      await firstTab.goto("/app");
+      const first = firstTab.locator(".verify-bar.late-notice");
+      await expect(first).toBeVisible();
+      expect(interceptedMe, "the synthetic signed-in /api/me response must be consumed").toBeGreaterThan(0);
+      await expect(first).toHaveCSS("position", "fixed");
+      await expect(first.getByRole("button", { name: "Dismiss" })).toBeVisible();
+      await expectNoLayoutShift(firstTab.getByRole("button", { name: /Add your first monitor|New monitor/ }).first());
+      await checkA11y(firstTab, testInfo, "first-load-verify-notice");
+    } finally {
+      await firstTab.unroute(isMe, slowMe);
+    }
+    // The next navigation uses real account state: only genuinely unverified accounts get an inline banner.
+    const actual = await (await firstTab.request.get("/api/me")).json() as { user?: { emailVerified?: boolean } | null };
+    await firstTab.reload();
+    if (actual.user?.emailVerified === false) await expect(firstTab.locator(".verify-bar:not(.late-notice)")).toBeVisible();
+    else await expect(firstTab.locator(".verify-bar")).toHaveCount(0);
+    await firstTab.close();
   });
 
   await test.step("dashboard renders and the skip link moves to the main content", async () => {

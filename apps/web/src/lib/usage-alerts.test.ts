@@ -3,7 +3,7 @@ import type { Quota, Usage } from "./api";
 import { zh } from "./zh";
 import {
   alertKey, formatResetDate, isQuotaCode, joinMeters, METER_LABEL, meterLevel, nextUtcMonthStart, QUOTA_CODES, QUOTA_MESSAGE, quotaRefusal,
-  resetDate, usageAlert, usageBarStorage, usageMeters, webhookInboxQuotaNotice,
+  resetDate, usageAlert, usageBarStorage, usageMeters, webhookInboxQuotaNotice, usageRequestVersion,
 } from "./usage-alerts";
 
 // Synthetic allowances only: no figure here describes a real plan.
@@ -188,5 +188,22 @@ describe("quota wording", () => {
     expect(QUOTA_MESSAGE.credits_exhausted).toMatch(/not enough checks left this period for this check/);
     expect(QUOTA_MESSAGE.browser_quota_exhausted).toMatch(/not enough browser check time left this period for this check/);
     for (const m of Object.values(QUOTA_MESSAGE)) expect(m).not.toMatch(/month/);
+  });
+});
+
+describe("latest usage response only", () => {
+  it("never accepts an earlier workspace or quota response after a new read", () => {
+    const g = usageRequestVersion();
+    const oldWorkspace = g.start();
+    expect(g.isCurrent(oldWorkspace)).toBe(true);
+    const newWorkspace = g.start();
+    expect(g.isCurrent(oldWorkspace)).toBe(false);
+    expect(g.isCurrent(newWorkspace)).toBe(true);
+    // A scope change or unmount invalidates even the most recent response.
+    g.invalidate();
+    expect(g.isCurrent(newWorkspace)).toBe(false);
+    const fresh = g.start();
+    expect(g.isCurrent(fresh)).toBe(true);
+    expect(g.isCurrent(0)).toBe(false);
   });
 });

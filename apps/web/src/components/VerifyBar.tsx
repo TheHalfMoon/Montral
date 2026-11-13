@@ -10,10 +10,12 @@ import { verifyBarAtFirstPaint, verifyBarStorage } from "../lib/verify-bar";
  * It sits above the page, so appearing late would push the page down under a click already on its way (a button
  * pressed right after load would hit whatever moved there). Once an account is known to be unverified, this tab
  * remembers that much (a flag, never the address) and later loads paint the bar with the page.
+ * On a tab's first unknown-account paint, a late notification is fixed outside page flow rather than shifting actions.
  */
 export default function VerifyBar() {
-  const [state, setState] = useState(() => verifyBarAtFirstPaint(verifyBarStorage()));
+  const [state, setState] = useState(() => ({ ...verifyBarAtFirstPaint(verifyBarStorage()), late: false }));
   useEffect(() => {
+    let active = true;
     // back from the link in the verification email: say so, then tidy the address bar
     const q = new URLSearchParams(location.search);
     if (q.get("verified") || q.get("error")) {
@@ -23,14 +25,17 @@ export default function VerifyBar() {
       history.replaceState(null, "", location.pathname + (q.size ? `?${q}` : "") + location.hash);
     }
     api.me().then((m) => {
+      // A slow /me from a signed-out tab must not repopulate its verification flag.
+      if (!active) return;
       const pending = !!m.user && m.user.emailVerified === false;
       verifyBarStorage().setPending(pending);
-      setState((s) => ({ ...s, pending }));
+      setState((s) => ({ ...s, pending, late: s.late || (pending && !s.pending) }));
     }).catch(() => {});
+    return () => { active = false; };
   }, []);
   if (!state.pending || state.dismissed) return null;
   return (
-    <div className="verify-bar" role="alert">
+    <div className={`verify-bar${state.late ? " late-notice" : ""}`} role="alert">
       <span>{t("Please verify your email address — check your inbox for the link we sent.")}</span>
       <button className="icon-btn" aria-label={t("Dismiss")} onClick={() => { verifyBarStorage().dismiss(); setState((s) => ({ ...s, dismissed: true })); }}>×</button>
     </div>

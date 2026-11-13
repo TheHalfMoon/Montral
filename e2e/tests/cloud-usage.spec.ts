@@ -92,6 +92,33 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await expect(page.getByRole("region", { name: "Finish setting up" })).toHaveCount(0);
   });
 
+  await test.step("first-tab quota notice remains out of flow on a slow response", async () => {
+    // The first banner in an unknown workspace must not push a search field or pointer target down.
+    await page.evaluate(() => {
+      sessionStorage.removeItem("montral_usage_alert");
+      sessionStorage.removeItem("montral_usage_bar_hidden");
+    });
+    await answerUsage(page, syntheticUsage({ webhookEvents: quota(85, 100) }), 950);
+    try {
+      await page.goto("/app");
+      const search = page.getByPlaceholder("Search monitors…");
+      await expect(search).toBeVisible();
+      const before = await topOf(search);
+      const banner = page.locator("[data-usage-alert=near].late-notice");
+      await expect(banner).toBeVisible();
+      await expect(banner).toHaveCSS("position", "fixed");
+      await expectNoLayoutShift(search, before);
+      await checkA11y(page, testInfo, "first-load-usage-notice");
+    } finally {
+      await page.unroute(isUsage);
+    }
+    // A future page load remembers the notice and paints it inline, without needing a delayed API response.
+    await answerUsage(page, syntheticUsage({ webhookEvents: quota(85, 100) }));
+    await page.reload();
+    await expect(page.locator("[data-usage-alert=near]:not(.late-notice)")).toBeVisible();
+    await page.unroute(isUsage);
+  });
+
   await test.step("metered ordinary member: inbox warning has a reset date but no billing actions", async () => {
     await answerUsage(page, syntheticUsage({ webhookEvents: quota(100, 100), canManageBilling: false }));
     await page.goto("/app/hooks");

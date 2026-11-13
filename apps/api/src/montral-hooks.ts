@@ -13,6 +13,7 @@ import { z } from "zod";
 import { WORKSPACE_SUSPENDED } from "./suspension";
 import { allowanceResetsAt, type Entitlements } from "./entitlements";
 import { secondsUntil } from "./montral-metering";
+import { migrateHookReplayUsage, recordHookReplayAttempt, readHookReplayUsage } from "./montral-hook-replay-usage";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const TOKEN = /^[0-9a-f]{64}$/;
@@ -230,6 +231,7 @@ export async function readPayload(request: Request, timeoutMs = MAX_READ_MS): Pr
   }
 }
 export async function migrateMontralHooks(db: Database): Promise<string[]> {
+  await migrateHookReplayUsage(db);
   await db.query(`CREATE TABLE IF NOT EXISTS montral_hook_inbox (
     id uuid PRIMARY KEY, organization_id text NOT NULL, project_id text NOT NULL,
     name varchar(100) NOT NULL, token_hash char(64) NOT NULL,
@@ -568,12 +570,21 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     return c.body(null, 204);
   });
   /**
+   * This month's accepted outbound replay attempts for the current workspace.
+   * No target URLs, event bodies or credentials are stored in the counter.
+   * Separate from webhook event intake quota; NOT yet billable usage.
+   */
+  privateHooks.get("/replay-usage", requireManager, async (c) => {
+    const usage = await readHookReplayUsage(c.get("database"), c.get("orgId"));
+    return c.json({ ...usage, billable: false });
+  });
+  /**
    * Development replay: resend one captured request to a URL the manager
    * supplies. Outbound requests get the same SSRF protection as monitor
    * checks (private, loopback and metadata targets refused unless the
    * operator set ALLOW_PRIVATE_TARGETS; DNS pinned), redirects are not
-   * followed, and only the stored allowlisted headers are sent. Nothing about
-   * the replay is stored.
+   * followed, and only the stored allowlisted headers are sent. Only the
+   * monthly aggregate attempt count is stored; no replay URL or body is stored.
    */
   privateHooks.post("/inboxes/:id/events/:sid/replay", uuidParams, requireManager, async (c) => {
     let incoming: Awaited<ReturnType<typeof readInboxCreation>>;
@@ -600,6 +611,15 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     if (!(await allow(repo, `montral:hook-replay:${inboxId}`, 20, 60)) || !(await allow(repo, `montral:hook-replay-org:${c.get("orgId")}`, 60, 60))
       || !(await allow(repo, `montral:hook-replay-user:${c.get("userId")}`, 60, 60))) {
       return c.json({ error: "Too many replays" }, 429);
+    }
+    // Durable operational accounting is admitted BEFORE the network operation.
+    // A 502/504 may mean the remote peer received the request, so never
+    // automatically refund or re-send it. A broken counter fails closed.
+    try {
+      await recordHookReplayAttempt(c.get("database"), c.get("orgId"));
+    } catch {
+      console.error("webhook replay counter unavailable");
+      return c.json({ error: "Replay accounting is unavailable; no outbound request was started" }, 503);
     }
     const headers: Record<string, string> = { "user-agent": checkUserAgent(), "x-montral-replay": event.id };
     for (const [name, value] of Object.entries(event.headers ?? {})) {

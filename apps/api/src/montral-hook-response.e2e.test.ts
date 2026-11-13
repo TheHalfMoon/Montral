@@ -267,6 +267,11 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
   it("replay sends the stored request and reports the target's answer, never the configured response", async () => {
     const owner = await signUp("replay");
     const { id, path } = await inbox(owner.cookie, "Replay");
+    const usageBefore = await call("/api/hooks/replay-usage", { cookie: owner.cookie });
+    expect(usageBefore.status).toBe(200);
+    expect(usageBefore.body).toMatchObject({ attempts: "0", billable: false });
+    const stranger = await signUp("replay-stranger");
+    expect((await call("/api/hooks/replay-usage", { cookie: stranger.cookie })).body.attempts).toBe("0");
     expect((await call(`/api/hooks/inboxes/${id}/response`, { method: "PUT", cookie: owner.cookie, body: { status: 503, body: "configured-down", headers: [{ name: "X-Mock", value: "1" }] } })).status).toBe(200);
     expect((await send(path, '{"order":7}')).status).toBe(503);
     const [event] = (await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events as { id: string; response_status: number }[];
@@ -286,10 +291,17 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
       expect(seen.body).toBe('{"order":7}');
       expect(seen.headers?.["x-mock"]).toBeUndefined();
       expect(JSON.stringify(replayed.body)).not.toContain("configured-down");
+      const usageAfter = await call("/api/hooks/replay-usage", { cookie: owner.cookie });
+      expect(usageAfter.status).toBe(200);
+      expect(usageAfter.body).toMatchObject({ attempts: "1", billable: false });
+      expect(usageAfter.body.periodStart).toMatch(/^\d{4}-\d{2}-01$/);
+      expect((await call("/api/hooks/replay-usage", { cookie: stranger.cookie })).body.attempts).toBe("0");
+      const rows = await q<{ attempts: string }>("SELECT attempts::text AS attempts FROM montral_hook_replay_usage WHERE organization_id=$1", [owner.orgId]);
+      expect(rows.map((r) => r.attempts)).toEqual(["1"]);
     } finally {
       await new Promise((r) => sink.close(r));
     }
-    // Replay stores nothing: still one event.
+    // Replay stores no new event/body/URL; only its monthly aggregate count persists.
     expect((await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events).toHaveLength(1);
   });
 

@@ -227,6 +227,35 @@ export const operatorApi = new Hono<AppEnv>()
       usage: { credits, emails },
     });
   })
+  // The workspace audit already records operator suspensions as system actions with a safe reason.
+  // Operators can read this narrow history without disclosing private notes or identity in customer logs.
+  // This is not a unified platform audit; only existing retained workspace actions are included.
+  .get("/workspaces/:id/suspension-history", async (c) => {
+    const id = c.req.param("id");
+    if (!ORG_ID.test(id)) return c.json({ error: "Not found" }, 404);
+    const rawLimit = c.req.query("limit");
+    const limit = rawLimit === undefined ? 20 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 50) return c.json({ error: "limit must be between 1 and 50" }, 400);
+    const db = c.get("database");
+    const [org] = await db.query<{ id: string }>("SELECT id FROM organization WHERE id = $1::text", [id]);
+    if (!org) return c.json({ error: "Not found" }, 404);
+    const rows = await db.query<{ id: string; action: string; reason: string | null; created_at: Date | string }>(
+      `SELECT id, action, changes->'values'->>'reason' AS reason, created_at
+         FROM audit_event
+        WHERE organization_id = $1::text AND target_type = 'workspace' AND target_id = $1::text
+          AND actor_type = 'system' AND actor_label = 'Montral operator'
+          AND action IN ('workspace.suspend', 'workspace.unsuspend')
+        ORDER BY created_at DESC, id DESC LIMIT $2::int`,
+      [id, limit],
+    );
+    return c.json({
+      workspaceId: id,
+      events: rows.map((row) => ({
+        id: row.id, action: row.action, reason: row.reason,
+        createdAt: new Date(row.created_at).toISOString(),
+      })),
+    });
+  })
   .post("/workspaces/:id/suspend", async (c) => {
     const id = c.req.param("id");
     if (!ORG_ID.test(id)) return c.json({ error: "Not found" }, 404);

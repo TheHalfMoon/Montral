@@ -35,6 +35,24 @@ describe("Montral Cloudflare edge probe", () => {
     expect((await handleEdgeProbe(await signed(payload, "wrong secret"), env)).status).toBe(401);
     expect((await handleEdgeProbe(await signed(payload), { PROBE_SECRET: secret })).status).toBe(503);
   });
+  it("accepts previous and current signatures during rotation, then refuses old keys", async () => {
+    const next = "new-montral-edge-rotation-key-2026";
+    const validUntil = new Date(Date.now() + 5 * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const expiredAt = new Date(Date.now() - 5_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const rollingEnv = { ...env, PROBE_SECRET: next, PROBE_PREVIOUS_SECRET: secret, PROBE_PREVIOUS_SECRET_EXPIRES_AT: validUntil };
+    okFetch.mockClear();
+    expect((await handleEdgeProbe(await signed(payload), rollingEnv, okFetch as never)).status).toBe(200);
+    expect((await handleEdgeProbe(await signed(payload, next), rollingEnv, okFetch as never)).status).toBe(200);
+    expect(okFetch).toHaveBeenCalledTimes(2);
+    expect((await handleEdgeProbe(await signed(payload, "unknown"), rollingEnv, okFetch as never)).status).toBe(401);
+    expect((await handleEdgeProbe(await signed(payload), { ...rollingEnv, PROBE_PREVIOUS_SECRET: undefined }, okFetch as never)).status).toBe(401);
+    expect((await handleEdgeProbe(await signed(payload), { ...rollingEnv, PROBE_PREVIOUS_SECRET_EXPIRES_AT: undefined }, okFetch as never)).status).toBe(401);
+    expect((await handleEdgeProbe(await signed(payload), { ...rollingEnv, PROBE_PREVIOUS_SECRET_EXPIRES_AT: "invalid" }, okFetch as never)).status).toBe(401);
+    expect((await handleEdgeProbe(await signed(payload), { ...rollingEnv, PROBE_PREVIOUS_SECRET_EXPIRES_AT: expiredAt }, okFetch as never)).status).toBe(401);
+    expect((await handleEdgeProbe(await signed(payload, next), { ...rollingEnv, PROBE_PREVIOUS_SECRET_EXPIRES_AT: expiredAt }, okFetch as never)).status).toBe(200);
+    expect((await handleEdgeProbe(await signed(payload), { ...rollingEnv, PROBE_SECRET: undefined }, okFetch as never)).status).toBe(503);
+  });
+
   it("sends one valid on-demand monitor check back to the main scheduler", async () => {
     okFetch.mockClear();
     const r = await handleEdgeProbe(await signed(payload), env, okFetch as never);

@@ -3,7 +3,7 @@ import { handleProbe } from "./handler";
 import { send, toRequest } from "./node-adapter";
 
 /** The probe as a plain Node HTTP server: what runs in the Docker image and on any host with Node. */
-export function createProbeServer(o: { secret: string | undefined; region?: string }): Server {
+export function createProbeServer(o: { secret: string | undefined; previousSecret?: string; previousExpiresAt?: string; region?: string }): Server {
   const server = createServer(async (req, res) => {
     try {
       const request = await toRequest(req);

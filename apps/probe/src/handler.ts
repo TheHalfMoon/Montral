@@ -2,7 +2,7 @@ import { HTTP_METHODS, HTTP_REQUEST_CAPABILITY, requestBodyProblem } from "../..
 import { runCheck, type CheckInput } from "../../api/src/checker";
 import { JSON_ASSERTION_CAPABILITY, JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, jsonPathProblem } from "../../api/src/json-assertion";
 import { targetProblem } from "../../api/src/netguard";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbe } from "../../api/src/probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbeWithRotation } from "../../api/src/probe-protocol";
 
 /**
  * Bounds the signed envelope, which is read before the signature can be checked: a 16 KiB request body (escaped) plus
@@ -63,14 +63,14 @@ export function parseCheck(raw: unknown): { input: CheckInput } | { error: strin
  * adapters around it differ. Nothing here depends on where it runs, so the region a result comes from is the place the
  * function is deployed to.
  */
-export async function handleProbe(req: Request, o: { secret: string | undefined; region?: string }): Promise<Response> {
+export async function handleProbe(req: Request, o: { secret: string | undefined; previousSecret?: string; previousExpiresAt?: string; region?: string }): Promise<Response> {
   if (req.method === "GET") return json(200, { ok: true, region: o.region ?? null, capabilities: [HTTP_REQUEST_CAPABILITY, JSON_ASSERTION_CAPABILITY] });
   if (req.method !== "POST") return json(405, { error: "POST a check to this endpoint" });
   if (!o.secret) return json(503, { error: "Probe has no PROBE_SECRET configured" });
   if (Number(req.headers.get("content-length")) > MAX_BODY_BYTES) return json(413, { error: "Request too large" });
   const text = await req.text();
   if (text.length > MAX_BODY_BYTES) return json(413, { error: "Request too large" });
-  const verified = await verifyProbe(o.secret, { timestamp: req.headers.get(TIMESTAMP_HEADER), signature: req.headers.get(SIGNATURE_HEADER), body: text });
+  const verified = await verifyProbeWithRotation(o.secret, o.previousSecret, o.previousExpiresAt, { timestamp: req.headers.get(TIMESTAMP_HEADER), signature: req.headers.get(SIGNATURE_HEADER), body: text });
   if (!verified) return json(401, { error: "Bad or expired signature" });
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return json(400, { error: "Body is not valid JSON" }); }

@@ -144,8 +144,7 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   The action is also logged as a server line (without the note), but not placed in any customer's audit log.
   Only the verified platform operator API exposes the event history. Repeating an action records another operator
   command; direct internal seed calls with no operator ID do not generate impersonated audit events.
-- Credentials: all probes share `PROBE_SECRET`. Rotating it is a coordinated redeploy of probes and API (there is no
-  overlap window yet); drain a region while its probe is being replaced.
+- Credentials: all probes still share `PROBE_SECRET` (there are no per-probe credentials or operator registration). The proposed staged rotation support, pending CI, lets probes temporarily accept an old `PROBE_PREVIOUS_SECRET` **only until `PROBE_PREVIOUS_SECRET_EXPIRES_AT`**: deploy every probe with new primary + old previous and bounded UTC expiry, switch the API signing key only once every probe is ready, and remove the old key after in-flight checks drain. Expiry is enforced automatically, but revocation across old deployments is not. See [probe rotation instructions](../apps/probe/README.md#staged-signing-key-rotation).
 
 ## Limitations
 
@@ -153,7 +152,7 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   of the page (what is paused, that nothing is deleted, to contact support; never the reason or note), triggered by
   the first `workspace_suspended` refusal; see [CUSTOMER-ONBOARDING.md](CUSTOMER-ONBOARDING.md#suspended-workspace).
   Members can still switch to another workspace from the workspace menu (the auth API).
-- Previously queued checks are refused when a suspension is visible before monitor load or start (#109). A proposed in-flight observation fence (pending CI) locks the organization row `FOR KEY SHARE` inside the result transaction before checking suspension; the operator's `FOR UPDATE` suspension lock serializes the two. Once suspension commits, even an already-started check or heartbeat cannot persist a new observation on the updated backend. The external probe may already have run and consumed credits before suspension, and an already-claimed alert delivery or legacy/older replica may still race. This is not cancellation of an outbound request.
+- Previously queued checks are refused when a suspension is visible before monitor load or start (#109). The merged in-flight observation fence (#116, 16/16 exact-head PR checks) locks the organization row `FOR KEY SHARE` inside the result transaction before checking suspension; the operator's `FOR UPDATE` suspension lock serializes the two. Once suspension commits, even an already-started check or heartbeat cannot persist a new observation on the updated backend. The external probe may already have run and consumed credits before suspension, and an already-claimed alert delivery or legacy/older replica may still race. This is not cancellation of an outbound request.
 - Montral-owned cached status responses are bypassed after a missing or suspended slug is detected (#107); already-delivered external browser/CDN responses may live until their original TTL.
 - A webhook body that started streaming before suspension is rechecked at the final PostgreSQL insert boundary. A
   capture takes an organization key-share lock that conflicts with the operator's suspension lock: if suspension

@@ -54,6 +54,27 @@ describe("probe as a Node server", () => {
     expect(await res.json()).toMatchObject({ ok: true, statusCode: 200 });
   });
 
+  it("accepts old and new keys during a bounded overlap over the real Node HTTP adapter", async () => {
+    const nextKey = "synthetic-rotated-node-key-for-qualification";
+    const expiry = new Date(Date.now() + 5 * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z");
+    const node = createProbeServer({ secret: nextKey, previousSecret: secret, previousExpiresAt: expiry });
+    const rotatingUrl = `http://127.0.0.1:${await listen(node)}/`;
+    const body = JSON.stringify({ type: "http", target: targetUrl, expectedStatus: 200, timeoutMs: 3000 });
+    const submit = async (key: string) => {
+      const ts = Math.floor(Date.now() / 1000);
+      return fetch(rotatingUrl, { method: "POST", body, headers: {
+        [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: await signProbe(key, ts, body),
+      } });
+    };
+    try {
+      expect((await submit(secret)).status).toBe(200);
+      expect((await submit(nextKey)).status).toBe(200);
+      expect((await submit("unrecognized")).status).toBe(401);
+    } finally {
+      await new Promise<void>((resolve, reject) => node.close((err) => err ? reject(err) : resolve()));
+    }
+  });
+
   it("carries a signed request body through to the target", async () => {
     const res = await post({ type: "http", target: targetUrl + "body", method: "PATCH", requestBody: '{"message":"你好"}', headers: { "content-type": "application/json" }, expectedStatus: 200, timeoutMs: 3000 });
     expect(await res.json()).toMatchObject({ ok: true, statusCode: 200 });

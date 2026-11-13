@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
+import { OperatorPlatformAudit } from "./OperatorPlatformAudit";
 import {
   operatorApi, operatorActionConfirmed, OperatorRequestError,
   type OperatorRegion, type OperatorProbeAuditEvent, type OperatorSuspensionEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
@@ -246,6 +247,8 @@ export default function OperatorConsole() {
         </form>
         <WorkspaceSuspensionHistory key={detail.id} orgId={detail.id} revision={historyRevision} onFailure={failure} />
       </section>}
+
+      <OperatorPlatformAudit onFailure={failure} />
 
       <section className="card sect" aria-label="Probe region controls">
         <h2>Probe regions</h2>

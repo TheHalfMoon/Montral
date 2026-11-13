@@ -45,6 +45,21 @@ describe("operator console request isolation", () => {
     expect(init).toMatchObject({ credentials: "include", cache: "no-store", method: "GET", referrerPolicy: "no-referrer" });
   });
 
+  it("reads the unified operator audit through the session only, safely encoding target and cursor", async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({ events: [], next: null }), { status: 200 }));
+    const api = makeOperatorApi(request as typeof fetch);
+    await expect(api.platformAudit("north/east + %", "probe", "opaque==")).resolves.toEqual({ events: [], next: null });
+    const [url, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url.startsWith("/api/operator/audit?")).toBe(true);
+    const params = new URL(url, "https://local.test").searchParams;
+    expect(params.get("q")).toBe("north/east + %");
+    expect(params.get("source")).toBe("probe");
+    expect(params.get("limit")).toBe("25");
+    expect(params.get("cursor")).toBe("opaque==");
+    expect(init).toMatchObject({ method: "GET", credentials: "include", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer" });
+    expect(JSON.stringify(init)).not.toMatch(/authorization|x-api-key|localStorage|sessionStorage/i);
+  });
+
   it("does not allow writes until the exact resource identifier is typed", () => {
     expect(operatorActionConfirmed("acme", "acme", "", 500)).toBe(true);
     expect(operatorActionConfirmed("acme", "Acme", "", 500)).toBe(false);

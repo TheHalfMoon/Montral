@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { AppEnv } from "./env";
-import { decodeOperatorCursor, encodeOperatorCursor, operatorIds, probeRegionView, requireOperator } from "./operator";
+import { decodeOperatorCursor, encodeOperatorCursor, decodePlatformAuditCursor, encodePlatformAuditCursor, operatorIds, probeRegionView, requireOperator } from "./operator";
 import { recordMfaSignIn } from "./operator-mfa";
 import { anySuspended, authCallWorkspaces, isSuspensionReason, suspensionGuardsAuthPath, SUSPENSION_REASONS } from "./suspension";
 
@@ -35,6 +35,24 @@ describe("operator cursor", () => {
     for (const bad of ["", "%%%", btoa("x|y"), encodeOperatorCursor("2026-11-11", "a"), encodeOperatorCursor("2026-11-11T10:00:00.123456", "a b"), btoa("2026-11-11T10:00:00.123456|a|b")]) {
       expect(decodeOperatorCursor(bad)).toBeNull();
     }
+  });
+});
+
+describe("unified operator audit keyset cursor", () => {
+  it("round trips a UTC microsecond timestamp, source and source-specific id", () => {
+    const at = "2026-11-13T09:00:00.123456";
+    const uuid = "a6789012-2345-4567-89ab-0123456789ab";
+    expect(decodePlatformAuditCursor(encodePlatformAuditCursor(at, "workspace", uuid))).toEqual({ at, source: "workspace", id: uuid });
+    expect(decodePlatformAuditCursor(encodePlatformAuditCursor(at, "probe", "987654321"))).toEqual({ at, source: "probe", id: "987654321" });
+    for (const bad of ["", "%%%", btoa('[]'), btoa('["x","probe","1"]'),
+      encodePlatformAuditCursor(at, "workspace", "not-uuid"),
+      encodePlatformAuditCursor("2026-02-30T09:00:00.000000", "probe", "1"),
+      encodePlatformAuditCursor("2026-11-13T25:00:00.000000", "probe", "1"),
+      encodePlatformAuditCursor(at, "probe", "-1"),
+      encodePlatformAuditCursor(at, "probe", "0"),
+      btoa(JSON.stringify([at, "customer", "1"])),
+      btoa(JSON.stringify([at, "probe", "1", "extra"]))])
+      expect(decodePlatformAuditCursor(bad)).toBeNull();
   });
 });
 

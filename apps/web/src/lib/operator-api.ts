@@ -22,6 +22,11 @@ export type OperatorProbeAuditEvent = {
   id: number; region: string; action: "drain" | "undrain";
   operatorId: string; note: string | null; createdAt: string;
 };
+export type OperatorPlatformAuditEvent = {
+  source: "workspace" | "probe"; id: string;
+  action: "workspace.suspend" | "workspace.unsuspend" | "probe.drain" | "probe.undrain";
+  target: string; operatorId: string | null; reason: string | null; createdAt: string;
+};
 export type SuspensionReason = "abuse" | "payment" | "legal" | "operator";
 
 export class OperatorRequestError extends Error {
@@ -50,6 +55,12 @@ export function makeOperatorApi(fetcher: typeof fetch = fetch) {
       if (q.trim()) query.set("q", q.trim());
       if (cursor) query.set("cursor", cursor);
       return call<{ workspaces: OperatorWorkspace[]; next: string | null }>(`/workspaces?${query}`);
+    },
+    platformAudit: (q = "", source: "all" | "workspace" | "probe" = "all", cursor?: string) => {
+      const params = new URLSearchParams({ source, limit: "25" });
+      if (q.trim()) params.set("q", q.trim());
+      if (cursor) params.set("cursor", cursor);
+      return call<{ events: OperatorPlatformAuditEvent[]; next: string | null }>(`/audit?${params}`);
     },
     workspace: (id: string) => call<OperatorWorkspaceDetail>(`/workspaces/${encodeURIComponent(id)}`),
     suspensionHistory: (id: string) => call<{ workspaceId: string; events: OperatorSuspensionEvent[] }>(`/workspaces/${encodeURIComponent(id)}/suspension-history?limit=20`),

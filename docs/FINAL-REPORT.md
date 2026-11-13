@@ -1,6 +1,6 @@
 # Montral release-readiness report
 
-**Current integration status (2026-11-13): FULL PRODUCT NO-GO.** Current inspected `main` is `d660e62` (PRs #106–#111 merged). Both `main@5096fdc` and `main@8435564` passed 11/11 integrated push workflows; #111 passed 11/11 exact-head checks before merge. Integrated push checks for `main@d660e62` were still in progress at the last verification. Workspace suspension history is a separate follow-up PR pending CI. Previous candidate `3fbc6e6` remains historical, not current release authorization. The prior `3fbc6e6` candidate and its historical passing checks remain recorded below, not as current release authorization.
+**Current integration status (2026-11-13): FULL PRODUCT NO-GO.** The current inspected `main` baseline is `82f20c4` (PRs #106–#112 merged), with 11/11 exact-head CI success for #112 and its earlier integrated baseline `d660e62` (also 11/11). The integrated push CI for `main@82f20c4` remains pending exact-head qualification. SSO suspension hardening PR #113 is separately pending requalification after reconciliation onto #112. Historical self-hosted candidate `3fbc6e6` remains a previous reference, not current publication authorization.
 
 Montral Cloud and Enterprise BYOC remain NO-GO pending external provider validation, authorized production infrastructure, legal/privacy review, resilience testing and independent security assessment. No release, tag, live payment, deployment or spend is authorized.
 

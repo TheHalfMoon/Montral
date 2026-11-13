@@ -10,6 +10,7 @@ import type { Bindings } from "./env";
 import { clientIpFromHeaders } from "./ratelimit";
 import { authorizationUrl, discover, emailDomain, exchangeCode, randomToken, sha256b64url, SsoError, verifyIdToken, withUserinfo, type VerifiedIdentity } from "./sso-oidc";
 import { SecretUnreadable } from "./sso-secret";
+import { workspaceSuspended } from "./suspension";
 import {
   accountIdOf, connectionById, connectionForStart, consumeFlow, createFlow, linkIdentity, removedFrom, markSsoSession, provisionUser,
   userByEmail, userByIdentity, userById, type SsoConnection,
@@ -95,7 +96,10 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             email = session.user.email.toLowerCase();
           }
           const conn = await connectionForStart(q, env, { email, workspace: intent === "link" ? null : ctx.body.workspace?.trim() || null });
-          if (!conn) throw new APIError("NOT_FOUND", { message: "No single sign-on is set up for that email domain or workspace", code: "SSO_NOT_CONFIGURED" });
+          // Do not start or advertise a workspace's SSO when the platform suspended it.
+          // Use the same generic refusal as a missing connection: no suspension reason or operator note leaks.
+          if (!conn || (conn.orgId && await workspaceSuspended(q, conn.orgId)))
+            throw new APIError("NOT_FOUND", { message: "No single sign-on is set up for that email domain or workspace", code: "SSO_NOT_CONFIGURED" });
           let discovery;
           try {
             discovery = await discover(conn.issuer);
@@ -141,6 +145,9 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
           const conn = await connectionById(q, env, flow.connection_id);
           // the connection may have been switched off, deleted or moved since the sign-in started
           if (!conn || !conn.enabled || conn.orgId !== flow.organization_id) return fail("connection_disabled");
+          // A flow may have begun before an operator suspended this workspace.
+          // Refuse before discovery, secret decryption, token exchange or account/identity writes.
+          if (conn.orgId && await workspaceSuspended(q, conn.orgId)) return fail("connection_disabled");
 
           let identity: VerifiedIdentity;
           try {
@@ -168,6 +175,9 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             return fail("domain_not_allowed");
           }
 
+          // Suspension may have committed while the identity provider verified the token.
+          // Re-check before any identity link, account write or first-time JIT operation.
+          if (conn.orgId && await workspaceSuspended(q, conn.orgId)) return fail("connection_disabled");
           let userId = await userByIdentity(q, conn.id, identity.issuer, identity.subject);
           let how: "existing" | "provisioned" | "linked";
           if (flow.intent === "link") {
@@ -176,11 +186,27 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             if (userId && userId !== me.id) return fail("identity_in_use");
             if (me.email.toLowerCase() !== identity.email) return fail("link_email_mismatch");
             if (!userId) {
+              // Linking an existing Montral identity is a persistent credential write.
+              // Take the same organization lock as JIT provisioning to serialize with suspend.
+              const doLink = async (tq: typeof q) => {
+                if (conn.orgId) {
+                  const [org] = await tq<{ id: string }>(
+                    "SELECT id FROM organization WHERE id = $1::text FOR SHARE", [conn.orgId],
+                  );
+                  if (!org || await workspaceSuspended(tq, conn.orgId)) return "suspended" as const;
+                }
+                await linkIdentity(tq, { userId: me.id, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject });
+                return "linked" as const;
+              };
+              let linked: "linked" | "suspended";
               try {
-                await linkIdentity(q, { userId: me.id, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject });
+                linked = conn.orgId && database.transaction
+                  ? await database.transaction((scoped) => doLink((sql, params) => scoped.query(sql, params)))
+                  : await doLink(q);
               } catch {
-                return fail("identity_in_use"); // linked to someone else in a concurrent request (unique index)
+                return fail("identity_in_use"); // linked to another person in a concurrent request
               }
+              if (linked === "suspended") return fail("connection_disabled");
             }
             userId = me.id;
             how = "linked";
@@ -212,8 +238,15 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             // person's SCIM record (FOR SHARE): a deactivation committed after the check above is seen here, and one that
             // starts now waits and then finds (and ends) the new membership. FOR NO KEY UPDATE also queues a second sign-in.
             const email = identity.email;
-            const provision = async (tq: typeof q): Promise<string | null | "inactive" | "not_assigned"> => {
+            const provision = async (tq: typeof q): Promise<string | null | "inactive" | "not_assigned" | "suspended"> => {
               if (conn.orgId) {
+                // The operator suspend write locks this organization FOR UPDATE.
+                // Take FOR SHARE inside the same provisioning transaction before reading suspension/SCIM;
+                // a JIT insert cannot race past a suspension committed while waiting for that lock.
+                const [org] = await tq<{ id: string }>(
+                  "SELECT id FROM organization WHERE id = $1::text FOR SHARE", [conn.orgId],
+                );
+                if (!org || await workspaceSuspended(tq, conn.orgId)) return "suspended";
                 const gate = await scimGate(tq, conn.orgId, email, { lock: true });
                 if (gate !== "allowed") return gate;
               }
@@ -221,7 +254,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
               if (id && conn.orgId) await linkScimUser(tq, conn.orgId, email, id);
               return id;
             };
-            let provisioned: string | null | "inactive" | "not_assigned" = null;
+            let provisioned: string | null | "inactive" | "not_assigned" | "suspended" = null;
             try {
               provisioned = conn.orgId && database.transaction
                 ? await database.transaction((scoped) => provision((sql, params) => scoped.query(sql, params)))
@@ -229,6 +262,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             } catch {
               provisioned = null;
             }
+            if (provisioned === "suspended") return fail("connection_disabled");
             if (provisioned === "inactive" || provisioned === "not_assigned") {
               await refusal(conn, provisioned === "inactive" ? "scim_inactive" : "scim_not_assigned", ctx.headers);
               return fail(provisioned === "inactive" ? "access_removed" : "not_provisioned");
@@ -253,6 +287,10 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
           // workspace (an invitation does), and a removed member's links are deleted with the membership, so SSO never
           // brings back someone who was removed.
 
+          // Existing identities and link flows must re-check after the slow IdP exchange, too.
+          // A workspace may still be suspended immediately after this check: its API and all
+          // credential access remains gated independently by requireOrg and the suspension guards.
+          if (conn.orgId && await workspaceSuspended(q, conn.orgId)) return fail("connection_disabled");
           signIn.connectionId = conn.id;
           signIn.orgId = conn.orgId;
           let session;

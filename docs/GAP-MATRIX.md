@@ -1,6 +1,6 @@
 # Montral feature and competitor gap matrix
 
-**Baseline notice (2026-11-13):** This matrix includes historical capability snapshots (`b01e28e`/`3fbc6e6`), not a live release-readiness statement. PRs #106–#111 are merged (the restricted operator console #110 and probe drain audit UI #111). Workspace suspension history is being qualified separately. See `TASK-LEDGER.md` and `FINAL-REPORT.md` for current gates and limitations.
+**Baseline notice (2026-11-13):** This matrix includes historical capability snapshots (`b01e28e`/`3fbc6e6`), not a live release-readiness statement. PRs #106–#111 are merged (the restricted operator console #110 and probe drain audit UI #111). Workspace suspension history has merged as #112; SSO suspension hardening is being qualified separately in PR #113. See `TASK-LEDGER.md` and `FINAL-REPORT.md` for current gates and limitations.
 
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list

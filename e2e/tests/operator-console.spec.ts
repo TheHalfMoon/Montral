@@ -60,6 +60,11 @@ test("operator console is denied by default and confirms every synthetic state c
     if (path === "/probes") return denyProbeOnFirstMock
       ? answer(route, 403, { error: "private operator configuration" })
       : answer(route, 200, { auto: { monitors: 0 }, regions: [region()] });
+    if (path === "/probes/synthetic-east/audit") return answer(route, 200, {
+      region: "synthetic-east",
+      events: [{ id: 19, region: "synthetic-east", action: "drain", operatorId: "synthetic-operator",
+        note: "Synthetic maintenance", createdAt: "2026-01-01T00:00:00.000Z" }],
+    });
     return answer(route, 404, { error: "Not found" });
   });
 
@@ -88,6 +93,12 @@ test("operator console is denied by default and confirms every synthetic state c
   expect(posted[1]?.path).toBe("/workspaces/synthetic-org-1/unsuspend");
 
   const probes = page.getByRole("region", { name: "Probe region controls" });
+  await probes.getByRole("button", { name: "Audit history" }).click();
+  const history = probes.getByRole("region", { name: "Audit history for Synthetic East" });
+  await expect(history).toContainText("Synthetic maintenance");
+  await expect(history).toContainText("synthetic-operator");
+  await probes.getByRole("button", { name: "Hide audit" }).click();
+  await expect(history).toHaveCount(0);
   await probes.getByRole("button", { name: "Drain", exact: true }).click();
   await expect(probes.getByRole("button", { name: "Confirm drain" })).toBeDisabled();
   await probes.getByLabel(/Type region ID/).fill("synthetic-east");

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import {
   operatorApi, operatorActionConfirmed, OperatorRequestError,
-  type OperatorRegion, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
+  type OperatorRegion, type OperatorProbeAuditEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
 } from "../lib/operator-api";
 
 const REASONS: SuspensionReason[] = ["operator", "abuse", "payment", "legal"];
@@ -30,12 +30,19 @@ export default function OperatorConsole() {
   const [probeConfirm, setProbeConfirm] = useState("");
   const [probeNote, setProbeNote] = useState("");
   const [probesError, setProbesError] = useState("");
+  const [auditRegion, setAuditRegion] = useState<string | null>(null);
+  const [auditEvents, setAuditEvents] = useState<OperatorProbeAuditEvent[]>([]);
+  const [auditError, setAuditError] = useState("");
+  const [auditBusy, setAuditBusy] = useState(false);
+  const auditSeq = useRef(0);
 
   function failure(e: unknown) {
     if (e instanceof OperatorRequestError && e.status === 403) {
       accessRevoked.current = true;
       requestSeq.current++;
       selectedRef.current = null;
+      auditSeq.current++;
+      setAuditRegion(null); setAuditEvents([]);
       setAccess("denied");
       setRows([]); setNext(null); setDetail(null); setRegions([]);
       return "Operator access is unavailable. Sign in with password and a fresh second factor.";
@@ -120,6 +127,23 @@ export default function OperatorConsole() {
     finally { setBusy(false); }
   }
 
+  async function showProbeAudit(id: string) {
+    if (accessRevoked.current) return;
+    if (auditRegion === id) {
+      auditSeq.current++;
+      setAuditRegion(null); setAuditEvents([]);
+      return;
+    }
+    const seq = ++auditSeq.current;
+    setAuditRegion(id); setAuditEvents([]); setAuditError(""); setAuditBusy(true);
+    try {
+      const data = await operatorApi.probeAudit(id);
+      if (seq === auditSeq.current && !accessRevoked.current) setAuditEvents(data.events);
+    } catch (e) {
+      if (seq === auditSeq.current && !accessRevoked.current) setAuditError(failure(e));
+    } finally { if (seq === auditSeq.current) setAuditBusy(false); }
+  }
+
   return <>
     <div className="ph"><div>
       <h1>Platform operations</h1>
@@ -195,11 +219,33 @@ export default function OperatorConsole() {
         {regions.map((r) => <div key={r.id} style={{ borderTop: "1px solid var(--line)", padding: "12px 0" }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <span><strong>{r.name}</strong> <small className="muted">({r.id}) · {r.status} · {r.monitors} monitors</small></span>
-            {(r.configured || r.drained) && <button type="button" className="btn sm" disabled={busy}
-              onClick={() => { setProbeEditing(probeEditing === r.id ? null : r.id); setProbeConfirm(""); setProbeNote(""); }}>
-              {r.drained ? "Undrain" : "Drain"}
-            </button>}
+            <span style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" className="btn sm" aria-expanded={auditRegion === r.id}
+                onClick={() => void showProbeAudit(r.id)} disabled={busy}>
+                {auditRegion === r.id ? "Hide audit" : "Audit history"}
+              </button>
+              {(r.configured || r.drained) && <button type="button" className="btn sm" disabled={busy}
+                onClick={() => { setProbeEditing(probeEditing === r.id ? null : r.id); setProbeConfirm(""); setProbeNote(""); }}>
+                {r.drained ? "Undrain" : "Drain"}
+              </button>}
+            </span>
           </div>
+          {auditRegion === r.id && <section aria-label={`Audit history for ${r.name}`} style={{ marginTop: 12 }}>
+            <h3>Latest drain and undrain actions</h3>
+            {auditBusy ? <p role="status">Loading audit history...</p> : auditError ? <p role="alert">{auditError}</p> :
+              auditEvents.length === 0 ? <p className="muted">No recorded actions for this region.</p> :
+              <div style={{ overflowX: "auto" }}>
+                <table className="usage-tbl">
+                  <thead><tr><th>When</th><th>Action</th><th>Operator</th><th>Private note</th></tr></thead>
+                  <tbody>{auditEvents.map((event) => <tr key={event.id}>
+                    <td>{new Date(event.createdAt).toLocaleString()}</td>
+                    <td>{event.action}</td>
+                    <td className="mono" style={{ overflowWrap: "anywhere" }}>{event.operatorId}</td>
+                    <td style={{ overflowWrap: "anywhere" }}>{event.note ?? "—"}</td>
+                  </tr>)}</tbody>
+                </table>
+              </div>}
+          </section>}
           {probeEditing === r.id && <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
             {!r.drained && <label className="fld">Private drain note (optional)
               <input className="in" maxLength={200} autoComplete="off" value={probeNote} onChange={(e) => setProbeNote(e.target.value)} />

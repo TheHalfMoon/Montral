@@ -1,6 +1,6 @@
 # Montral release-readiness report
 
-**Current integration status (2026-11-13): FULL PRODUCT NO-GO.** The latest inspected `main` baseline is `5096fdc` (PRs #106-#109 merged, each with 16/16 exact-head checks before merging). The combined 11-workflow push qualification was started, but this report does not claim it was green. Operator console PR #110 is separately pending exact-head qualification. The prior `3fbc6e6` candidate and its historical passing checks remain recorded below, not as current release authorization.
+**Current integration status (2026-11-13): FULL PRODUCT NO-GO.** The current inspected `main` baseline is `8435564` (PRs #106-#110 merged). The preceding integrated `main@5096fdc` passed all 11 push workflows. PR #110 also passed all 11 exact-head workflows before merge, but its new integrated `main@8435564` must finish post-merge push checks before being called qualified. The per-probe operator audit history is separately being qualified. The prior `3fbc6e6` candidate and its historical passing checks remain recorded below, not as current release authorization.
 
 Montral Cloud and Enterprise BYOC remain NO-GO pending external provider validation, authorized production infrastructure, legal/privacy review, resilience testing and independent security assessment. No release, tag, live payment, deployment or spend is authorized.
 

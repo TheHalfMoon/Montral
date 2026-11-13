@@ -26,6 +26,16 @@ describe("operator console request isolation", () => {
     expect(init.cache).toBe("no-store");
   });
 
+  it("reads only the safe workspace suspension history using a session and encoded ID", async () => {
+    const request = vi.fn(async () => new Response(JSON.stringify({ workspaceId: "a/b", events: [] }), { status: 200 }));
+    const api = makeOperatorApi(request as typeof fetch);
+    await expect(api.suspensionHistory("a/b")).resolves.toEqual({ workspaceId: "a/b", events: [] });
+    const [url, init] = request.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("/api/operator/workspaces/a%2Fb/suspension-history?limit=20");
+    expect(init).toMatchObject({ method: "GET", credentials: "include", cache: "no-store", redirect: "error", referrerPolicy: "no-referrer" });
+    expect(JSON.stringify(init)).not.toMatch(/authorization|x-api-key|localStorage|sessionStorage/i);
+  });
+
   it("reads a probe audit without caching or unsafe URL interpolation", async () => {
     const request = vi.fn(async () => new Response(JSON.stringify({ region: "east/west", events: [] }), { status: 200 }));
     const api = makeOperatorApi(request as typeof fetch);

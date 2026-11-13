@@ -14,6 +14,10 @@ export type OperatorRegion = {
   lastAnswerAt: string | null; lastUnreachableAt: string | null;
   lastUnreachableReason: string | null; drainedAt: string | null;
 };
+export type OperatorSuspensionEvent = {
+  id: string; action: "workspace.suspend" | "workspace.unsuspend";
+  reason: string | null; createdAt: string;
+};
 export type OperatorProbeAuditEvent = {
   id: number; region: string; action: "drain" | "undrain";
   operatorId: string; note: string | null; createdAt: string;
@@ -48,6 +52,7 @@ export function makeOperatorApi(fetcher: typeof fetch = fetch) {
       return call<{ workspaces: OperatorWorkspace[]; next: string | null }>(`/workspaces?${query}`);
     },
     workspace: (id: string) => call<OperatorWorkspaceDetail>(`/workspaces/${encodeURIComponent(id)}`),
+    suspensionHistory: (id: string) => call<{ workspaceId: string; events: OperatorSuspensionEvent[] }>(`/workspaces/${encodeURIComponent(id)}/suspension-history?limit=20`),
     suspend: (id: string, reason: SuspensionReason, note: string) =>
       call<{ id: string; suspended: true }>(`/workspaces/${encodeURIComponent(id)}/suspend`, { reason, note }),
     unsuspend: (id: string) => call<{ id: string; suspended: false }>(`/workspaces/${encodeURIComponent(id)}/unsuspend`, {}),

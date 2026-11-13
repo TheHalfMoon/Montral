@@ -53,6 +53,13 @@ test("operator console is denied by default and confirms every synthetic state c
       return answer(route, 200, { id: path.split("/")[2], suspended, drained });
     }
     if (path === "/workspaces") return answer(route, 200, { workspaces: [workspace()], next: null });
+    if (path === "/workspaces/synthetic-org-1/suspension-history") return answer(route, 200, {
+      workspaceId: "synthetic-org-1",
+      events: posted.filter((p) => p.path.startsWith("/workspaces/synthetic-org-1/")).map((p, i) => ({
+        id: `synthetic-event-${i + 1}`, action: p.path.endsWith("/unsuspend") ? "workspace.unsuspend" : "workspace.suspend",
+        reason: "operator", createdAt: "2026-01-01T00:00:00.000Z",
+      })).reverse(),
+    });
     if (path === "/workspaces/synthetic-org-1") return answer(route, 200, {
       ...workspace(), suspension: suspended ? { reason: "operator", note: null, suspendedBy: "synthetic",
         suspendedAt: "2026-01-01T00:00:00.000Z" } : null, usage: { credits: null, emails: null },
@@ -91,6 +98,11 @@ test("operator console is denied by default and confirms every synthetic state c
   await detail.getByRole("button", { name: "Lift suspension" }).click();
   await expect(detail.getByRole("button", { name: "Suspend workspace" })).toBeVisible();
   expect(posted[1]?.path).toBe("/workspaces/synthetic-org-1/unsuspend");
+  const suspensionHistory = detail.getByRole("region", { name: "Workspace suspension history" });
+  await expect(suspensionHistory).toContainText("Suspension lifted");
+  await expect(suspensionHistory).toContainText("Suspended");
+  await expect(suspensionHistory).toContainText("operator");
+  await expect(suspensionHistory).not.toContainText("private operator note");
 
   const probes = page.getByRole("region", { name: "Probe region controls" });
   await probes.getByRole("button", { name: "Audit history" }).click();

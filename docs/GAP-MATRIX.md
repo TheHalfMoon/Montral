@@ -1,6 +1,6 @@
 # Montral feature and competitor gap matrix
 
-**Baseline notice (2026-11-13):** This matrix includes historical capability snapshots (`b01e28e`/`3fbc6e6`), not a live release-readiness statement. PRs #106–#111 are merged (the restricted operator console #110 and probe drain audit UI #111). Workspace suspension history has merged as #112; SSO suspension hardening is being qualified separately in PR #113. See `TASK-LEDGER.md` and `FINAL-REPORT.md` for current gates and limitations.
+**Baseline notice (2026-11-13):** The comparison tables below are **historical capability snapshots** (`b01e28e`/`3fbc6e6`), not a live release-readiness statement. The newer `main@b624cfe` also includes restricted operator console and suspension history (#110–#112), suspended-workspace SSO controls (#113), first-tab notice layout stability (#114), legacy catalog resource-meter warnings (#115), and in-flight observation/heartbeat suspension fencing (#116). All four latest PRs passed 16/16 exact-head checks each; final integrated-main push CI must still complete. For current release gates and unresolved external blockers, see `TASK-LEDGER.md`, `FINAL-REPORT.md` and `RELEASE-GATES.md`.
 
 Maintained during development. Competitor facts were gathered on 2026-11-08 from
 primary sources (official docs, pricing pages, GitHub READMEs); see the source list

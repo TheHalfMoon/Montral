@@ -1,6 +1,6 @@
 # Montral release-readiness report
 
-**Current integration status (2026-11-13): FULL PRODUCT NO-GO.** The current inspected `main` baseline is `82f20c4` (PRs #106–#112 merged), with 11/11 exact-head CI success for #112 and its earlier integrated baseline `d660e62` (also 11/11). The integrated push CI for `main@82f20c4` remains pending exact-head qualification. SSO suspension hardening PR #113 is separately pending requalification after reconciliation onto #112. Historical self-hosted candidate `3fbc6e6` remains a previous reference, not current publication authorization.
+**Current integration status (2026-11-13): FULL PRODUCT NO-GO; COMMUNITY PUBLICATION HOLD.** The code-integrated `main` baseline inspected for this report (before the documentation-only update) is **`b624cfe`**. PRs #113 (SSO suspension), #114 (first-tab notices), #115 (legacy plan-catalog meter warnings) and #116 (in-flight observation/heartbeat suspension fence) are **merged** as `09735b9`, `2e0dc98`, `cffb9b5` and `b624cfe` respectively. Each PR passed **16/16 exact-head GitHub checks** before merging. The final integrated **`main@b624cfe` push CI is not yet proven complete**, so do not represent its aggregate checks as green until the exact-head runs finish. A disposable local integration merge of #114–#116 had zero conflicts, full monorepo typechecking passed, and 41/41 targeted unit tests passed; this is not a substitute for final hosted PostgreSQL/browser validation. Historical self-hosted candidate `3fbc6e6` remains prior evidence, not authorization to publish the current main.
 
 Montral Cloud and Enterprise BYOC remain NO-GO pending external provider validation, authorized production infrastructure, legal/privacy review, resilience testing and independent security assessment. No release, tag, live payment, deployment or spend is authorized.
 
@@ -10,7 +10,7 @@ Nothing is released, deployed, packaged, published or tagged; that requires the 
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
 published to any registry.
 
-**Candidate revision:** `main` at **`3fbc6e6`** (2026-11-11), superseding `b01e28e`: all ten workflows succeeded on that exact commit (§12, [RELEASE-GATES.md](RELEASE-GATES.md) §S.1). Sections 2–9 describe the `b01e28e` round and its runs; the SaaS round #74–#84 is in §12. Every claim below points to a merged pull request, a CI run on
+**Historical qualified candidate (not the current `main`):** `3fbc6e6` (2026-11-11), superseding `b01e28e`: all ten workflows succeeded on that exact commit (§12, [RELEASE-GATES.md](RELEASE-GATES.md) §S.1). Sections 2–9 describe the `b01e28e` round and its runs; the SaaS round #74–#84 is in §12. Every claim below points to a merged pull request, a CI run on
 its exact head, or an evidence file in `docs/evidence/`. Anything not demonstrated is listed as open or blocked. The
 prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor comparison is [GAP-MATRIX.md](GAP-MATRIX.md).
 

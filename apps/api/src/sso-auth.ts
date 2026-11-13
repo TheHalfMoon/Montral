@@ -175,6 +175,9 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             return fail("domain_not_allowed");
           }
 
+          // Suspension may have committed while the identity provider verified the token.
+          // Re-check before any identity link, account write or first-time JIT operation.
+          if (conn.orgId && await workspaceSuspended(q, conn.orgId)) return fail("connection_disabled");
           let userId = await userByIdentity(q, conn.id, identity.issuer, identity.subject);
           let how: "existing" | "provisioned" | "linked";
           if (flow.intent === "link") {
@@ -183,11 +186,27 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
             if (userId && userId !== me.id) return fail("identity_in_use");
             if (me.email.toLowerCase() !== identity.email) return fail("link_email_mismatch");
             if (!userId) {
+              // Linking an existing Montral identity is a persistent credential write.
+              // Take the same organization lock as JIT provisioning to serialize with suspend.
+              const doLink = async (tq: typeof q) => {
+                if (conn.orgId) {
+                  const [org] = await tq<{ id: string }>(
+                    "SELECT id FROM organization WHERE id = $1::text FOR SHARE", [conn.orgId],
+                  );
+                  if (!org || await workspaceSuspended(tq, conn.orgId)) return "suspended" as const;
+                }
+                await linkIdentity(tq, { userId: me.id, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject });
+                return "linked" as const;
+              };
+              let linked: "linked" | "suspended";
               try {
-                await linkIdentity(q, { userId: me.id, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject });
+                linked = conn.orgId && database.transaction
+                  ? await database.transaction((scoped) => doLink((sql, params) => scoped.query(sql, params)))
+                  : await doLink(q);
               } catch {
-                return fail("identity_in_use"); // linked to someone else in a concurrent request (unique index)
+                return fail("identity_in_use"); // linked to another person in a concurrent request
               }
+              if (linked === "suspended") return fail("connection_disabled");
             }
             userId = me.id;
             how = "linked";

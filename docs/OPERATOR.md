@@ -60,8 +60,10 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
 - **Workspace API**: every request that acts in the workspace (`requireOrg` in `apps/api/src/middleware.ts`) gets
   `403 {"error": "...", "code": "workspace_suspended"}`: sessions, API keys and OAuth/MCP agents alike, reads and writes.
   This includes the workspace's own audit log and `/api/me` while that workspace is the active one.
-- **Checks**: the scheduler does not claim the workspace's monitors (`claimDue`), so no checks run and no credits are
-  used.
+- **Checks**: the scheduler does not claim or start **new** runs for suspended workspaces (`claimDue`, `beginRuns`).
+  A check already running when suspension begins may still finish its outbound request and consume the credits
+  reserved before suspension. On updated instances, its observation is refused if suspension has already committed;
+  this does not cancel an external request or undo an existing meter charge.
 - **Heartbeats**: pings to the workspace's heartbeat URLs get the same 403 and record nothing.
 - **Workspace changes through Better Auth** (`/api/auth/*`, which does not pass `requireOrg`): inviting or accepting
   invitations, renaming, changing roles, removing members, deleting the workspace, and creating or changing API keys

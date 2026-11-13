@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { BUILTIN_SANDBOX_CATALOG, buildPlanCatalog, cachedPlanCatalog, loadPlanCatalog, METER_DEFAULTS, parsePlanCatalog, PlanCatalogError } from "./plan-catalog";
+import { describe, expect, it, vi } from "vitest";
+import { BUILTIN_SANDBOX_CATALOG, buildPlanCatalog, cachedPlanCatalog, implicitResourceMeterPaths, loadPlanCatalog, METER_DEFAULTS, parsePlanCatalog, PlanCatalogError } from "./plan-catalog";
 
 /** Synthetic values only: they describe no real offer. */
 const plan = (id: string, credits: number, extra: Record<string, unknown> = {}) => ({
@@ -56,6 +56,39 @@ describe("plan catalog", () => {
     }
     // the built-in catalog is itself valid
     expect(() => parsePlanCatalog(BUILTIN_SANDBOX_CATALOG)).not.toThrow();
+  });
+
+  it("warns once about implicit Free resource meters without exposing operator catalog data", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // A legacy priced catalog remains valid, but its missing meter fields are no longer silent.
+      const legacy = parsePlanCatalog(doc({
+        overrides: [{ organizationId: "private-workspace", note: "confidential-contract" }],
+      }));
+      expect(implicitResourceMeterPaths(legacy)).toEqual([
+        "plans.0.limits.webhookEvents", "plans.0.limits.browserSeconds",
+        "plans.1.limits.webhookEvents", "plans.1.limits.browserSeconds",
+      ]);
+      const loaded = await loadPlanCatalog({ MONTRAL_PLAN_CONFIG_JSON: JSON.stringify(legacy) });
+      expect(loaded.resolve("unlisted", "beta").limits).toMatchObject(METER_DEFAULTS);
+      expect(warn).toHaveBeenCalledTimes(1);
+      const log = String(warn.mock.calls[0]?.[0]);
+      expect(log).toContain("MONTRAL_CATALOG_IMPLICIT_METERS");
+      expect(log).toContain("plans.1.limits.browserSeconds");
+      expect(log).toMatch(/[a-f0-9]{16}/);
+      expect(log).not.toMatch(/ALPHA|BETA|synthetic-1|1234|EUR|private-workspace|confidential-contract|2222/);
+
+      // A complete operator catalog and the built-in sandbox catalog emit no warning.
+      const complete = parsePlanCatalog(doc({
+        plans: [plan("alpha", 1, { limits: { activeMonitors: 3, minIntervalSec: 120, regions: 1, credits: 1, emails: 7, webhookEvents: 0, browserSeconds: 0 } })],
+      }));
+      expect(implicitResourceMeterPaths(complete)).toEqual([]);
+      await loadPlanCatalog({ MONTRAL_PLAN_CONFIG_JSON: JSON.stringify(complete) });
+      await loadPlanCatalog({});
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("optionally resolves workspace status-page caps, including zero, without limiting legacy plans", async () => {

@@ -217,6 +217,18 @@ export async function buildPlanCatalog(doc: PlanCatalogDocument, source: PlanCat
   };
 }
 
+/**
+ * Plan-level omitted meter fields silently enforce built-in Free allowances. Report the exact
+ * configuration paths (never plan names, prices, override notes or allowance values) so operators
+ * can correct older catalogs before deploying them. Workspace overrides may legitimately be partial.
+ */
+export function implicitResourceMeterPaths(doc: PlanCatalogDocument): string[] {
+  return doc.plans.flatMap((plan, i) =>
+    (["webhookEvents", "browserSeconds"] as const)
+      .filter((meter) => plan.limits[meter] === undefined)
+      .map((meter) => `plans.${i}.limits.${meter}`));
+}
+
 /** The catalog a deployment configured: the operator's (validated, throws when invalid) or the built-in sandbox one. */
 export async function loadPlanCatalog(env: { MONTRAL_PLAN_CONFIG_JSON?: string }): Promise<PlanCatalog> {
   const text = env.MONTRAL_PLAN_CONFIG_JSON;
@@ -228,7 +240,15 @@ export async function loadPlanCatalog(env: { MONTRAL_PLAN_CONFIG_JSON?: string }
   } catch {
     throw new PlanCatalogError(["(root): not valid JSON"]);
   }
-  return buildPlanCatalog(parsePlanCatalog(raw), "operator");
+  const doc = parsePlanCatalog(raw);
+  const catalog = await buildPlanCatalog(doc, "operator");
+  const implicitMeters = implicitResourceMeterPaths(doc);
+  if (implicitMeters.length > 0) {
+    // A single warning per loaded catalog, including on cached Worker loads. The hash identifies
+    // the configuration revision without writing private prices, names or allowances into logs.
+    console.warn(`MONTRAL_CATALOG_IMPLICIT_METERS ${catalog.hash}: ${implicitMeters.join(", ")}; built-in Free meter limits apply until the operator sets these fields`);
+  }
+  return catalog;
 }
 
 /** One parsed catalog per document text (requests on Workers each build their entitlements). */

@@ -110,7 +110,7 @@ without the note.
 The restricted, unlinked platform console at `/app/operator` can display the latest 50 drain/undrain events for each configured or formerly configured region, including the timestamp, action, operator identity and private note. This read-only view uses the existing MFA-protected audit API and never makes events available to customer workspaces.
 
 
-Remote check regions are deployment configuration (`PROBE_REGIONS`, `PROBE_SECRET`; see [EDGE-PROBE.md](EDGE-PROBE.md)).
+Remote check regions are deployment configuration (`PROBE_REGIONS`, `PROBE_SECRET` and optional private `PROBE_SECRETS`; see [EDGE-PROBE.md](EDGE-PROBE.md)).
 What the platform learns about them at run time is stored per region in `probe_region_state` (migration
 `0059_probe_region_state`, augmented by `0060_probe_region_operator_audit`). Operator drain and undrain history is
 stored in an append-only `probe_region_drain_event` table in migration `0060`:
@@ -144,7 +144,7 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
   The action is also logged as a server line (without the note), but not placed in any customer's audit log.
   Only the verified platform operator API exposes the event history. Repeating an action records another operator
   command; direct internal seed calls with no operator ID do not generate impersonated audit events.
-- Credentials: all probes still share `PROBE_SECRET` (there are no per-probe credentials or operator registration). The proposed staged rotation support, pending CI, lets probes temporarily accept an old `PROBE_PREVIOUS_SECRET` **only until `PROBE_PREVIOUS_SECRET_EXPIRES_AT`**: deploy every probe with new primary + old previous and bounded UTC expiry, switch the API signing key only once every probe is ready, and remove the old key after in-flight checks drain. Expiry is enforced automatically, but revocation across old deployments is not. See [probe rotation instructions](../apps/probe/README.md#staged-signing-key-rotation).
+- Credentials: the merged #118 supports staged rotation of a shared `PROBE_SECRET` (there is not yet a registration API). Proposed separate per-region keys (pending exact-head CI) may be stored privately in API `PROBE_SECRETS`; a per-region key takes precedence over the shared fallback, and an invalid credential map fails closed. The staged rotation uses a temporary old `PROBE_PREVIOUS_SECRET` **only until `PROBE_PREVIOUS_SECRET_EXPIRES_AT`**: deploy every probe with new primary + old previous and bounded UTC expiry, switch the API signing key only once every probe is ready, and remove the old key after in-flight checks drain. Expiry is enforced automatically, but revocation across old deployments is not. A key-isolation config is not operator registration, attestation or managed key storage. See [probe rotation instructions](../apps/probe/README.md#staged-signing-key-rotation).
 
 ## Limitations
 

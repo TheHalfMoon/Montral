@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { configureProbes, isRegionConfigured, parseProbeRegions, availableRegions, combine, measure, runInRegion } from "./probes";
+import { describe, expect, it, vi } from "vitest";
+import { configureProbes, isRegionConfigured, parseProbeRegions, parseProbeSecrets, availableRegions, combine, measure, runInRegion } from "./probes";
 import { signProbe, verifyProbe } from "./probe-protocol";
 import { effectiveRegions } from "./regions";
 
@@ -44,6 +44,77 @@ describe("PROBE_REGIONS", () => {
     expect(availableRegions().map((r) => r.id)).toEqual(["auto", "us-east"]);
     expect(isRegionConfigured("us-east")).toBe(true);
     expect(isRegionConfigured("nowhere")).toBe(false);
+  });
+});
+
+describe("PROBE_SECRETS credential isolation", () => {
+  const urls = { "region-north": "https://north.example.test/check", "region-south": "https://south.example.test/check" };
+  const keys = { "region-north": "region-north-unique-hmac-key-for-tests", "region-south": "region-south-unique-hmac-key-for-tests" };
+  const input = { type: "http" as const, target: "https://example.test/health", method: "GET", expectedStatus: 200, timeoutMs: 1000 };
+  it("accepts only a private JSON object with known regions and nontrivial key lengths", () => {
+    const regions = parseProbeRegions(JSON.stringify(urls)).regions;
+    expect([...parseProbeSecrets(JSON.stringify(keys), regions).secrets.keys()]).toEqual(["region-north", "region-south"]);
+    for (const bad of ["{", "[]", "null", "   ", JSON.stringify({ "region-north": "short" }),
+      JSON.stringify({ "region-north": 123 }), JSON.stringify({ "not-configured": keys["region-north"] }),
+      JSON.stringify({ "region-north": " padded-too-long-probe-key-2026 " })]) {
+      const parsed = parseProbeSecrets(bad, regions);
+      expect(parsed.error).toBeDefined();
+      expect(parsed.secrets.size).toBe(0);
+      expect(JSON.stringify(parsed)).not.toContain(keys["region-north"]);
+    }
+    expect(parseProbeSecrets(undefined, regions).secrets.size).toBe(0);
+  });
+  it("fails the entire credential configuration closed, never downgrading to the shared key", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const bad of ["{", JSON.stringify({ "region-north": "bad" }),
+        JSON.stringify({ "not-configured": "synthetic-secret-that-must-not-appear-in-logs" })]) {
+        configureProbes({ PROBE_REGIONS: JSON.stringify(urls), PROBE_SECRET: "shared-legacy-probe-key", PROBE_SECRETS: bad });
+        expect(availableRegions()).toEqual([{ id: "auto", name: "Auto" }]);
+        expect(isRegionConfigured("region-north")).toBe(false);
+      }
+      const logs = JSON.stringify(warn.mock.calls);
+      expect(logs).not.toContain("synthetic-secret-that-must-not-appear-in-logs");
+      expect(logs).not.toContain("shared-legacy-probe-key");
+    } finally { warn.mockRestore(); configureProbes({}); }
+  });
+  it("uses each region's key exclusively; no global fallback for an overridden region", async () => {
+    const seen: string[] = [];
+    const realFetch = globalThis.fetch;
+    vi.stubGlobal("fetch", async (target: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(target instanceof Request ? target.url : target);
+      const region = url === urls["region-north"] ? "region-north" : "region-south";
+      const expected = keys[region];
+      const headers = new Headers(init?.headers);
+      const body = String(init?.body);
+      const signed = { timestamp: headers.get("x-montral-timestamp"), signature: headers.get("x-montral-signature"), body };
+      expect(await verifyProbe(expected, signed)).toBe(true);
+      for (const wrong of ["shared-legacy-probe-key", ...Object.values(keys).filter((k) => k !== expected)])
+        expect(await verifyProbe(wrong, signed)).toBe(false);
+      seen.push(region);
+      return new Response(JSON.stringify({ ok: true, statusCode: 200, latencyMs: 1 }), { status: 200 });
+    });
+    try {
+      configureProbes({ PROBE_REGIONS: JSON.stringify(urls), PROBE_SECRET: "shared-legacy-probe-key", PROBE_SECRETS: JSON.stringify(keys) });
+      expect(availableRegions().map(({ id }) => id)).toEqual(["auto", "region-north", "region-south"]);
+      expect(await runInRegion("region-north", input)).toMatchObject({ region: "region-north", outcome: { ok: true } });
+      expect(await runInRegion("region-south", input)).toMatchObject({ region: "region-south", outcome: { ok: true } });
+      expect(seen).toEqual(["region-north", "region-south"]);
+      expect(JSON.stringify(availableRegions())).not.toContain(keys["region-north"]);
+    } finally { vi.stubGlobal("fetch", realFetch); vi.unstubAllGlobals(); configureProbes({}); }
+  });
+  it("supports regional keys with no shared key; leaves unkeyed regions disabled", () => {
+    try {
+      configureProbes({ PROBE_REGIONS: JSON.stringify(urls), PROBE_SECRETS: JSON.stringify({ "region-north": keys["region-north"] }) });
+      expect(availableRegions().map(({ id }) => id)).toEqual(["auto", "region-north"]);
+      expect(isRegionConfigured("region-south")).toBe(false);
+    } finally { configureProbes({}); }
+  });
+  it("keeps the legacy shared-key region enabled when only another region is overridden", () => {
+    try {
+      configureProbes({ PROBE_REGIONS: JSON.stringify(urls), PROBE_SECRET: "shared-legacy-probe-key", PROBE_SECRETS: JSON.stringify({ "region-north": keys["region-north"] }) });
+      expect(availableRegions().map(({ id }) => id)).toEqual(["auto", "region-north", "region-south"]);
+    } finally { configureProbes({}); }
   });
 });
 

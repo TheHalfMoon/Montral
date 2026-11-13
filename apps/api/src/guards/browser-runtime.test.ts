@@ -39,7 +39,7 @@ describe("browser check runtime", () => {
     expect(app).not.toMatch(/build:|image:/); // the app keeps the default image
     expect(app).toMatch(/BROWSER_RUNNER_URL: http:\/\/browser-runner:8090/);
     expect(runner).toMatch(/target: browser-runner/);
-    expect(runner).not.toMatch(/^\s+(?:DATABASE_URL|BETTER_AUTH_SECRET|POSTGRES_\w+|SMTP_\w+|RESEND_API_KEY|LEMONSQUEEZY_\w+|APNS_\w+|GITHUB_CLIENT_SECRET|CRON_SECRET|PROBE_SECRET|TURNSTILE_SECRET_KEY):/m);
+    expect(runner).not.toMatch(/^\s+(?:DATABASE_URL|BETTER_AUTH_SECRET|POSTGRES_\w+|SMTP_\w+|RESEND_API_KEY|LEMONSQUEEZY_\w+|APNS_\w+|GITHUB_CLIENT_SECRET|CRON_SECRET|PROBE_SECRET|PROBE_SECRETS|TURNSTILE_SECRET_KEY):/m);
     expect(runner).toMatch(/^      BROWSER_RUNNER_TOKEN:/m);
     expect(runner).toMatch(/networks: \[browser-jobs, browser-egress\]/);
     expect(runner).toMatch(/cap_drop: \[ALL\]/);

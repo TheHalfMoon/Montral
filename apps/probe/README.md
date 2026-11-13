@@ -65,9 +65,24 @@ PROBE_SECRET=… PROBE_REGION=sao-paulo node apps/probe/dist/server.mjs
 
 The server answers `SIGTERM` by finishing checks in flight, so `docker stop` is clean.
 
+### Separate signing keys per probe region (opt-in)
+
+On the scheduler/API deployment, `PROBE_REGIONS` holds **public region URLs**, and a separate **private environment secret** `PROBE_SECRETS` may hold a JSON object keyed by those region IDs. Example (placeholder values only):
+
+```sh
+PROBE_REGIONS='{"us-east":"https://north.example.test/check","eu-central":"https://south.example.test/check"}'
+PROBE_SECRETS='{"us-east":"<long-random-key-for-north>","eu-central":"<different-long-key-for-south>"}'
+```
+
+Each probe must have its **own** `PROBE_SECRET` matching its scheduler-side `PROBE_SECRETS` entry. Set these as private deployment secrets, not in `PROBE_REGIONS`, public documentation, logs, status responses or repository files. An entry overrides the shared `PROBE_SECRET` only for that region; a compromised regional key does not authenticate to any other region that has a different configured key. A region not listed in `PROBE_SECRETS` still uses the legacy shared `PROBE_SECRET` if one exists. For full region isolation, configure **every** remote region and unset the shared fallback. Regions with no signing key are not advertised.
+
+The configuration is deliberately fail-closed: any malformed JSON, unknown region, non-string, too-short or whitespace-padded key in `PROBE_SECRETS` disables **all** remote regions rather than silently falling back to the shared key. The scheduler logs a generic configuration problem without key material. Configure and validate offline before production use.
+
+To rotate one isolated region, first stage its probe with the new primary key, its old key in `PROBE_PREVIOUS_SECRET`, and a short explicit UTC expiry; then update **only** that region's entry in the API `PROBE_SECRETS`, and remove the probe's previous key after all old API replicas drain. No operator API registration, remote secret provisioning or automatic fleet-wide distribution is implemented. Deploying multiple Vercel functions within **one** Vercel project shares its environment variables: per-region isolation requires **separate** project/secret scopes (or independent deployments). Never claim isolation between functions that still use the same key.
+
 ### Staged signing-key rotation
 
-The API signs with exactly one `PROBE_SECRET`; probes can temporarily verify against the current and previous secrets. To rotate without a synchronized redeployment:
+For legacy deployments, the API signs with one shared `PROBE_SECRET`. Operators may optionally configure distinct signing keys per region through a private API-side `PROBE_SECRETS` map (see above). Each probe can temporarily verify against its current and previous secrets. To rotate without a synchronized redeployment:
 
 1. First deploy every probe region and replica with the new `PROBE_SECRET`, the old `PROBE_PREVIOUS_SECRET` and a near-future UTC `PROBE_PREVIOUS_SECRET_EXPIRES_AT` deadline that comfortably covers rollout. The expiry is mandatory; missing or expired dates disable old-key verification. Keep the API signing with the old key. Verify a signed check on every region, not merely the unauthenticated health GET.
 2. After all probes have been upgraded, switch the API `PROBE_SECRET` to the new key. New signatures will verify, while requests signed by old API replicas can still be accepted during the overlap.
@@ -85,7 +100,7 @@ pnpm install
 pnpm build:vercel                   # all of regions.json; or PROBE_BUILD_REGIONS=us-east,eu-central pnpm build:vercel
 
 npx vercel link                     # once, creates a project for apps/probe
-npx vercel env add PROBE_SECRET production   # a long random string; the same value goes to the API
+npx vercel env add PROBE_SECRET production   # a long random string; configure matching API PROBE_SECRET or per-region PROBE_SECRETS
 npx vercel deploy --prebuilt --prod
 ```
 

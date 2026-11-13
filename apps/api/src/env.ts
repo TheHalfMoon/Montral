@@ -113,8 +113,10 @@ export type Bindings = {
    * {"us-east":"https://probe.example.app/api/probe/us-east"}. Unset: monitors can only run from `auto`.
    */
   PROBE_REGIONS?: string;
-  /** Secret the probes in PROBE_REGIONS verify requests with (required for those regions to be usable). */
+  /** Legacy fallback HMAC key for regions without an explicit dedicated key. */
   PROBE_SECRET?: string;
+  /** Private JSON map of region id to HMAC key; invalid config disables all remote regions (never silently falls back). */
+  PROBE_SECRETS?: string;
   /**
    * iOS push notifications (APNs). All four must be set: the APNs Auth Key (.p8 file contents; literal `\n` is accepted),
    * its key id, the Apple team id and the app's bundle id.

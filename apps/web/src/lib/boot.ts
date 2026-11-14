@@ -34,7 +34,14 @@ api.counts().then((c) => {
   });
 }).catch(() => {});
 
-// the Plan & usage entry exists only where this deployment has plans (the hosted edition); self-hosted never shows it
+// Edition-aware navigation. Plan & usage appears only where this deployment meters usage (the hosted edition), and
+// Billing only where, in addition, this user may manage billing and the server reports a configured billing provider.
+// Unmetered self-hosted installs never show either. Hiding is presentation only: the API enforces access itself.
 api.usage().then((u) => {
-  if (u.metered) document.querySelectorAll<HTMLElement>("[data-metered]").forEach((el) => (el.hidden = false));
+  if (!u.metered) return;
+  document.querySelectorAll<HTMLElement>("[data-metered]").forEach((el) => (el.hidden = false));
+  if (!u.canManageBilling) return;
+  return api.billingStatus().then((b) => {
+    if (b.billingConfigured) document.querySelectorAll<HTMLElement>("[data-billing]").forEach((el) => (el.hidden = false));
+  });
 }).catch(() => {});

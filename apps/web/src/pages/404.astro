@@ -8,7 +8,7 @@ const days = Array.from({ length: 90 }, (_, i) => i === 89);
 <Base title="Page not found · Montral" router={false} noindex>
   <header class="nf-top">
     <a href="/" class="doc-brand">
-      <span class="doc-mk"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6H21" /></svg></span>
+      <svg class="tm" viewBox="0 0 130 85" aria-hidden="true"><rect y="58" width="130" height="27" rx="2" fill="currentColor"/><rect x="92" width="36" height="36" rx="2" fill="#F04D35"/></svg>
       <b>Montral</b>
     </a>
   </header>
@@ -45,9 +45,9 @@ const days = Array.from({ length: 90 }, (_, i) => i === 89);
   .nf-bar { display: flex; gap: 3px; }
   .nf-bar i { flex: 1 1 0; min-width: 2px; height: 40px; border-radius: 3px; background: var(--line); }
   .nf-bar i.down { background: var(--down); }
-  .nf-axis { display: flex; justify-content: space-between; margin-top: -18px; font-family: ui-monospace, "Geist Mono", monospace; font-size: 13px; color: var(--muted); }
+  .nf-axis { display: flex; justify-content: space-between; margin-top: -18px; font-family: var(--mono); font-size: 13px; color: var(--muted); }
   .nf-msg { margin: 0; font-size: 19px; line-height: 1.55; color: var(--muted); }
-  .nf-msg code { font-family: ui-monospace, "Geist Mono", monospace; font-size: 16px; background: var(--surface-2); padding: 2px 8px; border-radius: 6px; word-break: break-all; }
+  .nf-msg code { font-family: var(--mono); font-size: 16px; background: var(--surface-2); padding: 2px 8px; border-radius: 6px; word-break: break-all; }
   .nf-cta { display: flex; flex-wrap: wrap; gap: 12px; }
   .nf-btn { display: inline-flex; align-items: center; min-height: 48px; padding: 0 24px; border-radius: 12px; background: var(--ink); color: var(--bg); text-decoration: none; font-size: 16px; font-weight: 600; }
   .nf-btn.ghost { background: var(--surface); color: var(--ink); border: 1px solid var(--line-2); font-weight: 500; }
@@ -58,5 +58,5 @@ const days = Array.from({ length: 90 }, (_, i) => i === 89);
 <style is:global>
   html:not([lang="zh-CN"]) .nf [lang="zh-CN"], html[lang="zh-CN"] .nf [lang="en"] { display: none !important; }
   .nf-top .doc-brand { display: inline-flex; align-items: center; gap: 10px; color: var(--ink); font-size: 17px; font-weight: 600; text-decoration: none; }
-  .nf-top .doc-mk { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, #0f9d58, #0a5c34); display: grid; place-items: center; flex: none; }
+  
 </style>

@@ -44,7 +44,7 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
     <div class="scrim" id="scrim"></div>
     <aside class="side">
       <a class="brand" href="/app">
-        <span class="mk"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18V6l5 7 3-4 3 4 5-7v12"/></svg></span>
+        <svg class="tm" viewBox="0 0 130 85" aria-hidden="true"><rect y="58" width="130" height="27" rx="2" fill="currentColor"/><rect x="92" width="36" height="36" rx="2" fill="#F04D35"/></svg>
         <span class="bn">Montral</span>
       </a>
       <ProjectSwitcher client:only="react" />
@@ -54,7 +54,7 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
       ))}
       <div class="nav-l" data-t>Workspace</div>
       {workspace.map(([k, href, label]) => (
-        <a data-nav={k} class={`nav ${active === k ? "on" : ""}`} href={href} aria-current={active === k ? "page" : undefined} hidden={k === "usage" && active !== "usage"} data-metered={k === "usage" ? "" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
+        <a data-nav={k} class={`nav ${active === k ? "on" : ""}`} href={href} aria-current={active === k ? "page" : undefined} hidden={(k === "usage" || k === "billing") && active !== k} data-metered={k === "usage" ? "" : undefined} data-billing={k === "billing" ? "" : undefined}><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" set:html={I[k]} /><span data-t>{label}</span></a>
       ))}
       </nav>
       <div class="sp"></div>

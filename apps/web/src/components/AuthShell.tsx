@@ -3,7 +3,7 @@ import { t } from "../lib/i18n";
 import TopBar from "./TopBar";
 
 const dot = (
-  <span className="auth-mk"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6H21" /></svg></span>
+  <svg className="tm" viewBox="0 0 130 85" aria-hidden="true"><rect y="58" width="130" height="27" rx="2" fill="currentColor" /><rect x="92" width="36" height="36" rx="2" fill="#F04D35" /></svg>
 );
 
 /** Split-screen frame shared by login / signup / forgot / reset (design boards Login, Signup, Forgot). */

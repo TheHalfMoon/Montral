@@ -14,6 +14,11 @@ const { title = "Montral", router = false, noindex = false, description = "" } =
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#171713" />
+    <!-- Threshold fonts and tokens, shared with the landing pages (self-hosted, font-src 'self') -->
+    <link rel="preload" href="/fonts/inter-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/newsreader-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/brand/threshold.css" />
     {noindex && <meta name="robots" content="noindex,nofollow" />}
     {description && <meta name="description" content={description} />}
     {description && <meta property="og:description" content={description} />}

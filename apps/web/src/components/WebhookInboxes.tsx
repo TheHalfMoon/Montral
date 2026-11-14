@@ -139,7 +139,14 @@ export default function WebhookInboxes() {
     const list = (await api.hookInboxes()).inboxes;
     setInboxes(list);
   }
-  useEffect(() => { load().catch((e) => setError((e as Error).message)); }, []);
+  // replay attempt counter: owners and admins only (the API answers 403 to everyone else, and the line stays hidden)
+  const [replays, setReplays] = useState<{ attempts: number; periodEnd: string } | null>(null);
+  const loadReplays = () => {
+    api.hookReplayUsage()
+      .then((u) => setReplays({ attempts: Number(u.attempts) || 0, periodEnd: u.periodEnd }))
+      .catch(() => setReplays(null));
+  };
+  useEffect(() => { load().catch((e) => setError((e as Error).message)); loadReplays(); }, []);
   useEffect(() => {
     // On scope switches, discard a stale allowance before requesting the new workspace's.
     let generation = 0;
@@ -202,6 +209,10 @@ export default function WebhookInboxes() {
     <div className="ph">
       <div><h1>{t("Webhooks")}</h1><p className="muted">{t("Create an inbox, capture HTTP requests, and inspect their payloads. Seven-day retention; up to 32 KiB per event.")}</p></div>
     </div>
+    {replays && <p className="replay-count" data-replay-attempts={replays.attempts}>
+      <span>{t("Replay attempts this month")}</span> <b className="tnum">{replays.attempts.toLocaleString(document.documentElement.lang)}</b>
+      <span className="faint"> · {t("counter resets on {date} (UTC)").replace("{date}", formatResetDate(new Date(`${replays.periodEnd}T00:00:00Z`), document.documentElement.lang))} · {t("not billed")}</span>
+    </p>}
     {quota && <section className="card sect" role="status" data-webhook-quota="exhausted" style={{ marginBottom: 18 }}>
       <b>{t("Webhook event quota used up")}</b>
       <p className="muted">{t("New webhook requests are refused until {date} (UTC).").replace("{date}", formatResetDate(quota.resetsAt, document.documentElement.lang))}</p>
@@ -257,7 +268,7 @@ export default function WebhookInboxes() {
           <details style={{ marginTop: 8 }}><summary>{t("Inspect request")}</summary>
             <b>{t("Headers")}</b><pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(e.headers, null, 2)}</pre>
             <b>{t("Body")}</b><pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{e.body}</pre>
-            <EventActions inbox={selected} event={e} onDeleted={() => setEvents((prev) => prev.filter((x) => x.id !== e.id))} />
+            <EventActions inbox={selected} event={e} onDeleted={() => setEvents((prev) => prev.filter((x) => x.id !== e.id))} onReplayed={loadReplays} />
           </details>
         </div>)}
       </div>
@@ -269,7 +280,7 @@ export default function WebhookInboxes() {
 type ReplayResult = Awaited<ReturnType<typeof api.replayHookEvent>>;
 
 /** Delete one captured request, or resend it to a development endpoint. */
-function EventActions({ inbox, event, onDeleted }: { inbox: string; event: HookEvent; onDeleted: () => void }) {
+function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; event: HookEvent; onDeleted: () => void; onReplayed?: () => void }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReplayResult | null>(null);
@@ -278,7 +289,8 @@ function EventActions({ inbox, event, onDeleted }: { inbox: string; event: HookE
     e.preventDefault(); setBusy(true); setError(""); setResult(null);
     try { setResult(await api.replayHookEvent(inbox, event.id, url.trim())); }
     catch (x) { setError((x as Error).message); }
-    finally { setBusy(false); }
+    // an attempt is counted even when the target answers with an error, so refresh the count either way
+    finally { setBusy(false); onReplayed?.(); }
   };
   const remove = async () => {
     if (!(await ask(t("Delete this captured request? This cannot be undone."), t("Delete request")))) return;

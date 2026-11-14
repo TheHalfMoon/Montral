@@ -198,7 +198,9 @@ describe.skipIf(!url)("bounded observation time coverage", () => {
     await db.insert(schema.monitorObservation).values({ monitorId: m.id, observedAt: future, state: "paused", revision: 0 });
     expect(await repo.recordObservation(m, { ok: false })).toBe(true);
     const rows = await db.select().from(schema.monitorObservation).where(eq(schema.monitorObservation.monitorId, m.id));
-    expect(rows.every((r) => r.observedAt.getTime() <= Date.now())).toBe(true);
+    // Repairs are bounded by the database clock, which may be slightly ahead of the application clock.
+    const [clock] = await db.execute<{ at: Date }>(sql`select clock_timestamp() as at`);
+    expect(rows.every((r) => r.observedAt.getTime() <= new Date(clock.at).getTime())).toBe(true);
     expect(rows.some((r) => r.state === "down")).toBe(true);
     expect(await repo.recordObservation(m, { ok: true })).toBe(true);
   });

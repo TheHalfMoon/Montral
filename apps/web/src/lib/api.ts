@@ -293,6 +293,7 @@ export type OncallLayer = {
   id?: string; name: string; userIds: string[]; rotationType: "daily" | "weekly" | "custom"; shiftLengthHours: number | null;
   handoffTime: string; handoffWeekday: number | null; startDate: string; restrictions: OncallRestriction[];
 };
+export type PushDevice = { id: string; token: string; platform: "ios"; environment: "sandbox" | "production"; locale: string | null; name: string | null; critical: boolean };
 export type OncallShift = { userId: string; name: string | null; start: string; end: string; source: "layer" | "override"; layerId: string | null; overrideId: string | null };
 export type OncallSchedule = { id: string; projectId: string | null; name: string; timeZone: string; version: number; layers: OncallLayer[]; onCallNow?: OncallShift | null };
 export type OncallOverride = { id: string; scheduleId: string; userId: string; startsAt: string; endsAt: string; createdBy: string | null; createdAt: string };
@@ -375,6 +376,9 @@ export const api = {
   deleteMaintenance: (id: string) => req<void>(`/maintenance/${id}`, { method: "DELETE" }),
   /** What this deployment can do (public). */
   config: () => req<{ push?: { apns: boolean } }>("/config"),
+  /** phones registered for push alerts by the signed-in person (the iOS app registers them) */
+  pushDevices: () => req<PushDevice[]>("/push/devices"),
+  removePushDevice: (token: string) => req<void>(`/push/devices/${encodeURIComponent(token)}`, { method: "DELETE" }),
   channels: () => req<Channel[]>("/channels"),
   projectAlerting: (projectId: string) => req<ProjectAlerting>(`/projects/${projectId}/alerting`),
   saveProjectAlerting: (projectId: string, b: ProjectAlerting) => req<ProjectAlerting>(`/projects/${projectId}/alerting`, { method: "PUT", body: JSON.stringify(b) }),

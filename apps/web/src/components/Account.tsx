@@ -2,7 +2,7 @@ import { t } from "../lib/i18n";
 import { LOCALES, type Locale } from "../lib/i18n";
 import { go, switchLocale } from "../lib/locale-path";
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, type PushDevice } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
@@ -404,6 +404,53 @@ function PasswordChange() {
   );
 }
 
+/**
+ * Phones that receive push alerts for this person (registered by the iOS app). Hidden on a server without Apple push
+ * and no phones, so nothing suggests push delivery that this deployment cannot make. Device tokens are only used to
+ * remove a phone and are never shown.
+ */
+function Phones() {
+  const [devices, setDevices] = useState<PushDevice[] | null>(null);
+  // null until known: a failed /config must not claim that push is not configured
+  const [apns, setApns] = useState<boolean | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [busy, setBusy] = useState("");
+  const load = () => api.pushDevices().then((d) => { setDevices(d); setFailed(false); }).catch(() => setFailed(true));
+  useEffect(() => { load(); api.config().then((c) => setApns(!!c.push?.apns)).catch(() => {}); }, []);
+  // a failed list is not "no phones": hide the card rather than say something untrue
+  if (failed || devices === null || (apns !== true && devices.length === 0)) return null;
+  const remove = async (d: PushDevice) => {
+    const name = d.name || t("iPhone");
+    if (!(await ask(t("Stop push alerts to {name}? The app turns them back on the next time it registers the phone. To stop them for good, also sign that phone out under Sessions.").replace("{name}", name), t("Remove phone")))) return;
+    setBusy(d.id);
+    try { await api.removePushDevice(d.token); toast(t("Phone removed.")); await load(); }
+    catch (e) { toast((e as Error).message, "err"); }
+    finally { setBusy(""); }
+  };
+  return (
+    <div className="card sect">
+      <h3>{t("Phones")}</h3>
+      <p className="muted" style={{ marginBottom: 12 }}>{t("Phones signed in to the Montral iOS app receive push alerts from the channels you are part of.")}</p>
+      {apns === false && <p className="muted" role="status">{t("Push delivery is not configured on this server, so these phones get no alerts.")}</p>}
+      {devices.length === 0
+        ? <p className="muted">{t("No phones yet.")} <a className="auth-link" href="/ios">{t("Get the iOS app")}</a></p>
+        : (
+          <ul className="sess">
+            {devices.map((d) => (
+              <li key={d.id}>
+                <div className="sess-d">
+                  <b>{d.name || t("iPhone")}</b>
+                  <small>{[d.environment === "sandbox" ? t("Development build") : null, d.critical ? t("Critical alerts on") : null].filter(Boolean).join(" · ") || t("Push alerts on")}</small>
+                </div>
+                <button type="button" className="btn sm" disabled={!!busy} onClick={() => void remove(d)}>{busy === d.id ? t("Removing…") : t("Remove")}<span className="sr-only"> {d.name || t("iPhone")}</span></button>
+              </li>
+            ))}
+          </ul>
+        )}
+    </div>
+  );
+}
+
 export default function Account() {
   const [me, setMe] = useState<Me | null>(null);
   const [saved, setSaved] = useState(false);
@@ -445,6 +492,7 @@ export default function Account() {
         {me && <SsoLink accounts={accounts} />}
         {me && accounts?.some((a) => a.providerId === "credential") && <PasswordChange />}
         {me && <Sessions />}
+        {me && <Phones />}
         {me && <Security me={me} reload={load} hasPassword={!accounts || accounts.length === 0 || accounts.some((a) => a.providerId === "credential")} />}
       </div>
     </>

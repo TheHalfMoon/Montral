@@ -1,11 +1,11 @@
 import { t } from "../lib/i18n";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { api, ago, type AlertDelivery, type Channel, type OncallSchedule, type ProjectAlerting } from "../lib/api";
 import { deliveryReason, deliveryState, stateClass } from "../lib/delivery";
 import { ask } from "../lib/confirm";
 import Modal from "./Modal";
-import { appendPage, nextBefore } from "../lib/log-pages";
+import { appendPage, nextBefore, nextLimit } from "../lib/log-pages";
 import { toast } from "../lib/toast";
 
 const TYPES: { id: Channel["type"]; label: string; desc: string }[] = [
@@ -77,16 +77,26 @@ export default function Alerting() {
     if (rules.escalation.some((x) => !x.channelIds.length && !x.scheduleIds?.length && !x.userIds?.length)) { setRulesErr(t("Pick at least one channel or on-call schedule for each level.")); return; }
     try { setRules(await api.saveProjectAlerting(projectId, rules)); setRulesNote(t("Saved")); } catch (e) { setRulesErr((e as Error).message); }
   });
-  const loadLog = () => api.alertLog(LOG_PAGE).then((l) => { setLog(l); setMoreLog(l.length >= LOG_PAGE); }).catch(() => setLog([]));
+  // bumped by every reload of the first page: an older page that arrives afterwards belongs to the old list and is dropped
+  const logGen = useRef(0);
+  const loadLog = () => {
+    const gen = ++logGen.current;
+    return api.alertLog(LOG_PAGE)
+      .then((l) => { if (gen !== logGen.current) return; setLog(l); setMoreLog(l.length >= LOG_PAGE); })
+      .catch(() => { if (gen === logGen.current) { setLog([]); setMoreLog(false); } });
+  };
   const olderLog = async () => {
     if (!log) return;
+    const gen = logGen.current;
+    const limit = nextLimit(log, LOG_PAGE);
     setLoadingOlder(true);
     try {
-      const page = await api.alertLog(LOG_PAGE, nextBefore(log));
-      const next = appendPage(log, page, LOG_PAGE);
+      const page = await api.alertLog(limit, nextBefore(log));
+      if (gen !== logGen.current) return;
+      const next = appendPage(log, page, limit);
       setLog(next.rows);
       setMoreLog(next.more);
-    } catch (e) { toast((e as Error).message, "err"); } finally { setLoadingOlder(false); }
+    } catch (e) { if (gen === logGen.current) toast((e as Error).message, "err"); } finally { setLoadingOlder(false); }
   };
   const load = () => api.channels().then(setItems);
   useEffect(() => { load(); loadLog(); api.config().then((c) => setPush(!!c.push?.apns)).catch(() => {}); api.settings().then((s) => setDays(s.alertLogRetentionDays)).catch(() => {}); api.oncallSchedules().then(setSchedules).catch(() => {}); api.me().then((m) => { setProjectId(m.projectId); return api.projectAlerting(m.projectId).then(setRules); }).catch(() => {}); }, []);

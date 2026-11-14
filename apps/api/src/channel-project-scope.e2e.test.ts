@@ -4,15 +4,17 @@ import { createApp } from "./app";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
-const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: origin, WEB_ORIGIN: origin, CRON_SECRET: "cron" };
+const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: origin, WEB_ORIGIN: origin, CRON_SECRET: "cron", TRUST_PROXY: "true" };
 describe.skipIf(!url)("project channel authority", () => {
   const app = createApp(openDatabase);
+  // This independent synthetic client must not consume the shared unknown-peer signup quota of other suites.
+  const clientIp = `2001:db8:71:${crypto.randomUUID().slice(0, 4)}::1`;
   let cookie: string, key: string, org: string, a: string, b: string;
   let own: string, shared: string, hidden: string, foreign: string;
   const db = url ? openDatabase(url) : undefined;
   async function request(method: string, path: string, body?: unknown, project?: string, scoped = false) {
     const response = await app.fetch(new Request(`${origin}${path}`, {
-      method, headers: { "content-type": "application/json", ...(scoped ? { "x-api-key": key } : { cookie }), ...(project ? { "x-project-id": project } : {}) },
+      method, headers: { "content-type": "application/json", "x-forwarded-for": clientIp, ...(scoped ? { "x-api-key": key } : { cookie }), ...(project ? { "x-project-id": project } : {}) },
       body: body === undefined ? undefined : JSON.stringify(body),
     }), env as never);
     return { status: response.status, body: await response.json().catch(() => null) as any, response };

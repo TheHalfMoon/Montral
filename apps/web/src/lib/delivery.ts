@@ -10,8 +10,8 @@ export function deliveryState(d: Pick<AlertDelivery, "kind" | "status" | "ok" | 
   return d.ok ? "sent" : "failed";
 }
 
-/** The pill class for a state. */
-export const stateClass = (s: DeliveryState): string => (s === "sent" ? "up" : s === "failed" ? "down" : "");
+/** The pill class for a state: sent is a success, failed an outage, waiting a pending ring; the rest neutral. */
+export const stateClass = (s: DeliveryState): string => (s === "sent" ? "up" : s === "failed" ? "down" : s === "pending" || s === "sending" ? "pending" : "");
 
 /** The reason a delivery did not go out as asked, in the words stored with it, or null when it was sent. */
 export function deliveryReason(d: Pick<AlertDelivery, "kind" | "status" | "ok" | "error" | "statusMessage">): string | null {

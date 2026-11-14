@@ -135,7 +135,7 @@ export default function Alerting() {
                   <span className="muted mono ch-dest" title={dest(c)}>{dest(c)}</span>
                   <span>
                     <button className="pill-btn" title={c.enabled ? t("Pause") : t("Resume")} onClick={async () => { try { await api.updateChannel(c.id, { enabled: !c.enabled }); await load(); } catch (e) { setErr((e as Error).message); } }}>
-                      <span className={`pill ${c.enabled ? "up" : "pending"}`}>{c.enabled ? t("Active") : t("Paused")}</span>
+                      <span className={`pill ${c.enabled ? "up" : "paused"}`}>{c.enabled ? t("Active") : t("Paused")}</span>
                     </button>
                   </span>
                   <span className="ch-a">

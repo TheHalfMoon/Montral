@@ -81,7 +81,7 @@ h1,h2,h3{font-family:var(--serif);font-weight:500;letter-spacing:-.015em}
 .tbl .tr.th{border-top:0;font:500 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);background:var(--surface-2);border-radius:var(--radius) var(--radius) 0 0}
 .tbl small{display:block;color:var(--faint);font:12.5px var(--mono)}
 /* above the phone tab bar (20) and drawer scrim (30): the bottom-sheet footer, with its submit button, sat under the tabs */
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:grid;place-items:center;z-index:35}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:grid;place-items:center;z-index:var(--z-modal)}
 .modal .card{width:min(520px,92vw);padding:28px;display:grid;gap:16px}
 .auth{min-height:100vh;display:grid;place-items:center;padding:24px}
 .auth .card{width:min(420px,100%);padding:36px;display:grid;gap:18px}
@@ -743,3 +743,47 @@ a.muted:hover{color:var(--ink)}
 .modal.status-create-overlay .card.status-create-form{width:min(520px,100%);max-height:calc(100dvh - 32px);border-radius:18px;padding:24px 20px}
 /* Threshold wordmark: Newsreader everywhere the name sits next to the mark */
 .brand .bn,.doc-brand b,.auth-brand b{font-family:var(--serif);font-size:22px;font-weight:600;letter-spacing:-.02em}
+
+/* ---------- Threshold app shell ---------- */
+/* The sidebar is Ink in both themes; re-scoping the tokens dresses everything inside it (switcher menus included). */
+.side{background:#171713;color:var(--ink);border-right-color:#2C2B26;--bg:#171713;--surface:#1F1F1B;--surface-2:#24231F;--surface-3:#2E2D28;--hover:#24231F;--line:#2C2B26;--line-2:#3A3934;--ink:#EDEAE2;--ink-2:#D6D2C8;--muted:#AEAAA0;--faint:#9A978D;--focus:#EDEAE2;--down:#F2828A;--ok:#4CB38C;--accent:var(--ok)}
+:root[data-theme=dark] .side{background:#0F0F0D}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .side{background:#0F0F0D}}
+.side .brand{color:var(--ink)}
+.side .tm{color:#FFFDF8}
+.nav.on{background:var(--surface-3);color:var(--ink)}
+.nav.on .ic{color:#F2614B}
+.cmdk-btn{display:flex;align-items:center;gap:9px;width:100%;height:36px;margin:2px 0 6px;padding:0 10px;border:1px solid var(--line-2);border-radius:var(--r-sm);background:var(--surface-2);color:var(--muted);font:400 13.5px var(--sans);cursor:pointer;text-align:left}
+.cmdk-btn:hover{color:var(--ink);border-color:var(--faint)}
+.cmdk-btn span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmdk-btn kbd,.cmdk kbd{font:500 11px var(--sans);border:1px solid var(--line-2);border-radius:4px;padding:1px 5px;color:var(--muted);background:var(--surface)}
+@media (max-width:1024px){.cmdk-btn{display:none}}
+/* status shapes: meaning never depends on colour alone */
+.st{display:inline-block;width:10px;height:10px;flex:none}
+.st.up{border-radius:50%;background:var(--ok)}
+.st.deg{background:var(--warn-fill);clip-path:polygon(50% 0,100% 100%,0 100%)}
+.st.down{background:var(--down);transform:rotate(45deg) scale(.82);border-radius:1px}
+.st.paused{background:linear-gradient(90deg,var(--faint) 0 35%,transparent 35% 65%,var(--faint) 65%)}
+.st.pending{border-radius:50%;box-shadow:inset 0 0 0 2px var(--faint)}
+.st.maint{border-radius:50%;box-shadow:inset 0 0 0 2px var(--info)}
+/* command menu */
+.cmdk-scrim{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(23,23,19,.32);display:flex;justify-content:center;align-items:flex-start;padding:12vh 16px 16px;animation:cmdk-in var(--t-fast) var(--ease)}
+.cmdk{width:min(640px,100%);max-height:min(560px,76vh);display:flex;flex-direction:column;background:var(--surface);color:var(--ink);border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:0 24px 60px -20px rgba(0,0,0,.45);overflow:hidden}
+.cmdk-in{display:flex;align-items:center;gap:10px;padding:0 14px;border-bottom:1px solid var(--line)}
+.cmdk-in .ic{color:var(--muted)}
+.cmdk-in input{flex:1;height:52px;border:0;background:none;color:var(--ink);font:400 16px var(--sans);outline:0}
+.cmdk-list{list-style:none;margin:0;padding:6px;overflow-y:auto;overscroll-behavior:contain}
+.cmdk-g{font:600 11px var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:10px 10px 4px}
+:lang(zh-CN) .cmdk-g{letter-spacing:.02em}
+.cmdk-o{display:flex;align-items:center;gap:10px;min-height:38px;padding:6px 10px;border-radius:var(--r-sm);cursor:pointer;font-size:14px}
+.cmdk-o.on{background:var(--surface-2)}
+.cmdk-dot{width:6px;height:6px;border-radius:1px;background:var(--line-2);flex:none;margin:0 2px}
+.cmdk-o.on .cmdk-dot{background:var(--signal)}
+.cmdk-l{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmdk-h{font:400 12px var(--mono);color:var(--faint);max-width:45%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmdk-empty,.cmdk-note{margin:0;padding:14px 16px;color:var(--muted);font-size:13.5px}
+.cmdk-f{display:flex;gap:16px;padding:9px 14px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
+.cmdk-f kbd{margin-right:3px}
+@keyframes cmdk-in{from{opacity:0}to{opacity:1}}
+/* keyboard hints are noise on touch layouts */
+@media (max-width:1024px){.search kbd{display:none}}

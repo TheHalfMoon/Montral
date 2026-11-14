@@ -877,4 +877,10 @@ export const zh: Record<string, string> = {
   "Plan limit": "方案限制",
   "Region is drained and not being checked": "此区域已由运维人员暂停，不再执行检查",
   "Region is not checked under the current plan": "当前方案不检查此区域",
+  // command menu
+  "Search…": "搜索…", Pages: "页面", "Switch to light theme": "切换到浅色主题", "Switch to dark theme": "切换到深色主题",
+  "Open documentation": "打开文档", "Command menu": "命令菜单", "Search pages, monitors and actions": "搜索页面、监控和操作",
+  "Search pages, monitors and actions…": "搜索页面、监控和操作…", Results: "结果", "No results": "没有结果", "Loading monitors…": "正在加载监控…",
+  "Monitors and incidents could not be loaded. Pages and actions still work.": "无法加载监控和事件，页面和操作仍可使用。",
+  "to move": "移动", "to open": "打开", "to close": "关闭",
 };

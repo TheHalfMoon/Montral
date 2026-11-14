@@ -147,6 +147,8 @@ export type Variables = {
   /** Present only after requireOrg has successfully verified identity, membership and selected project access. */
   requestPrincipal?: RequestPrincipal;
   statusResponsePrivate?: boolean;
+  /** Page/version actually authorized by statusAccess; subscriptions must not upgrade it after a fresh read. */
+  statusAuthorizedPage?: Readonly<{ id: string; accessVersion: number }>;
   repo: Repo;
   database: Database;
   auth: Auth;

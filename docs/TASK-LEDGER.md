@@ -130,12 +130,19 @@ The source audit found the following executable work beyond the earlier historic
 | SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Implemented on this branch; qualification/merge pending. Mutation authority precedes dependency lookup; hidden consumers receive a generic conflict. `docs/evidence/2026-11-14-channel-project-authority.md`. |
 | SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Implemented on this branch; qualification/merge pending. Actual-project write validation, repository selection and delivery/retry/escalation boundaries retain shared channels. `docs/evidence/2026-11-14-channel-project-authority.md`. |
 | SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
-| OBS-REQUEST-BODY | HTTP body, DNS assertions, browser secrets and expiry-window edits admitted older observation snapshots | P1 | Implemented on this branch; qualification/merge pending. Reuses the measurement revision fence, preserving unchanged stored values and metadata edits. Full database regression suite added to existing hosted jobs. `docs/evidence/2026-11-14-request-body-observation-revision.md`. |
+| OBS-REQUEST-BODY | HTTP body, DNS assertions, browser secrets and expiry-window edits admitted older observation snapshots | P1 | Merged in #143. Reuses the measurement revision fence, preserving unchanged stored values and metadata edits. Full database regression suite added to hosted jobs. `docs/evidence/2026-11-14-request-body-observation-revision.md`. |
 | SEC-LOGIN-REDIRECT | Login return-path normalization could create an external destination | P2 | Implemented on this branch; qualification/merge pending. Shared control/network-path guard runs before and after locale stripping. `docs/evidence/2026-11-14-login-return-path.md`. |
 
-## Project deletion invariant under qualification
+## Status-access findings under qualification
 
-**P1**, implemented on this branch; merge pending. Concurrent authorized deletions must leave at least one project and preserve that project's data. Atomic repository guard and real PostgreSQL regression: `docs/evidence/2026-11-14-project-delete-race.md`.
+| ID | Gap | Severity | Status |
+|---|---|---|---|
+| SEC-STATUS-VERSION | Concurrent protection edits could reuse a revision and retain outsider grants or subscriber eligibility | P2 | Implemented on this branch; qualification/merge pending. Atomic current-row access revision update. `docs/evidence/2026-11-14-status-access-races.md`. |
+| SEC-STATUS-SUBSCRIBE | An in-flight subscription could adopt a revision newer than its access proof | P2 | Implemented on this branch; qualification/merge pending. Bind subscriber eligibility to the middleware-authorized page/version. Same evidence file. |
+
+## Project deletion invariant
+
+**P1**, merged in #145. Concurrent authorized deletions must leave at least one project and preserve that project's data. Atomic repository guard and real PostgreSQL regression: `docs/evidence/2026-11-14-project-delete-race.md`.
 
 ## External dependencies (cannot be closed in engineering)
 

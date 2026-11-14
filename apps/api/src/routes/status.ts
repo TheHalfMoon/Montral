@@ -170,11 +170,9 @@ export const statusPages = new Hono<AppEnv>()
     // A new password, or any change of visibility, signs out everyone outside the workspace: an old unlock cookie
     // must not come back to life when a page returns to password mode, and anyone who subscribed while the page was
     // public is not a current subscriber of the protected page.
-    const visibilityChanged = v.visibility !== undefined && v.visibility !== page.visibility;
     await repo.updateStatusPage(page.id, {
       ...v,
       ...(password ? { accessPasswordHash: await hashPagePassword(password) } : {}),
-      ...(password || visibilityChanged ? { accessVersion: page.accessVersion + 1 } : {}),
     });
     if (monitorIds || components) await repo.setPageComponents(page.id, c.get("orgId"), toComponents({ monitorIds, components }), c.get("projectScope"));
     // the new password itself is never recorded: only that the field changed
@@ -186,7 +184,7 @@ export const statusPages = new Hono<AppEnv>()
     const repo = c.get("repo");
     const page = await repo.getStatusPage(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
     if (!page) return c.json({ error: "Not found" }, 404);
-    await repo.updateStatusPage(page.id, { accessVersion: page.accessVersion + 1 });
+    await repo.updateStatusPage(page.id, {}, { revokeAccess: true });
     await audit(c, "status_page.access.revoke", { type: "status_page", id: page.id, projectId: page.projectId });
     return c.json({ ok: true });
   })
@@ -449,7 +447,10 @@ async function statusAccess(c: Context<AppEnv>, next: () => Promise<void>) {
   const page = await c.get("repo").statusPageBySlug(slug);
   const membersOnly = page?.visibility === "members" || page?.visibility === "password";
   if (!policy && !membersOnly) {
-    if (page) return next();
+    if (page) {
+      c.set("statusAuthorizedPage", { id: page.id, accessVersion: page.accessVersion });
+      return next();
+    }
     // An operator suspension hides the page from statusPageBySlug, but a
     // previously warmed board/history could otherwise still be returned from
     // this process or a shared edge cache. A missing page must bypass both
@@ -490,6 +491,7 @@ async function statusAccess(c: Context<AppEnv>, next: () => Promise<void>) {
     if (access?.allowed !== true) return c.json({ error: "Not found" }, 404);
   }
   // Always bypass external caches: a formerly public page may change access, and a visitor's session decides.
+  c.set("statusAuthorizedPage", { id: page.id, accessVersion: page.accessVersion });
   await next();
   c.header("cache-control", "private, no-store");
   c.header("vary", "Cookie, Authorization");
@@ -712,7 +714,8 @@ export const publicStatus = new Hono<AppEnv>()
   .post("/:slug/subscribe", subscriptionBodyGuard, zValidator("json", emailSchema.extend({ monitorIds: z.array(z.string().uuid()).max(200).optional() })), async (c) => {
     const repo = c.get("repo");
     const page = await repo.statusPageBySlug(c.req.param("slug"));
-    if (!page) return c.json({ error: "Not found" }, 404);
+    const authorized = c.get("statusAuthorizedPage");
+    if (!page || !authorized || authorized.id !== page.id) return c.json({ error: "Not found" }, 404);
     const { email, monitorIds } = c.req.valid("json");
     // Each request can trigger an outbound email, so cap per client, per address and per page.
     const ip = clientIp(c);
@@ -728,7 +731,7 @@ export const publicStatus = new Hono<AppEnv>()
     const shown = new Set((await repo.pageComponents(page.id)).map((x) => x.monitorId));
     const chosen = [...new Set(monitorIds ?? [])].filter((id) => shown.has(id));
     const token = crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
-    const row = await repo.addSubscriber({ pageId: page.id, email, token, locale: langFromHeader(c.req.header("accept-language")), monitorIds: chosen, accessVersion: page.accessVersion });
+    const row = await repo.addSubscriber({ pageId: page.id, email, token, locale: langFromHeader(c.req.header("accept-language")), monitorIds: chosen, accessVersion: authorized.accessVersion });
     // Always the same answer, so the endpoint does not reveal who is subscribed. A pending address gets its confirmation
     // again (the first link may be lost); a confirmed one gets nothing, so the form cannot be used to mail a stranger.
     if (row.confirmed) return c.json({ ok: true });

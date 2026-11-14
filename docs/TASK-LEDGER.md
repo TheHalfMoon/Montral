@@ -119,6 +119,7 @@ configuration and are not part of the repository.
 | 76 | Threshold identity, design tokens, self-hosted fonts and public landing page; edition-aware Billing navigation | P1 | Done: #127 merged (`e278a57`), 16/16 exact-head CI after independent review (1 high, 2 medium, 5 low fixed) and two axe fixes found by CI; 11/11 integrated push CI on `e278a57`. Evidence: `docs/evidence/2026-11-14-threshold-foundation.md` |
 | 77 | App shell: Cmd/Ctrl+K command menu (pages, monitors, open incidents, actions), Ink sidebar, shared status shapes | P2 | Done: #128 merged (`0d83ef3`), 16/16 exact-head CI after independent review (2 high and 4 medium in the stacked dialog work, command-menu items fixed in #128). Evidence: `docs/evidence/2026-11-14-app-shell-dialogs.md` |
 | 78 | Accessible dialogs: shared Modal (dialog role, focus trap, Escape, focus return) for 7 hand-built dialogs; in-app confirmation replaces 21 native confirm() boxes with specific, translated verbs | P2 | In review: #129 |
+| 79 | Status by shape app-wide (pills, dots, timeline, public status page, 404: circle / triangle / diamond / pause / ring) and a monitor table whose name column no longer collapses between 1025 and 1320 px | P2 | In review |
 
 ## External dependencies (cannot be closed in engineering)
 

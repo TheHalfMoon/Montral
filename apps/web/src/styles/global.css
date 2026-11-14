@@ -212,7 +212,9 @@ h1 .pill,h2 .pill{font-family:var(--sans)}
 .search kbd{font:11.5px var(--mono);border:1px solid var(--line-2);border-radius:5px;padding:1px 6px;color:var(--faint)}
 .search:focus-within{border-color:var(--ink)}
 .tbl{overflow:hidden}
-.mon-tbl .tr{grid-template-columns:minmax(0,1.7fr) 104px minmax(100px,150px) 90px 100px 90px;gap:16px;min-height:66px;padding:0 22px}
+.mon-tbl .tr{grid-template-columns:minmax(220px,1.7fr) 112px minmax(100px,150px) 84px 92px 84px;gap:16px;min-height:66px;padding:0 22px}
+/* the name never collapses: below 1320 px the response sparkline (and its column) gives way first */
+@media (max-width:1320px){.mon-tbl .tr{grid-template-columns:minmax(200px,1fr) 112px 84px 92px 84px}.mon-tbl .tr .spk{display:none}}
 .mon-tbl{overflow:visible}.mon-tbl .tr.th{min-height:44px;border-radius:var(--radius) var(--radius) 0 0}.mon-tbl>.tbl-f{border-radius:0 0 var(--radius) var(--radius)}.iv{position:relative;display:inline-flex}.iv-tag{cursor:pointer;font:inherit;font:500 11px var(--mono);letter-spacing:.04em}.iv-tag:hover,.iv-tag:focus-visible{border-color:var(--accent);color:var(--accent)}.iv-pop{position:absolute;top:calc(100% + 6px);left:0;z-index:20;min-width:170px;display:grid;gap:6px;padding:10px;background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.12);font-size:13px;font-weight:400;letter-spacing:0;text-transform:none}.iv-opt{height:30px;border:1px solid var(--line);border-radius:7px;background:var(--surface-2);cursor:pointer;font:inherit;color:inherit;text-align:left;padding:0 10px}.iv-opt:hover:not(:disabled){border-color:var(--accent)}.iv-opt.on{border-color:var(--accent);color:var(--accent);cursor:default}.iv-opt:disabled:not(.on){opacity:.5;cursor:not-allowed}.iv-acts{display:flex;gap:8px}.iv-ok{color:var(--accent)}
 .mon-tbl .tr:not(.th):hover{background:color-mix(in srgb,var(--surface-2) 60%,transparent)}
 .nm{display:flex;align-items:center;gap:13px;min-width:0}
@@ -798,3 +800,10 @@ a.muted:hover{color:var(--ink)}
 .ask-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;flex-wrap:wrap}
 .btn.danger{background:var(--down);border-color:var(--down);color:var(--surface)}
 .btn.danger:hover{filter:brightness(.94)}
+/* ---------- status semantics: every state has its own shape, so meaning never depends on colour alone ----------
+   operational / up / resolved: circle (default) · degraded / identified / monitoring / warn: triangle
+   down / outage / investigating: diamond (crimson, never the Signal square) · paused: pause bars · pending: ring */
+.pill.degraded::before,.pill.identified::before,.pill.monitoring::before,.pill.warn::before,.dot.warn,.sd.w{border-radius:0;clip-path:polygon(50% 0,100% 100%,0 100%)}
+.pill.down::before,.pill.outage::before,.pill.investigating::before,.dot.down,.sd.d,.tl .ev.now::before{border-radius:1px;transform:rotate(45deg) scale(.86)}
+.pill.paused::before{border-radius:0;background:linear-gradient(90deg,currentColor 0 35%,transparent 35% 65%,currentColor 65%)}
+.pill.pending::before{background:transparent;box-shadow:inset 0 0 0 1.5px currentColor}

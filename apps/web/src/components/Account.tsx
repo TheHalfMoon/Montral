@@ -2,7 +2,8 @@ import { t } from "../lib/i18n";
 import { LOCALES, type Locale } from "../lib/i18n";
 import { go, switchLocale } from "../lib/locale-path";
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { ago, api } from "../lib/api";
+import { ask } from "../lib/confirm";
 import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
@@ -246,6 +247,119 @@ function SsoLink({ accounts }: { accounts: Linked[] | null }) {
 }
 
 /** Personal settings: who you are and which language emails (and the app) use. API keys live on their own page. */
+type Sess = { id: string; token: string; userAgent?: string | null; ipAddress?: string | null; createdAt: string; updatedAt: string };
+
+/** "Chrome on Windows", read from the stored user agent; the raw string stays out of the page. */
+function device(ua?: string | null): string {
+  if (!ua) return t("Unknown device");
+  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : /Montral/i.test(ua) ? "Montral app" : t("Browser");
+  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+  return os ? t("{browser} on {os}").replace("{browser}", browser).replace("{os}", os) : browser;
+}
+
+/**
+ * Where the user is signed in, with sign-out per session and for every other session. Better Auth asks for a recent
+ * sign-in before it lists sessions; when it refuses, the card says so instead of showing an empty list. Session tokens
+ * are only held in memory to revoke a session and are never shown.
+ */
+function Sessions() {
+  const [list, setList] = useState<Sess[] | null>(null);
+  const [current, setCurrent] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    setErr("");
+    const [l, s] = await Promise.all([authClient.listSessions(), authClient.getSession()]);
+    if (l.error) { setList([]); setErr(l.error.status === 403 ? t("For your security, sign in again to see and end your sessions.") : l.error.message ?? t("Could not load sessions.")); return; }
+    setCurrent((s.data as { session?: { id: string } } | null)?.session?.id ?? "");
+    // the client may hand back Date objects or ISO strings; keep ISO strings
+    const iso = (v: unknown) => new Date(v as string | Date).toISOString();
+    const rows: Sess[] = (l.data ?? []).map((s) => ({ id: s.id, token: s.token, userAgent: s.userAgent, ipAddress: s.ipAddress, createdAt: iso(s.createdAt), updatedAt: iso(s.updatedAt) }))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    setList(rows);
+  };
+  useEffect(() => { load().catch(() => { setList([]); setErr(t("Could not load sessions.")); }); }, []);
+  const end = async (s: Sess) => {
+    setBusy(s.id);
+    try {
+      const r = await authClient.revokeSession({ token: s.token });
+      if (r.error) toast(r.error.message ?? t("Could not sign out that session."), "err"); else toast(t("Signed out of that session."));
+      await load();
+    } finally { setBusy(""); }
+  };
+  const endOthers = async () => {
+    if (!(await ask(t("Sign out everywhere except this device? Each of those sessions will need to sign in again."), t("Sign out other sessions")))) return;
+    setBusy("others");
+    try {
+      const r = await authClient.revokeOtherSessions();
+      if (r.error) toast(r.error.message ?? t("Could not sign out the other sessions."), "err"); else toast(t("Signed out of every other session."));
+      await load();
+    } finally { setBusy(""); }
+  };
+  const others = (list ?? []).filter((s) => s.id !== current);
+  return (
+    <div className="card sect">
+      <h3>{t("Sessions")}</h3>
+      <p className="muted" style={{ marginBottom: 12 }}>{t("Devices and browsers signed in to your account. Signing a session out takes effect at once.")}</p>
+      {list === null && <p className="muted">{t("Loading…")}</p>}
+      {err && <p className="muted" role="status">{err}</p>}
+      {list && list.length > 0 && (
+        <ul className="sess">
+          {list.map((s) => (
+            <li key={s.id}>
+              <div className="sess-d">
+                <b>{device(s.userAgent)}</b>
+                <small>{s.ipAddress ? <span className="mono">{s.ipAddress}</span> : null}{s.ipAddress ? " · " : ""}{t("Active")} {ago(s.updatedAt)} · {t("Signed in")} {new Date(s.createdAt).toLocaleDateString(document.documentElement.lang)}</small>
+              </div>
+              {s.id === current
+                ? <span className="pill up">{t("This device")}</span>
+                : <button type="button" className="btn sm" disabled={!!busy} onClick={() => void end(s)}>{busy === s.id ? t("Signing out…") : t("Sign out")}<span className="sr-only"> {device(s.userAgent)}</span></button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {others.length > 0 && (
+        <button type="button" className="btn sm danger-l" style={{ marginTop: 12 }} disabled={!!busy} onClick={() => void endOthers()}>
+          {busy === "others" ? t("Signing out…") : t("Sign out other sessions")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Change the password while signed in (accounts that have one); optionally end every other session. */
+function PasswordChange() {
+  const [cur, setCur] = useState("");
+  const [next, setNext] = useState("");
+  const [others, setOthers] = useState(true);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.SyntheticEvent) => {
+    e.preventDefault();
+    setErr("");
+    if (next.length < 8) { setErr(t("Use at least 8 characters.")); return; }
+    if (next === cur) { setErr(t("Choose a password you have not used here.")); return; }
+    setBusy(true);
+    try {
+      const r = await authClient.changePassword({ currentPassword: cur, newPassword: next, revokeOtherSessions: others });
+      if (r.error) { setErr(r.error.message ?? t("Could not change the password.")); return; }
+      setCur(""); setNext("");
+      toast(others ? t("Password changed. Other sessions were signed out.") : t("Password changed."));
+    } finally { setBusy(false); }
+  };
+  return (
+    <form className="card sect pw-change" onSubmit={submit}>
+      <h3>{t("Password")}</h3>
+      <label className="fld">{t("Current password")}<input className="in" type="password" autoComplete="current-password" required value={cur} onChange={(e) => setCur(e.target.value)} /></label>
+      <label className="fld">{t("New password")}<input className="in" type="password" autoComplete="new-password" required value={next} onChange={(e) => setNext(e.target.value)} aria-describedby="pw-hint" /></label>
+      <small id="pw-hint" className="faint">{t("At least 8 characters.")}</small>
+      <label className="chk"><input type="checkbox" checked={others} onChange={(e) => setOthers(e.target.checked)} /> {t("Sign out of every other session")}</label>
+      {err && <p className="err" role="alert">{err}</p>}
+      <div><button className="btn primary sm" disabled={busy || !cur || !next}>{busy ? t("Saving…") : t("Change password")}</button></div>
+    </form>
+  );
+}
+
 export default function Account() {
   const [me, setMe] = useState<Me | null>(null);
   const [saved, setSaved] = useState(false);
@@ -285,6 +399,8 @@ export default function Account() {
         )}
         {me && <ConnectedAccounts accounts={accounts} load={loadAccounts} />}
         {me && <SsoLink accounts={accounts} />}
+        {me && accounts?.some((a) => a.providerId === "credential") && <PasswordChange />}
+        {me && <Sessions />}
         {me && <Security me={me} reload={load} hasPassword={!accounts || accounts.length === 0 || accounts.some((a) => a.providerId === "credential")} />}
       </div>
     </>

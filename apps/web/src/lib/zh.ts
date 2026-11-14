@@ -890,5 +890,16 @@ export const zh: Record<string, string> = {
   Visibility: "可见范围", "Change role to admin": "改为管理员", "Change role to member": "改为成员", "Role updated.": "角色已更新。",
   "Could not change the role": "无法更改角色",
   "Load older deliveries": "加载更早的发送记录", "Showing every delivery kept.": "已显示保留的全部发送记录。",
+  // account: sessions and password
+  "Unknown device": "未知设备", Browser: "浏览器", "{browser} on {os}": "{os} 上的 {browser}",
+  "For your security, sign in again to see and end your sessions.": "为了你的安全，请重新登录后再查看和结束会话。",
+  "Could not load sessions.": "无法加载会话。", "Could not sign out that session.": "无法退出该会话。", "Signed out of that session.": "已退出该会话。",
+  "Sign out everywhere except this device? Each of those sessions will need to sign in again.": "要退出除本设备外的所有会话吗？这些会话都需要重新登录。",
+  "Sign out other sessions": "退出其他会话", "Could not sign out the other sessions.": "无法退出其他会话。", "Signed out of every other session.": "已退出其他所有会话。",
+  Sessions: "会话", "Devices and browsers signed in to your account. Signing a session out takes effect at once.": "已登录你账户的设备和浏览器。退出某个会话会立即生效。",
+  "Signed in": "登录于", "This device": "本设备", "Signing out…": "正在退出…",
+  "Use at least 8 characters.": "请至少使用 8 个字符。", "Choose a password you have not used here.": "请选择一个与当前不同的新密码。",
+  "Could not change the password.": "无法修改密码。", "Password changed. Other sessions were signed out.": "密码已修改，其他会话已退出。", "Password changed.": "密码已修改。",
+  "Current password": "当前密码", "At least 8 characters.": "至少 8 个字符。", "Sign out of every other session": "退出其他所有会话", "Change password": "修改密码",
   "Replay attempts this month": "本月重放次数", "counter resets on {date} (UTC)": "计数于 {date}（UTC）清零", "not billed": "不计费",
 };

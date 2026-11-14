@@ -8,6 +8,7 @@ import { useBusy } from "../lib/use-busy";
 import { isAllProjects } from "../lib/scope";
 import { ProjectBadge, ScopeChip, useProjects } from "./AllProjects";
 import Modal from "./Modal";
+import Segmented from "./Segmented";
 
 const DAY = 86400_000;
 const dur = (a: string, b: string | null) => {
@@ -123,7 +124,7 @@ function Declare({ onClose, onDone }: { onClose: () => void; onDone: (id: string
           <Select className="in" value={mon} onChange={setMon} options={[{ value: "", label: t("None") }, ...monitors.map((m) => ({ value: m.id, label: m.name }))]} />
         </label>
         <div className="fld">{t("Severity")}
-          <div className="seg">{(["major", "minor"] as const).map((s) => <i key={s} className={sev === s ? "on" : ""} onClick={() => setSev(s)}>{t(s)}</i>)}</div>
+          <Segmented label={t("Severity")} value={sev} onChange={setSev} options={(["major", "minor"] as const).map((s) => ({ value: s, label: t(s) }))} />
         </div>
         <label className="fld">{t("What do customers need to know?")}<textarea className="in" style={{ height: 90, padding: 12 }} value={body} onChange={(e) => setBody(e.target.value)} /></label>
         {err && <p className="err">{err}</p>}

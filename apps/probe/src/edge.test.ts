@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signProbe } from "../../api/src/probe-protocol";
 import { handleEdgeProbe, safeTarget, type EdgeEnv } from "./edge";
 
@@ -13,8 +13,72 @@ async function signed(value: unknown, password = secret): Promise<Request> {
     body: text });
 }
 const okFetch = vi.fn(async () => new Response("ready", { status: 200 }));
+afterEach(() => vi.useRealTimers());
 
 describe("Montral Cloudflare edge probe", () => {
+  it.each(["", '{"type":'])("bounds incomplete unauthenticated uploads (%j)", async (partial) => {
+    vi.useFakeTimers();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({ start(c) { if (partial) c.enqueue(new TextEncoder().encode(partial)); }, cancel });
+    let status: number | undefined;
+    const pending = handleEdgeProbe(new Request("https://edge.example.invalid", { method: "POST", body, duplex: "half" } as RequestInit), env)
+      .then((r) => { status = r.status; });
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(status).toBe(408);
+    await pending;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("does not await hostile cancellation after actual oversized bytes", async () => {
+    vi.useFakeTimers();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(64 * 1024 + 1)); }, cancel });
+    let status: number | undefined;
+    const pending = handleEdgeProbe(new Request("https://edge.example.invalid", { method: "POST", headers: { "content-length": "1" }, body, duplex: "half" } as RequestInit), env)
+      .then((r) => { status = r.status; });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(status).toBe(413);
+    await pending;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("uses one total deadline even when chunks continue arriving", async () => {
+    vi.useFakeTimers();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start(c) { controller = c; } });
+    let status: number | undefined;
+    const pending = handleEdgeProbe(new Request("https://edge.example.invalid", { method: "POST", body, duplex: "half" } as RequestInit), env)
+      .then((r) => { status = r.status; });
+    await vi.advanceTimersByTimeAsync(4000);
+    controller.enqueue(new TextEncoder().encode("{"));
+    await vi.advanceTimersByTimeAsync(4000);
+    controller.enqueue(new TextEncoder().encode('"type":'));
+    await vi.advanceTimersByTimeAsync(2001);
+    expect(status).toBe(408);
+    await pending;
+  });
+
+  it("preserves signed whitespace and Unicode without requiring a content type", async () => {
+    const text = "\n " + JSON.stringify({ ...payload, keyword: "ready é" }) + " \n";
+    const ts = Math.floor(Date.now() / 1000);
+    const req = new Request("https://edge.example.invalid", { method: "POST", body: text,
+      headers: { [TIMESTAMP_HEADER]: String(ts), [SIGNATURE_HEADER]: await signProbe(secret, ts, text) } });
+    const res = await handleEdgeProbe(req, env, (async () => new Response("ready é")) as typeof fetch);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true });
+  });
+
+  it("allows the exact 64 KiB UTF-8 envelope and refuses one more byte", async () => {
+    const fixed = JSON.stringify({ ...payload, padding: "" });
+    const remaining = 64 * 1024 - new TextEncoder().encode(fixed).length;
+    const padding = "é".repeat(Math.floor(remaining / 2)) + (remaining % 2 ? "x" : "");
+    const value = { ...payload, padding };
+    expect(new TextEncoder().encode(JSON.stringify(value)).length).toBe(64 * 1024);
+    const fetcher = (async () => new Response("ready")) as typeof fetch;
+    expect((await handleEdgeProbe(await signed(value), env, fetcher)).status).toBe(200);
+    expect((await handleEdgeProbe(await signed({ ...value, padding: padding + "x" }), env, fetcher)).status).toBe(413);
+  });
+
   it("reports capabilities but never runs a schedule on its own", async () => {
     const r = await handleEdgeProbe(new Request("https://edge.example.invalid"), env);
     expect(await r.json()).toMatchObject({ ok: true, region: "edge-eu", capabilities: ["http-request-body-v1"] });

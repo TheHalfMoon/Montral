@@ -1,5 +1,6 @@
 import { HTTP_REQUEST_CAPABILITY, HTTP_METHODS, requestBodyProblem } from "../../api/src/http-request";
 import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbeWithRotation } from "../../api/src/probe-protocol";
+import { limitedBodyBytes } from "../../api/src/json-body-budget";
 
 /**
  * A small, HTTP-only Cloudflare Worker probe. Reuses the request validation and
@@ -57,8 +58,18 @@ export async function handleEdgeProbe(request: Request, env: EdgeEnv, fetcher: t
   if (request.method === "GET") return json(200, { ok: true, region, capabilities: [HTTP_REQUEST_CAPABILITY] });
   if (request.method !== "POST") return json(405, { error: "POST a signed check" });
   if (!env.PROBE_SECRET || env.PROBE_SECRET.length < 16 || !env.ALLOWED_HOSTS?.trim()) return json(503, { error: "Edge probe not configured" });
-  const body = await readBytes(request, MAX_SIGNED_BODY);
-  if (body === null) return json(413, { error: "Request too large" });
+  let body: string;
+  try {
+    // This envelope is untrusted until HMAC verification. Its total upload
+    // window must not depend on an unverified payload field or chunk pacing.
+    const bytes = await limitedBodyBytes(request, MAX_SIGNED_BODY, 10_000);
+    body = new TextDecoder().decode(bytes ?? new Uint8Array());
+  } catch (error) {
+    const status = (error as { status?: unknown } | null)?.status;
+    if (status === 413) return json(413, { error: "Request too large" });
+    if (status === 408) return json(408, { error: "Request body read timed out" });
+    throw error;
+  }
   if (!await verifyProbeWithRotation(env.PROBE_SECRET, env.PROBE_PREVIOUS_SECRET, env.PROBE_PREVIOUS_SECRET_EXPIRES_AT, {
     timestamp: request.headers.get(TIMESTAMP_HEADER),
     signature: request.headers.get(SIGNATURE_HEADER),

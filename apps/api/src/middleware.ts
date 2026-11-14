@@ -205,14 +205,24 @@ export function cookieValue(header: string | undefined, name: string) {
 
 // each lookup is a database round trip (~350ms to the origin): remember answers briefly per isolate
 const projectCache = new Map<string, { id: string; until: number }>();
+const PROJECT_CACHE_MAX_ENTRIES = 1024;
 export const forgetProjects = (orgId: string) => {
   for (const k of projectCache.keys()) if (k.startsWith(orgId + "|")) projectCache.delete(k);
 };
 async function cachedProject(repo: Repo, orgId: string, wanted?: string) {
-  const key = `${orgId}|${wanted ?? ""}`;
+  // Project selection is a hint, not a credential. Match resolveProject's
+  // malformed-selector fallback without retaining arbitrary header/cookie text.
+  // Do this after requireOrg chose its scoped default; the final scope check stays authoritative.
+  const selected = wanted && UUID.test(wanted) ? wanted.toLowerCase() : undefined;
+  const key = `${orgId}|${selected ?? ""}`;
   const hit = projectCache.get(key);
   if (hit && hit.until > Date.now()) return hit.id;
-  const id = await repo.resolveProject(orgId, wanted);
+  if (hit) projectCache.delete(key);
+  const id = await repo.resolveProject(orgId, selected);
+  // Enforce capacity after the await: concurrent misses must each evict before
+  // inserting. Cache completed values only (Workers cannot share request promises).
+  projectCache.delete(key);
+  if (projectCache.size >= PROJECT_CACHE_MAX_ENTRIES) projectCache.delete(projectCache.keys().next().value!);
   projectCache.set(key, { id, until: Date.now() + 30_000 });
   return id;
 }

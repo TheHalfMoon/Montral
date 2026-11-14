@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { createMiddleware } from "hono/factory";
-import { auditChanges, recordAuditEvent } from "./audit";
+import { auditChanges } from "./audit";
 import type { AppEnv, Bindings } from "./env";
 import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
@@ -183,25 +183,23 @@ async function atomically<T>(c: Context<AppEnv>, work: (query: Query) => Promise
   return work((sql, params) => database.query(sql, params));
 }
 
-/** The customer reads this in their own audit log; it names the operator role, not the person. Throws on failure. */
-function recordOperatorAudit(query: Query, orgId: string, action: string, reason: string) {
-  return recordAuditEvent(query, {
-    orgId,
-    projectId: null,
-    actor: { type: "system", id: null, label: "Montral operator" },
-    action,
-    targetType: "workspace",
-    targetId: orgId,
-    changes: auditChanges({ reason }),
-    ip: null,
-  });
+/** One statement writes the customer-safe event and its private operator identity.
+ * The surrounding mutation transaction fails closed if either insert fails. */
+function recordOperatorAudit(query: Query, orgId: string, action: string, reason: string, operatorId: string) {
+  return query(`WITH customer_event AS (
+    INSERT INTO audit_event (organization_id, actor_type, actor_label, action, target_type, target_id, changes)
+    VALUES ($1::text, 'system', 'Montral operator', $2::text, 'workspace', $1::text, $3::jsonb)
+    RETURNING id
+  )
+  INSERT INTO workspace_operator_audit (audit_event_id, operator_id)
+  SELECT id, $4::text FROM customer_event`, [orgId, action, JSON.stringify(auditChanges({ reason })), operatorId]);
 }
 
 export const operatorApi = new Hono<AppEnv>()
   .use("*", requireOperator)
   /** Read-only, bounded unified platform timeline from existing operator actions.
    * Other customer audit rows and private operator notes are excluded entirely.
-   * No new writer or migration: source actions stay committed transactionally.
+   * Private workspace identities are joined only here, never in customer reads.
    */
   .get("/audit", async (c) => {
     const limitRaw = c.req.query("limit");
@@ -239,9 +237,10 @@ export const operatorApi = new Hono<AppEnv>()
       WITH actions AS (
         SELECT 'workspace'::text AS source, a.id::text AS id,
           a.action, a.organization_id::text AS target,
-          NULL::text AS operator_id, a.changes->'values'->>'reason' AS reason,
+          w.operator_id, a.changes->'values'->>'reason' AS reason,
           a.created_at
         FROM audit_event a
+        LEFT JOIN workspace_operator_audit w ON w.audit_event_id = a.id
         WHERE a.actor_type='system' AND a.actor_label='Montral operator'
           AND a.target_type='workspace' AND a.target_id=a.organization_id
           AND a.action IN ('workspace.suspend','workspace.unsuspend')
@@ -263,7 +262,7 @@ export const operatorApi = new Hono<AppEnv>()
     const last = shown[shown.length - 1];
     return c.json({ events: shown.map((r) => ({
       source: r.source, id: r.id, action: r.action, target: r.target,
-      // Workspace operator identity was never stored in its customer audit log.
+      // Historical/older-replica actions have no private identity; keep null.
       operatorId: r.operator_id, reason: r.reason,
       createdAt: new Date(r.created_at).toISOString(),
     })), next: more && last ? encodePlatformAuditCursor(last.cursor_at, last.source, last.id) : null });
@@ -362,7 +361,7 @@ export const operatorApi = new Hono<AppEnv>()
     const done = await atomically(c, async (query) => {
       const [org] = await query<{ id: string }>(`SELECT id FROM organization WHERE id = $1::text FOR UPDATE`, [id]);
       if (!org) return false;
-      await recordOperatorAudit(query, id, "workspace.suspend", reason);
+      await recordOperatorAudit(query, id, "workspace.suspend", reason, operatorId);
       await query(
         `INSERT INTO workspace_suspension (organization_id, reason, note, suspended_by) VALUES ($1::text, $2::text, $3::text, $4::text)
          ON CONFLICT (organization_id) DO UPDATE SET reason = EXCLUDED.reason, note = EXCLUDED.note, suspended_by = EXCLUDED.suspended_by`,
@@ -385,7 +384,7 @@ export const operatorApi = new Hono<AppEnv>()
       const [current] = await query<{ reason: string }>(`SELECT reason FROM workspace_suspension WHERE organization_id = $1::text FOR UPDATE`, [id]);
       // unsuspending a workspace that is not suspended changes nothing and records nothing
       if (!current) return "unchanged" as const;
-      await recordOperatorAudit(query, id, "workspace.unsuspend", current.reason);
+      await recordOperatorAudit(query, id, "workspace.unsuspend", current.reason, operatorId);
       await query(`DELETE FROM workspace_suspension WHERE organization_id = $1::text`, [id]);
       return "lifted" as const;
     });

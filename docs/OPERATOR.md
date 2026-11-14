@@ -1,7 +1,7 @@
 # Operator control plane
 
 Platform staff ("operators") of a hosted Montral deployment can look up workspaces and suspend or unsuspend them, and
-see and drain probe regions. This is a minimal, API-only control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`). The unlinked platform console is at `/app/operator`, with per-request server verification of a browser session and a recent second-factor sign-in. Its new Platform audit section (proposed pending CI) exposes the same bounded search/filter/cursor controls from `GET /api/operator/audit`; no data is prefetched before the operator session is admitted, and results are discarded on unmount or access denial. This UI grants no new permissions.
+see and drain probe regions. The control plane (`/api/operator/*`, implemented in `apps/api/src/operator.ts`) also has an unlinked platform console at `/app/operator`, with per-request server verification of a browser session and a recent second-factor sign-in. Its Platform audit section exposes the same bounded search/filter/cursor controls from `GET /api/operator/audit`; no data is prefetched before the operator session is admitted, and results are discarded on unmount or access denial. This UI grants no new permissions.
 
 ## Who is an operator
 
@@ -38,16 +38,22 @@ there is no shared "unknown address" bucket, so nobody can lock operators out by
 | `GET /api/operator/workspaces?q=&limit=&cursor=` | Workspaces, newest first: id, name, slug, creation time, member count, the first owner's email, monitor count, whether it is suspended, and the plan id (null when the deployment has no plans). `q` matches name, slug, exact id, or a member's email (case-insensitive substring). `limit` is 1–100 (default 50); `next` is an opaque cursor. |
 | `GET /api/operator/workspaces/:id` | The same fields, plus the suspension (reason, note, operator user id, time) and the current period's credit and email usage when the deployment meters usage (null otherwise). |
 | `GET /api/operator/workspaces/:id/suspension-history?limit=20` | Up to 50 newest retained workspace suspension/unsuspension audit events (default 20), including action, safe reason and timestamp. Does **not** return notes, operator identity, unrelated customer activity or other workspaces' audit logs. |
-| `GET /api/operator/audit?source=all&q=&limit=50&cursor=` | **Merged in #123 (16/16 exact-head PR checks):** unified platform-only action timeline from existing workspace suspension and probe drain audit tables. `source` is `all`, `workspace` or `probe`; `q` searches target ID/region only, not notes or email; `limit` 1–100; `cursor` uses UTC-microsecond keyset pagination. Returns action, source, target, timestamp and safe reason (workspace) or operator ID (probe) without notes, customer audit details, or workspace operator identity that was never stored. |
+| `GET /api/operator/audit?source=all&q=&limit=50&cursor=` | **Merged in #123 (16/16 exact-head PR checks):** unified platform-only action timeline from existing workspace suspension and probe drain audit tables. `source` is `all`, `workspace` or `probe`; `q` searches target ID/region only, not notes or email; `limit` 1–100; `cursor` uses UTC-microsecond keyset pagination. Returns action, source, target, timestamp and safe reason (workspace) or operator ID (probe and new workspace actions), with null for historical workspace identities; no notes or customer audit details. |
 
 Operators **cannot** see, through this API: monitor targets, headers or bodies, alert channels and their settings,
 incidents, status page contents, webhook payloads, API keys, member lists beyond the count and first owner email, or
 the workspace's audit log. They cannot sign in as a customer, change a workspace's data, change plans or billing, or
 delete anything.
 
+## Private attribution for new workspace actions
+
+Migration `0062_workspace_operator_identity` adds a private `workspace_operator_audit` side table for new suspension/unsuspension actions. Its operator ID and the customer-safe audit event are inserted together, inside the mutation transaction; either failure rolls back the operation. Only the MFA-protected unified timeline joins the identity. Historical events and actions from older replicas have `operatorId: null`; no identity is inferred from current suspension state or server logs.
+
+Attribution is immutable, retains the recorded ID after an operator account is deleted, and is removed only when the parent audit event is pruned by existing retention or cascades on workspace deletion. The per-workspace suspension-history endpoint and customer audit/export remain identity-free. Upgrade every replica before expecting identities on every new action. This changes no retention period and does not restore historical identities.
+
 ## Suspending a workspace
 
-The unlinked console also shows each selected workspace's retained suspension history. It reuses append-only `audit_event` records already written atomically with the suspend/unsuspend mutation; no extra migrations or writes are needed. Every read requires the same allowlisted browser operator session and fresh MFA. The response intentionally has no operator ID or private suspension note. The merged unified read-only platform audit (#123, 16/16 exact-head PR checks) additionally includes existing probe drain/undrain actions from the separate append-only table. It is still **not** a universal platform event log: only the two operator action families that currently persist evidence are included. Workspace operator identities are not stored in the customer audit log; the unified timeline reports them as null rather than guessing.
+The unlinked console also shows each selected workspace's retained suspension history. It reuses append-only `audit_event` records already written atomically with the suspend/unsuspend mutation; no extra migrations or writes are needed. Every read requires the same allowlisted browser operator session and fresh MFA. The response intentionally has no operator ID or private suspension note. The merged unified read-only platform audit (#123, 16/16 exact-head PR checks) additionally includes existing probe drain/undrain actions from the separate append-only table. It is still **not** a universal platform event log: only the two operator action families that currently persist evidence are included. Workspace operator identities are not stored in the customer audit log; the unified timeline reads new identities from the private side table described above and reports historical identities as null rather than guessing.
 
 
 `POST /api/operator/workspaces/:id/suspend` with `{"reason": "abuse" | "payment" | "legal" | "operator", "note"?: string}`

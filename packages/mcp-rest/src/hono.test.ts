@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { mountMcp, mountOAuthMetadata } from "./hono";
 import { createMcpServer, defineTool } from "./rpc";
@@ -25,8 +25,34 @@ mountOAuthMetadata(app, { resource: () => "https://api.example/api/mcp", authori
 const post = (body: unknown, headers: Record<string, string> = {}) =>
   app.request("https://api.example/api/mcp", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
 const callWhoami = { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "whoami" } };
+afterEach(() => vi.useRealTimers());
 
 describe("mountMcp", () => {
+  it.each(["/api/mcp", "/api/mcp/public"])("bounds the original JSON-RPC envelope at %s", async (path) => {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", ignored: "x".repeat(5 * 1024 * 1024) });
+    const res = await app.request("https://api.example" + path, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer good" }, body });
+    expect(res.status).toBe(413);
+  });
+
+  it("allows framing around the existing 4 MiB bulk-import allowance", async () => {
+    const res = await post({ jsonrpc: "2.0", id: 1, method: "tools/list", ignored: "x".repeat(4 * 1024 * 1024) }, { authorization: "Bearer good" });
+    expect(res.status).toBe(200);
+  });
+
+  it.each(["/api/mcp", "/api/mcp/public"])("times out incomplete envelopes at %s without waiting for cancellation", async (path) => {
+    vi.useFakeTimers();
+    const cancel = vi.fn(() => new Promise<void>(() => {}));
+    const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new TextEncoder().encode('{"jsonrpc":')); }, cancel });
+    let status: number | undefined;
+    const pending = Promise.resolve(app.fetch(new Request("https://api.example" + path, {
+      method: "POST", headers: { "content-type": "application/json", authorization: "Bearer good" }, body, duplex: "half",
+    } as RequestInit))).then((r) => { status = r.status; });
+    await vi.advanceTimersByTimeAsync(10_001);
+    expect(status).toBe(408);
+    await pending;
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
   it("answers 401 with a discovery challenge when there are no credentials", async () => {
     const res = await post(callWhoami);
     expect(res.status).toBe(401);

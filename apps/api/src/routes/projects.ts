@@ -1,6 +1,6 @@
 import { forgetProjects, requireManager, uuidParams } from "../middleware";
 import { audit, auditChanges } from "../audit";
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "../bounded-validator";
 import type { MiddlewareHandler } from "hono";
 import { Hono } from "hono";
 import { z } from "zod";

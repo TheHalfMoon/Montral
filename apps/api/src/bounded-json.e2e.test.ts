@@ -54,4 +54,22 @@ describe.skipIf(!url)("authenticated JSON body memory budgets", () => {
   it("refuses oversized manual check before reading or spending credits", async () => {
     expect((await send("POST", `/monitors/${crypto.randomUUID()}/check`, { region: "auto", padding: "x".repeat(24 * 1024) })).status).toBe(413);
   });
+
+  it("refuses oversized ordinary CRUD JSON before project or monitor writes", async () => {
+    const get = async (path: string) => {
+      const r = await app.fetch(new Request(origin + "/api" + path, { headers: { origin, cookie } }), env as never);
+      expect(r.status).toBe(200);
+      return r.json();
+    };
+    const before = await get("/projects");
+    const padding = "x".repeat(4 * 1024 * 1024);
+    expect((await send("POST", "/projects", { name: "Must not be stored", padding })).status).toBe(413);
+    expect(await get("/projects")).toEqual(before);
+    expect((await send("POST", "/monitors", { name: "Must not run", type: "heartbeat", padding })).status).toBe(413);
+    expect(await get("/monitors")).toEqual([]);
+    const valid = await send("POST", "/monitors", { name: "Valid heartbeat", type: "heartbeat" });
+    expect(valid.status).toBe(201);
+    const monitor = await valid.json() as { id: string };
+    expect((await send("PATCH", `/monitors/${monitor.id}`, { paused: true })).status).toBe(200);
+  });
 });

@@ -1,4 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "../bounded-validator";
 import { Hono } from "hono";
 import { z } from "zod";
 import { audit, auditChanges, AUDIT_EXPORT_CAP, decodeCursor, exportAuditEvents, listAuditEvents, type AuditFilters } from "../audit";

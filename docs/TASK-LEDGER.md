@@ -131,6 +131,7 @@ The source audit found the following executable work beyond the earlier historic
 | SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Implemented on this branch; qualification/merge pending. Actual-project write validation, repository selection and delivery/retry/escalation boundaries retain shared channels. `docs/evidence/2026-11-14-channel-project-authority.md`. |
 | SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
 | OBS-REQUEST-BODY | HTTP body, DNS assertions, browser secrets and expiry-window edits admitted older observation snapshots | P1 | Implemented on this branch; qualification/merge pending. Reuses the measurement revision fence, preserving unchanged stored values and metadata edits. Full database regression suite added to existing hosted jobs. `docs/evidence/2026-11-14-request-body-observation-revision.md`. |
+| SEC-LOGIN-REDIRECT | Login return-path normalization could create an external destination | P2 | Implemented on this branch; qualification/merge pending. Shared control/network-path guard runs before and after locale stripping. `docs/evidence/2026-11-14-login-return-path.md`. |
 
 ## External dependencies (cannot be closed in engineering)
 

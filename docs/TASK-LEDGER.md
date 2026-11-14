@@ -121,6 +121,7 @@ configuration and are not part of the repository.
 | 78 | Accessible dialogs: shared Modal (dialog role, focus trap, Escape, focus return) for 7 hand-built dialogs; in-app confirmation replaces 21 native confirm() boxes with specific, translated verbs | P2 | In review: #129 |
 | 79 | Status by shape app-wide (pills, dots, timeline, public status page, 404: circle / triangle / diamond / pause / ring) and a monitor table whose name column no longer collapses between 1025 and 1320 px | P2 | In review |
 | 80 | Team role changes (owners/admins promote or demote members via Better Auth updateMemberRole; members see no actions) and keyboard-accessible segmented choices (7 controls become a real radio group) | P2 | In review |
+| 81 | Alert delivery log paging: "Load older deliveries" pages GET /alert-log with before, without skipping rows that share a timestamp at the page boundary | P3 | In review |
 
 ## External dependencies (cannot be closed in engineering)
 

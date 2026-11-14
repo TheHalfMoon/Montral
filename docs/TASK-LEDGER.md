@@ -127,8 +127,8 @@ The source audit found the following executable work beyond the earlier historic
 |---|---|---|---|
 | SEC-JSON | CRUD and private/public MCP JSON parsing lacked pre-parse byte/deadline bounds | P0 | Implemented on this branch; qualification/merge pending. Shared original-stream reader; 4 MiB CRUD / 5 MiB MCP, 10 seconds; `docs/evidence/2026-11-14-json-validation-budget.md`. |
 | SEC-CACHE | Client-selected project cache has unbounded cardinality and key lengths | P2 | Confirmed source path; bounded eviction and canonical selection remain executable. |
-| SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Confirmed source path; scoped disclosure fix remains executable. |
-| SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Confirmed source path; write and delivery-boundary authorization remain executable. |
+| SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Implemented on this branch; qualification/merge pending. Mutation authority precedes dependency lookup; hidden consumers receive a generic conflict. `docs/evidence/2026-11-14-channel-project-authority.md`. |
+| SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Implemented on this branch; qualification/merge pending. Actual-project write validation, repository selection and delivery/retry/escalation boundaries retain shared channels. `docs/evidence/2026-11-14-channel-project-authority.md`. |
 | SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
 
 ## External dependencies (cannot be closed in engineering)

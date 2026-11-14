@@ -49,8 +49,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm -r typecheck
-      - name: API PostgreSQL E2E, unit and probe tests
-        run: pnpm --filter @montral/api test && pnpm --filter @montral/probe test
+      - name: API PostgreSQL E2E, MCP transport, unit and probe tests
+        run: pnpm --filter @montral/api test && pnpm --filter @montral/mcp-rest test && pnpm --filter @montral/probe test
       - name: Build Node API, edge probe and self-hosted web
         run: |
           pnpm --filter @montral/api build:node

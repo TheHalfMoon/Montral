@@ -1,4 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "../bounded-validator";
 import type { IncidentUpdate, IncidentWithUpdates } from "@montral/repo";
 import { Hono, type Context } from "hono";
 import { z } from "zod";

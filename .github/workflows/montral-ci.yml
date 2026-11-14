@@ -61,8 +61,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typescript and Astro checks
         run: pnpm -r typecheck
-      - name: PostgreSQL E2E, API and probe tests
-        run: pnpm --filter @montral/api test && pnpm --filter @montral/probe test
+      - name: PostgreSQL E2E, API, MCP transport and probe tests
+        run: pnpm --filter @montral/api test && pnpm --filter @montral/mcp-rest test && pnpm --filter @montral/probe test
       - name: Build Node API
         run: pnpm --filter @montral/api build:node
       - name: Build edge probe

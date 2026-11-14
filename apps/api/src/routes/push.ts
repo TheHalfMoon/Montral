@@ -1,4 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "../bounded-validator";
 import type { PushDevice } from "@montral/repo";
 import { Hono } from "hono";
 import { z } from "zod";

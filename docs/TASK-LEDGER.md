@@ -119,6 +119,18 @@ configuration and are not part of the repository.
 | 76 | Threshold identity, design tokens, self-hosted fonts and public landing page; edition-aware Billing navigation | P1 | Done: #127 merged (`e278a57`), 16/16 exact-head CI after independent review (1 high, 2 medium, 5 low fixed) and two axe fixes found by CI. Evidence: `docs/evidence/2026-11-14-threshold-foundation.md` |
 | 77 | App shell: Cmd/Ctrl+K command menu (pages, monitors, open incidents, actions), Ink sidebar, shared status shapes | P2 | In review: #128 |
 
+## Active security audit follow-ups (2026-11-14)
+
+The source audit found the following executable work beyond the earlier historical qualification. None is a production exploit claim. Publication remains on hold, and the historical green baseline does not establish that these findings are closed.
+
+| ID | Item | Sev | Status |
+|---|---|---|---|
+| SEC-JSON | CRUD and private/public MCP JSON parsing lacked pre-parse byte/deadline bounds | P0 | Implemented on this branch; qualification/merge pending. Shared original-stream reader; 4 MiB CRUD / 5 MiB MCP, 10 seconds; `docs/evidence/2026-11-14-json-validation-budget.md`. |
+| SEC-CACHE | Client-selected project cache has unbounded cardinality and key lengths | P2 | Confirmed source path; bounded eviction and canonical selection remain executable. |
+| SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Confirmed source path; scoped disclosure fix remains executable. |
+| SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Confirmed source path; write and delivery-boundary authorization remain executable. |
+| SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

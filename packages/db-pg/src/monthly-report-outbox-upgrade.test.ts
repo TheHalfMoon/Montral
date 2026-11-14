@@ -19,7 +19,9 @@ describe.skipIf(!url)("monthly outbox migration from an existing Montral databas
       db = createDb(fresh.href, { max: 4 });
       // Upgrade historical 0040 through 0041 recipient outbox, 0042 review
       // evidence and 0043 immutable report content, without replaying claims.
-      const previous = MIGRATIONS.slice(0, -3);
+      const baseline = MIGRATIONS.findIndex((m) => m.tag === "0040_gray_ultimates");
+      expect(baseline).toBeGreaterThanOrEqual(0);
+      const previous = MIGRATIONS.slice(0, baseline + 1);
       expect(previous.at(-1)?.tag).toBe("0040_gray_ultimates");
       expect((await migrate(db, previous)).length).toBe(previous.length);
       const org = `synthetic-legacy-${randomUUID()}`;
@@ -28,7 +30,7 @@ describe.skipIf(!url)("monthly outbox migration from an existing Montral databas
       expect((await db.$client`select to_regclass('public.monthly_report_recipient') as name`)[0].name).toBeNull();
       // Simulate multiple application replicas upgrading at once.
       const runs = await Promise.all([migrate(db), migrate(db), migrate(db)]);
-      expect(runs.flat()).toEqual(MIGRATIONS.slice(-3).map((m) => m.tag));
+      expect(runs.flat()).toEqual(MIGRATIONS.slice(baseline + 1).map((m) => m.tag));
       expect((await db.$client`select last_report_month as month,monthly_report as enabled from workspace_setting where organization_id=${org}`)[0]).toEqual({ month: "2026-09", enabled: true });
       expect((await db.$client`select count(*)::int as n from monthly_report_recipient`)[0].n).toBe(0);
       expect((await db.$client`select count(*)::int as n from monthly_report_reconciliation`)[0].n).toBe(0);

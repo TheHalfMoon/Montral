@@ -1052,6 +1052,8 @@ describe.skipIf(!url)("lists across projects", () => {
     expect(listed[0].spark).toEqual(Array.from({ length: 30 }, (_, k) => (k + 5 === 33 ? null : k + 5)));
     expect(listed[1].id).toBe(idle.id);
     expect(listed[1].spark).toEqual([]);
+    // This suite's later overview assertion concerns A and B, not this temporary sparkline project.
+    await repo.deleteProject(orgId, p.id);
   });
 
   it("lists incidents of several projects with their project, newest first", async () => {

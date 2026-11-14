@@ -58,10 +58,12 @@ describe.skipIf(!url)("atomic monthly owner snapshots and crash recovery (staged
 
   it("atomically snapshots owners and recovers only persisted prepared records", async () => {
     expect(await repo.claimMonthlyReportsWithRecipients(month, 20)).toEqual([orgA, orgB]);
-    expect(await repo.preparedMonthlyReportRecipients(orgA, month)).toEqual([
+    // PostgreSQL's configured text collation may order these IDs differently across hosted platforms.
+    const byUserId = (a: { userId: string }, b: { userId: string }) => a.userId.localeCompare(b.userId);
+    expect((await repo.preparedMonthlyReportRecipients(orgA, month)).sort(byUserId)).toEqual([
       { userId: a1, email: `${a1}@example.test`, locale: null },
       { userId: a2, email: `${a2}@example.test`, locale: null },
-    ]);
+    ].sort(byUserId));
     expect(await repo.preparedMonthlyReportRecipients(orgB, month)).toEqual([{ userId: b1, email: `${b1}@example.test`, locale: null }]);
     expect(await repo.preparedMonthlyReportRecipients(orgC, month)).toEqual([]);
     // Simulate a new worker instance after a process stopped post-commit.

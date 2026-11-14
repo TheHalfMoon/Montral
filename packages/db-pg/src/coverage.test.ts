@@ -145,6 +145,41 @@ describe.skipIf(!url)("bounded observation time coverage", () => {
     expect((await repo.updateMonitor(orgId, m.id, null, { intervalSec: 120 }))?.coverageRevision).toBe(m.coverageRevision + 1);
   });
 
+  it("fences an in-flight HTTP result after a body-only edit and preserves unchanged bodies", async () => {
+    const m = await monitor({ method: "POST", requestBody: "old-body", runGeneration: 1 });
+    clock(0); expect(await repo.recordObservation(m, { ok: true })).toBe(true);
+    clock(20);
+    const changed = (await repo.updateMonitor(orgId, m.id, null, { requestBody: "new-body" }))!;
+    expect(changed.coverageRevision).toBe(m.coverageRevision + 1);
+    expect(await repo.recordObservation(m, { ok: false }, { generation: 1 })).toBe(false);
+    const unchanged = (await repo.updateMonitor(orgId, m.id, null, { requestBody: "new-body", name: "Renamed" }))!;
+    expect(unchanged.coverageRevision).toBe(changed.coverageRevision);
+    clock(40); expect(await repo.recordObservation(unchanged, { ok: true }, { generation: 1 })).toBe(true);
+    clock(50);
+    const cleared = (await repo.updateMonitor(orgId, m.id, null, { requestBody: null }))!;
+    expect(cleared.coverageRevision).toBe((changed.coverageRevision ?? 0) + 1);
+    expect(await repo.recordObservation(unchanged, { ok: false })).toBe(false);
+    expect((await repo.timeCoverage(orgId, m.id, null, 7, at(60)))?.states.down).toBe(0);
+  });
+
+  it.each([
+    { type: "dns" as const, initial: { dnsRecordType: "A" as const }, patch: { dnsRecordType: "TXT" as const } },
+    { type: "dns" as const, initial: { dnsExpectedValue: "old" }, patch: { dnsExpectedValue: "new" } },
+    { type: "dns" as const, initial: { dnsMatchMode: "exact" as const }, patch: { dnsMatchMode: "contains" as const } },
+    { type: "browser" as const, initial: { browserSecrets: { token: "synthetic-old-ciphertext" } }, patch: { browserSecrets: { token: "synthetic-new-ciphertext" } } },
+    { type: "certificate" as const, initial: { domainExpiryWarnDays: 30 }, patch: { domainExpiryWarnDays: 14 } },
+  ])("fences changed $type measurement inputs and preserves their unchanged values ($patch)", async ({ type, initial, patch }) => {
+    const m = await monitor({ type, ...initial });
+    clock(0); expect(await repo.recordObservation(m, { ok: true })).toBe(true);
+    clock(10);
+    const changed = (await repo.updateMonitor(orgId, m.id, null, patch))!;
+    expect(changed.coverageRevision).toBe(m.coverageRevision + 1);
+    expect(await repo.recordObservation(m, { ok: false })).toBe(false);
+    const unchanged = (await repo.updateMonitor(orgId, m.id, null, patch))!;
+    expect(unchanged.coverageRevision).toBe(changed.coverageRevision);
+    expect(await repo.recordObservation(unchanged, { ok: true })).toBe(true);
+  });
+
   it("accepts a heartbeat against current configuration even if the request loaded an older revision", async () => {
     const m = await monitor({ type: "heartbeat", intervalSec: 60 });
     clock(0); await repo.updateMonitor(orgId, m.id, null, { intervalSec: 120 });

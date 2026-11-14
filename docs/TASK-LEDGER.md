@@ -130,6 +130,7 @@ The source audit found the following executable work beyond the earlier historic
 | SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Confirmed source path; scoped disclosure fix remains executable. |
 | SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Confirmed source path; write and delivery-boundary authorization remain executable. |
 | SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
+| OBS-REQUEST-BODY | HTTP body, DNS assertions, browser secrets and expiry-window edits admitted older observation snapshots | P1 | Implemented on this branch; qualification/merge pending. Reuses the measurement revision fence, preserving unchanged stored values and metadata edits. Full database regression suite added to existing hosted jobs. `docs/evidence/2026-11-14-request-body-observation-revision.md`. |
 
 ## External dependencies (cannot be closed in engineering)
 

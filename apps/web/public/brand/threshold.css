@@ -1,0 +1,75 @@
+/* Montral Threshold: fonts and design tokens, the one source shared by the landing pages (public/*.html) and the
+   Astro app (layouts/Base.astro). Fonts are self-hosted OFL-1.1 files in /fonts (licences next to them), so the strict
+   `font-src 'self'` policy holds. Chinese and Japanese text falls through to the system CJK families in each stack.
+   Text tokens meet WCAG 2.1 AA (4.5:1) on --bg, --surface and --surface-2 in both themes; e2e/ runs axe on them. */
+
+@font-face{font-family:"Inter";font-style:normal;font-weight:100 900;font-display:swap;src:url(/fonts/inter-latin.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Inter";font-style:normal;font-weight:100 900;font-display:swap;src:url(/fonts/inter-latin-ext.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:"Newsreader";font-style:normal;font-weight:200 800;font-display:swap;src:url(/fonts/newsreader-latin.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"Newsreader";font-style:normal;font-weight:200 800;font-display:swap;src:url(/fonts/newsreader-latin-ext.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+@font-face{font-family:"Newsreader";font-style:italic;font-weight:200 800;font-display:swap;src:url(/fonts/newsreader-latin-italic.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+2000-206F,U+20AC,U+2122}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:100 800;font-display:swap;src:url(/fonts/jetbrains-mono-latin.woff2) format("woff2");unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}
+@font-face{font-family:"JetBrains Mono";font-style:normal;font-weight:100 800;font-display:swap;src:url(/fonts/jetbrains-mono-latin-ext.woff2) format("woff2");unicode-range:U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF}
+
+:root{
+  /* brand foundations (approved Threshold palette) */
+  --brand-ink:#171713;--brand-signal:#F04D35;--brand-paper:#F5F2EB;--brand-surface:#FFFDF8;
+
+  /* type */
+  --serif:"Newsreader","Noto Serif SC","Songti SC","Noto Serif JP","Hiragino Mincho ProN",Georgia,"Times New Roman",serif;
+  --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans SC","Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,"Noto Sans Mono CJK SC",monospace;
+  --fs-xs:12px;--fs-sm:13px;--fs-md:14px;--fs-base:15px;--fs-lg:17px;--fs-xl:20px;
+  --fs-h3:24px;--fs-h2:clamp(32px,4.2vw,52px);--fs-h1:clamp(46px,7.6vw,104px);
+
+  /* space (4px base), radius, motion, layers */
+  --s1:4px;--s2:8px;--s3:12px;--s4:16px;--s5:20px;--s6:24px;--s8:32px;--s10:40px;--s12:48px;--s16:64px;--s24:96px;
+  --r-xs:3px;--r-sm:6px;--r-md:8px;--r-lg:12px;--r-xl:16px;--radius:var(--r-lg);
+  --ease:cubic-bezier(.2,.7,.2,1);--t-fast:120ms;--t-med:220ms;--t-slow:480ms;
+  --z-sticky:10;--z-menu:20;--z-drawer:30;--z-modal:35;--z-toast:40;
+
+  /* light theme */
+  color-scheme:light;
+  --bg:#F5F2EB;--surface:#FFFDF8;--surface-2:#EEEAE0;--surface-3:#E6E1D5;--hover:#EEEAE0;
+  --line:#DDD8CC;--line-2:#C9C3B5;
+  --ink:#171713;--ink-2:#2C2B26;--muted:#56554E;--faint:#64635B;
+  --signal:#F04D35;--signal-ink:#B8321C;--signal-weak:rgba(240,77,53,.10);
+  --ok:#1E7556;--ok-weak:rgba(30,117,86,.10);
+  --warn:#8A5300;--warn-fill:#C27803;--warn-weak:rgba(194,120,3,.12);
+  --down:#A61B29;--down-weak:rgba(166,27,41,.08);
+  --info:#2F5DA8;--info-weak:rgba(47,93,168,.10);
+  --focus:#171713;--selection:rgba(240,77,53,.18);
+  --accent:var(--ok);
+  --shadow-sm:0 1px 2px rgba(23,23,19,.06);
+  --shadow:0 1px 0 rgba(255,255,255,.7) inset,0 24px 48px -28px rgba(23,23,19,.28),0 8px 18px -12px rgba(23,23,19,.12);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){
+  color-scheme:dark;
+  --bg:#141411;--surface:#1B1B17;--surface-2:#24231F;--surface-3:#2C2B26;--hover:#24231F;
+  --line:#2C2B26;--line-2:#3A3934;
+  --ink:#EDEAE2;--ink-2:#D6D2C8;--muted:#A9A69C;--faint:#959288;
+  --signal:#F2614B;--signal-ink:#F58A78;--signal-weak:rgba(242,97,75,.14);
+  --ok:#4CB38C;--ok-weak:rgba(76,179,140,.14);
+  --warn:#E0A33A;--warn-fill:#D99A2B;--warn-weak:rgba(224,163,58,.14);
+  --down:#F2828A;--down-weak:rgba(242,130,138,.12);
+  --info:#8DB0EA;--info-weak:rgba(141,176,234,.14);
+  --focus:#EDEAE2;--selection:rgba(242,97,75,.28);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow:0 0 0 1px rgba(255,255,255,.04) inset,0 24px 48px -24px rgba(0,0,0,.7);
+}}
+:root[data-theme=dark]{
+  color-scheme:dark;
+  --bg:#141411;--surface:#1B1B17;--surface-2:#24231F;--surface-3:#2C2B26;--hover:#24231F;
+  --line:#2C2B26;--line-2:#3A3934;
+  --ink:#EDEAE2;--ink-2:#D6D2C8;--muted:#A9A69C;--faint:#959288;
+  --signal:#F2614B;--signal-ink:#F58A78;--signal-weak:rgba(242,97,75,.14);
+  --ok:#4CB38C;--ok-weak:rgba(76,179,140,.14);
+  --warn:#E0A33A;--warn-fill:#D99A2B;--warn-weak:rgba(224,163,58,.14);
+  --down:#F2828A;--down-weak:rgba(242,130,138,.12);
+  --info:#8DB0EA;--info-weak:rgba(141,176,234,.14);
+  --focus:#EDEAE2;--selection:rgba(242,97,75,.28);
+  --shadow-sm:0 1px 2px rgba(0,0,0,.4);
+  --shadow:0 0 0 1px rgba(255,255,255,.04) inset,0 24px 48px -24px rgba(0,0,0,.7);
+}
+::selection{background:var(--selection)}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}}

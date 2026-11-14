@@ -8,7 +8,7 @@ const DAY = 86_400_000;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const SHORT_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 /** Background tints for the timeline bar (decorative: every shift is also listed as text). */
-const TINTS = ["#0b7a43", "#2563eb", "#9333ea", "#c2410c", "#0e7490", "#be185d", "#4d7c0f", "#6d28d9"];
+const TINTS = ["#2F5DA8", "#1E7556", "#6B4FA0", "#9A4A12", "#0E6E82", "#A23B72", "#56554E", "#4A6B1E"];
 
 const browserZone = () => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; } };
 const zones = (() => { try { return (Intl as unknown as { supportedValuesOf?: (k: string) => string[] }).supportedValuesOf?.("timeZone") ?? []; } catch { return []; } })();

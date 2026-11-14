@@ -60,6 +60,8 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
   await test.step("self-hosted: no usage banner, no Plan & usage entry, no limits", async () => {
     await expect(page.locator("[data-usage-alert]")).toHaveCount(0);
     await expect(page.locator("nav.nl a[data-nav=usage]")).toHaveJSProperty("hidden", true);
+    // Community is free: no Billing entry either (the route itself stays guarded by the API)
+    await expect(page.locator("nav.nl a[data-nav=billing]")).toHaveJSProperty("hidden", true);
     await page.goto("/app/usage");
     await expect(page.getByText("This deployment has no plans or usage limits.")).toBeVisible();
     await expect(page.locator(".meter, [data-usage-alert]")).toHaveCount(0);

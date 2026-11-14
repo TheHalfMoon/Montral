@@ -1,6 +1,6 @@
 // Explicit dark-theme WCAG 2.1 AA qualification on the built self-hosted Node server.
-// The landing page intentionally defaults to data-theme="light"; operating-system dark emulation
-// alone would silently test its light palette. Set the actual theme attribute after navigation,
+// A stored theme choice overrides the operating-system preference on the landing page, so emulation
+// alone is not proof the dark palette is active. Set the actual theme attribute after navigation,
 // assert the dark CSS token is active, then run axe. Every case runs in all five Playwright projects.
 import { checkA11y, expect, synthetic, test } from "../support/fixtures";
 
@@ -10,7 +10,7 @@ async function activateDarkTheme(page: import("@playwright/test").Page) {
   await page.locator("html").evaluate((root) => { root.dataset.theme = "dark"; });
   // Landing transitions its background for 250 ms. Axe must inspect the settled dark palette,
   // not a light background partway through the transition (particularly in WebKit).
-  await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === "rgb(10, 12, 11)");
+  await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === "rgb(20, 20, 17)");
   const result = await page.locator("html").evaluate((root) => ({
     theme: root.dataset.theme,
     preference: matchMedia("(prefers-color-scheme: dark)").matches,
@@ -19,7 +19,7 @@ async function activateDarkTheme(page: import("@playwright/test").Page) {
   expect(result, "the dark palette must actually be active, not just requested").toEqual({
     theme: "dark",
     preference: true,
-    bg: "#0a0c0b",
+    bg: "#141411",
   });
 }
 

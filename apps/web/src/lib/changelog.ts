@@ -26,6 +26,15 @@ export interface ChangelogEntry {
 
 /** Community entries, newest first within a day. Cloud-only entries are added by changelog-cloud.ts. */
 export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
+  { id: "threshold-identity", date: "2026-11-14", edition: "community",
+    title: { en: "A new look: the Threshold identity", zh: "全新视觉：Threshold 品牌形象" },
+    summary: { en: "Montral has a new mark, colours and typography, and a rebuilt home page.", zh: "Montral 换上了新的标志、配色和字体，并重新设计了首页。" },
+    points: [
+      { en: "The mark is a bar with a small square crossing above it: the moment a signal crosses a threshold.", zh: "新标志由一条横线和其上方的小方块组成，代表信号越过阈值的那一刻。" },
+      { en: "Self-hosted Newsreader, Inter and JetBrains Mono fonts; no requests to font services.", zh: "自托管 Newsreader、Inter 和 JetBrains Mono 字体，不会向任何字体服务发起请求。" },
+      { en: "The home page follows your system's light or dark setting and has an interactive product tour.", zh: "首页跟随系统的浅色或深色设置，并提供可交互的产品导览。" },
+      { en: "Self-hosted installs no longer show a Billing entry; it appears only where billing is configured.", zh: "自托管部署不再显示“账单”入口，只有配置了计费的部署才会出现。" },
+    ] },
   { id: "multi-region-confirmation", date: "2026-11-11", edition: "community",
     title: { en: "Safer multi-region alerts and probe drains", zh: "更可靠的多区域告警与探针下线" },
     summary: { en: "An unreachable probe region can no longer let one region's view open an incident on its own.", zh: "某个探针区域无法访问时，不再仅凭单个区域的结果创建事件。" },

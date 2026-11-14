@@ -21,7 +21,7 @@ const zhMeta = titleZh || descriptionZh ? scriptJson({ title: (titleZh ?? title)
   <header class="doc-top">
     <div class="doc-top-in">
       <a href="/" class="doc-brand" aria-label="Montral">
-        <span class="doc-mk"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6H21" /></svg></span>
+        <svg class="tm" viewBox="0 0 130 85" aria-hidden="true"><rect y="58" width="130" height="27" rx="2" fill="currentColor"/><rect x="92" width="36" height="36" rx="2" fill="#F04D35"/></svg>
         <b>Montral</b>
       </a>
       <nav class="doc-links">
@@ -47,7 +47,7 @@ const zhMeta = titleZh || descriptionZh ? scriptJson({ title: (titleZh ?? title)
     <div class="sf-wrap">
       <div class="sf-grid">
         <div>
-          <a class="doc-brand sf-brand" href="/"><span class="doc-mk"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-6 4 12 2.5-6H21" /></svg></span><b>Montral</b></a>
+          <a class="doc-brand sf-brand" href="/"><svg class="tm" viewBox="0 0 130 85" aria-hidden="true"><rect y="58" width="130" height="27" rx="2" fill="currentColor"/><rect x="92" width="36" height="36" rx="2" fill="#F04D35"/></svg><b>Montral</b></a>
           <p class="sf-tag"><span lang="en">Open-source uptime monitoring and status pages for Cloudflare Workers and Postgres.</span><span lang="zh-CN">面向 Cloudflare Workers 与 Postgres 的开源可用性监控与状态页。</span></p>
           <a class="sf-status" id="sf-status" href="/status/montral" hidden><i></i><span id="sf-status-t"></span></a>
         </div>
@@ -86,8 +86,8 @@ const zhMeta = titleZh || descriptionZh ? scriptJson({ title: (titleZh ?? title)
   .doc-brand { display: flex; align-items: center; gap: 10px; color: var(--ink); font-size: 17px; font-weight: 600; letter-spacing: -.01em; text-decoration: none; }
   .doc-brand b { font-weight: 600; }
   @media (hover: hover) { .doc-brand:hover { opacity: .8; } .doc a:not([class]):hover, .doc a.sf-status:hover { text-decoration: underline; } .sf-grid a.sf-status:hover { border-color: var(--faint); text-decoration: none; } }
-  .doc-mk { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg, #0f9d58, #0a5c34); display: grid; place-items: center; flex: none; }
-  .doc-mk svg { width: 16px; height: 16px; }
+  
+
   .doc-links { display: flex; gap: 28px; justify-self: center; font-size: 14.5px; }
   .doc-links a { color: var(--muted); text-decoration: none; transition: color .15s; }
   .doc-links a:hover { color: var(--ink); }

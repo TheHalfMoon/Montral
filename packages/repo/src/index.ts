@@ -517,7 +517,7 @@ export interface StatusPage {
   createdAt: Date;
 }
 export type NewStatusPage = { slug: string; title: string; theme?: string; showLatency?: boolean; externalUrl?: string | null; hideBranding?: boolean; visibility?: StatusPage["visibility"]; accessPasswordHash?: string | null };
-export type StatusPagePatch = Partial<Pick<StatusPage, "title" | "theme" | "showLatency" | "externalUrl" | "hideBranding" | "uptimeOkPct" | "uptimeWarnPct" | "mcpEnabled" | "maintenanceReminderHours" | "visibility" | "accessPasswordHash" | "accessVersion">>;
+export type StatusPagePatch = Partial<Pick<StatusPage, "title" | "theme" | "showLatency" | "externalUrl" | "hideBranding" | "uptimeOkPct" | "uptimeWarnPct" | "mcpEnabled" | "maintenanceReminderHours" | "visibility" | "accessPasswordHash">>;
 export type PageComponentInput = { monitorId: string; groupName?: string };
 export interface Subscriber {
   id: string;
@@ -942,7 +942,8 @@ export interface Repo {
   createStatusPage(orgId: string, projectId: string, p: NewStatusPage): Promise<StatusPage>;
   /** Atomically enforce a workspace-wide page cap even with concurrent requests across projects/replicas. */
   createStatusPageWithinLimit(orgId: string, projectId: string, p: NewStatusPage, maxPages: number): Promise<StatusPage | null>;
-  updateStatusPage(id: string, patch: StatusPagePatch): Promise<void>;
+  /** Password replacements, visibility transitions and explicit revocation advance access atomically. */
+  updateStatusPage(id: string, patch: StatusPagePatch, options?: { revokeAccess?: true }): Promise<void>;
   deleteStatusPage(id: string): Promise<void>;
   pageComponents(pageId: string): Promise<{ monitorId: string; groupName: string }[]>;
   /** Replace the page's components; monitors not in the workspace (or the key's projects) are dropped. */

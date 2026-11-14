@@ -131,6 +131,13 @@ The source audit found the following executable work beyond the earlier historic
 | SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Implemented on this branch; qualification/merge pending. Actual-project write validation, repository selection and delivery/retry/escalation boundaries retain shared channels. `docs/evidence/2026-11-14-channel-project-authority.md`. |
 | SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
 
+## Status-access findings under qualification
+
+| ID | Gap | Severity | Status |
+|---|---|---|---|
+| SEC-STATUS-VERSION | Concurrent protection edits could reuse a revision and retain outsider grants or subscriber eligibility | P2 | Implemented on this branch; qualification/merge pending. Atomic current-row access revision update. `docs/evidence/2026-11-14-status-access-races.md`. |
+| SEC-STATUS-SUBSCRIBE | An in-flight subscription could adopt a revision newer than its access proof | P2 | Implemented on this branch; qualification/merge pending. Bind subscriber eligibility to the middleware-authorized page/version. Same evidence file. |
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

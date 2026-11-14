@@ -1712,8 +1712,17 @@ export function createRepo(db: Db): Repo {
         return page;
       });
     },
-    async updateStatusPage(id, patch) {
-      if (Object.keys(patch).length) await db.update(schema.statusPage).set(patch).where(eq(schema.statusPage.id, id));
+    async updateStatusPage(id, patch, options) {
+      const revoke = options?.revokeAccess || patch.accessPasswordHash !== undefined;
+      if (!Object.keys(patch).length && !revoke) return;
+      // Compare and advance against the row being updated, after concurrent writers serialize.
+      // A route's prior snapshot cannot decide whether a visibility change revokes current outsiders.
+      const accessVersion = revoke
+        ? sql`${schema.statusPage.accessVersion} + 1`
+        : patch.visibility !== undefined
+          ? sql`${schema.statusPage.accessVersion} + case when ${schema.statusPage.visibility} is distinct from ${patch.visibility} then 1 else 0 end`
+          : undefined;
+      await db.update(schema.statusPage).set({ ...patch, ...(accessVersion ? { accessVersion } : {}) }).where(eq(schema.statusPage.id, id));
     },
     async deleteStatusPage(id) {
       await db.delete(schema.statusPage).where(eq(schema.statusPage.id, id));

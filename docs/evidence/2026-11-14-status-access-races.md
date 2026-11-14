@@ -1,0 +1,14 @@
+# Status-page access revision races
+
+Two separate races could retain outsider access after a protection change. Both were reproduced against the real Hono application and disposable PostgreSQL 17, using synthetic identities and an in-memory mail transport.
+
+1. Concurrent authorized manager requests read the same access version. Absolute version assignments could collapse two password changes or a password change followed by revocation into one revision. A stale visibility PATCH could restore password protection without invalidating subscribers admitted while the page was public. Three deterministic regression cases failed before the fix.
+2. Subscription middleware authorized one page revision, but the handler fetched the page again and saved its newer revision. A request already in flight during protection or revocation could acquire subscriber eligibility it had never proved. This also affected refresh of an already confirmed subscriber. Independent postpatch review found this distinct boundary, and two real-database cases reproduced it before correction.
+
+The repository now advances access versions within the same UPDATE as the password or visibility change, comparing visibility against the current stored row. Explicit revocation uses a server-owned option rather than accepting an absolute revision in StatusPagePatch. Subscription creation and refresh record the page ID and version actually authorized by middleware. A page missing during authorization cannot become an authorized subscription target later in the same request.
+
+Six regression cases control the interleaving with promises, without timing sleeps. Controls retain access after a title edit or unchanged visibility, accept the current password after revocation, and allow a subscriber to renew with a current grant. Existing signed grant formats, share-link secrets and schema remain unchanged. All replicas must run the updated code before the old writer/read paths are eliminated; this is not a production deployment claim.
+
+Validation at PR preparation: nearest access suites passed 19/19 before the final missing-page case; the subsequent full API run passed all six new cases and 1,606 tests overall, with 31 skipped and one unrelated operator-suite 20-second timeout. The operator suite passed 3/3 in a fresh isolated database without timeout changes. A fresh full single-worker run is pending. API and database TypeScript checks and the Node build passed. A repeated focused run against a previously used database hit the existing per-address mail quota; no production quota was weakened. Hosted qualification and merge remain pending.
+
+Review: a fresh independent source investigator confirmed the manager race; one fresh independent postpatch reviewer found the subscription race above. The parent reproduced and corrected that finding. The managed repository security scan remains partial and records these as two separate findings, not whole-repository clearance.

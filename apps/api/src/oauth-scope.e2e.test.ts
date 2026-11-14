@@ -134,6 +134,16 @@ describe.skipIf(!url)("an agent sees only what the user authorized", () => {
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
     };
 
+    // Readable workspace channels still require unrestricted mutation authority. Dependency errors must not
+    // reveal the names of monitors in Beta through either shared or project-bound channels.
+    const sharedChannel = await ada("POST", "/channels", { type: "email", name: "Shared scope control", config: { to: "scope@example.com" }, scope: "workspace" });
+    expect(sharedChannel.status).toBe(201);
+    expect((await ada("PATCH", `/monitors/${betaMon}`, { channelIds: [betaChannel.body.id, sharedChannel.body.id] }, { "x-project-id": beta })).status).toBe(200);
+    for (const id of [betaChannel.body.id, sharedChannel.body.id]) {
+      expect((await agent("DELETE", `/channels/${id}`)).status).toBe(204);
+      expect((await ada("DELETE", `/channels/${id}`)).status).toBe(409);
+    }
+
     expect((await agent("GET", "/hooks/inboxes")).body.inboxes.map((i: any) => i.id)).toEqual([alphaHookId]);
     expect((await agent("GET", `/hooks/inboxes/${betaHookId}/events`)).status).toBe(404);
     expect((await agent("POST", "/hooks/inboxes", { name: "Wrong project" }, { "x-project-id": beta })).status).toBe(403);

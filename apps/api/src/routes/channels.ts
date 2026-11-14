@@ -147,13 +147,20 @@ export const channels = new Hono<AppEnv>()
   .delete("/:id", uuidParams, requireManager, async (c) => {
     const repo = c.get("repo");
     const id = c.req.param("id");
+    const scope = c.get("projectScope");
+    const existing = await repo.getChannel(c.get("orgId"), id, scope);
+    // Workspace channels are readable by a scoped grant, but only an unrestricted manager may mutate them.
+    if (!existing || (scope && (existing.projectId == null || !scope.includes(existing.projectId)))) return c.body(null, 204);
     // a channel some monitors still alert through is only removed once they have let go of it
-    const using = await repo.monitorsUsingChannel(c.get("orgId"), id);
+    const consumers = await repo.monitorsUsingChannel(c.get("orgId"), id);
+    if (scope && consumers.some((m) => m.projectId == null || !scope.includes(m.projectId))) {
+      return c.json({ error: "This channel is still used by monitors. Remove their channel references before deleting it.", code: "channel_in_use" }, 409);
+    }
+    const using = consumers.map(({ id, name }) => ({ id, name }));
     if (using.length) {
       const names = using.slice(0, 5).map((m) => m.name).join(", ") + (using.length > 5 ? ", …" : "");
       return c.json({ error: `This channel is used by ${using.length} monitor${using.length === 1 ? "" : "s"} (${names}). Turn it off on ${using.length === 1 ? "that monitor" : "those monitors"} before removing it.`, code: "channel_in_use", monitors: using }, 409);
     }
-    const existing = await repo.getChannel(c.get("orgId"), id, c.get("projectScope"));
     await repo.deleteChannel(c.get("orgId"), id, c.get("projectScope"));
     if (existing) await audit(c, "channel.delete", { type: "channel", id: existing.id, projectId: existing.projectId }, auditChanges({}, { name: existing.name, type: existing.type }));
     return c.body(null, 204);

@@ -824,7 +824,7 @@ export interface Repo {
   /** Enabled channels (the project's own and the workspace-wide ones) that new monitors of the project start out with. */
   autoEnabledChannelIds(orgId: string, projectId: string): Promise<string[]>;
   /** Monitors that list the channel explicitly (a monitor with no list alerts every channel, so it does not count). */
-  monitorsUsingChannel(orgId: string, channelId: string): Promise<{ id: string; name: string }[]>;
+  monitorsUsingChannel(orgId: string, channelId: string): Promise<{ id: string; name: string; projectId: string | null }[]>;
   /** Enabled channels to alert: the listed ones, or (no list) the project's own plus workspace-wide ones. */
   /** Registers a device for the user; a token that belonged to someone else moves to this user. */
   upsertPushDevice(userId: string, d: NewPushDevice): Promise<PushDevice>;

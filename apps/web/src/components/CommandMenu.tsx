@@ -72,7 +72,7 @@ export default function CommandMenu() {
   const [incidents, setIncidents] = useState<Incident[] | null>(null);
   const [failed, setFailed] = useState(false);
   const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLUListElement>(null);
+  const list = useRef<HTMLDivElement>(null);
   const returnTo = useRef<HTMLElement | null>(null);
 
   const close = useCallback(() => {
@@ -86,13 +86,19 @@ export default function CommandMenu() {
     setActive(0);
     setOpen(true);
     setFailed(false);
-    Promise.all([api.monitors(), api.incidents()])
-      .then(([m, i]) => { setMonitors(m); setIncidents(i); })
-      .catch(() => setFailed(true));
+    // each list on its own: incidents failing must not throw away the monitors (or the other way round)
+    void Promise.allSettled([api.monitors(), api.incidents()]).then(([m, i]) => {
+      setMonitors(m.status === "fulfilled" ? m.value : []);
+      setIncidents(i.status === "fulfilled" ? i.value : []);
+      if (m.status === "rejected" || i.status === "rejected") setFailed(true);
+    });
   }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (e.isComposing) return;
+      // another dialog owns the keyboard while it is open
+      if (!open && document.querySelector(".modal")) return;
       if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
         if (open) close(); else show();
@@ -138,7 +144,8 @@ export default function CommandMenu() {
 
   if (!open) return null;
 
-  const run = (i: number) => { const it = items[i]; if (!it) return; setOpen(false); it.run(); };
+  // give focus back first: actions that do not navigate (theme, sign-out) must not leave it on a removed node
+  const run = (i: number) => { const it = items[i]; if (!it) return; close(); it.run(); };
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setActive((a) => (items.length ? (a + 1) % items.length : 0)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActive((a) => (items.length ? (a - 1 + items.length) % items.length : 0)); }
@@ -149,7 +156,13 @@ export default function CommandMenu() {
     else if (e.key === "Tab") e.preventDefault(); // the input is the only stop inside the dialog
   };
 
-  let group = "";
+  // results grouped for the listbox: each group is a role="group" named by its visible heading
+  const groups: { name: string; items: { it: Item; i: number }[] }[] = [];
+  items.forEach((it, i) => {
+    const last = groups[groups.length - 1];
+    if (last && last.name === it.group) last.items.push({ it, i });
+    else groups.push({ name: it.group, items: [{ it, i }] });
+  });
   return (
     <div className="cmdk-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget) close(); }}>
       <div className="cmdk" role="dialog" aria-modal="true" aria-label={t("Command menu")} onKeyDown={onKeyDown}>
@@ -158,8 +171,8 @@ export default function CommandMenu() {
           <input
             ref={input}
             role="combobox"
-            aria-expanded="true"
-            aria-controls="cmdk-list"
+            aria-expanded={items.length > 0}
+            aria-controls={items.length > 0 ? "cmdk-list" : undefined}
             aria-autocomplete="list"
             aria-activedescendant={items[active] ? `cmdk-${items[active].id}` : undefined}
             aria-label={t("Search pages, monitors and actions")}
@@ -171,29 +184,31 @@ export default function CommandMenu() {
           />
           <kbd>Esc</kbd>
         </div>
-        <ul className="cmdk-list" id="cmdk-list" role="listbox" ref={list} aria-label={t("Results")}>
-          {items.map((it, i) => {
-            const head = it.group !== group ? (group = it.group) : null;
-            return (
-              <li key={it.id} role="presentation">
-                {head && <div className="cmdk-g" role="presentation">{head}</div>}
-                <div
-                  id={`cmdk-${it.id}`}
-                  data-i={i}
-                  role="option"
-                  aria-selected={i === active}
-                  className={`cmdk-o${i === active ? " on" : ""}`}
-                  onMouseMove={() => setActive(i)}
-                  onClick={() => run(i)}
-                >
-                  {it.shape ? <span className={`st ${it.shape}`} aria-hidden="true" /> : <span className="cmdk-dot" aria-hidden="true" />}
-                  <span className="cmdk-l">{it.label}</span>
-                  {it.hint && <span className="cmdk-h">{it.hint}</span>}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        {items.length > 0 && (
+          <div className="cmdk-list" id="cmdk-list" role="listbox" ref={list} aria-label={t("Results")}>
+            {groups.map((g, gi) => (
+              <div key={g.name} role="group" aria-labelledby={`cmdk-g${gi}`}>
+                <div className="cmdk-g" id={`cmdk-g${gi}`} role="presentation">{g.name}</div>
+                {g.items.map(({ it, i }) => (
+                  <div
+                    key={it.id}
+                    id={`cmdk-${it.id}`}
+                    data-i={i}
+                    role="option"
+                    aria-selected={i === active}
+                    className={`cmdk-o${i === active ? " on" : ""}`}
+                    onMouseMove={() => setActive(i)}
+                    onClick={() => run(i)}
+                  >
+                    {it.shape ? <span className={`st ${it.shape}`} aria-hidden="true" /> : <span className="cmdk-dot" aria-hidden="true" />}
+                    <span className="cmdk-l">{it.label}</span>
+                    {it.hint && <span className="cmdk-h">{it.hint}</span>}
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        )}
         {items.length === 0 && <p className="cmdk-empty">{t("No results")}</p>}
         {monitors === null && !failed && <p className="cmdk-note" role="status">{t("Loading monitors…")}</p>}
         {failed && <p className="cmdk-note" role="status">{t("Monitors and incidents could not be loaded. Pages and actions still work.")}</p>}

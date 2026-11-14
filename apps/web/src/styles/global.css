@@ -81,7 +81,7 @@ h1,h2,h3{font-family:var(--serif);font-weight:500;letter-spacing:-.015em}
 .tbl .tr.th{border-top:0;font:500 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);background:var(--surface-2);border-radius:var(--radius) var(--radius) 0 0}
 .tbl small{display:block;color:var(--faint);font:12.5px var(--mono)}
 /* above the phone tab bar (20) and drawer scrim (30): the bottom-sheet footer, with its submit button, sat under the tabs */
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:grid;place-items:center;z-index:35}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:grid;place-items:center;z-index:var(--z-modal)}
 .modal .card{width:min(520px,92vw);padding:28px;display:grid;gap:16px}
 .auth{min-height:100vh;display:grid;place-items:center;padding:24px}
 .auth .card{width:min(420px,100%);padding:36px;display:grid;gap:18px}
@@ -746,7 +746,7 @@ a.muted:hover{color:var(--ink)}
 
 /* ---------- Threshold app shell ---------- */
 /* The sidebar is Ink in both themes; re-scoping the tokens dresses everything inside it (switcher menus included). */
-.side{background:#171713;color:var(--ink);border-right-color:#2C2B26;--surface:#1F1F1B;--surface-2:#24231F;--surface-3:#2E2D28;--hover:#24231F;--line:#2C2B26;--line-2:#3A3934;--ink:#EDEAE2;--ink-2:#D6D2C8;--muted:#AEAAA0;--faint:#9A978D;--focus:#EDEAE2;--down:#F2828A;--ok:#4CB38C;--accent:var(--ok)}
+.side{background:#171713;color:var(--ink);border-right-color:#2C2B26;--bg:#171713;--surface:#1F1F1B;--surface-2:#24231F;--surface-3:#2E2D28;--hover:#24231F;--line:#2C2B26;--line-2:#3A3934;--ink:#EDEAE2;--ink-2:#D6D2C8;--muted:#AEAAA0;--faint:#9A978D;--focus:#EDEAE2;--down:#F2828A;--ok:#4CB38C;--accent:var(--ok)}
 :root[data-theme=dark] .side{background:#0F0F0D}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]) .side{background:#0F0F0D}}
 .side .brand{color:var(--ink)}

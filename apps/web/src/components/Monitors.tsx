@@ -141,7 +141,7 @@ export default function Monitors() {
     const k = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
       const typing = !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
-      if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); document.getElementById("mon-search")?.focus(); }
+      if (e.key === "/" && !typing && !document.querySelector(".modal, .cmdk-scrim") && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); document.getElementById("mon-search")?.focus(); }
     };
     addEventListener("keydown", k);
     return () => removeEventListener("keydown", k);

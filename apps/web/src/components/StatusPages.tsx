@@ -5,6 +5,7 @@ import { api, type DomainCheckError, type Monitor, type StatusPage, type Subscri
 import { mounted } from "../lib/mounted";
 import { ask } from "../lib/confirm";
 import Modal from "./Modal";
+import Segmented from "./Segmented";
 
 export default function StatusPages() {
   const [pages, setPages] = useState<StatusPage[] | null>(null);
@@ -163,11 +164,7 @@ export function StatusPageEditor({ id }: { id: string }) {
             <label className="fld">{t("Title")}<input className="in" value={page.title} onChange={(e) => setPage({ ...page, title: e.target.value })} /></label>
             <div className="fld">{t("Slug")}<div className="in mono faint ro">/status/{page.slug}</div></div>
             <div className="fld">{t("Theme")}
-              <div className="seg">
-                {(["light", "dark", "auto"] as const).map((th) => (
-                  <i key={th} className={page.theme === th ? "on" : ""} onClick={() => setPage({ ...page, theme: th })}>{t(th === "auto" ? "Auto" : th === "dark" ? "Dark" : "Light")}</i>
-                ))}
-              </div>
+              <Segmented label={t("Theme")} value={page.theme} onChange={(th) => setPage({ ...page, theme: th })} options={(["light", "dark", "auto"] as const).map((th) => ({ value: th, label: t(th === "auto" ? "Auto" : th === "dark" ? "Dark" : "Light") }))} />
             </div>
             <label className="fld">{t("Website link (optional)")}<input className="in" type="url" inputMode="url" placeholder="https://example.com" maxLength={2048} value={page.externalUrl ?? ""} onChange={(e) => setPage({ ...page, externalUrl: e.target.value })} /><small className="faint">{t("Shows an external-link icon next to the title that opens this address.")}</small></label>
             <button type="button" className="route tog" onClick={() => setPage({ ...page, showLatency: !page.showLatency })}>

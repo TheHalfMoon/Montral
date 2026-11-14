@@ -5,11 +5,13 @@ import { authClient } from "../lib/auth-client";
 import { api } from "../lib/api";
 import { ask } from "../lib/confirm";
 import Modal from "./Modal";
+import { toast } from "../lib/toast";
+import Segmented from "./Segmented";
 
 // The session's "active organization" can be unset (older sessions, cookie cache); the workspace the API resolves is authoritative.
 const orgId = () => api.me().then((m) => m.organization.id);
 
-type Member = { id: string; role: string; user: { name: string; email: string } };
+type Member = { id: string; userId?: string; role: string; user: { name: string; email: string } };
 type Invite = { id: string; email: string; role: string; status: string; expiresAt?: string };
 
 /** "Expires in 6 days" / "Expires today", from the invitation's own expiry. */
@@ -57,8 +59,12 @@ export default function Team() {
   const [removing, setRemoving] = useState("");
   const [canceling, setCanceling] = useState("");
   const [open, setOpen] = useState(false);
+  const [myId, setMyId] = useState("");
+  const [changing, setChanging] = useState("");
   const load = async () => {
-    const res = await authClient.organization.getFullOrganization({ query: { organizationId: await orgId() } });
+    const me = await api.me();
+    setMyId(me.userId);
+    const res = await authClient.organization.getFullOrganization({ query: { organizationId: me.organization.id } });
     const o = res.data as { members?: Member[]; invitations?: Invite[] } | null;
     setMembers(o?.members ?? []);
     setInvites((o?.invitations ?? []).filter((i) => i.status === "pending" && (!i.expiresAt || new Date(i.expiresAt).getTime() > Date.now())));
@@ -81,6 +87,19 @@ export default function Team() {
     });
   }
   const initial = (m: string) => (m.trim()[0] ?? "?").toUpperCase();
+  // only owners and admins see member actions; the server enforces the same rule on every call
+  const myRole = members.find((m) => m.userId === myId)?.role;
+  const canManage = myRole === "owner" || myRole === "admin";
+  async function changeRole(m: Member, role: "admin" | "member") {
+    setChanging(m.id);
+    setMsg("");
+    try {
+      const r = await authClient.organization.updateMemberRole({ memberId: m.id, role, organizationId: await orgId() });
+      if (r.error) { setMsg(r.error.message ?? t("Could not change the role")); return; }
+      toast(t("Role updated."));
+      await load();
+    } catch (x) { setMsg((x as Error).message); } finally { setChanging(""); }
+  }
   return (
     <>
       <div className="ph">
@@ -109,8 +128,11 @@ export default function Team() {
               <div className="tr tm-tr" key={m.id}>
                 <div className="nm"><span className="av">{initial(m.user.name || m.user.email)}</span><div><b style={{ fontWeight: 600 }}>{m.user.name}</b><small>{m.user.email}</small></div></div>
                 <span><span className={`pill ${m.role === "owner" ? "up" : ""}`}>{t(m.role)}</span></span>
-                {m.role !== "owner" ? (
-                  <RowMenu busy={removing === m.id} items={[{
+                {m.role !== "owner" && canManage ? (
+                  <RowMenu busy={removing === m.id || changing === m.id} items={[{
+                    label: m.role === "admin" ? t("Change role to member") : t("Change role to admin"),
+                    run: () => changeRole(m, m.role === "admin" ? "member" : "admin"),
+                  }, {
                     label: t("Remove from workspace"), danger: true,
                     run: async () => {
                       if (!(await ask(`${t("Remove")} ${m.user.email}?`, t("Remove")))) return;
@@ -166,9 +188,7 @@ export default function Team() {
             <h2 style={{ fontSize: 30 }}>{t("Invite a teammate")}</h2>
             <label className="fld">{t("Email")}<input className="in" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" /></label>
             <div className="fld">{t("Role")}
-              <div className="seg">
-                {(["member", "admin"] as const).map((r) => <i key={r} className={role === r ? "on" : ""} onClick={() => setRole(r)}>{t(r)}</i>)}
-              </div>
+              <Segmented label={t("Role")} value={role} onChange={setRole} options={(["member", "admin"] as const).map((r) => ({ value: r as string, label: t(r) }))} />
             </div>
             {msg && <p className="err">{msg}</p>}
             <div style={{ display: "flex", gap: 10, justifyContent: "flex-end" }}>

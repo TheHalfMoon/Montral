@@ -63,6 +63,21 @@ Not run locally: PostgreSQL-backed API tests and the Playwright/axe matrix (Dock
 machine); they run in the PR's required CI. `e2e/tests/dark-mode.spec.ts` now expects the Threshold dark background
 (`#141411`), and `e2e/tests/cloud-usage.spec.ts` asserts that Billing is hidden on unmetered deployments.
 
+## Independent review (before merge)
+
+An independent reviewer read the full diff (no edits). Findings and resolution:
+
+| Severity | Finding | Resolution |
+|---|---|---|
+| High | Light `--ok` on its 10% tint over `--bg`/`--surface-2` was 4.41:1 (status strip, `.pill.up`) | `--ok` darkened to `#17664A` (5.35:1 on tint over `--bg`, 5.00 over `--surface-2`) |
+| Medium | Dark theme: avatar initials `#fff` on light `--ink-2` (1.5:1) | `.av` text uses `var(--bg)` |
+| Medium | Dark theme: toggle knob `#fff` on `--ink` track (1.2:1) | knob uses `var(--surface)` when on |
+| Low | Status footer showed a raw key for `overall: "unknown"` | footer badge only for operational / degraded / outage |
+| Low | `html[lang=zh-CN]` overrode the font stacks with an unloaded family | rule removed; stacks come from `threshold.css` |
+| Low | Unloaded "Instrument Serif" / "Geist Mono" names in onboarding, meters, 404, docs | `var(--serif)` / `var(--mono)` |
+| Low | `:root --shadow-sm` in `global.css` overrode the dark token | removed; `--accent-line` defined (was undefined) |
+| Low | `aria-label` on role-less `div`/`pre`; language menu `li` without `role="none"` | `role="group"` where labelled, labels dropped from `pre`, `role="none"` added |
+
 ## Known limitations
 
 - The authenticated app still uses its existing layouts and components; only tokens, fonts and marks changed here.

@@ -176,7 +176,7 @@ function tr(k){var d=dict();return d[k]||EN[k]||k}
 
 /* our own status page: shown only when it exists */
 fetch('/api/public/status/montral').then(function(r){return r.ok?r.json():null}).then(function(d){
-  if(!d||!d.overall)return;
+  if(!d||['operational','degraded','outage'].indexOf(d.overall)<0)return;
   ['cta-status','ft-status'].forEach(function(i){var e=document.getElementById(i);if(e)e.hidden=false});
   var a=document.getElementById('f-status'),k='ft.st.'+d.overall;
   a.className='f-status '+d.overall;document.getElementById('f-status-t').textContent=tr(k);a.hidden=false;

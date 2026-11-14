@@ -1,4 +1,4 @@
-/* text tokens meet WCAG 2.1 AA (4.5:1) on --bg, --surface, --surface-2 and the 10% accent tint: e2e/ axe checks */
+/* text tokens meet WCAG 2.1 AA (4.5:1) on --bg, --surface, --surface-2 and their 10% status tints: e2e/ axe checks */
 /* Colour, type, spacing and motion tokens come from /brand/threshold.css (layouts/Base.astro links it first). */
 *{box-sizing:border-box;margin:0}
 [hidden]{display:none!important}
@@ -29,7 +29,6 @@ h1,h2,h3{font-family:var(--serif);font-weight:500;letter-spacing:-.015em}
 .brand{display:flex;align-items:center;gap:10px;font-weight:600;font-size:17px;padding:2px 8px 14px}
 .tm{display:block;width:28px;height:18px;flex:none;color:var(--ink)}
 .brand{font-family:var(--serif);font-size:21px;letter-spacing:-.02em}
-.brand .mk .ic{width:18px;height:18px}
 .ic{width:18px;height:18px;flex:none}
 .ws-wrap{position:relative;margin-bottom:10px}
 .ws{width:100%;display:flex;align-items:center;gap:10px;padding:8px;border:1px solid var(--line);border-radius:11px;background:var(--surface-2);color:var(--ink);cursor:pointer;text-align:left;font:inherit}
@@ -188,7 +187,7 @@ h1 .pill,h2 .pill{font-family:var(--sans)}
 .tbl .tr>.btn,.tbl .tr>button.btn{justify-self:end}
 
 /* ── dashboard (design: Dashboard board) ── */
-:root{--accent-weak:color-mix(in srgb,var(--accent) 10%,transparent);--down-weak:color-mix(in srgb,var(--down) 9%,transparent);--shadow-sm:0 1px 2px rgba(0,0,0,.06)}
+:root{--accent-weak:color-mix(in srgb,var(--accent) 10%,transparent);--down-weak:color-mix(in srgb,var(--down) 9%,transparent);--accent-line:color-mix(in srgb,var(--accent) 30%,var(--line))}
 .ph p{margin-top:6px;font-size:15px}.ph h1{font-size:40px}
 .ph .acts{display:flex;gap:10px;flex-wrap:wrap}
 .chip{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:7px;border:1px solid var(--line);background:var(--surface-2);font:500 11px var(--mono);letter-spacing:.04em;color:var(--muted);flex:none}
@@ -259,7 +258,7 @@ svg.sp{width:100%;max-width:140px;height:30px;display:block}
 .route small{display:block;color:var(--faint);font-size:12.5px;line-height:1.3}
 .tg{width:36px;height:21px;border-radius:99px;background:var(--line-2);margin-left:auto;position:relative;flex:none}
 .tg::after{content:"";position:absolute;left:3px;top:3px;width:15px;height:15px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25)}
-.tg.on{background:var(--ink)}.tg.on::after{left:18px}
+.tg.on{background:var(--ink)}.tg.on::after{left:18px;background:var(--surface)}
 .btn.danger-l{color:var(--down);justify-content:center}
 @media (max-width:1100px){.cols{grid-template-columns:minmax(0,1fr)}}
 .rr-err{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
@@ -502,7 +501,7 @@ button.route.tog{width:100%;text-align:left;background:none;border:0;border-top:
 .ak-tr{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) minmax(0,1fr) 110px 84px!important}
 .tm-tr .nm,.ak-tr .nm{display:flex;gap:12px;align-items:center;min-width:0}
 .tm-tr .nm small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.av{width:36px;height:36px;border-radius:50%;background:var(--ink-2);color:#fff;display:grid;place-items:center;font-weight:600;flex:none}
+.av{width:36px;height:36px;border-radius:50%;background:var(--ink-2);color:var(--bg);display:grid;place-items:center;font-weight:600;flex:none}
 .av.ghost{background:var(--line-2);color:var(--muted)}
 .tr.inv{background:var(--surface-2)}
 .fresh{padding:18px 20px;margin-bottom:20px;border-color:var(--info)}
@@ -541,12 +540,12 @@ button.route.tog{width:100%;text-align:left;background:none;border:0;border-top:
 .onb-compact { margin-top: 22px; }
 .onb-side { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .onb-h { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
-.onb-t { font-family: "Instrument Serif", serif; font-weight: 400; font-size: 32px; margin: 0 0 4px; }
+.onb-t { font-family: var(--serif); font-weight: 500; font-size: 32px; margin: 0 0 4px; }
 .onb-steps { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; list-style: none; margin: 0; padding: 0; }
 .onb-opt { font-weight: 400; }
 .onb-step { display: flex; align-items: center; gap: 14px; padding: 16px 18px; border-bottom: 1px solid var(--line); min-width: 0; }
 .onb-step:last-child { border-bottom: 0; }
-.onb-n { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font: 500 13px "Geist Mono", monospace; flex: none; color: var(--muted); }
+.onb-n { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); display: grid; place-items: center; font: 500 13px var(--mono); flex: none; color: var(--muted); }
 .onb-step.done .onb-n { background: var(--accent); border-color: var(--accent); color: #fff; }
 .onb-step.done .onb-b b { color: var(--muted); }
 .onb-b { flex: 1; min-width: 0; display: grid; gap: 2px; }
@@ -578,7 +577,6 @@ button.route.tog{width:100%;text-align:left;background:none;border:0;border-top:
 .tbl:has(.tm-tr){overflow:visible}.tbl:has(.tm-tr) .tr:last-child{border-radius:0 0 var(--radius) var(--radius)}
 
 /* Chinese: one sans family everywhere (same as the landing page); headings are bold sans instead of the Latin serif */
-html[lang="zh-CN"]{--sans:"Geist","Noto Sans SC","PingFang SC","Microsoft YaHei",system-ui,sans-serif;--serif:"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif}
 html[lang="zh-CN"] body{line-height:1.7}
 html[lang="zh-CN"] h1,html[lang="zh-CN"] h2,html[lang="zh-CN"] h3,html[lang="zh-CN"] .onb-t{font-family:var(--sans);font-weight:600;letter-spacing:0}
 html[lang="zh-CN"] h1{font-weight:700}
@@ -634,7 +632,7 @@ html[lang="zh-CN"] h1{font-weight:700}
 .meter{padding:20px;display:grid;gap:12px;align-content:start}
 .meter-h{display:flex;justify-content:space-between;align-items:center;min-height:24px}
 .meter .k{font:500 11px var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--muted)}
-.meter-n{font:400 36px/1 "Instrument Serif",Georgia,serif}
+.meter-n{font:500 36px/1 var(--serif)}
 .track{height:8px;border-radius:99px;background:var(--surface-2);border:1px solid var(--line);overflow:hidden}
 .fill{height:100%;border-radius:99px;background:var(--accent)}.fill.warn{background:var(--warn-fill)}
 .pill.warn{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:99px;font-size:12.5px;font-weight:500;border:1px solid color-mix(in srgb,var(--warn) 32%,transparent);background:color-mix(in srgb,var(--warn) 12%,transparent);color:var(--warn)}

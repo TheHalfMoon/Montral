@@ -15,4 +15,10 @@ The additive migration does not backfill historical actions. Old replicas contin
 - PostgreSQL acceptance extends the real MFA operator flow: new identities on both actions; no identity/note in customer audit or narrow history; historical fixture stays null; guarded mutation/deletion; failed private identity insert rolls back the parent audit event; workspace deletion removes the private identity.
 - Independent fresh-context correctness/product/parsimony and security reviews were requested through the `ps-review` skill. A fixture expectation conflict was found and corrected before CI. This is an engineering agent review, not an external penetration test.
 
+## Supported local runtime follow-up
+
+A portable Node 24.22.1 binary was downloaded from the official Node distribution and verified against its published SHA-256. A disposable PostgreSQL 17.7 cluster runs on loopback port 55441 on `D:`; no Docker daemon, production service or system-wide runtime setting was changed. On the implementation, `operator.test.ts` plus `operator.e2e.test.ts` passed **22/22** with no skips.
+
+The broader API run exposed an existing audit test whose `TRUNCATE audit_event` now stopped at the new foreign key before reaching its append-only trigger. The test now requests `CASCADE` inside a transaction and forces rollback if truncation unexpectedly succeeds; it specifically requires the parent guard's `audit_event is append-only` error. The revised audit and operator tests passed **35/35** on Node 24.22.1 / PostgreSQL 17.7. Retention coverage also exercises the parent's transaction-local cutoff on one old fixture only, avoiding global pruning of other suites. The full API run is still in progress; no full-suite result is claimed here.
+
 No publication, production deployment, paid resource, external email or billing activation is involved. Community publication remains HOLD; Cloud and BYOC production gates remain NO-GO.

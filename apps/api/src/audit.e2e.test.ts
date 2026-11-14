@@ -280,7 +280,12 @@ describe.skipIf(!url)("workspace audit log (PostgreSQL)", () => {
     await expect(q("UPDATE audit_event SET action = 'monitor.create' WHERE id = $1", [row.id])).rejects.toThrow(/append-only/);
     await expect(q("UPDATE audit_event SET changes = NULL WHERE organization_id = $1", [owner.orgId])).rejects.toThrow(/append-only/);
     await expect(q("DELETE FROM audit_event WHERE id = $1", [row.id])).rejects.toThrow(/append-only/);
-    await expect(q("TRUNCATE audit_event")).rejects.toThrow(/append-only/);
+    // Include private attribution so PostgreSQL reaches the append-only trigger
+    // instead of stopping at its new FK. Roll back even if the guard regresses.
+    await expect(database!.transaction!(async (tx) => {
+      await tx.query("TRUNCATE audit_event CASCADE");
+      throw new Error("truncate guard missing");
+    })).rejects.toThrow(/^audit_event is append-only$/);
     // the prune setting only lets rows older than a cutoff at least 30 days back through
     const org = owner.orgId.replace(/'/g, "");
     await expect(q(`DO $t$ BEGIN PERFORM set_config('montral.audit_prune_before', extract(epoch FROM now())::text, true); DELETE FROM audit_event WHERE organization_id = '${org}'; END $t$`)).rejects.toThrow(/append-only/);

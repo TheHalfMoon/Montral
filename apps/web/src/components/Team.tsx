@@ -161,7 +161,7 @@ export default function Team() {
       </div>
 
       {open && (
-        <Modal onClose={() => setOpen(false)}>
+        <Modal onClose={() => setOpen(false)} busy={busy}>
           <form className="card" onSubmit={invite}>
             <h2 style={{ fontSize: 30 }}>{t("Invite a teammate")}</h2>
             <label className="fld">{t("Email")}<input className="in" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" /></label>

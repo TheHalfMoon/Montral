@@ -108,7 +108,7 @@ function Declare({ onClose, onDone }: { onClose: () => void; onDone: (id: string
   const [busy, run] = useBusy();
   useEffect(() => { api.monitors().then(setMonitors).catch(() => {}); }, []);
   return (
-    <Modal onClose={onClose}>
+    <Modal onClose={onClose} busy={busy}>
       <form className="card" onSubmit={(e) => {
         e.preventDefault();
         setErr("");

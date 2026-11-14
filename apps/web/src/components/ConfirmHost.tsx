@@ -18,10 +18,10 @@ export default function ConfirmHost() {
   const answer = (ok: boolean) => { current.resolve(ok); setQueue((q) => q.slice(1)); };
 
   return (
-    <Modal key={queue.length} onClose={() => answer(false)} labelledBy="ask-title">
+    <Modal key={queue.length} onClose={() => answer(false)} labelledBy="ask-title" describedBy="ask-body">
       <div className="card ask">
         <h2 id="ask-title">{current.title ?? t("Are you sure?")}</h2>
-        <p className="muted">{current.body}</p>
+        <p className="muted" id="ask-body">{current.body}</p>
         <div className="ask-actions">
           {/* the safe choice gets focus first, so Enter alone never destroys anything */}
           <button type="button" className="btn" autoFocus onClick={() => answer(false)}>{t("Cancel")}</button>

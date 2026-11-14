@@ -789,7 +789,7 @@ a.muted:hover{color:var(--ink)}
 @media (max-width:1024px){.search kbd{display:none}}
 /* dialogs (components/Modal.tsx) and the confirmation dialog (components/ConfirmHost.tsx) */
 .modal{animation:modal-in var(--t-fast) var(--ease)}
-.modal-box{display:grid;place-items:center;max-width:100%;outline:0}
+.modal-box{display:grid;justify-items:center;width:100%;max-width:100%;outline:0}
 .modal-box>.card{max-height:calc(100dvh - 48px);overflow-y:auto}
 @keyframes modal-in{from{opacity:0}to{opacity:1}}
 .ask{width:min(440px,92vw)!important;gap:12px!important}

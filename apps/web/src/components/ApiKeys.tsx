@@ -151,7 +151,7 @@ export default function ApiKeys() {
       </div>
 
       {open && (
-        <Modal onClose={() => setOpen(false)}>
+        <Modal onClose={() => setOpen(false)} busy={busy}>
           <form className="card" onSubmit={create}>
             <h2 style={{ fontSize: 30 }}>{t("New API key")}</h2>
             <label className="fld">{t("Name")}<input className="in" required autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t("CI deploy hook")} /></label>

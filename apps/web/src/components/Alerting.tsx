@@ -231,7 +231,7 @@ export default function Alerting() {
       )}
 
       {adding && (
-        <Modal onClose={() => setAdding(false)}>
+        <Modal onClose={() => setAdding(false)} busy={busy}>
           <form className="card" onSubmit={add}>
             <h2 style={{ fontSize: 30 }}>{editId ? t("Edit channel") : t("Add a channel")}</h2>
             {!editId && <div className="type-grid">

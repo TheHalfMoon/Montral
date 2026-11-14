@@ -62,7 +62,7 @@ jobs:
       - name: Typescript and Astro checks
         run: pnpm -r typecheck
       - name: PostgreSQL E2E, API, MCP transport and probe tests
-        run: pnpm --filter @montral/api test && pnpm --filter @montral/mcp-rest test && pnpm --filter @montral/probe test
+        run: pnpm --filter @montral/api test && DATABASE_URL="$TEST_DATABASE_URL" pnpm --filter @montral/db-pg test && pnpm --filter @montral/mcp-rest test && pnpm --filter @montral/probe test
       - name: Build Node API
         run: pnpm --filter @montral/api build:node
       - name: Build edge probe

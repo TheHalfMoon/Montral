@@ -124,6 +124,7 @@ configuration and are not part of the repository.
 | 81 | Alert delivery log paging: "Load older deliveries" pages GET /alert-log with before, without skipping rows that share a timestamp at the page boundary | P3 | In review |
 | 82 | Webhook replay attempt counter: owners/admins see this month's replay attempts (GET /hooks/replay-usage, closes the ledger 56 UI gap), labelled not billed, refreshed after each replay | P3 | In review |
 | 83 | Account sessions (list devices, sign out one or every other session) and change password while signed in (Better Auth list/revoke sessions, changePassword) | P2 | In review |
+| 84 | Account phones: list push devices registered by the iOS app and remove one (GET/DELETE /push/devices); hidden on servers without Apple push and no phones | P3 | In review |
 
 ## External dependencies (cannot be closed in engineering)
 

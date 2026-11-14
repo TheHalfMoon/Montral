@@ -901,5 +901,11 @@ export const zh: Record<string, string> = {
   "Use at least 8 characters.": "请至少使用 8 个字符。", "The new password must differ from the current one.": "新密码必须与当前密码不同。", "The current password is not right.": "当前密码不正确。", "Too many attempts. Wait a minute and try again.": "尝试次数过多，请稍等一分钟再试。", "Password changed, but the other sessions could not be signed out.": "密码已修改，但无法退出其他会话。",
   "Could not change the password.": "无法修改密码。", "Password changed. Other sessions were signed out.": "密码已修改，其他会话已退出。", "Password changed.": "密码已修改。",
   "Current password": "当前密码", "At least 8 characters.": "至少 8 个字符。", "Sign out of every other session": "退出其他所有会话", "Change password": "修改密码",
+  // account: phones
+  iPhone: "iPhone", "Stop push alerts to {name}? Sign in to the app on it again to turn them back on.": "停止向 {name} 推送告警？在该设备上重新登录应用即可恢复。",
+  "Remove phone": "移除手机", "Phone removed.": "已移除手机。", Phones: "手机",
+  "Phones signed in to the Montral iOS app receive push alerts from the channels you are part of.": "登录了 Montral iOS 应用的手机会收到你所在渠道的推送告警。",
+  "Push delivery is not configured on this server, so these phones get no alerts.": "此服务器未配置推送，这些手机不会收到告警。",
+  "No phones yet.": "还没有手机。", "Get the iOS app": "获取 iOS 应用", "Test build": "测试版", "Critical alerts on": "已开启紧急告警", "Push alerts on": "已开启推送告警",
   "Replay attempts this month": "本月重放次数", "counter resets on {date} (UTC)": "计数于 {date}（UTC）清零", "not billed": "不计费",
 };

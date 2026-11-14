@@ -1257,7 +1257,7 @@ export function createRepo(db: Db): Repo {
     },
     monitorsUsingChannel: (orgId, channelId) =>
       db
-        .select({ id: schema.monitor.id, name: schema.monitor.name })
+        .select({ id: schema.monitor.id, name: schema.monitor.name, projectId: schema.monitor.projectId })
         .from(schema.monitor)
         .where(and(eq(schema.monitor.organizationId, orgId), sql`${schema.monitor.channelIds} @> ARRAY[${channelId}]::uuid[]`)),
     async upsertPushDevice(userId, d) {
@@ -1312,8 +1312,8 @@ export function createRepo(db: Db): Repo {
             eq(schema.alertChannel.organizationId, orgId),
             o.withDisabled ? undefined : eq(schema.alertChannel.enabled, true),
             o.channelIds.length ? inArray(schema.alertChannel.id, o.channelIds) : undefined,
-            // without an explicit list, only the monitor's own project (plus any workspace-wide legacy channel) is alerted
-            !o.channelIds.length && o.projectId ? or(eq(schema.alertChannel.projectId, o.projectId), isNull(schema.alertChannel.projectId)) : undefined,
+            // Explicit references and legacy rows have the same project boundary as automatic selection.
+            o.projectId ? or(eq(schema.alertChannel.projectId, o.projectId), isNull(schema.alertChannel.projectId)) : isNull(schema.alertChannel.projectId),
           ),
         ),
     channelsByIds: (orgId, ids) =>

@@ -365,9 +365,13 @@ async function authorizeChannel(channel: AlertChannel, ev: Event, entitlements: 
  * Send one delivery that this worker has already claimed (status `sending`) and record the outcome. Never throws.
  * `meter` charges an email against the workspace allowance; retries are not charged again.
  */
-async function execute(repo: Repo, d: Pick<AlertDelivery, "id" | "kind" | "attempts" | "emailQuotaAttempted"> & Partial<Pick<AlertDelivery, "createdAt">>, channel: AlertChannel, ev: Event, lang: Lang, meter?: Entitlements, pushed?: PushedDevices, routingAt?: Date) {
+const channelScopeAllowed = (orgId: string, ev: Event, channel: AlertChannel) =>
+  channel.organizationId === orgId && (channel.projectId == null || channel.projectId === ev.monitor.projectId);
+
+async function execute(repo: Repo, orgId: string, d: Pick<AlertDelivery, "id" | "kind" | "attempts" | "emailQuotaAttempted"> & Partial<Pick<AlertDelivery, "createdAt">>, channel: AlertChannel, ev: Event, lang: Lang, meter?: Entitlements, pushed?: PushedDevices, routingAt?: Date) {
   const attempts = d.attempts + 1;
   try {
+    if (!channelScopeAllowed(orgId, ev, channel)) throw new Skipped("skipped: channel is not available in this project");
     if (routingAt) await authorizeChannel(channel, ev, meter ?? unmetered, routingAt);
     if (meter && channel.type === "email" && !d.emailQuotaAttempted) {
       if (routingAt) {
@@ -447,7 +451,7 @@ export async function retryDeliveries(repo: Repo, limit = 10, entitlements: Enti
       const eventKey = `${incident.id}:${delivery.kind}:${ev.count ?? 0}`;
       if (!pushedBy.has(eventKey)) pushedBy.set(eventKey, new Map());
       const pendingRouting = delivery.error === ROUTING_UNAVAILABLE;
-      await execute(repo, delivery, channel, ev, await languageFor(repo, channel), pendingRouting ? entitlements : undefined, pushedBy.get(eventKey), pendingRouting ? delivery.createdAt : undefined);
+      await execute(repo, delivery.organizationId, delivery, channel, ev, await languageFor(repo, channel), pendingRouting ? entitlements : undefined, pushedBy.get(eventKey), pendingRouting ? delivery.createdAt : undefined);
     } catch {
       // Rows were already claimed as `sending`. A transient read/finish error must
       // not starve later deliveries; the sweeper recovers the interrupted row after
@@ -466,6 +470,7 @@ export async function retryDeliveries(repo: Repo, limit = 10, entitlements: Enti
  */
 async function fanOut(repo: Repo, orgId: string, event: Event, channels: AlertChannel[], entitlements: Entitlements, extra: Partial<NewDelivery> = {}) {
   const ev = await withProject(repo, orgId, event);
+  channels = channels.filter((c) => channelScopeAllowed(orgId, ev, c));
   const fallback = channels.some((c) => c.type === "email") ? await orgLang(repo, orgId) : "en";
   const base = { organizationId: orgId, projectId: ev.monitor.projectId ?? null, kind: ev.kind, incidentId: ev.incident.id, monitorName: ev.monitor.name, ...extra };
   // a person notified directly has no channel row: the delivery names them instead (see personalChannel)
@@ -504,7 +509,7 @@ async function fanOut(repo: Repo, orgId: string, event: Event, channels: AlertCh
         return;
       }
       const claimed = await repo.claimDelivery(row.id);
-      if (claimed) await execute(repo, claimed, c, ev, lang, entitlements, pushed, entitlements.allowAlertChannel ? claimed.createdAt ?? new Date() : undefined);
+      if (claimed) await execute(repo, orgId, claimed, c, ev, lang, entitlements, pushed, entitlements.allowAlertChannel ? claimed.createdAt ?? new Date() : undefined);
     }),
   );
   for (const result of outcomes) {
@@ -628,7 +633,7 @@ export async function sendEscalations(repo: Repo, entitlements: Entitlements = u
       await repo.logDeliveries([suppressed(orgId, ev, "suppressed: maintenance")]);
       continue;
     }
-    let channels = step.channelIds.length ? await repo.channelsByIds(orgId, step.channelIds) : [];
+    let channels = (step.channelIds.length ? await repo.channelsByIds(orgId, step.channelIds) : []).filter((c) => channelScopeAllowed(orgId, ev, c));
     // A policy's first step goes out right after the incident opened: a channel that already got (or is getting) the
     // "down" alert for this incident is not paged a second time for the same thing.
     if (policy && policy.stepNumber === 1 && policy.round === 1 && channels.length) {

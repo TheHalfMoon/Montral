@@ -217,6 +217,15 @@ async function withAutoChannels(repo: Repo, orgId: string, projectId: string, ch
   return auto.length ? [...new Set([...channelIds, ...auto])] : channelIds;
 }
 
+async function channelProblem(c: Context<AppEnv>, projectId: string | null, ids: string[]) {
+  const unique = [...new Set(ids)];
+  const channels = await c.get("repo").channelsByIds(c.get("orgId"), unique);
+  if (channels.length !== unique.length || channels.some((ch) => ch.organizationId !== c.get("orgId") || (ch.projectId != null && ch.projectId !== projectId))) {
+    return c.json({ error: "One or more alert channels are not available in this project", code: "invalid_channel" }, 400);
+  }
+  return null;
+}
+
 /**
  * What the workspace's plan refuses (HTTP 402), or null. `add` is how many active monitors the request would add and
  * `intervalSec` the interval it asks for. Deployments without plans (self-hosted) never refuse.
@@ -451,6 +460,8 @@ export const monitors = new Hono<AppEnv>()
     if (badParent) return badParent;
     const badPolicy = await policyProblem(c, c.get("projectId"), v.escalationPolicyId);
     if (badPolicy) return badPolicy;
+    const badChannels = await channelProblem(c, c.get("projectId"), v.channelIds);
+    if (badChannels) return badChannels;
     const refused = await overPlan(c, { add: 1, intervalSec: v.type === "heartbeat" ? undefined : v.intervalSec });
     if (refused) return refused;
     const channelIds = await withAutoChannels(repo, c.get("orgId"), c.get("projectId"), v.channelIds);
@@ -490,6 +501,12 @@ export const monitors = new Hono<AppEnv>()
     const repo = c.get("repo");
     const v = c.req.valid("json");
     if (Object.keys(v).length === 0) return c.json({ error: "No changes" }, 400);
+    if (v.channelIds !== undefined) {
+      const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));
+      if (!current) return c.json({ error: "Not found" }, 404);
+      const badChannels = await channelProblem(c, current.projectId, v.channelIds);
+      if (badChannels) return badChannels;
+    }
     // browser journeys and their write-only secrets; the target follows the first goto step
     if (v.browser !== undefined || v.browserSecrets !== undefined || v.target !== undefined) {
       const current = await repo.getMonitor(c.get("orgId"), c.req.param("id"), c.get("projectScope"));

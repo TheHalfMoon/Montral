@@ -39,6 +39,8 @@ python3 scripts/verify_sources.py
 
 For a **local disposable environment only**, configure `DATABASE_URL` and `BETTER_AUTH_SECRET` (see `.env.example`), then run `pnpm db:migrate`. The Montral webhook schema extension is applied by the Montral Node server during startup or via the protected `POST /internal/migrate` endpoint. Do not expose development credentials.
 
+JSON CRUD validation accepts at most **4 MiB** of original request bytes within one **10-second upload window**. JSON-RPC MCP envelopes, including a whole batch, accept **5 MiB** in the same window, leaving room around the existing 4 MiB monitor-import body. Size and time refusals use HTTP 413 and 408. Existing smaller endpoint-specific limits still apply. These are per-request bounds, not an aggregate concurrency guarantee.
+
 ### Optional Cloudflare probe
 
 The Worker source is `apps/probe/src/edge.ts`, built with `pnpm --filter @montral/probe build:edge`; the example config is `apps/probe/wrangler.edge.jsonc`. **No Worker is deployed by CI.** To enable one, privately provision its `PROBE_SECRET` and explicit `ALLOWED_HOSTS`, build/deploy it separately, and configure `PROBE_REGIONS` on the scheduler with a matching signing key (a shared `PROBE_SECRET`, or optional private per-region `PROBE_SECRETS` override). It runs only signed on-demand HTTP checks; the single Montral scheduler retains ownership of monitoring state.

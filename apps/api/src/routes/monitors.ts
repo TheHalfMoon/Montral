@@ -1,4 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "../bounded-validator";
 import { MANUAL_CHECK_WINDOW_SEC, MANUAL_CHECKS_PER_WINDOW, manualChecks } from "../manual-check-gate";
 import type { Repo } from "@montral/repo";
 import { Hono, type Context } from "hono";

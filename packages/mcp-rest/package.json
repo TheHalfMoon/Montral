@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./hono": "./src/hono.ts",
+    "./body-budget": "./src/body-budget.ts",
     "./oauth": "./src/oauth.ts"
   },
   "scripts": { "typecheck": "tsc -p .", "test": "vitest run" },

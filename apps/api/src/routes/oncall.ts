@@ -1,4 +1,4 @@
-import { zValidator } from "@hono/zod-validator";
+import { zValidator } from "../bounded-validator";
 import type { EscalationPolicy, OncallLayerInput, OncallSchedule, PolicyStep, Repo, Scope } from "@montral/repo";
 import type { Context } from "hono";
 import { Hono } from "hono";

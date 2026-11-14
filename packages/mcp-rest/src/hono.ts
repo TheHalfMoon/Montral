@@ -1,4 +1,6 @@
 import type { Context, Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { limitedBodyBytes } from "./body-budget";
 import type { McpServer, RestCall } from "./rpc";
 
 export type MountMcpOptions = {
@@ -27,6 +29,8 @@ export type MountMcpOptions = {
 const originOf = (url: string) => new URL(url).origin;
 /** Most messages one JSON-RPC batch may carry; a larger one is refused before any of it runs. */
 export const MAX_BATCH = 10;
+/** Includes JSON-RPC framing around the API's existing 4 MiB bulk-import body. */
+export const MCP_BODY_MAX_BYTES = 5 * 1024 * 1024;
 const rpcError = (code: number, message: string) => ({ jsonrpc: "2.0", id: null, error: { code, message } });
 
 /**
@@ -55,7 +59,17 @@ export function mountMcp(app: Hono<any>, options: MountMcpOptions) {
     if (foreign && foreign !== origin && !(options.cookieOrigins?.(c) ?? []).includes(foreign)) headers.delete("cookie");
     if (!options.anonymous && !credentialHeaders.some((h) => headers.has(h))) return unauthorized();
 
-    const raw = (await c.req.json().catch(() => undefined)) as unknown;
+    // Bound the original JSON-RPC envelope before parsing, authentication probes,
+    // batch inspection or redispatch into REST. Public tools need this gate too.
+    let raw: unknown;
+    try {
+      const bytes = await limitedBodyBytes(c.req.raw, MCP_BODY_MAX_BYTES, 10_000);
+      try { raw = JSON.parse(new TextDecoder().decode(bytes ?? new Uint8Array())); }
+      catch { raw = undefined; }
+    } catch (error) {
+      if (error instanceof HTTPException) throw error; // keep 413/408 outside the parse-error conversion
+      raw = undefined;
+    }
     if (raw === undefined) return c.json(rpcError(-32700, "Parse error"), 400);
 
     let executionCtx: Parameters<typeof app.fetch>[2];

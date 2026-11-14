@@ -3,6 +3,7 @@ import { LOCALES, type Locale } from "../lib/i18n";
 import { go, switchLocale } from "../lib/locale-path";
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { ask } from "../lib/confirm";
 import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
@@ -246,6 +247,163 @@ function SsoLink({ accounts }: { accounts: Linked[] | null }) {
 }
 
 /** Personal settings: who you are and which language emails (and the app) use. API keys live on their own page. */
+type Sess = { id: string; token: string; userAgent?: string | null; ipAddress?: string | null; createdAt: string; updatedAt: string };
+
+/** "Chrome on Windows", read from the stored user agent; the raw string stays out of the page. */
+function device(ua?: string | null): string {
+  if (!ua) return t("Unknown device");
+  const browser = /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : /Montral/i.test(ua) ? "Montral app" : t("Browser");
+  const os = /iPhone|iPad/.test(ua) ? "iOS" : /Android/.test(ua) ? "Android" : /Mac OS X|Macintosh/.test(ua) ? "macOS" : /Windows/.test(ua) ? "Windows" : /Linux/.test(ua) ? "Linux" : "";
+  return os ? t("{browser} on {os}").replace("{browser}", browser).replace("{os}", os) : browser;
+}
+
+/**
+ * Where the user is signed in, with sign-out per session and for every other session. Better Auth asks for a recent
+ * sign-in before it lists sessions; when it refuses, the card says so instead of showing an empty list. Session tokens
+ * are only held in memory to revoke a session and are never shown.
+ */
+const SESSIONS_CHANGED = "montral:sessions";
+
+/** Sign out here, then come back to Account after signing in: Better Auth lists sessions only for a recent sign-in. */
+async function signInAgain() {
+  await fetch("/api/auth/sign-out", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+  go(`/login?next=${encodeURIComponent("/app/account")}`);
+}
+
+function Sessions() {
+  const [list, setList] = useState<Sess[] | null>(null);
+  // null: the current session is unknown, so no row offers a sign-out (it could be this one)
+  const [current, setCurrent] = useState<string | null>(null);
+  const [stale, setStale] = useState(false);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    setErr(""); setStale(false);
+    const [l, s] = await Promise.all([authClient.listSessions(), authClient.getSession()]);
+    if (l.error) {
+      setList([]);
+      if (l.error.code === "SESSION_NOT_FRESH") setStale(true);
+      else setErr(t("Could not load sessions."));
+      return;
+    }
+    setCurrent((s.data as { session?: { id: string } } | null)?.session?.id ?? null);
+    // the client may hand back Date objects or ISO strings; keep ISO strings
+    const iso = (v: unknown) => new Date(v as string | Date).toISOString();
+    const rows: Sess[] = (l.data ?? []).map((s) => ({ id: s.id, token: s.token, userAgent: s.userAgent, ipAddress: s.ipAddress, createdAt: iso(s.createdAt), updatedAt: iso(s.updatedAt) }))
+      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+    setList(rows);
+  };
+  useEffect(() => {
+    const reload = () => { load().catch(() => { setList([]); setErr(t("Could not load sessions.")); }); };
+    reload();
+    window.addEventListener(SESSIONS_CHANGED, reload);
+    return () => window.removeEventListener(SESSIONS_CHANGED, reload);
+  }, []);
+  const end = async (s: Sess) => {
+    setBusy(s.id);
+    try {
+      const r = await authClient.revokeSession({ token: s.token });
+      if (r.error) toast(r.error.message ?? t("Could not sign out that session."), "err"); else toast(t("Signed out of that session."));
+      await load();
+    } finally { setBusy(""); }
+  };
+  const endOthers = async () => {
+    if (!(await ask(t("Sign out everywhere except this device? Each of those sessions will need to sign in again."), t("Sign out other sessions")))) return;
+    setBusy("others");
+    try {
+      const r = await authClient.revokeOtherSessions();
+      if (r.error) toast(r.error.message ?? t("Could not sign out the other sessions."), "err"); else toast(t("Signed out of every other session."));
+      await load();
+    } finally { setBusy(""); }
+  };
+  const others = current === null ? [] : (list ?? []).filter((s) => s.id !== current);
+  const lang = document.documentElement.lang || undefined;
+  return (
+    <div className="card sect">
+      <h3>{t("Sessions")}</h3>
+      {/* the API trusts a signed session cookie for up to 5 minutes, so a sign-out is not instant everywhere */}
+      <p className="muted" style={{ marginBottom: 12 }}>{t("Devices and browsers signed in to your account. A session you sign out stops working within 5 minutes.")}</p>
+      {list === null && <p className="muted">{t("Loading…")}</p>}
+      {err && <p className="muted" role="status">{err}</p>}
+      {stale && (
+        <div className="sess-stale" role="status">
+          <p className="muted">{t("For your security, the list of sessions needs a sign-in from the last 24 hours.")}</p>
+          <div className="sess-acts">
+            <button type="button" className="btn sm" onClick={() => void signInAgain()}>{t("Sign out and sign in again")}</button>
+            {/* ending the other sessions does not need a recent sign-in */}
+            <button type="button" className="btn sm danger-l" disabled={!!busy} onClick={() => void endOthers()}>{busy === "others" ? t("Signing out…") : t("Sign out other sessions")}</button>
+          </div>
+        </div>
+      )}
+      {list && list.length > 0 && (
+        <ul className="sess">
+          {list.map((s) => (
+            <li key={s.id}>
+              <div className="sess-d">
+                <b>{device(s.userAgent)}</b>
+                <small>{s.ipAddress ? <span className="mono">{s.ipAddress}</span> : null}{s.ipAddress ? " · " : ""}{t("Last active")} {new Date(s.updatedAt).toLocaleString(lang, { dateStyle: "medium", timeStyle: "short" })} · {t("Signed in")} {new Date(s.createdAt).toLocaleDateString(lang)}</small>
+              </div>
+              {s.id === current
+                ? <span className="pill up">{t("This device")}</span>
+                : current === null ? null
+                : <button type="button" className="btn sm" disabled={!!busy} onClick={() => void end(s)}>{busy === s.id ? t("Signing out…") : t("Sign out")}<span className="sr-only"> {device(s.userAgent)}, {t("signed in")} {new Date(s.createdAt).toLocaleDateString(lang)}</span></button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {others.length > 0 && (
+        <button type="button" className="btn sm danger-l" style={{ marginTop: 12 }} disabled={!!busy} onClick={() => void endOthers()}>
+          {busy === "others" ? t("Signing out…") : t("Sign out other sessions")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Change the password while signed in (accounts that have one); optionally end every other session. */
+function PasswordChange() {
+  const [cur, setCur] = useState("");
+  const [next, setNext] = useState("");
+  const [others, setOthers] = useState(true);
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const submit = async (e: React.SyntheticEvent) => {
+    e.preventDefault();
+    setErr("");
+    if (next.length < 8) { setErr(t("Use at least 8 characters.")); return; }
+    if (next === cur) { setErr(t("The new password must differ from the current one.")); return; }
+    setBusy(true);
+    try {
+      // Never let Better Auth revoke sessions inside the password change: it would delete this session as well and
+      // create a new one, which a workspace that requires single sign-on refuses, leaving the person signed out
+      // everywhere. Ending the other sessions is a separate call that keeps this one.
+      const r = await authClient.changePassword({ currentPassword: cur, newPassword: next, revokeOtherSessions: false });
+      if (r.error) {
+        const code = r.error.code;
+        setErr(code === "INVALID_PASSWORD" ? t("The current password is not right.") : code === "PASSWORD_TOO_SHORT" ? t("Use at least 8 characters.") : r.error.status === 429 ? t("Too many attempts. Wait a minute and try again.") : t("Could not change the password."));
+        return;
+      }
+      setCur(""); setNext("");
+      if (others) {
+        const o = await authClient.revokeOtherSessions();
+        toast(o.error ? t("Password changed, but the other sessions could not be signed out.") : t("Password changed. Other sessions were signed out."), o.error ? "err" : "ok");
+      } else toast(t("Password changed."));
+      window.dispatchEvent(new Event(SESSIONS_CHANGED));
+    } finally { setBusy(false); }
+  };
+  return (
+    <form className="card sect pw-change" onSubmit={submit}>
+      <h3>{t("Password")}</h3>
+      <label className="fld">{t("Current password")}<input className="in" type="password" autoComplete="current-password" required value={cur} onChange={(e) => setCur(e.target.value)} /></label>
+      <label className="fld">{t("New password")}<input className="in" type="password" autoComplete="new-password" required value={next} onChange={(e) => setNext(e.target.value)} aria-describedby="pw-hint" /></label>
+      <small id="pw-hint" className="faint">{t("At least 8 characters.")}</small>
+      <label className="chk"><input type="checkbox" checked={others} onChange={(e) => setOthers(e.target.checked)} /> {t("Sign out of every other session")}</label>
+      {err && <p className="err" role="alert">{err}</p>}
+      <div><button className="btn primary sm" disabled={busy || !cur || !next}>{busy ? t("Saving…") : t("Change password")}</button></div>
+    </form>
+  );
+}
+
 export default function Account() {
   const [me, setMe] = useState<Me | null>(null);
   const [saved, setSaved] = useState(false);
@@ -285,6 +443,8 @@ export default function Account() {
         )}
         {me && <ConnectedAccounts accounts={accounts} load={loadAccounts} />}
         {me && <SsoLink accounts={accounts} />}
+        {me && accounts?.some((a) => a.providerId === "credential") && <PasswordChange />}
+        {me && <Sessions />}
         {me && <Security me={me} reload={load} hasPassword={!accounts || accounts.length === 0 || accounts.some((a) => a.providerId === "credential")} />}
       </div>
     </>

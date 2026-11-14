@@ -123,6 +123,7 @@ configuration and are not part of the repository.
 | 80 | Team role changes (owners/admins promote or demote members via Better Auth updateMemberRole; members see no actions) and keyboard-accessible segmented choices (7 controls become a real radio group) | P2 | In review |
 | 81 | Alert delivery log paging: "Load older deliveries" pages GET /alert-log with before, without skipping rows that share a timestamp at the page boundary | P3 | In review |
 | 82 | Webhook replay attempt counter: owners/admins see this month's replay attempts (GET /hooks/replay-usage, closes the ledger 56 UI gap), labelled not billed, refreshed after each replay | P3 | In review |
+| 83 | Account sessions (list devices, sign out one or every other session) and change password while signed in (Better Auth list/revoke sessions, changePassword) | P2 | In review |
 
 ## External dependencies (cannot be closed in engineering)
 

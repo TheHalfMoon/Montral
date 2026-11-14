@@ -376,7 +376,8 @@ export const api = {
   channels: () => req<Channel[]>("/channels"),
   projectAlerting: (projectId: string) => req<ProjectAlerting>(`/projects/${projectId}/alerting`),
   saveProjectAlerting: (projectId: string, b: ProjectAlerting) => req<ProjectAlerting>(`/projects/${projectId}/alerting`, { method: "PUT", body: JSON.stringify(b) }),
-  alertLog: (limit = 30) => req<AlertDelivery[]>(`/alert-log?limit=${limit}`),
+  /** newest first; `before` (ISO time) pages back through older deliveries */
+  alertLog: (limit = 30, before?: string) => req<AlertDelivery[]>(`/alert-log?limit=${limit}${before ? `&before=${encodeURIComponent(before)}` : ""}`),
   reconciliationSummary: (month: string) => req<MonthlyReconciliationSummary>(`/monthly-reconciliation/summary?month=${encodeURIComponent(month)}`),
   reconciliationPending: (month: string) => req<{ items: MonthlyReviewCandidate[] }>(`/monthly-reconciliation/pending?month=${encodeURIComponent(month)}`),
   reconcileMonthlyReport: (input: MonthlyReviewInput) => req<{ applied: boolean }>("/monthly-reconciliation/review", { method: "POST", body: JSON.stringify(input) }),

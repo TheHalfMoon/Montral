@@ -5,6 +5,8 @@ import { api, ago, type AlertDelivery, type Channel, type OncallSchedule, type P
 import { deliveryReason, deliveryState, stateClass } from "../lib/delivery";
 import { ask } from "../lib/confirm";
 import Modal from "./Modal";
+import { appendPage, nextBefore } from "../lib/log-pages";
+import { toast } from "../lib/toast";
 
 const TYPES: { id: Channel["type"]; label: string; desc: string }[] = [
   { id: "discord", label: "Discord", desc: "Send alerts through a Discord channel webhook." },
@@ -45,6 +47,9 @@ const ICONS: Record<Channel["type"], React.ReactNode> = {
 const REPEATS = [5, 10, 15, 30, 60];
 const dest = (c: Channel) => c.type === "push" ? t("App on members' phones") : c.type === "ntfy" ? `${(c.config.url ?? "").replace(/^https?:\/\//, "").split("/")[0]}/${c.config.topic ?? ""}` : c.type === "pushover" ? `Pushover${c.config.device ? ` · ${c.config.device}` : ""}` : c.config.url?.replace(/^https?:\/\//, "") ?? c.config.to ?? (c.config.chatId ? `chat ${c.config.chatId}` : c.config.routingKey ? "routing key ••••" : "");
 
+/** delivery log page size */
+const LOG_PAGE = 30;
+
 export default function Alerting() {
   const [items, setItems] = useState<Channel[] | null>(null);
   const [f, setF] = useState({ type: "slack" as Channel["type"], name: "", url: "", to: "", botToken: "", chatId: "", routingKey: "", secret: "", topic: "", token: "", priority: "3", userKey: "", device: "", auto: false });
@@ -56,6 +61,8 @@ export default function Alerting() {
   const [testing, setTesting] = useState("");
   const [note, setNote] = useState("");
   const [log, setLog] = useState<AlertDelivery[] | null>(null);
+  const [moreLog, setMoreLog] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [days, setDays] = useState(30);
   const [push, setPush] = useState(false);
   const [rules, setRules] = useState<ProjectAlerting | null>(null);
@@ -70,7 +77,17 @@ export default function Alerting() {
     if (rules.escalation.some((x) => !x.channelIds.length && !x.scheduleIds?.length && !x.userIds?.length)) { setRulesErr(t("Pick at least one channel or on-call schedule for each level.")); return; }
     try { setRules(await api.saveProjectAlerting(projectId, rules)); setRulesNote(t("Saved")); } catch (e) { setRulesErr((e as Error).message); }
   });
-  const loadLog = () => api.alertLog(30).then(setLog).catch(() => setLog([]));
+  const loadLog = () => api.alertLog(LOG_PAGE).then((l) => { setLog(l); setMoreLog(l.length >= LOG_PAGE); }).catch(() => setLog([]));
+  const olderLog = async () => {
+    if (!log) return;
+    setLoadingOlder(true);
+    try {
+      const page = await api.alertLog(LOG_PAGE, nextBefore(log));
+      const next = appendPage(log, page, LOG_PAGE);
+      setLog(next.rows);
+      setMoreLog(next.more);
+    } catch (e) { toast((e as Error).message, "err"); } finally { setLoadingOlder(false); }
+  };
   const load = () => api.channels().then(setItems);
   useEffect(() => { load(); loadLog(); api.config().then((c) => setPush(!!c.push?.apns)).catch(() => {}); api.settings().then((s) => setDays(s.alertLogRetentionDays)).catch(() => {}); api.oncallSchedules().then(setSchedules).catch(() => {}); api.me().then((m) => { setProjectId(m.projectId); return api.projectAlerting(m.projectId).then(setRules); }).catch(() => {}); }, []);
 
@@ -186,6 +203,13 @@ export default function Alerting() {
             </div>
           );
         })}
+        {log && log.length > 0 && (
+          <div className="log-more">
+            {moreLog
+              ? <button type="button" className="btn sm" disabled={loadingOlder} aria-busy={loadingOlder} onClick={() => void olderLog()}>{loadingOlder ? t("Loading…") : t("Load older deliveries")}</button>
+              : <span className="faint">{t("Showing every delivery kept.")}</span>}
+          </div>
+        )}
       </div>
 
       {rules && items && (

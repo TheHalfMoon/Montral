@@ -3,6 +3,7 @@ import { api, ApiError, type SsoSettings as Sso } from "../lib/api";
 import { t } from "../lib/i18n";
 import { toast } from "../lib/toast";
 import ScimSettings from "./ScimSettings";
+import { ask } from "../lib/confirm";
 
 /**
  * Single sign-on (OpenID Connect) for the workspace, on the Settings page. Only the owner sees it (the API answers 403
@@ -64,8 +65,8 @@ export default function SsoSettings() {
     fill(await api.sso());
     toast(t("Domain verified."));
   });
-  const remove = () => {
-    if (!confirm(t("Delete the single sign-on connection? People who signed in with it and have no password will need to set one."))) return;
+  const remove = async () => {
+    if (!(await ask(t("Delete the single sign-on connection? People who signed in with it and have no password will need to set one."), t("Delete connection")))) return;
     return run(async () => { await api.deleteSso(); fill(await api.sso()); toast(t("Single sign-on deleted.")); });
   };
 

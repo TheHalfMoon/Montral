@@ -883,4 +883,8 @@ export const zh: Record<string, string> = {
   "Search pages, monitors and actions…": "搜索页面、监控和操作…", Results: "结果", "No results": "没有结果", "Loading monitors…": "正在加载监控…",
   "Monitors and incidents could not be loaded. Pages and actions still work.": "无法加载监控和事件，页面和操作仍可使用。",
   "to move": "移动", "to open": "打开", "to close": "关闭",
+  // confirmation dialog
+  "Are you sure?": "确定要继续吗？", "End series": "结束系列", "Delete policy": "删除策略", "Delete connection": "删除连接",
+  "Delete status page": "删除状态页", "Sign everyone out": "全部登出", "Remove domain": "移除域名", "Delete inbox": "删除收件箱",
+  "Delete request": "删除请求",
 };

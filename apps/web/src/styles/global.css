@@ -787,3 +787,14 @@ a.muted:hover{color:var(--ink)}
 @keyframes cmdk-in{from{opacity:0}to{opacity:1}}
 /* keyboard hints are noise on touch layouts */
 @media (max-width:1024px){.search kbd{display:none}}
+/* dialogs (components/Modal.tsx) and the confirmation dialog (components/ConfirmHost.tsx) */
+.modal{animation:modal-in var(--t-fast) var(--ease)}
+.modal-box{display:grid;justify-items:center;width:100%;max-width:100%;outline:0}
+.modal-box>.card{max-height:calc(100dvh - 48px);overflow-y:auto}
+@keyframes modal-in{from{opacity:0}to{opacity:1}}
+.ask{width:min(440px,92vw)!important;gap:12px!important}
+.ask h2{font-size:26px;line-height:1.15}
+.ask p{margin:0;line-height:1.55}
+.ask-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px;flex-wrap:wrap}
+.btn.danger{background:var(--down);border-color:var(--down);color:var(--surface)}
+.btn.danger:hover{filter:brightness(.94)}

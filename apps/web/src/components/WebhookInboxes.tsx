@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { t } from "../lib/i18n";
 import { api, ApiError, type HookInbox, type HookEvent, type HookResponse, type HookResponseContentType } from "../lib/api";
 import { formatResetDate, webhookInboxQuotaNotice, type WebhookInboxQuotaNotice } from "../lib/usage-alerts";
+import { ask } from "../lib/confirm";
 
 const CONTENT_TYPES: HookResponseContentType[] = ["text/plain", "application/json", "application/xml", "text/xml", "text/csv"];
 const BODYLESS = new Set([204, 205, 304]);
@@ -188,7 +189,7 @@ export default function WebhookInboxes() {
     } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   };
   const remove = async (id: string) => {
-    if (!confirm(t("Delete this inbox and all captured events? This cannot be undone."))) return;
+    if (!(await ask(t("Delete this inbox and all captured events? This cannot be undone."), t("Delete inbox")))) return;
     setBusy(true); setError("");
     try {
       await api.deleteHookInbox(id);
@@ -280,7 +281,7 @@ function EventActions({ inbox, event, onDeleted }: { inbox: string; event: HookE
     finally { setBusy(false); }
   };
   const remove = async () => {
-    if (!confirm(t("Delete this captured request? This cannot be undone."))) return;
+    if (!(await ask(t("Delete this captured request? This cannot be undone."), t("Delete request")))) return;
     setBusy(true); setError("");
     try { await api.deleteHookEvent(inbox, event.id); onDeleted(); }
     catch (x) { setError((x as Error).message); setBusy(false); }

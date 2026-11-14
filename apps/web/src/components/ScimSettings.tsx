@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
 import { api, type ScimStatus } from "../lib/api";
 import { t } from "../lib/i18n";
+import { ask } from "../lib/confirm";
 
 /**
  * SCIM provisioning for the workspace, under the single sign-on settings (owner only, like them). The token is shown
@@ -23,7 +24,7 @@ export default function ScimSettings() {
   }
   const create = () => run(async () => { setToken((await api.createScimToken()).token); });
   const off = () => run(async () => {
-    if (!confirm(t("Turn off SCIM provisioning? Your identity provider will no longer be able to add or remove people."))) return;
+    if (!(await ask(t("Turn off SCIM provisioning? Your identity provider will no longer be able to add or remove people."), t("Turn off")))) return;
     await api.revokeScimToken();
     setToken("");
   });

@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { authClient } from "../lib/auth-client";
 import { api } from "../lib/api";
+import { ask } from "../lib/confirm";
+import Modal from "./Modal";
 
 // The session's "active organization" can be unset (older sessions, cookie cache); the workspace the API resolves is authoritative.
 const orgId = () => api.me().then((m) => m.organization.id);
@@ -111,7 +113,7 @@ export default function Team() {
                   <RowMenu busy={removing === m.id} items={[{
                     label: t("Remove from workspace"), danger: true,
                     run: async () => {
-                      if (!confirm(`${t("Remove")} ${m.user.email}?`)) return;
+                      if (!(await ask(`${t("Remove")} ${m.user.email}?`, t("Remove")))) return;
                       setRemoving(m.id);
                       try { await authClient.organization.removeMember({ memberIdOrEmail: m.id, organizationId: await orgId() }); await load(); } catch (x) { setMsg((x as Error).message); } finally { setRemoving(""); }
                     },
@@ -131,7 +133,7 @@ export default function Team() {
                   {
                     label: t("Cancel invitation"), danger: true,
                     run: async () => {
-                      if (!confirm(`${t("Cancel invitation")} ${i.email}?`)) return;
+                      if (!(await ask(`${t("Cancel invitation")} ${i.email}?`, t("Cancel invitation")))) return;
                       setCanceling(i.id);
                       try {
                         const r = await authClient.organization.cancelInvitation({ invitationId: i.id });
@@ -159,8 +161,8 @@ export default function Team() {
       </div>
 
       {open && (
-        <div className="modal" onClick={() => setOpen(false)}>
-          <form className="card" onClick={(e) => e.stopPropagation()} onSubmit={invite}>
+        <Modal onClose={() => setOpen(false)} busy={busy}>
+          <form className="card" onSubmit={invite}>
             <h2 style={{ fontSize: 30 }}>{t("Invite a teammate")}</h2>
             <label className="fld">{t("Email")}<input className="in" type="email" required autoFocus value={email} onChange={(e) => setEmail(e.target.value)} placeholder="teammate@example.com" /></label>
             <div className="fld">{t("Role")}
@@ -174,7 +176,7 @@ export default function Team() {
               <button className="btn primary" disabled={busy}>{busy ? t("Creating…") : t("Create invitation")}</button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
     </>
   );

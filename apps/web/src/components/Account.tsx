@@ -411,14 +411,17 @@ function PasswordChange() {
  */
 function Phones() {
   const [devices, setDevices] = useState<PushDevice[] | null>(null);
-  const [apns, setApns] = useState(false);
+  // null until known: a failed /config must not claim that push is not configured
+  const [apns, setApns] = useState<boolean | null>(null);
+  const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState("");
-  const load = () => api.pushDevices().then(setDevices).catch(() => setDevices([]));
+  const load = () => api.pushDevices().then((d) => { setDevices(d); setFailed(false); }).catch(() => setFailed(true));
   useEffect(() => { load(); api.config().then((c) => setApns(!!c.push?.apns)).catch(() => {}); }, []);
-  if (devices === null || (!apns && devices.length === 0)) return null;
+  // a failed list is not "no phones": hide the card rather than say something untrue
+  if (failed || devices === null || (apns !== true && devices.length === 0)) return null;
   const remove = async (d: PushDevice) => {
     const name = d.name || t("iPhone");
-    if (!(await ask(t("Stop push alerts to {name}? Sign in to the app on it again to turn them back on.").replace("{name}", name), t("Remove phone")))) return;
+    if (!(await ask(t("Stop push alerts to {name}? The app turns them back on the next time it registers the phone. To stop them for good, also sign that phone out under Sessions.").replace("{name}", name), t("Remove phone")))) return;
     setBusy(d.id);
     try { await api.removePushDevice(d.token); toast(t("Phone removed.")); await load(); }
     catch (e) { toast((e as Error).message, "err"); }
@@ -428,7 +431,7 @@ function Phones() {
     <div className="card sect">
       <h3>{t("Phones")}</h3>
       <p className="muted" style={{ marginBottom: 12 }}>{t("Phones signed in to the Montral iOS app receive push alerts from the channels you are part of.")}</p>
-      {!apns && <p className="muted" role="status">{t("Push delivery is not configured on this server, so these phones get no alerts.")}</p>}
+      {apns === false && <p className="muted" role="status">{t("Push delivery is not configured on this server, so these phones get no alerts.")}</p>}
       {devices.length === 0
         ? <p className="muted">{t("No phones yet.")} <a className="auth-link" href="/ios">{t("Get the iOS app")}</a></p>
         : (
@@ -437,7 +440,7 @@ function Phones() {
               <li key={d.id}>
                 <div className="sess-d">
                   <b>{d.name || t("iPhone")}</b>
-                  <small>{[d.environment === "sandbox" ? t("Test build") : null, d.critical ? t("Critical alerts on") : null].filter(Boolean).join(" · ") || t("Push alerts on")}</small>
+                  <small>{[d.environment === "sandbox" ? t("Development build") : null, d.critical ? t("Critical alerts on") : null].filter(Boolean).join(" · ") || t("Push alerts on")}</small>
                 </div>
                 <button type="button" className="btn sm" disabled={!!busy} onClick={() => void remove(d)}>{busy === d.id ? t("Removing…") : t("Remove")}<span className="sr-only"> {d.name || t("iPhone")}</span></button>
               </li>

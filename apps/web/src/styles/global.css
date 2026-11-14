@@ -822,4 +822,4 @@ a.muted:hover{color:var(--ink)}
 .seg>[role=radio]:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 @media (max-width:560px){.seg.stack-sm>[role=radio]{place-items:center start;text-align:left;padding:8px 12px}}
 .log-more{display:flex;justify-content:center;padding:14px 0 2px;font-size:13px}
-.replay-count{margin:-12px 0 18px;font-size:13.5px;color:var(--muted)}.replay-count b{color:var(--ink);font-weight:600;margin-left:4px}
+.replay-count{margin:22px 0 0;padding-top:14px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}.replay-count b{color:var(--ink);font-weight:600;margin:0 6px 0 4px}

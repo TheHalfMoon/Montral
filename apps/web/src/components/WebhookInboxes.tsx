@@ -141,10 +141,14 @@ export default function WebhookInboxes() {
   }
   // replay attempt counter: owners and admins only (the API answers 403 to everyone else, and the line stays hidden)
   const [replays, setReplays] = useState<{ attempts: number; periodEnd: string } | null>(null);
+  // only on metered deployments does "not billed" mean anything; Community has no billing language at all
+  const [metered, setMetered] = useState(false);
+  const replaySeq = useRef(0);
   const loadReplays = () => {
+    const seq = ++replaySeq.current; // quick successive replays: only the latest answer is shown
     api.hookReplayUsage()
-      .then((u) => setReplays({ attempts: Number(u.attempts) || 0, periodEnd: u.periodEnd }))
-      .catch(() => setReplays(null));
+      .then((u) => { if (seq === replaySeq.current) setReplays({ attempts: Number(u.attempts) || 0, periodEnd: u.periodEnd }); })
+      .catch(() => { if (seq === replaySeq.current) setReplays(null); });
   };
   useEffect(() => { load().catch((e) => setError((e as Error).message)); loadReplays(); }, []);
   useEffect(() => {
@@ -153,7 +157,7 @@ export default function WebhookInboxes() {
     const refresh = () => {
       const current = ++generation;
       api.usage().then((usage) => {
-        if (current === generation) setQuota(webhookInboxQuotaNotice(usage));
+        if (current === generation) { setQuota(webhookInboxQuotaNotice(usage)); setMetered(usage.metered); }
       }).catch(() => { if (current === generation) setQuota(null); });
     };
     const onScope = () => { generation++; setQuota(null); refresh(); };
@@ -209,10 +213,6 @@ export default function WebhookInboxes() {
     <div className="ph">
       <div><h1>{t("Webhooks")}</h1><p className="muted">{t("Create an inbox, capture HTTP requests, and inspect their payloads. Seven-day retention; up to 32 KiB per event.")}</p></div>
     </div>
-    {replays && <p className="replay-count" data-replay-attempts={replays.attempts}>
-      <span>{t("Replay attempts this month")}</span> <b className="tnum">{replays.attempts.toLocaleString(document.documentElement.lang)}</b>
-      <span className="faint"> · {t("counter resets on {date} (UTC)").replace("{date}", formatResetDate(new Date(`${replays.periodEnd}T00:00:00Z`), document.documentElement.lang))} · {t("not billed")}</span>
-    </p>}
     {quota && <section className="card sect" role="status" data-webhook-quota="exhausted" style={{ marginBottom: 18 }}>
       <b>{t("Webhook event quota used up")}</b>
       <p className="muted">{t("New webhook requests are refused until {date} (UTC).").replace("{date}", formatResetDate(quota.resetsAt, document.documentElement.lang))}</p>
@@ -274,6 +274,11 @@ export default function WebhookInboxes() {
       </div>
       {next && <button className="btn sm" style={{ marginTop: 12 }} onClick={() => fetchEvents(next).catch(report)}>{t("Load older events")}</button>}
     </section>}
+    {/* at the foot of the page: it arrives after the page renders, and nothing below it can be pushed */}
+    {replays && <p className="replay-count" data-replay-attempts={replays.attempts}>
+      <span>{t("Replay attempts this month")}</span> <b className="tnum">{replays.attempts.toLocaleString(document.documentElement.lang)}</b>
+      <span className="faint">· {t("counter resets on {date} (UTC)").replace("{date}", formatResetDate(new Date(`${replays.periodEnd}T00:00:00Z`), document.documentElement.lang))}{metered ? ` · ${t("not billed")}` : ""}</span>
+    </p>}
   </>;
 }
 

@@ -19,3 +19,7 @@ The cache holds at most 1,024 completed string answers. Expired hits are removed
 - Pre-existing limitation: a resolution already in progress can repopulate after project invalidation. This does not defeat the size bound; changing stale-resolution behavior is outside this memory-retention fix. Existing authorization checks still run for every request.
 
 No production resource, provider call, paid dependency, deployment or publication was used. Historical integrated-main qualification is separate from this branch's pending qualification.
+
+## Hosted qualification diagnosis
+
+The first browser failure was a hero-note contrast issue corrected in main by #139; this branch incorporates that main revision. The next mobile-WebKit failure sampled eyebrow/lead text during the finite reveal transition: the reported blended foreground was #76756e rather than the final #56554e token. The landing check now waits for the hero heading's final opacity and for visible revealed hero elements to finish before axe runs. It changes neither product styling nor axe rules, thresholds or retry policy. E2E TypeScript and discovery of all five engine/viewport cases pass locally; actual browser validation remains a hosted gate (no local browser binaries were available).

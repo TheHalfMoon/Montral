@@ -12,6 +12,12 @@ test("landing page renders with its scripts, no console errors and no CSP violat
   expect(policy).toMatch(/script-src 'self' 'sha256-/);
   expect(policy).not.toMatch(/script-src[^;]*'unsafe-inline'/);
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+  // Visibility is true partway through a reveal, when opacity still blends text with the background.
+  // Measure the rendered hero at its final contrast without disabling motion or any axe rule.
+  await expect(page.locator(".hero h1")).toHaveCSS("opacity", "1");
+  await expect.poll(() => page.locator(".hero .rv.in").evaluateAll((nodes) => nodes
+    .filter((node) => { const box = node.getBoundingClientRect(); return box.bottom > 0 && box.top < innerHeight; })
+    .every((node) => getComputedStyle(node).opacity === "1"))).toBe(true);
   await checkA11y(page, testInfo, "landing");
   expect(guard.errors, "console errors on the landing page").toEqual([]);
   expect(guard.failedResponses, "unexpected failed requests on the landing page").toEqual([]);

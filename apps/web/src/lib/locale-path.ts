@@ -1,3 +1,5 @@
+import { internalPath } from "./next-path";
+
 /** Locale URL prefixes: English is the unprefixed default; the others live under /zh-Hans, /ja, /es. */
 export const PREFIXES = { "zh-CN": "zh-Hans", ja: "ja", es: "es" } as const;
 export type PrefixedLocale = keyof typeof PREFIXES;
@@ -15,8 +17,9 @@ export const stripLocale = (pathname: string) => splitLocale(pathname).rest;
 /** `path` (without prefix, may carry ?query/#hash) for `locale`; English and unknown locales stay unprefixed. */
 export function withLocale(path: string, locale: string): string {
   const prefix = PREFIXES[locale as PrefixedLocale];
-  const m = path.match(/^([^?#]*)(.*)$/)!;
-  const rest = stripLocale(m[1]);
+  const m = internalPath(path).match(/^([^?#]*)(.*)$/)!;
+  // Removing a locale can turn /ja//host into //host. Recheck after that transformation.
+  const rest = internalPath(stripLocale(m[1]));
   if (!prefix) return rest + m[2];
   return `/${prefix}${rest === "/" ? "" : rest}${m[2]}`;
 }

@@ -136,10 +136,12 @@ export default function Monitors() {
     const stop = pollWhileVisible(load, 15000);
     return () => { generation++; window.removeEventListener("montral:scope", onScope); stop(); };
   }, []);
-  // ⌘K / Ctrl+K focuses the search box
+  // "/" focuses the search box (⌘K / Ctrl+K is the app-wide command menu); ignored while typing in a field
   useEffect(() => {
     const k = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); document.getElementById("mon-search")?.focus(); }
+      const el = e.target as HTMLElement | null;
+      const typing = !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+      if (e.key === "/" && !typing && !e.metaKey && !e.ctrlKey && !e.altKey) { e.preventDefault(); document.getElementById("mon-search")?.focus(); }
     };
     addEventListener("keydown", k);
     return () => removeEventListener("keydown", k);
@@ -245,7 +247,7 @@ export default function Monitors() {
             <label className="search">
               <svg className="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
               <input id="mon-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("Search monitors…")} />
-              <kbd>⌘K</kbd>
+              <kbd>/</kbd>
             </label>
           </div>
           {allTags.length > 0 && (

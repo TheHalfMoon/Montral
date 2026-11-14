@@ -116,7 +116,8 @@ configuration and are not part of the repository.
 | 74 | On-call override GET could exceed strict 90-day millisecond range | P2 | Done (#108, 16/16 exact-head CI): use one clock capture for both bounds. Evidence: `docs/evidence/2026-11-12-oncall-range-boundary.md` |
 
 | 75 | Session-only platform operator console | P2 | Done: #110 merged (`8435564`), 11/11 exact-head CI and 11/11 integrated push CI; per-region read-only history added by #111. Server MFA authorization unchanged. Evidence: `docs/evidence/2026-11-13-operator-console.md` |
-| 76 | Threshold identity, design tokens, self-hosted fonts and public landing page; edition-aware Billing navigation | P1 | In review: design/montral-threshold-foundation-20261114. Evidence: `docs/evidence/2026-11-14-threshold-foundation.md` |
+| 76 | Threshold identity, design tokens, self-hosted fonts and public landing page; edition-aware Billing navigation | P1 | Done: #127 merged (`e278a57`), 16/16 exact-head CI after independent review (1 high, 2 medium, 5 low fixed) and two axe fixes found by CI. Evidence: `docs/evidence/2026-11-14-threshold-foundation.md` |
+| 77 | App shell: Cmd/Ctrl+K command menu (pages, monitors, open incidents, actions), Ink sidebar, shared status shapes | P2 | In review: #128 |
 
 ## External dependencies (cannot be closed in engineering)
 

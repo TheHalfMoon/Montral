@@ -79,7 +79,7 @@ export default function IncidentDetail({ id }: { id: string }) {
             <div className="cc-h"><h3>{t("Timeline")}</h3></div>
             <div className="tl">
               {events.map((u, k) => (
-                <div key={u.id} className={`ev ${k === 0 && !resolved ? "now" : u.status === "resolved" ? "ok" : ""}`}>
+                <div key={u.id} className={`ev ${k === 0 && !resolved ? (u.status === "investigating" ? "now" : "now mid") : u.status === "resolved" ? "ok" : ""}`}>
                   <b>{t(u.status)}</b>{u.visibility === "internal" && <span className="chip" style={{ marginLeft: 8 }}>{t("Internal")}</span>}<time>{utc(u.createdAt)}</time>
                   <p>{u.body}</p>
                 </div>
@@ -156,7 +156,7 @@ export default function IncidentDetail({ id }: { id: string }) {
             <div className="card cc">
               <div className="cc-h"><h3>{t("Affected components")}</h3></div>
               <a className="route" href={`/app/monitors/${inc.monitor.id}`}>
-                <span className={`dot ${inc.monitor.status === "up" ? "up" : inc.monitor.status === "down" ? "down" : "warn"}`} />
+                <span className={`dot ${({ up: "up", degraded: "warn", down: "down", paused: "paused", pending: "pending" } as Record<string, string>)[inc.monitor.status] ?? "pending"}`} />
                 <div style={{ minWidth: 0, flex: 1 }}>{inc.monitor.name}<small className="mono">{inc.monitor.target || inc.monitor.type}</small></div>
                 <span className={`pill ${inc.monitor.status}`}>{t(inc.monitor.status)}</span>
               </a>

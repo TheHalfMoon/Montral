@@ -44,7 +44,7 @@ export default function Maintenance() {
           <div className="tr" key={w.id} style={{ gridTemplateColumns: "minmax(0,1.8fr) minmax(0,1fr) 110px 150px" }}>
             <div><b style={{ fontWeight: 600 }}>{w.name}</b><small><span style={{ whiteSpace: "nowrap" }}>{fmt(w.startsAt)}</span> <span style={{ whiteSpace: "nowrap" }}>→ {fmt(w.endsAt)}</span></small>{w.recurrence && <small>{t(w.recurrence.frequency === "daily" ? "Daily" : "Weekly")} · {w.recurrence.timeZone}</small>}</div>
             <span className="muted">{names(w)}</span>
-            <span><span className={`pill ${state(w) === "active" ? "degraded" : ""}`}>{t(state(w))}</span></span>
+            <span><span className={`pill ${state(w) === "active" ? "maint" : ""}`}>{t(state(w))}</span></span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}><button className="btn sm" disabled={removing === w.id} onClick={async () => {
               if (!(await ask(t("Remove this window?"), t("Remove")))) return;
               setRemoving(w.id);

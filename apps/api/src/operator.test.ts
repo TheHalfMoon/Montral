@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import type { AppEnv } from "./env";
-import { decodeOperatorCursor, encodeOperatorCursor, decodePlatformAuditCursor, encodePlatformAuditCursor, operatorIds, probeRegionView, requireOperator } from "./operator";
+import { decodeOperatorCursor, encodeOperatorCursor, decodePlatformAuditCursor, encodePlatformAuditCursor, operatorApi, operatorIds, probeRegionView, requireOperator } from "./operator";
 import { recordMfaSignIn } from "./operator-mfa";
 import { anySuspended, authCallWorkspaces, isSuspensionReason, suspensionGuardsAuthPath, SUSPENSION_REASONS } from "./suspension";
 
@@ -137,6 +137,35 @@ describe("requireOperator", () => {
     app.get("/x", (c) => c.text("ok"));
     expect((await app.fetch(new Request("http://api.test/x"), { MONTRAL_OPERATOR_USER_IDS: "op" } as never)).status).toBe(200);
     expect(keys).toEqual(["operator:session:s1", "operator:user:op"]);
+  });
+});
+
+describe("operator workspace audit failure", () => {
+  it.each(["suspend", "unsuspend"])("refuses %s when private attribution cannot be persisted", async (action) => {
+    const transaction = vi.fn(async (work: (db: unknown) => Promise<unknown>) => work({
+      query: async (sql: string) => {
+        if (sql.includes("workspace_operator_audit")) throw new Error("private audit unavailable");
+        if (sql.includes("SELECT id FROM organization")) return [{ id: "customer" }];
+        if (sql.includes("SELECT reason FROM workspace_suspension")) return [{ reason: "abuse" }];
+        return [];
+      },
+    }));
+    const app = new Hono<AppEnv>();
+    app.use("*", async (c, next) => {
+      c.set("repo", { withinLimit: async () => true } as never);
+      c.set("auth", { api: { getSession: async () => ({ user: { id: "op" }, session: { id: "s1" } }) } } as never);
+      c.set("database", { query: async () => [{ enabled: true, verified: true }], transaction } as never);
+      await next();
+    });
+    app.route("/operator", operatorApi);
+    app.onError((_error, c) => c.json({ error: "Operation failed" }, 500));
+    const res = await app.fetch(new Request(`http://web.test/operator/workspaces/customer/${action}`, {
+      method: "POST", headers: { origin: "http://web.test", "content-type": "application/json" },
+      body: JSON.stringify({ reason: "abuse" }),
+    }), { WEB_ORIGIN: "http://web.test", MONTRAL_OPERATOR_USER_IDS: "op" } as never);
+    expect(res.status).toBe(500);
+    expect(transaction).toHaveBeenCalledOnce();
+    expect(await res.text()).not.toContain("private audit unavailable");
   });
 });
 

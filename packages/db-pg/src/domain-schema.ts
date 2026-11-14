@@ -971,6 +971,18 @@ export const probeRegionState = pgTable(
   ],
 );
 
+/** Private identity for new operator workspace actions. Customer audit reads never join this table.
+ * No user FK: deleting an operator account must not rewrite historical attribution.
+ * The parent audit event's guarded deletion controls retention and workspace erasure. */
+export const workspaceOperatorAudit = pgTable(
+  "workspace_operator_audit",
+  {
+    auditEventId: uuid("audit_event_id").primaryKey().references(() => auditEvent.id, { onDelete: "cascade" }),
+    operatorId: text("operator_id").notNull(),
+  },
+  (t) => [check("workspace_operator_audit_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`)],
+);
+
 /** Append-only platform-operator actions, not tied to a customer workspace or project. */
 export const probeRegionDrainEvent = pgTable(
   "probe_region_drain_event",

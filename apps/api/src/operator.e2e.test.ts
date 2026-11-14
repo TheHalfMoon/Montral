@@ -339,7 +339,7 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect(workspaceAudit.status).toBe(200);
     expect(workspaceAudit.headers.get("cache-control")).toBe("no-store");
     expect(workspaceAudit.body.events).toHaveLength(1);
-    expect(workspaceAudit.body.events[0]).toMatchObject({ source: "workspace", target: owner.orgId, operatorId: null, reason: "abuse" });
+    expect(workspaceAudit.body.events[0]).toMatchObject({ source: "workspace", target: owner.orgId, operatorId: operator.id, reason: "abuse" });
     expect(workspaceAudit.body.next).toEqual(expect.any(String));
     const nextAudit = await operatorCall(opCookie,
       `/audit?source=workspace&q=${encodeURIComponent(owner.orgId)}&limit=1&cursor=${encodeURIComponent(workspaceAudit.body.next)}`);
@@ -348,9 +348,22 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect(nextAudit.body.events[0].id).not.toBe(workspaceAudit.body.events[0].id);
     expect(nextAudit.body.next).toBeNull();
     expect(workspaceAudit.text + nextAudit.text).not.toContain(NOTE);
-    expect(workspaceAudit.text + nextAudit.text).not.toContain(operator.id);
+    expect(nextAudit.body.events[0].operatorId).toBe(operator.id);
     expect([workspaceAudit.body.events[0].action, nextAudit.body.events[0].action].sort())
       .toEqual(["workspace.suspend", "workspace.unsuspend"]);
+
+    // Older replicas/historical actions carry no private identity: never infer it
+    // from the current suspension row, the operator allowlist or another event.
+    const [legacy] = await db!.query<{ id: string }>(`INSERT INTO audit_event
+      (organization_id,actor_type,actor_label,action,target_type,target_id)
+      VALUES ($1,'system','Montral operator','workspace.unsuspend','workspace',$1) RETURNING id`, [other.orgId]);
+    const historical = await operatorCall(opCookie, `/audit?source=workspace&q=${other.orgId}`);
+    expect(historical.body.events).toEqual([expect.objectContaining({ id: legacy.id, operatorId: null })]);
+
+    // Private identity is immutable, and its retention follows the customer event.
+    const eventId = workspaceAudit.body.events[0].id;
+    await expect(db!.query(`UPDATE workspace_operator_audit SET operator_id='forged' WHERE audit_event_id=$1::uuid`, [eventId])).rejects.toThrow();
+    await expect(db!.query(`DELETE FROM workspace_operator_audit WHERE audit_event_id=$1::uuid`, [eventId])).rejects.toThrow();
 
     // Match the same safe target prefix in both audit sources to test a true UNION view.
     const probeRegion = owner.orgId.slice(0, 16);
@@ -390,9 +403,51 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     expect((await operatorCall(opCookie, "/workspaces/does-not-exist/suspension-history")).status).toBe(404);
     const untouchedHistory = await operatorCall(opCookie, `/workspaces/${other.orgId}/suspension-history`);
     expect(untouchedHistory.status).toBe(200);
-    expect(untouchedHistory.body.events).toEqual([]);
-    // nothing about the operator plane reached the other workspace's log
-    expect((await other.as("/audit-events?action=workspace")).body.events).toEqual([]);
+    expect(untouchedHistory.body.events).toEqual([expect.objectContaining({ id: legacy.id, action: "workspace.unsuspend" })]);
+    // Only the deliberate legacy fixture reached the other workspace's log.
+    expect((await other.as("/audit-events?action=workspace")).body.events.map((e: { id: string }) => e.id)).toEqual([legacy.id]);
+  });
+
+  it("couples private attribution to audit rollback and workspace deletion", async () => {
+    const orgId = `operator-identity-${crypto.randomUUID()}`;
+    await db!.query(`INSERT INTO organization (id,name,slug,created_at) VALUES ($1,$1,$1,now())`, [orgId]);
+    const eventId = crypto.randomUUID();
+    try {
+      await expect(db!.transaction!(async (tx) => {
+        await tx.query(`INSERT INTO audit_event (id,organization_id,actor_type,actor_label,action,target_type,target_id)
+          VALUES ($1::uuid,$2,'system','Montral operator','workspace.suspend','workspace',$2)`, [eventId, orgId]);
+        // The private identity constraint fails after the customer event insert.
+        await tx.query(`INSERT INTO workspace_operator_audit (audit_event_id,operator_id) VALUES ($1::uuid,'')`, [eventId]);
+      })).rejects.toThrow();
+      expect(await db!.query(`SELECT id FROM audit_event WHERE id=$1::uuid`, [eventId])).toEqual([]);
+      await db!.query(`INSERT INTO audit_event (id,organization_id,actor_type,actor_label,action,target_type,target_id)
+        VALUES ($1::uuid,$2,'system','Montral operator','workspace.suspend','workspace',$2)`, [eventId, orgId]);
+      await db!.query(`INSERT INTO workspace_operator_audit (audit_event_id,operator_id) VALUES ($1::uuid,'deleted-operator')`, [eventId]);
+      // No user FK: removing an operator account never erases attribution.
+      expect(await db!.query(`SELECT operator_id FROM workspace_operator_audit WHERE audit_event_id=$1::uuid`, [eventId]))
+        .toEqual([{ operator_id: "deleted-operator" }]);
+      // Even if a broken guard allowed TRUNCATE, the sentinel rolls it back.
+      await expect(db!.transaction!(async (tx) => {
+        await tx.query(`TRUNCATE workspace_operator_audit`);
+        throw new Error("truncate guard missing");
+      })).rejects.toThrow("workspace_operator_audit is append-only");
+
+      const oldEventId = crypto.randomUUID();
+      await db!.query(`INSERT INTO audit_event (id,organization_id,actor_type,actor_label,action,target_type,target_id,created_at)
+        VALUES ($1::uuid,$2,'system','Montral operator','workspace.unsuspend','workspace',$2,now()-interval '40 days')`, [oldEventId, orgId]);
+      await db!.query(`INSERT INTO workspace_operator_audit (audit_event_id,operator_id) VALUES ($1::uuid,'old-operator')`, [oldEventId]);
+      // Use the parent's existing retention gate on this fixture only; a global
+      // prune would interfere with unrelated tests sharing the database.
+      await db!.transaction!(async (tx) => {
+        await tx.query(`SELECT set_config('montral.audit_prune_before', extract(epoch FROM now()-interval '30 days')::text, true)`);
+        await tx.query(`DELETE FROM audit_event WHERE id=$1::uuid`, [oldEventId]);
+      });
+      expect(await db!.query(`SELECT audit_event_id FROM workspace_operator_audit WHERE audit_event_id=$1::uuid`, [oldEventId])).toEqual([]);
+      await db!.query(`DELETE FROM organization WHERE id=$1`, [orgId]);
+      expect(await db!.query(`SELECT audit_event_id FROM workspace_operator_audit WHERE audit_event_id=$1::uuid`, [eventId])).toEqual([]);
+    } finally {
+      await db!.query(`DELETE FROM organization WHERE id=$1`, [orgId]);
+    }
   });
 
   it("leaves suspended workspaces out of every scheduled claim (alerts, retries, reminders, escalations, mails, reports)", async () => {

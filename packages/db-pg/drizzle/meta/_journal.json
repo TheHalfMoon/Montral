@@ -435,6 +435,13 @@
       "when": 1794464304047,
       "tag": "0061_onboarding_dismissal",
       "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1794621521009,
+      "tag": "0062_workspace_operator_identity",
+      "breakpoints": true
     }
   ]
 }

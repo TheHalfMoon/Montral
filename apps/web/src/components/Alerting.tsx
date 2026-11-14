@@ -3,6 +3,8 @@ import { useEffect, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { api, ago, type AlertDelivery, type Channel, type OncallSchedule, type ProjectAlerting } from "../lib/api";
 import { deliveryReason, deliveryState, stateClass } from "../lib/delivery";
+import { ask } from "../lib/confirm";
+import Modal from "./Modal";
 
 const TYPES: { id: Channel["type"]; label: string; desc: string }[] = [
   { id: "discord", label: "Discord", desc: "Send alerts through a Discord channel webhook." },
@@ -140,7 +142,7 @@ export default function Alerting() {
                     <button className="btn sm" disabled={testing === c.id} onClick={() => test(c)}>{testing === c.id ? t("Sending…") : t("Test")}</button>
                     <button className="btn sm" onClick={() => openEdit(c)}>{t("Edit")}</button>
                     <button className="btn sm" disabled={removing === c.id} onClick={async () => {
-                      if (!confirm(t("Remove this channel?"))) return;
+                      if (!(await ask(t("Remove this channel?"), t("Remove")))) return;
                       setRemoving(c.id);
                       try { await api.deleteChannel(c.id); await load(); } catch (e) { setErr((e as Error).message); } finally { setRemoving(""); }
                     }}>{removing === c.id ? t("Removing…") : t("Remove")}</button>
@@ -229,8 +231,8 @@ export default function Alerting() {
       )}
 
       {adding && (
-        <div className="modal" onClick={() => setAdding(false)}>
-          <form className="card" onClick={(e) => e.stopPropagation()} onSubmit={add}>
+        <Modal onClose={() => setAdding(false)}>
+          <form className="card" onSubmit={add}>
             <h2 style={{ fontSize: 30 }}>{editId ? t("Edit channel") : t("Add a channel")}</h2>
             {!editId && <div className="type-grid">
               {TYPES.filter((x) => x.id !== "push" || push).map((x) => (
@@ -288,7 +290,7 @@ export default function Alerting() {
               <button className="btn primary" disabled={busy}>{busy ? (editId ? t("Saving…") : t("Adding…")) : editId ? t("Save changes") : t("Add channel")}</button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
     </>
   );

@@ -7,6 +7,7 @@ import { ago, api, type Incident, type Monitor } from "../lib/api";
 import { useBusy } from "../lib/use-busy";
 import { isAllProjects } from "../lib/scope";
 import { ProjectBadge, ScopeChip, useProjects } from "./AllProjects";
+import Modal from "./Modal";
 
 const DAY = 86400_000;
 const dur = (a: string, b: string | null) => {
@@ -107,8 +108,8 @@ function Declare({ onClose, onDone }: { onClose: () => void; onDone: (id: string
   const [busy, run] = useBusy();
   useEffect(() => { api.monitors().then(setMonitors).catch(() => {}); }, []);
   return (
-    <div className="modal" onClick={onClose}>
-      <form className="card" onClick={(e) => e.stopPropagation()} onSubmit={(e) => {
+    <Modal onClose={onClose}>
+      <form className="card" onSubmit={(e) => {
         e.preventDefault();
         setErr("");
         run(async () => {
@@ -128,6 +129,6 @@ function Declare({ onClose, onDone }: { onClose: () => void; onDone: (id: string
         {err && <p className="err">{err}</p>}
         <div className="formact"><button type="button" className="btn" onClick={onClose}>{t("Cancel")}</button><button className="btn primary" disabled={busy}>{busy ? t("Declaring…") : t("Declare incident")}</button></div>
       </form>
-    </div>
+    </Modal>
   );
 }

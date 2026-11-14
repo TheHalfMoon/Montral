@@ -3,6 +3,7 @@ import Base from "./Base.astro";
 import ProjectSwitcher from "../components/ProjectSwitcher";
 import TopBar from "../components/TopBar";
 import CommandMenu from "../components/CommandMenu";
+import ConfirmHost from "../components/ConfirmHost";
 const { title = "Montral", active = "monitors" } = Astro.props as { title?: string; active?: string };
 // The shell is static HTML: no server data. The browser fetches identity, counts and the page's data in parallel (lib/boot.ts)
 // and translates the `data-t` labels, so this file renders the same bytes for everyone.
@@ -96,6 +97,7 @@ const crumb = [...main, ...workspace].find(([k]) => k === active)?.[2] ?? title;
     </nav>
   </div>
   <CommandMenu client:only="react" />
+  <ConfirmHost client:only="react" />
   <script>import "../lib/boot";</script>
   <script>import { registerServiceWorker } from "../lib/pwa";
     registerServiceWorker();</script>

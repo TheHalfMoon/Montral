@@ -4,6 +4,8 @@ import { useBusy } from "../lib/use-busy";
 import { ago, api, type Project } from "../lib/api";
 import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
+import { ask } from "../lib/confirm";
+import Modal from "./Modal";
 
 type Key = { id: string; name: string | null; start: string | null; createdAt: string; metadata?: { projectIds?: string[] } | null };
 
@@ -35,7 +37,7 @@ function AgentGrants() {
             <div><b style={{ fontWeight: 600 }}>{g.name ?? t("An application")}</b><div className="muted" style={{ fontSize: 13 }}>{g.scopes.filter((x) => x.startsWith("mcp:")).join(", ") || "—"}</div></div>
             <span className="muted">{ago(g.updatedAt)}</span>
             <button className="btn sm" disabled={gone === g.id} onClick={async () => {
-              if (!confirm(t("Revoke this key?"))) return;
+              if (!(await ask(t("Revoke this key?"), t("Revoke")))) return;
               setGone(g.id);
               try {
                 await fetch("/api/auth/oauth2/delete-consent", { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ id: g.id }) });
@@ -135,7 +137,7 @@ export default function ApiKeys() {
             <span className="muted" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{scopeOf(k)}</span>
             <span className="muted">{ago(k.createdAt)}</span>
             <button className="btn sm" disabled={revoking === k.id} onClick={async () => {
-              if (!confirm(t("Revoke this key?"))) return;
+              if (!(await ask(t("Revoke this key?"), t("Revoke")))) return;
               setRevoking(k.id);
               try { await authClient.apiKey.delete({ keyId: k.id }); await load(); } catch (e) { setErr((e as Error).message); } finally { setRevoking(""); }
             }}>{revoking === k.id ? t("Revoking…") : t("Revoke")}</button>
@@ -149,8 +151,8 @@ export default function ApiKeys() {
       </div>
 
       {open && (
-        <div className="modal" onClick={() => setOpen(false)}>
-          <form className="card" onClick={(e) => e.stopPropagation()} onSubmit={create}>
+        <Modal onClose={() => setOpen(false)}>
+          <form className="card" onSubmit={create}>
             <h2 style={{ fontSize: 30 }}>{t("New API key")}</h2>
             <label className="fld">{t("Name")}<input className="in" required autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t("CI deploy hook")} /></label>
             <div className="fld">{t("Project access")}
@@ -174,7 +176,7 @@ export default function ApiKeys() {
               <button className="btn primary" disabled={busy}>{busy ? t("Creating…") : t("Create key")}</button>
             </div>
           </form>
-        </div>
+        </Modal>
       )}
     </>
   );

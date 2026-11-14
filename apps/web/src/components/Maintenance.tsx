@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useBusy } from "../lib/use-busy";
 import { api, type Maintenance as Window, type Monitor } from "../lib/api";
 import { t } from "../lib/i18n";
+import { ask } from "../lib/confirm";
 
 const local = (d: Date) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
 
@@ -45,7 +46,7 @@ export default function Maintenance() {
             <span className="muted">{names(w)}</span>
             <span><span className={`pill ${state(w) === "active" ? "degraded" : ""}`}>{t(state(w))}</span></span>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}><button className="btn sm" disabled={removing === w.id} onClick={async () => {
-              if (!confirm(t("Remove this window?"))) return;
+              if (!(await ask(t("Remove this window?"), t("Remove")))) return;
               setRemoving(w.id);
               try { await api.deleteMaintenance(w.id); await load(); } catch (e) { setErr((e as Error).message); } finally { setRemoving(""); }
             }}>{removing === w.id ? t("Removing…") : t(w.seriesId && state(w) === "upcoming" ? "Skip once" : "Remove")}</button>
@@ -53,7 +54,7 @@ export default function Maintenance() {
               setRemoving(w.id); try { await api.endMaintenance(w.id); await load(); } catch (e) { setErr((e as Error).message); } finally { setRemoving(""); }
             }}>{t("End now")}</button>}
             {w.seriesId && state(w) !== "ended" && <button className="btn sm" disabled={removing === w.id} onClick={async () => {
-              if (!confirm(t("Cancel future occurrences and end any active window in this series?"))) return;
+              if (!(await ask(t("Cancel future occurrences and end any active window in this series?"), t("End series")))) return;
               setRemoving(w.id); try { await api.cancelMaintenanceSeries(w.seriesId!); await load(); } catch (e) { setErr((e as Error).message); } finally { setRemoving(""); }
             }}>{t("Cancel series")}</button>}</div>
           </div>

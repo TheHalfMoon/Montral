@@ -6,6 +6,7 @@ import { useBusy } from "../lib/use-busy";
 import { selectProject as select, switchScope } from "../lib/nav";
 import { scrollEdges } from "../lib/scroll-edges";
 import { ALL, COOKIE, isAllProjects, setProjectCookie } from "../lib/scope";
+import { ask } from "../lib/confirm";
 
 /** A list with at most a few rows in view: fades at the edge that still has rows behind it, so it reads as scrollable. */
 function ScrollList({ children, deps }: { children: React.ReactNode; deps: unknown[] }) {
@@ -87,7 +88,7 @@ export default function ProjectSwitcher() {
     await run(() => api.renameProject(active.id, next).then(() => setProjects((l) => l.map((p) => (p.id === active.id ? { ...p, name: next } : p)))).catch((x: Error) => setErr(x.message)));
   }
   async function remove() {
-    if (!active || !confirm(`${t("Delete project")} “${active.name}”? ${t("Its monitors, status pages and channels are deleted too.")}`)) return;
+    if (!active || !(await ask(`${t("Delete project")} “${active.name}”? ${t("Its monitors, status pages and channels are deleted too.")}`, t("Delete project")))) return;
     const ok = await run(() => api.deleteProject(active.id).then(() => true).catch((x: Error) => { setErr(x.message); return false; }));
     if (ok) { document.cookie = `${COOKIE}=;path=/;max-age=0`; switchScope(); }
   }

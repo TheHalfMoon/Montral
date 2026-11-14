@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { t } from "../lib/i18n";
+import Modal from "./Modal";
 
 export type ImportReport = {
   preview: boolean; created: number; duplicates: number; ready: number; canImport: boolean; autoChannelCount: number;
@@ -37,7 +38,7 @@ export default function MonitorImport({ raw, onClose, onImported }: { raw: strin
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
-  return <div className="modal" role="dialog" aria-modal="true" aria-label={t("Import preview")}>
+  return <Modal onClose={onClose} busy={busy} backdropClose={false} label={t("Import preview")}>
     <div className="card mform" style={{ maxWidth: 820 }}>
       <div className="mhead"><h2>{t("Import preview")}</h2><button className="icon-btn mclose" disabled={busy} aria-label={t("Close")} onClick={onClose}>×</button></div>
       <label className="fld">{t("Source namespace")}
@@ -59,5 +60,5 @@ export default function MonitorImport({ raw, onClose, onImported }: { raw: strin
         </tbody></table></div>
       </>}
     </div>
-  </div>;
+  </Modal>;
 }

@@ -13,7 +13,9 @@ export type Segment<V extends string | number> = {
  * jump, and screen readers hear "Role, radio group, Admin, 2 of 2, checked". Locked options stay reachable so their
  * reason can be read, but cannot be chosen.
  */
-export default function Segmented<V extends string | number>({ value, options, onChange, label, disabled = false, style }: {
+export default function Segmented<V extends string | number>({ value, options, onChange, label, disabled = false, style, className = "" }: {
+  /** extra classes, e.g. "stack-sm" to stack long options on phones */
+  className?: string;
   value: V;
   options: Segment<V>[];
   onChange: (v: V) => void;
@@ -43,7 +45,7 @@ export default function Segmented<V extends string | number>({ value, options, o
     choose(j);
   };
   return (
-    <div className="seg" role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} ref={ref} style={style}>
+    <div className={className ? `seg ${className}` : "seg"} role="radiogroup" aria-label={label} aria-disabled={disabled || undefined} ref={ref} style={style}>
       {options.map((o, i) => {
         const on = i === current;
         return (

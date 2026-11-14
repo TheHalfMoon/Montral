@@ -128,7 +128,8 @@ export default function Team() {
               <div className="tr tm-tr" key={m.id}>
                 <div className="nm"><span className="av">{initial(m.user.name || m.user.email)}</span><div><b style={{ fontWeight: 600 }}>{m.user.name}</b><small>{m.user.email}</small></div></div>
                 <span><span className={`pill ${m.role === "owner" ? "up" : ""}`}>{t(m.role)}</span></span>
-                {m.role !== "owner" && canManage ? (
+                {/* not on your own row: demoting or removing yourself is done by another owner or admin */}
+                {m.role !== "owner" && canManage && m.userId !== myId ? (
                   <RowMenu busy={removing === m.id || changing === m.id} items={[{
                     label: m.role === "admin" ? t("Change role to member") : t("Change role to admin"),
                     run: () => changeRole(m, m.role === "admin" ? "member" : "admin"),

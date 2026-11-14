@@ -186,15 +186,8 @@ export function StatusPageEditor({ id }: { id: string }) {
 
           <div className="card cc">
             <div className="cc-h"><h3>{t("Who can see this page")}</h3></div>
-            <div className="seg stack-sm" role="radiogroup" aria-label={t("Who can see this page")}>
-              {(["public", "password", "members"] as const).map((v) => (
-                <i key={v} role="radio" tabIndex={0} aria-checked={(page.visibility ?? "public") === v} className={(page.visibility ?? "public") === v ? "on" : ""}
-                  onClick={() => setPage({ ...page, visibility: v })}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setPage({ ...page, visibility: v }); } }}>
-                  {t(v === "public" ? "Anyone with the link" : v === "password" ? "Password or share link" : "Workspace members only")}
-                </i>
-              ))}
-            </div>
+            <Segmented className="stack-sm" label={t("Who can see this page")} value={page.visibility ?? "public"} onChange={(v) => setPage({ ...page, visibility: v })}
+              options={(["public", "password", "members"] as const).map((v) => ({ value: v, label: t(v === "public" ? "Anyone with the link" : v === "password" ? "Password or share link" : "Workspace members only") }))} />
             <small className="faint" style={{ display: "block", marginTop: 8 }}>
               {(page.visibility ?? "public") === "members"
                 ? t("Only people signed in to this workspace can open the page, its feeds, badge and llms.txt; everyone else gets “not found”. Share links can still let specific people in. Embeds and the public MCP tools stop working, and incident and maintenance emails go only to subscribers who are verified workspace members.")

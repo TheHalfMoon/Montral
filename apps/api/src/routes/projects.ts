@@ -80,8 +80,7 @@ export const projects = new Hono<AppEnv>()
   .delete("/:id", uuidParams, unlimited, requireManager, async (c) => {
     const repo = c.get("repo");
     const orgId = c.get("orgId");
-    if ((await repo.countProjects(orgId)) <= 1) return c.json({ error: "A workspace needs at least one project" }, 400);
-    await repo.deleteProject(orgId, c.req.param("id"));
+    if (!await repo.deleteProject(orgId, c.req.param("id"))) return c.json({ error: "A workspace needs at least one project" }, 400);
     forgetProjects(orgId);
     // the project is gone: the event is workspace-wide and names it by id
     await audit(c, "project.delete", { type: "project", id: c.req.param("id"), projectId: null });

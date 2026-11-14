@@ -437,7 +437,14 @@ export function createRepo(db: Db): Repo {
       return row ?? null;
     },
     async deleteProject(orgId, id) {
-      await db.delete(schema.project).where(and(eq(schema.project.id, id), eq(schema.project.organizationId, orgId)));
+      return db.transaction(async (tx) => {
+        // Serialize deletions across replicas so two requests cannot each remove the other's last project.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"project-delete:" + orgId}))`);
+        const [used] = await tx.select({ n: count() }).from(schema.project).where(eq(schema.project.organizationId, orgId));
+        if (used.n <= 1) return false;
+        await tx.delete(schema.project).where(and(eq(schema.project.id, id), eq(schema.project.organizationId, orgId)));
+        return true;
+      });
     },
     async resolveProject(orgId, wanted) {
       if (wanted && UUID.test(wanted)) {

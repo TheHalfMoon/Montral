@@ -663,7 +663,8 @@ export interface Repo {
   projectOverview(orgId: string, scope: Scope): Promise<ProjectOverview[]>;
   createProject(orgId: string, name: string): Promise<Project>;
   renameProject(orgId: string, id: string, name: string): Promise<Project | null>;
-  deleteProject(orgId: string, id: string): Promise<void>;
+  /** False when deletion would violate the workspace's minimum of one project; serialized across replicas. */
+  deleteProject(orgId: string, id: string): Promise<boolean>;
   /** The requested project if it belongs to the workspace, else the oldest (created on first use). */
   resolveProject(orgId: string, wanted?: string): Promise<string>;
   ensureDefaultProject(orgId: string): Promise<string>;

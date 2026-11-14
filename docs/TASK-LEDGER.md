@@ -132,6 +132,10 @@ The source audit found the following executable work beyond the earlier historic
 | SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
 | SEC-LOGIN-REDIRECT | Login return-path normalization could create an external destination | P2 | Implemented on this branch; qualification/merge pending. Shared control/network-path guard runs before and after locale stripping. `docs/evidence/2026-11-14-login-return-path.md`. |
 
+## Project deletion invariant under qualification
+
+**P1**, implemented on this branch; merge pending. Concurrent authorized deletions must leave at least one project and preserve that project's data. Atomic repository guard and real PostgreSQL regression: `docs/evidence/2026-11-14-project-delete-race.md`.
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

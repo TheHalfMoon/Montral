@@ -1,0 +1,9 @@
+# Preserve the final project during concurrent deletions
+
+The API checked the project's workspace count before calling a separate DELETE. With two projects, two authorized manager requests could both observe a count of two and remove both projects, bypassing the existing minimum-one rule. Project data cascades with deletion; creating a fresh default later does not restore it.
+
+A deterministic real-Hono/PostgreSQL 17 regression holds both requests immediately before repository deletion. Before the fix, both returned 204, failing the expected one-success/one-refusal assertion. After the fix, one returns 204 and the other returns the existing 400 response. The test verifies that the remaining project's monitor survives and a further deletion is refused. Unknown IDs remain idempotent no-ops when more than one project exists.
+
+The repository now takes a workspace-specific transaction advisory lock before counting and deleting, so the waiting caller counts after the previous commit. The API consumes the repository's boolean result. The lock covers deletion across connections and replicas without a migration or deployment setting. Creation only adds projects and does not need this deletion lock. Manager and project-scope authorization remain on the existing route.
+
+Validation: regression RED then GREEN on a disposable local database; five project/workspace/OAuth suites passed 9/9. API and PostgreSQL package TypeScript checks, Node API build, source verification and diff checks passed. Hosted qualification is pending. Fresh independent combined correctness/parsimony/product review found no must-fix or advisory findings, including repository caller and lock-order checks; the reviewer did not rerun tests. No release or production deployment is claimed.

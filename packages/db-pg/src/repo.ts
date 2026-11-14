@@ -613,7 +613,7 @@ export function createRepo(db: Db): Repo {
           delete effective.status;
           delete effective.nextCheckAt;
         }
-        const measured = ["paused", "target", "method", "expectedStatus", "intervalSec", "timeoutMs", "graceSec", "slowThresholdMs", "regions", "minRegionsFailing", "keyword", "keywordMode", "jsonPath", "jsonExpected", "jsonMatch", "expectedLocation", "headers", "wsMessage", "browser"];
+        const measured = ["paused", "target", "method", "requestBody", "expectedStatus", "intervalSec", "timeoutMs", "graceSec", "slowThresholdMs", "regions", "minRegionsFailing", "keyword", "keywordMode", "jsonPath", "jsonExpected", "jsonMatch", "expectedLocation", "headers", "wsMessage", "browser"];
         const comparable = (key: string, value: unknown) => JSON.stringify(
           key === "regions" && Array.isArray(value) ? [...value].sort() : value,
           (_name, part) => part && typeof part === "object" && !Array.isArray(part)

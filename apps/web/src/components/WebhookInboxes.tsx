@@ -139,14 +139,25 @@ export default function WebhookInboxes() {
     const list = (await api.hookInboxes()).inboxes;
     setInboxes(list);
   }
-  useEffect(() => { load().catch((e) => setError((e as Error).message)); }, []);
+  // replay attempt counter: owners and admins only (the API answers 403 to everyone else, and the line stays hidden)
+  const [replays, setReplays] = useState<{ attempts: number; periodEnd: string } | null>(null);
+  // only on metered deployments does "not billed" mean anything; Community has no billing language at all
+  const [metered, setMetered] = useState(false);
+  const replaySeq = useRef(0);
+  const loadReplays = () => {
+    const seq = ++replaySeq.current; // quick successive replays: only the latest answer is shown
+    api.hookReplayUsage()
+      .then((u) => { if (seq === replaySeq.current) setReplays({ attempts: Number(u.attempts) || 0, periodEnd: u.periodEnd }); })
+      .catch(() => { if (seq === replaySeq.current) setReplays(null); });
+  };
+  useEffect(() => { load().catch((e) => setError((e as Error).message)); loadReplays(); }, []);
   useEffect(() => {
     // On scope switches, discard a stale allowance before requesting the new workspace's.
     let generation = 0;
     const refresh = () => {
       const current = ++generation;
       api.usage().then((usage) => {
-        if (current === generation) setQuota(webhookInboxQuotaNotice(usage));
+        if (current === generation) { setQuota(webhookInboxQuotaNotice(usage)); setMetered(usage.metered); }
       }).catch(() => { if (current === generation) setQuota(null); });
     };
     const onScope = () => { generation++; setQuota(null); refresh(); };
@@ -257,19 +268,24 @@ export default function WebhookInboxes() {
           <details style={{ marginTop: 8 }}><summary>{t("Inspect request")}</summary>
             <b>{t("Headers")}</b><pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(e.headers, null, 2)}</pre>
             <b>{t("Body")}</b><pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{e.body}</pre>
-            <EventActions inbox={selected} event={e} onDeleted={() => setEvents((prev) => prev.filter((x) => x.id !== e.id))} />
+            <EventActions inbox={selected} event={e} onDeleted={() => setEvents((prev) => prev.filter((x) => x.id !== e.id))} onReplayed={loadReplays} />
           </details>
         </div>)}
       </div>
       {next && <button className="btn sm" style={{ marginTop: 12 }} onClick={() => fetchEvents(next).catch(report)}>{t("Load older events")}</button>}
     </section>}
+    {/* at the foot of the page: it arrives after the page renders, and nothing below it can be pushed */}
+    {replays && <p className="replay-count" data-replay-attempts={replays.attempts}>
+      <span>{t("Replay attempts this month")}</span> <b className="tnum">{replays.attempts.toLocaleString(document.documentElement.lang)}</b>
+      <span className="faint">· {t("counter resets on {date} (UTC)").replace("{date}", formatResetDate(new Date(`${replays.periodEnd}T00:00:00Z`), document.documentElement.lang))}{metered ? ` · ${t("not billed")}` : ""}</span>
+    </p>}
   </>;
 }
 
 type ReplayResult = Awaited<ReturnType<typeof api.replayHookEvent>>;
 
 /** Delete one captured request, or resend it to a development endpoint. */
-function EventActions({ inbox, event, onDeleted }: { inbox: string; event: HookEvent; onDeleted: () => void }) {
+function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; event: HookEvent; onDeleted: () => void; onReplayed?: () => void }) {
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReplayResult | null>(null);
@@ -278,7 +294,8 @@ function EventActions({ inbox, event, onDeleted }: { inbox: string; event: HookE
     e.preventDefault(); setBusy(true); setError(""); setResult(null);
     try { setResult(await api.replayHookEvent(inbox, event.id, url.trim())); }
     catch (x) { setError((x as Error).message); }
-    finally { setBusy(false); }
+    // an attempt is counted even when the target answers with an error, so refresh the count either way
+    finally { setBusy(false); onReplayed?.(); }
   };
   const remove = async () => {
     if (!(await ask(t("Delete this captured request? This cannot be undone."), t("Delete request")))) return;

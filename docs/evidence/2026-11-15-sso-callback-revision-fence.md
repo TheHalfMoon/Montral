@@ -1,6 +1,6 @@
 # SSO callback versus owner configuration changes (2026-11-15)
 
-**Status:** proposed, pending hosted exact-head checks and independent review. Not a claim of production exploitation. No deployments, provider requests, or production database changes.
+**Status:** merged in PR #149, merge commit `ead97409848cd55600bffcaf241f0388e7b06a1a` on November 15. All 11 exact-head PR workflows passed, including PostgreSQL 17/18, macOS PostgreSQL 18, browser and Docker qualifications. Combined-main integration evidence and independent security review remain separate. No production exploitation claim, deployment, external provider request or production database change.
 
 ## Race
 
@@ -25,7 +25,7 @@ A real-PostgreSQL SSO E2E test:
 3. Tries to attach the previously captured revisions to a real session. Both must refuse without inserting a marker.
 4. Attaches the latest revision successfully, checks the stored connection ID, and removes the synthetic marker in a `finally` block.
 
-A second real-PostgreSQL E2E regression deliberately pauses a real callback during a synthetic provider token response, saves the same workspace connection through its authenticated owner API, then confirms the old callback redirects with `connection_disabled`, receives no signed-in cookie, and leaves no additional session for that existing user. This covers the complete callback flow and the narrow serialization guard without external provider credentials. Exact-head PostgreSQL 17/18, API typecheck/build, macOS and other repository gates must be verified before merge.
+A second real-PostgreSQL E2E regression deliberately pauses a real callback during a synthetic provider token response, saves the same workspace connection through its authenticated owner API, then confirms the old callback redirects with `connection_disabled`, receives no signed-in cookie, and leaves no additional session for that existing user. This covers the complete callback flow and the narrow serialization guard without external provider credentials. The exact-head workflows passed before merge. That does not replace a third-party security audit, a real external identity-provider qualification or a full main-branch integrated run.
 
 ## Scope and limits
 

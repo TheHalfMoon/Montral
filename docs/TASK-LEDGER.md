@@ -172,6 +172,12 @@ Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e
 
 Security #149 and web #129–#135 are now merged to `main@3fe4a5e46f52a4220b2a2162b4166286372bde04`. All eight PRs passed **11/11 workflows individually** before merge. This fact does **not** prove the combined head's full push CI, physical Safari/VoiceOver, live-provider coverage, or an independent audit. A dedicated integration qualification pull request follows, with no release/tag/deployment authorized. The old `d49e2cf` 11/11 main run remains historical, not qualification for these additions.
 
+## November 15 integrated-main qualification (non-release)
+
+At `main@2bbbca8f1efa87fd3f408037170f3f10b5338009`, **all 11/11 exact-SHA push workflows succeeded**, including Windows Docker safety preflight, hosted macOS, PostgreSQL, Docker Compose, failover, cross-browser, accessibility, browser runner, load, upgrade/rollback/DR, Terraform and source integrity. Evidence and run IDs: `docs/RELEASE-GATES.md` (latest integrated-main qualification). This supersedes the pending combined-main qualification wording above; the earlier `3fe4a5e` and `d49e2cf` entries remain historical.
+
+#151 (APNs token-free web phone management), #152 (Web-first/PWA delivery decision) and #153 (dependency security updates) are merged into this qualified main. The dependency audit remains partial: `esbuild@0.18.20` and `fast-uri@3.1.8` advisories were still reported in development-tool dependency paths on the scoped audit. No inference of runtime exploitability or complete security clearance is made. Physical Windows Docker, physical Safari/VoiceOver, live SMTP/APNs/payment providers, independent security testing, legal/privacy review and production DR remain unqualified or blocked. **No release, publication, deployment, or commercial activation is authorized.**
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

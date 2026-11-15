@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createAuth } from "./auth";
 import { recheckSsoDomains } from "./sso-domains";
 import { setSsoOptionsForTests } from "./sso-oidc";
-import { removedFrom } from "./sso-store";
+import { connectionById, markSsoSession, removedFrom } from "./sso-store";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
@@ -237,6 +237,41 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await q<{ token_endpoint: string }>("SELECT token_endpoint FROM sso_connection WHERE id = $1", [connA]))[0].token_endpoint).toBe(`${idpA.issuer}/token`);
     // a second connection for the same workspace is the same row (PUT updates)
     expect((await q("SELECT 1 FROM sso_connection WHERE organization_id = $1", [ownerA.orgId])).length).toBe(1);
+  });
+
+  it("fences a delayed SSO session marker to the connection's exact revision", async () => {
+    const old = await connectionById(q, env as never, connA);
+    expect(old?.configRevision).toBeTruthy();
+    const settings = { issuer: idpA.issuer, clientId: idpA.clientId, domains: [domainA], defaultRole: "member" };
+    // Even two no-op settings saves must produce distinct revisions. An old callback
+    // cannot become valid again when the owner restores identical provider settings.
+    const one = await call("/api/sso", { method: "PUT", jar: ownerA.jar, body: settings });
+    expect(one.status, one.text).toBe(200);
+    const middle = await connectionById(q, env as never, connA);
+    const two = await call("/api/sso", { method: "PUT", jar: ownerA.jar, body: settings });
+    expect(two.status, two.text).toBe(200);
+    const current = await connectionById(q, env as never, connA);
+    expect(middle?.configRevision).not.toBe(old?.configRevision);
+    expect(current?.configRevision).not.toBe(middle?.configRevision);
+
+    // Use an existing normal session so PostgreSQL's sso_session foreign key is exercised.
+    const [normal] = await q<{ id: string }>(
+      `SELECT s.id FROM session s LEFT JOIN sso_session ss ON ss.session_id = s.id
+       WHERE s.user_id = $1::text AND ss.session_id IS NULL ORDER BY s.created_at DESC LIMIT 1`,
+      [ownerA.id],
+    );
+    expect(normal).toBeDefined();
+    try {
+      expect(await markSsoSession(q, normal.id, old!)).toBe(false);
+      expect(await markSsoSession(q, normal.id, middle!)).toBe(false);
+      expect(await q("SELECT 1 FROM sso_session WHERE session_id = $1::text", [normal.id])).toHaveLength(0);
+      expect(await markSsoSession(q, normal.id, current!)).toBe(true);
+      expect(await q<{ connection_id: string }>("SELECT connection_id FROM sso_session WHERE session_id = $1::text", [normal.id]))
+        .toEqual([{ connection_id: connA }]);
+    } finally {
+      // Do not leave the owner's regular sign-in relabeled as SSO for later tests.
+      await q("DELETE FROM sso_session WHERE session_id = $1::text", [normal.id]);
+    }
   });
 
   it("tests discovery, refusing private and plain-http providers without SSO_ALLOW_PRIVATE_IDP", async () => {

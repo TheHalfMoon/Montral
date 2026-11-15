@@ -327,6 +327,45 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await call("/api/me", { jar: again })).status).toBe(401);
   });
 
+  it("refuses an in-flight OIDC callback after an owner saves the connection", async () => {
+    // Alice is already linked, so the regression isolates session minting from JIT provisioning.
+    const email = `alice@${domainA}`;
+    const aliceId = (await userIdOf(email))!;
+    expect(aliceId).toBeTruthy();
+    const before = await q<{ n: number }>(
+      "SELECT count(*)::int AS n FROM session WHERE user_id = $1::text", [aliceId],
+    );
+    const jar = new Jar();
+    const start = await call("/api/auth/sso/start", { method: "POST", jar, body: { email } });
+    expect(start.status, start.text).toBe(200);
+    const { callback } = idpA.authorize(start.body.url, { sub: "alice-sub", email, email_verified: true });
+    const cb = new URL(callback);
+    const sentBefore = idpA.requests.filter((r) => r.path === "/token").length;
+    // The synthetic provider records /token at the start of its deliberate response delay.
+    // Save the connection while that old callback is already exchanging its code.
+    idpA.delayMs = 1800;
+    try {
+      const pending = call(cb.pathname + cb.search, { jar });
+      await vi.waitFor(
+        () => expect(idpA.requests.filter((r) => r.path === "/token").length).toBeGreaterThan(sentBefore),
+        { timeout: 10000, interval: 20 },
+      );
+      const updated = await call("/api/sso", {
+        method: "PUT", jar: ownerA.jar,
+        body: { issuer: idpA.issuer, clientId: idpA.clientId, domains: [domainA], defaultRole: "member" },
+      });
+      expect(updated.status, updated.text).toBe(200);
+      const callbackResult = await pending;
+      expect(callbackResult.status).toBe(302);
+      expect(failure(callbackResult.location ?? "")).toBe("connection_disabled");
+      expect((await call("/api/me", { jar })).status).toBe(401);
+      expect(await q<{ n: number }>("SELECT count(*)::int AS n FROM session WHERE user_id = $1::text", [aliceId]))
+        .toEqual(before);
+    } finally {
+      idpA.delayMs = 0;
+    }
+  });
+
   it("sends the client secret only to the token endpoint it was entered for", async () => {
     const email = `pinned@${domainA}`;
     const user = { sub: "pinned-sub", email, email_verified: true };

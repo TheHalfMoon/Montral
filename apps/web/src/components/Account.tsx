@@ -406,8 +406,8 @@ function PasswordChange() {
 
 /**
  * Phones that receive push alerts for this person (registered by the iOS app). Hidden on a server without Apple push
- * and no phones, so nothing suggests push delivery that this deployment cannot make. Device tokens are only used to
- * remove a phone and are never shown.
+ * and no phones, so nothing suggests push delivery that this deployment cannot make. The account UI fetches metadata and removes by device ID; raw APNs tokens
+ * never enter browser state or request URLs.
  */
 function Phones() {
   const [devices, setDevices] = useState<PushDevice[] | null>(null);
@@ -423,7 +423,7 @@ function Phones() {
     const name = d.name || t("iPhone");
     if (!(await ask(t("Stop push alerts to {name}? The app turns them back on the next time it registers the phone. To stop them for good, also sign that phone out under Sessions.").replace("{name}", name), t("Remove phone")))) return;
     setBusy(d.id);
-    try { await api.removePushDevice(d.token); toast(t("Phone removed.")); await load(); }
+    try { await api.removePushDeviceById(d.id); toast(t("Phone removed.")); await load(); }
     catch (e) { toast((e as Error).message, "err"); }
     finally { setBusy(""); }
   };

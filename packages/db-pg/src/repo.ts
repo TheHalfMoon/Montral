@@ -1286,6 +1286,12 @@ export function createRepo(db: Db): Repo {
       const gone = await db.delete(schema.pushDevice).where(and(eq(schema.pushDevice.userId, userId), eq(schema.pushDevice.token, token))).returning({ id: schema.pushDevice.id });
       return gone.length > 0;
     },
+    async deletePushDeviceById(userId, id) {
+      // The row ID is not an APNs credential. Keep the user constraint in the
+      // DELETE itself so even racing token reassignment cannot erase another owner's device.
+      const gone = await db.delete(schema.pushDevice).where(and(eq(schema.pushDevice.userId, userId), eq(schema.pushDevice.id, id))).returning({ id: schema.pushDevice.id });
+      return gone.length > 0;
+    },
     async pushDevicesForOrganization(orgId) {
       const rows = await db
         .select({ d: schema.pushDevice })

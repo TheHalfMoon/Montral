@@ -830,8 +830,10 @@ export interface Repo {
   /** Registers a device for the user; a token that belonged to someone else moves to this user. */
   upsertPushDevice(userId: string, d: NewPushDevice): Promise<PushDevice>;
   listPushDevices(userId: string): Promise<PushDevice[]>;
-  /** Removes the user's own device; false when they have no such token. */
+  /** Legacy iOS removal by APNs token; retained for existing mobile clients. */
   deletePushDevice(userId: string, token: string): Promise<boolean>;
+  /** Web-console removal by public row ID, scoped to the signed-in owner; APNs tokens never enter URL paths. */
+  deletePushDeviceById(userId: string, id: string): Promise<boolean>;
   /** Devices of every member of the workspace. */
   pushDevicesForOrganization(orgId: string): Promise<PushDevice[]>;
   /** APNs said the token is dead: forget it, whoever owns it. */

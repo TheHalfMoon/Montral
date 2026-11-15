@@ -18,10 +18,17 @@ const body = z.object({
 });
 
 const shape = (d: PushDevice) => ({ id: d.id, token: d.token, platform: d.platform, environment: d.environment, locale: d.locale, name: d.name, critical: d.critical });
+/** Metadata only: the account screen does not need an APNs bearer token. */
+const summary = (d: PushDevice) => ({ id: d.id, platform: d.platform, environment: d.environment, locale: d.locale, name: d.name, critical: d.critical });
 
 /** Registrations of phones for push alerts. They belong to the signed-in person (session or API key), not to a workspace. */
 export const push = new Hono<AppEnv>()
   .get("/devices", async (c) => c.json((await c.get("repo").listPushDevices(c.get("userId"))).map(shape)))
+  .get("/devices/summaries", async (c) => {
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "This credential is not tied to a user" }, 403);
+    return c.json((await c.get("repo").listPushDevices(userId)).map(summary));
+  })
   .put("/devices", zValidator("json", body), async (c) => {
     const repo = c.get("repo");
     const userId = c.get("userId");
@@ -50,6 +57,17 @@ export const push = new Hono<AppEnv>()
       }
     }
     return c.json(shape(device));
+  })
+  .delete("/devices/by-id/:id", async (c) => {
+    const deviceId = z.string().uuid().safeParse(c.req.param("id"));
+    if (!deviceId.success) return c.json({ error: "Invalid device ID" }, 400);
+    const repo = c.get("repo");
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "This credential is not tied to a user" }, 403);
+    if (!(await repo.withinLimit(`push:${userId}`, 60, 600))) return c.json({ error: "Too many requests, try again in a few minutes" }, 429);
+    await repo.deletePushDeviceById(userId, deviceId.data);
+    // Deliberately indistinguishable: not found and another person's UUID.
+    return c.body(null, 204);
   })
   .delete("/devices/:token", async (c) => {
     const repo = c.get("repo");

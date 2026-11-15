@@ -220,6 +220,36 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     expect(after.inboxes.some((i) => i.id === existing!.id)).toBe(false);
   });
 
+  await test.step("account phone management never fetches or sends an APNs token in browser URLs", async () => {
+    // The device is synthetic; the server has no live APNs credentials.
+    const token = crypto.randomUUID().replaceAll("-", "").repeat(2);
+    const registered = await page.request.put("/api/push/devices", {
+      data: { token, platform: "ios", environment: "sandbox", name: "Synthetic test phone" },
+    });
+    expect(registered.status()).toBe(200);
+
+    const summaryResponse = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/push/devices/summaries");
+    await page.goto("/app/account");
+    const summary = await summaryResponse;
+    expect(summary.status()).toBe(200);
+    const safeJson = await summary.text();
+    expect(safeJson).not.toContain(token);
+    expect(JSON.parse(safeJson)[0]).not.toHaveProperty("token");
+    await expect(page.getByRole("heading", { name: "Phones" })).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ has: page.getByRole("button", { name: "Remove Synthetic test phone" }) }).locator("b")).toHaveText("Synthetic test phone");
+    await checkA11y(page, testInfo, "account-phone-summary");
+
+    const deleting = page.waitForRequest((r) => r.method() === "DELETE" && new URL(r.url()).pathname.startsWith("/api/push/devices/by-id/"));
+    await page.getByRole("button", { name: "Remove Synthetic test phone" }).click();
+    await page.getByRole("dialog", { name: "Are you sure?" }).getByRole("button", { name: "Remove phone" }).click();
+    const request = await deleting;
+    expect(request.url()).not.toContain(token);
+    await expect(page.getByText("Phone removed.")).toBeVisible();
+    const list = await page.request.get("/api/push/devices/summaries");
+    expect(list.status()).toBe(200);
+    expect(await list.json()).toEqual([]);
+  });
+
   await test.step("on-call page: schedule, who is on call, timeline, overrides and escalation policy are accessible", async () => {
     const me = await (await page.request.get("/api/me")).json() as { userId: string };
     const created = await page.request.post("/api/oncall/schedules", { data: {

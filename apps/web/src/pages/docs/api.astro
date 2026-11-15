@@ -377,7 +377,11 @@ content-type: application/json
 200 { "id", "token", "platform", "environment", "locale", "name", "critical" }
 
 GET    /api/push/devices           200 [ { "id", "token", "platform", "environment", "locale", "name", "critical" } ]
-DELETE /api/push/devices/:token    204</code></pre>
+DELETE /api/push/devices/:token    204  (legacy iOS token-based API)
+
+GET    /api/push/devices/summaries 200 [ { "id", "platform", "environment", "locale", "name", "critical" } ]
+DELETE /api/push/devices/by-id/:id 204  (preferred for web; token-free row UUID)</code></pre>
+    <p>The account dashboard uses device summaries and deletion by row ID. The APNs token is never returned to the browser or embedded in a deletion URL. Existing iOS endpoints remain for compatibility; legacy list/remove operations still expose the token. Both deletion routes require the owning user and return 204 for a missing or another user's device.</p>
     <p>Registering is an upsert by token: a token that was registered by another person moves to the caller. When push is configured, registering also gives every workspace where the caller is owner or admin a <em>Mobile app</em> channel (type <code>push</code>, on for new monitors) if it has none. A <code>push</code> channel alerts every member of its workspace who has a registered device; creating one while push is not configured fails with <code>400</code> and <code>code: "push_not_configured"</code>. A key limited to some projects registers devices but does not create channels.</p>
     <p><code>critical</code> (boolean, default <code>false</code>) opts the device in to critical alerts. Down alerts then go out with interruption level <code>critical</code> and a critical sound, which can break through Do Not Disturb; without it they are <code>time-sensitive</code>, and recoveries are always <code>active</code>. Leaving <code>critical</code> out when registering again keeps the stored choice. Alerts for one incident share an APNs collapse id, so reminders replace the earlier banner, and notifications are grouped per monitor. A token APNs reports as invalid is removed automatically, and a device that has not registered for 180 days is dropped.</p>
     <h2 id="examples">Examples</h2>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ASK_EVENT, type AskRequest } from "../lib/confirm";
 import { t } from "../lib/i18n";
 import Modal from "./Modal";
@@ -6,16 +6,29 @@ import Modal from "./Modal";
 /** Renders the requests made with lib/confirm.ts `ask()`, one at a time. Mounted once by the app shell. */
 export default function ConfirmHost() {
   const [queue, setQueue] = useState<AskRequest[]>([]);
+  const pending = useRef<AskRequest[]>([]);
   useEffect(() => {
     window.__montralConfirmHost = true;
-    const on = (e: Event) => setQueue((q) => [...q, (e as CustomEvent<AskRequest>).detail]);
+    const on = (e: Event) => {
+      pending.current.push((e as CustomEvent<AskRequest>).detail);
+      setQueue([...pending.current]);
+    };
     window.addEventListener(ASK_EVENT, on);
-    return () => { window.removeEventListener(ASK_EVENT, on); window.__montralConfirmHost = false; };
+    return () => {
+      window.__montralConfirmHost = false;
+      window.removeEventListener(ASK_EVENT, on);
+      for (const request of pending.current.splice(0)) request.resolve(false);
+    };
   }, []);
 
   const current = queue[0];
   if (!current) return null;
-  const answer = (ok: boolean) => { current.resolve(ok); setQueue((q) => q.slice(1)); };
+  const answer = (ok: boolean) => {
+    if (pending.current[0] !== current) return;
+    pending.current.shift();
+    current.resolve(ok);
+    setQueue([...pending.current]);
+  };
 
   return (
     <Modal key={queue.length} onClose={() => answer(false)} labelledBy="ask-title" describedBy="ask-body">

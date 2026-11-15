@@ -76,30 +76,38 @@ export async function pinnedFetch(url: string, init: RequestInit, addresses: str
         ...(u.protocol === "https:" && !/^[\d.]+$|:/.test(u.hostname) ? { servername: u.hostname } : {}),
       } as import("node:http").RequestOptions,
       (res) => {
-        const noBody = [101, 204, 205, 304].includes(res.statusCode ?? 0) || req.method === "HEAD";
-        const out = new Headers();
-        for (let i = 0; i < res.rawHeaders.length; i += 2) out.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
-        if (noBody) res.resume();
-        // a server may compress anyway: undo it, so callers always read the real bytes
-        const encoding = (out.get("content-encoding") ?? "").trim().toLowerCase();
-        const inflate = noBody ? null : encoding === "gzip" || encoding === "x-gzip" ? zlib.createGunzip() : encoding === "deflate" ? inflateAuto(zlib, Transform) : encoding === "br" ? zlib.createBrotliDecompress() : null;
-        let source: import("node:stream").Readable | null = noBody ? null : res;
-        if (inflate && source) {
-          out.delete("content-encoding");
-          out.delete("content-length");
-          // an empty body has nothing to decode, whatever the header claims: it stays empty instead of failing
-          let received = 0;
-          res.on("data", (d: Buffer) => { received += d.length; });
-          const decoded = new PassThrough();
-          inflate.on("error", (e) => (received === 0 ? decoded.end() : decoded.destroy(e)));
-          res.on("error", (e) => inflate.destroy(e));
-          inflate.pipe(decoded);
-          res.pipe(inflate);
-          source = decoded;
-          // dropping the response (a capped read) must stop the download too
-          source.on("close", () => res.destroy());
+        try {
+          // Node accepts status codes above 599; Web Response does not. This callback runs outside the Promise executor.
+          const status = res.statusCode ?? 502;
+          if (status < 200 || status > 599) throw new TypeError("Invalid HTTP response status");
+          const noBody = [204, 205, 304].includes(status) || req.method === "HEAD";
+          const out = new Headers();
+          for (let i = 0; i < res.rawHeaders.length; i += 2) out.append(res.rawHeaders[i], res.rawHeaders[i + 1]);
+          if (noBody) res.resume();
+          // a server may compress anyway: undo it, so callers always read the real bytes
+          const encoding = (out.get("content-encoding") ?? "").trim().toLowerCase();
+          const inflate = noBody ? null : encoding === "gzip" || encoding === "x-gzip" ? zlib.createGunzip() : encoding === "deflate" ? inflateAuto(zlib, Transform) : encoding === "br" ? zlib.createBrotliDecompress() : null;
+          let source: import("node:stream").Readable | null = noBody ? null : res;
+          if (inflate && source) {
+            out.delete("content-encoding");
+            out.delete("content-length");
+            // an empty body has nothing to decode, whatever the header claims: it stays empty instead of failing
+            let received = 0;
+            res.on("data", (d: Buffer) => { received += d.length; });
+            const decoded = new PassThrough();
+            inflate.on("error", (e) => (received === 0 ? decoded.end() : decoded.destroy(e)));
+            res.on("error", (e) => inflate.destroy(e));
+            inflate.pipe(decoded);
+            res.pipe(inflate);
+            source = decoded;
+            // dropping the response (a capped read) must stop the download too
+            source.on("close", () => res.destroy());
+          }
+          resolve(new Response(source ? (Readable.toWeb(source) as unknown as ReadableStream<Uint8Array>) : null, { status, statusText: res.statusMessage, headers: out }));
+        } catch (error) {
+          res.destroy();
+          reject(signal?.aborted ? signal.reason : new TypeError("fetch failed", { cause: error }));
         }
-        resolve(new Response(source ? (Readable.toWeb(source) as unknown as ReadableStream<Uint8Array>) : null, { status: res.statusCode ?? 502, statusText: res.statusMessage, headers: out }));
       },
     );
     req.on("error", (err) => reject(signal?.aborted ? signal.reason : new TypeError("fetch failed", { cause: err })));

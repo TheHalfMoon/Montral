@@ -236,7 +236,7 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     expect(safeJson).not.toContain(token);
     expect(JSON.parse(safeJson)[0]).not.toHaveProperty("token");
     await expect(page.getByRole("heading", { name: "Phones" })).toBeVisible();
-    await expect(page.getByText("Synthetic test phone")).toBeVisible();
+    await expect(page.getByRole("listitem").filter({ has: page.getByRole("button", { name: "Remove Synthetic test phone" }) }).locator("b")).toHaveText("Synthetic test phone");
     await checkA11y(page, testInfo, "account-phone-summary");
 
     const deleting = page.waitForRequest((r) => r.method() === "DELETE" && new URL(r.url()).pathname.startsWith("/api/push/devices/by-id/"));

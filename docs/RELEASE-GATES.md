@@ -1,3 +1,5 @@
+# Montral release gates
+
 **Latest integrated-main qualification (2026-11-15):** `main@2bbbca8f1efa87fd3f408037170f3f10b5338009` includes #149, the web-first/PWA stack (#129–#135, #152), secretless phone management (#151), and scoped dependency security updates (#153). All **11/11 GitHub Actions push workflows completed successfully on this exact main SHA**. This is integrated CI qualification, **not** authorization to publish, deploy, tag or release. It does not establish independent penetration testing, physical Safari/VoiceOver coverage, real-provider readiness or a complete dependency audit. Community stays HOLD; Cloud and Enterprise BYOC stay NO-GO.
 
 | Exact-main push workflow | GitHub Actions run | Result |
@@ -15,6 +17,8 @@
 | Montral load qualification | [43729744446](https://github.com/TheHalfMoon/Montral/actions/runs/43729744446) | SUCCESS |
 
 All 11 results were checked with `gh run list --commit 2bbbca8f1efa87fd3f408037170f3f10b5338009`, filtered to exact-SHA `push` runs. The prior qualification at `d49e2cf` is retained below as historical evidence.
+
+**Previously verified integrated-main qualification (historical):** `main@d49e2cf0919f1f411bacc64e57c3340d6f63c16d` passed 11/11 exact-SHA integrated push workflows for the earlier upload-budget, project-cache, authority, login-return, measurement revision, status-access and deletion-protection changes (#136, #137, #140–#145). That evidence remains a historical baseline, not qualification for subsequent changes. Hosted CI and first-party reviews are not an independent security audit or physical-device qualification.
 
 Publication of any kind (tag, GitHub release, Docker image, npm package, Terraform provider, deployment) requires the
 owner's explicit `GREEN LIGHT MONTRAL`. This file has three parts: the **historical self-hosted candidate gates**,

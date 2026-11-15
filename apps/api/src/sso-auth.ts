@@ -304,7 +304,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
           }
           // A provider/connection edit can commit during an in-flight IdP exchange.
           // Refuse a session created against that stale revision, and do not issue its cookie.
-          // The marker is serialized with config updates; a later update revokes it.
+          // The marker is serialized with config edits; issuer/client replacement or deletion revokes it.
           if (!(await markSsoSession(q, session.id, conn))) {
             await q(`DELETE FROM session WHERE id = $1::text`, [session.id]);
             return fail("connection_disabled");

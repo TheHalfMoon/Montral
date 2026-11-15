@@ -43,10 +43,10 @@ const l = (en: string, zh: string): L => ({ en, zh });
 export const MONTRAL = {
   license: l("MIT license, source on GitHub", "MIT 许可证，源码在 GitHub"),
   hosting: l(
-    "Hosted service, or self-host with Docker and Postgres, or on Cloudflare Workers with Postgres",
-    "托管服务；也可用 Docker 加 Postgres 自托管，或部署到 Cloudflare Workers 加 Postgres",
+    "Self-host with Docker and PostgreSQL or run on Cloudflare Workers with PostgreSQL; no public Montral Cloud service is live",
+    "可通过 Docker 与 PostgreSQL 自托管，或在 Cloudflare Workers 与 PostgreSQL 上部署；Montral Cloud 尚未公开上线",
   ),
-  selfHost: l("Yes, the same code as the hosted service, no feature limits", "支持，与托管服务是同一份代码，没有功能限制"),
+  selfHost: l("Yes; free open-source Community self-hosting. A public hosted edition is not yet available", "支持免费的开源 Community 自托管；公开托管版尚未推出"),
   types: l(
     "HTTP and HTTPS (expected status, keyword must or must not appear, custom headers), TCP, DNS, heartbeat, PostgreSQL, MySQL / MariaDB and Redis reachability, domain registration expiry, TLS certificate expiry and validity, and ICMP ping (certificate and ping checks need the Node runtime, not Cloudflare Workers)",
     "HTTP / HTTPS（预期状态码、关键字必须出现或不得出现、自定义请求头）、TCP、DNS、心跳、PostgreSQL、MySQL / MariaDB 与 Redis 连通性、域名注册到期、TLS 证书到期与有效性，以及 ICMP ping（证书与 ping 检测需要 Node 运行时，Cloudflare Workers 上不可用）",
@@ -98,8 +98,8 @@ const parallelStep = l(
 const faqSelfHost = (name: string): Faq => ({
   q: l(`Can I self-host Montral instead of using ${name}?`, `可以用自托管的 Montral 代替 ${name} 吗？`),
   a: l(
-    "Yes. Montral runs from one Docker image with Postgres, or on Cloudflare Workers with a Postgres database you provide. The self-hosted version is the same code as the hosted service.",
-    "可以。Montral 可用一个 Docker 镜像加 Postgres 运行，也可部署在 Cloudflare Workers 上并使用你自己提供的 Postgres 数据库。自托管版本与托管服务是同一份代码。",
+    "Yes. Montral runs with Docker and PostgreSQL or on Cloudflare Workers with a PostgreSQL database you provide. The self-hosted Community edition is available from source; Montral Cloud is not publicly available yet.",
+    "可以。Montral 可用 Docker 和 PostgreSQL 运行，也可部署在 Cloudflare Workers 上并使用自行提供的 PostgreSQL 数据库。Community 自托管版可从源码运行；Montral Cloud 尚未公开上线。",
   ),
 });
 const faqImport = (name: string): Faq => ({
@@ -119,8 +119,8 @@ const faqGaps = (name: string): Faq => ({
 const faqPricing = (name: string): Faq => ({
   q: l(`Is Montral cheaper than ${name}?`, `Montral 比 ${name} 便宜吗？`),
   a: l(
-    `Self-hosting costs only the infrastructure you run it on. The hosted service has plans, and ${name} changes its own pricing from time to time, so compare the current pricing pages of both for the number of monitors and check interval you need.`,
-    `自托管只需承担运行它的基础设施成本。托管服务有各档套餐，${name} 的价格也会不时调整，请对照两边当前的价格页，按你需要的监控数量和检测间隔来比较。`,
+    `The Montral Community software is free to self-host; you pay for your own infrastructure. Montral Cloud is not publicly available or priced yet, so compare self-hosting costs with the current published prices of ${name}.`,
+    `Montral Community 软件可免费自托管，你仅需支付自己的基础设施费用。Montral Cloud 尚未公开上线或定价，请将自托管成本与 ${name} 当前公布的价格进行比较。`,
   ),
 });
 
@@ -147,10 +147,10 @@ export const TOOLS: Tool[] = [
       { topic: l("Self-hosting", "自托管"), montral: MONTRAL.selfHost, them: l("Not offered", "不提供") },
       { topic: l("Monitor types", "监控类型"), montral: MONTRAL.types, them: l("Website, keyword and port style checks; see their site for the full list", "网站、关键字、端口等检测；完整列表见其官网") },
       { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for features per plan", "提供；各套餐的功能请查看其文档") },
-      { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
+      { topic: l("Pricing", "价格"), montral: l("Free to self-host; Cloud is not publicly available or priced yet", "可免费自托管；Cloud 尚未公开上线或定价"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
     ],
     theyHave: [
-      l("A long-running hosted service you do not have to operate. With Montral you either use the hosted service or run it yourself.", "无需自行运维的长期托管服务。使用 Montral 时，你要么用托管服务，要么自己运行。"),
+      l("A long-running managed service you do not operate. Montral currently requires self-hosting; its Cloud service is not publicly launched.", "无需自行运维的成熟托管服务。目前 Montral 需要自行部署；Cloud 尚未公开上线。"),
     ],
     bestThem: [
       l("You want a hosted service and the checks you need are plain website, keyword or port checks.", "你想用托管服务，而且需要的只是网站、关键字或端口这类基础检测。"),
@@ -192,7 +192,7 @@ export const TOOLS: Tool[] = [
       { topic: l("Scope", "产品范围"), montral: l("Uptime monitoring, incidents, alerts and status pages", "可用性监控、事件、告警与状态页"), them: l("Uptime monitoring plus on-call, incident management and logs", "可用性监控，加上值班、事件管理与日志") },
       { topic: l("Alerting", "告警"), montral: MONTRAL.alerts, them: l("On-call scheduling and phone or SMS alerts are part of the product; check their docs for what each plan includes", "值班排班以及电话、短信告警是产品的一部分；各套餐包含的内容请查看其文档") },
       { topic: l("Automation", "自动化"), montral: MONTRAL.automation, them: l("Has an API; check their docs for coverage", "提供 API；覆盖范围请查看其文档") },
-      { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Check their current pricing", "请查看其最新价格") },
+      { topic: l("Pricing", "价格"), montral: l("Free to self-host; Cloud is not publicly available or priced yet", "可免费自托管；Cloud 尚未公开上线或定价"), them: l("Check their current pricing", "请查看其最新价格") },
     ],
     theyHave: [
       l("On-call schedules and phone-call or SMS alerts. Montral escalates by channel after a number of minutes unacknowledged, but has no rota.", "值班排班表以及电话、短信告警。Montral 在事件未确认若干分钟后按渠道升级，但没有排班表。"),
@@ -249,7 +249,7 @@ export const TOOLS: Tool[] = [
       { topic: l("Uptime checks", "可用性检测"), montral: MONTRAL.types, them: l("Website and server uptime checks from the vendor's locations", "从厂商的检测节点对网站和服务器做可用性检测") },
       { topic: l("Transaction checks and real user monitoring", "事务检测与真实用户监控"), montral: l("Browser journeys from a fixed set of steps on the self-hosted server; no real user monitoring", "在自托管服务器上运行由固定步骤组成的浏览器流程；没有真实用户监控"), them: l("Offered as separate products", "作为独立产品提供") },
       { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
-      { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Check their current pricing", "请查看其最新价格") },
+      { topic: l("Pricing", "价格"), montral: l("Free to self-host; Cloud is not publicly available or priced yet", "可免费自托管；Cloud 尚未公开上线或定价"), them: l("Check their current pricing", "请查看其最新价格") },
     ],
     theyHave: [
       l("Scripted transaction checks with your own code, and real user monitoring. Montral's browser journeys use a fixed set of steps and run on the self-hosted server only.", "用你自己的代码编写的脚本化事务检测，以及真实用户监控。Montral 的浏览器流程只支持固定的步骤类型，且只能在自托管服务器上运行。"),
@@ -306,7 +306,7 @@ export const TOOLS: Tool[] = [
       { topic: l("Uptime checks", "可用性检测"), montral: MONTRAL.types, them: l("Website and server uptime checks; see their site for the full list", "网站与服务器可用性检测；完整列表见其官网") },
       { topic: l("SSL and domain monitoring", "SSL 与域名监控"), montral: l("Domain registration expiry with a 1 to 365 day warning; TLS certificate expiry, trust and hostname checks with the same warning, on the Node runtime only (not on Cloudflare Workers)", "域名注册到期，可设 1 至 365 天预警；TLS 证书到期、信任链与主机名检测，预警设置相同，仅限 Node 运行时（Cloudflare Workers 上不可用）"), them: l("Offered", "提供") },
       { topic: l("Status pages", "状态页"), montral: MONTRAL.status, them: l("Offered; check their docs for details", "提供；详情请查看其文档") },
-      { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
+      { topic: l("Pricing", "价格"), montral: l("Free to self-host; Cloud is not publicly available or priced yet", "可免费自托管；Cloud 尚未公开上线或定价"), them: l("Free tier and paid plans; check their current pricing", "有免费档与付费套餐；请查看其最新价格") },
     ],
     theyHave: [
       l("SSL certificate and domain monitoring in a hosted service. Montral warns about both too, but its certificate checks need the Node runtime and do not run on Cloudflare Workers.", "托管服务中的 SSL 证书与域名监控。Montral 也会对两者预警，但其证书检测需要 Node 运行时，不能在 Cloudflare Workers 上运行。"),
@@ -350,8 +350,8 @@ export const TOOLS: Tool[] = [
       "Montral 与 Uptime Kuma 对比：两个开源、可自托管的可用性监控工具，涉及多区域探针、托管选项与 API。",
     ),
     lede: l(
-      "Uptime Kuma is a popular open-source tool you run yourself. Montral is also open source and self-hostable, and differs in multi-region probes, workspaces with roles, an MCP server and an optional hosted service.",
-      "Uptime Kuma 是广受欢迎、需自行运行的开源工具。Montral 同样开源、可自托管，区别在于多区域探针、带角色的工作区、MCP 服务以及可选的托管服务。",
+      "Uptime Kuma is a popular open-source tool you run yourself. Montral is also open source and self-hostable, and differs in multi-region probes, workspaces with roles and an MCP server. Montral Cloud is not publicly launched.",
+      "Uptime Kuma 是广受欢迎、需自行运行的开源工具。Montral 同样开源、可自托管，另有多区域探针、带角色的工作区及 MCP 服务；Montral Cloud 尚未公开上线。",
     ),
     about: l(
       "Uptime Kuma is an open-source (MIT) monitoring tool that you install and operate yourself. It is known for an easy install and a wide range of monitor types and notification options.",
@@ -375,7 +375,7 @@ export const TOOLS: Tool[] = [
     ],
     bestUs: [
       l("You want the same monitor checked from several places, using probes you run in the regions you care about.", "你想让同一个监控项从多个地点检测，探针由你部署在关心的区域。"),
-      l("You want the option of a hosted service now and self-hosting later, or the reverse, on the same code.", "你希望现在用托管服务、以后改为自托管（或反过来），并且代码是同一份。"),
+      l("You want a free open-source self-hosted platform now, with the possibility of a hosted Montral offering in the future.", "你希望现在免费自托管开源平台，并可能在未来考虑 Montral 托管服务。"),
       l("Several people or clients share one installation, and you want workspaces, projects and roles.", "多人或多个客户共用同一套部署，需要工作区、项目和角色。"),
       l("You want to drive monitoring from scripts or an AI agent.", "你想通过脚本或 AI Agent 驱动监控。"),
     ],
@@ -597,8 +597,8 @@ export const SEGMENTS: Segment[] = [
       {
         q: l("Can I remove the Montral branding from a client's status page?", "能去掉客户状态页上的 Montral 品牌标识吗？"),
         a: l(
-          "Status pages have a hide-branding setting. On the hosted service it depends on the plan; on a self-hosted instance it is always available.",
-          "状态页有隐藏品牌标识的设置。在托管服务上取决于套餐；在自托管实例上始终可用。",
+          "Status pages have a hide-branding setting. It is available in self-hosted Community; any future Cloud plan policy is not yet published.",
+          "状态页支持隐藏品牌标识，Community 自托管版可使用；未来 Cloud 套餐政策尚未公布。",
         ),
       },
     ],
@@ -773,8 +773,8 @@ export const SEGMENTS: Segment[] = [
       {
         q: l("Can I monitor services on a private network?", "能监控私有网络中的服务吗？"),
         a: l(
-          "On a self-hosted instance, yes, after the operator sets ALLOW_PRIVATE_TARGETS=true. The hosted service and Cloudflare Workers cannot reach private ranges.",
-          "在自托管实例上可以，前提是运维设置 ALLOW_PRIVATE_TARGETS=true。托管服务和 Cloudflare Workers 无法访问私有网段。",
+          "On a self-hosted Node instance, yes, when the operator sets ALLOW_PRIVATE_TARGETS=true. Cloudflare Workers cannot reach private ranges; no public Montral Cloud service is currently offered.",
+          "在自托管 Node 实例上可以，前提是运维设置 ALLOW_PRIVATE_TARGETS=true。Cloudflare Workers 不能访问私有网段；Montral Cloud 当前尚未公开提供。",
         ),
       },
       {

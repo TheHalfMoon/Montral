@@ -1,6 +1,6 @@
 # Optional Edge probe upload deadline
 
-Status: local implementation and independent review complete; hosted qualification and merge remain required.
+Status: merged in #140 (`5727add`) after 16/16 exact-head PR checks. Included in `main@d49e2cf` with all 11/11 integrated workflows successful, verified November 15. Local preparation notes below are chronological evidence, not current merge status.
 
 ## Finding and scope
 

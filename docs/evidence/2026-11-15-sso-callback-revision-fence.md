@@ -25,7 +25,7 @@ A real-PostgreSQL SSO E2E test:
 3. Tries to attach the previously captured revisions to a real session. Both must refuse without inserting a marker.
 4. Attaches the latest revision successfully, checks the stored connection ID, and removes the synthetic marker in a `finally` block.
 
-The existing OIDC E2E suite continues to exercise complete sign-ins, provider token exchange, and the session cookie. The new test directly exercises the narrow serialization guard; it does **not** schedule a full callback and admin PUT on two suspended threads. Exact-head PostgreSQL 17/18, API typecheck/build, macOS and other repository gates must be verified before merge.
+A second real-PostgreSQL E2E regression deliberately pauses a real callback during a synthetic provider token response, saves the same workspace connection through its authenticated owner API, then confirms the old callback redirects with `connection_disabled`, receives no signed-in cookie, and leaves no additional session for that existing user. This covers the complete callback flow and the narrow serialization guard without external provider credentials. Exact-head PostgreSQL 17/18, API typecheck/build, macOS and other repository gates must be verified before merge.
 
 ## Scope and limits
 

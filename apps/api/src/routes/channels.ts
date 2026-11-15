@@ -82,7 +82,7 @@ const shown = async <T extends { config: unknown }>(c: Parameters<typeof isManag
 
 export const channels = new Hono<AppEnv>()
   .get("/", async (c) => c.json(await shown(c, await c.get("repo").listChannels(c.get("orgId"), c.get("projectId")))))
-  .post("/", zValidator("json", body), async (c) => {
+  .post("/", requireManager, zValidator("json", body), async (c) => {
     const v = c.req.valid("json");
     if (v.type === "push" && !apnsConfigured()) return c.json({ error: "Push notifications are not set up on this server. Configure APNs first (see the self-hosting docs).", code: "push_not_configured" }, 400);
     const cfg = parseConfig(v.type, v.config);

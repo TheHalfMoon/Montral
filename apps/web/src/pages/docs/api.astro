@@ -162,7 +162,7 @@ const groups: Group[] = [
   {
     id: "alert-log", en: "Alert log", zh: "告警日志",
     eps: [
-      { m: "GET", p: "/alert-log", en: "Alert delivery history, newest first. Query: limit (1-200, default 50) and before (ISO 8601 date-time cursor, the createdAt of the last row of the previous page).", zh: "告警投递历史，按时间倒序。查询参数：limit（1-200，默认 50）和 before（ISO 8601 时间游标，取上一页最后一条的 createdAt）。",
+      { m: "GET", p: "/alert-log", en: "Alert delivery history, newest first (createdAt DESC, id DESC). Query: limit (1-200, default 50), beforeId (UUID of the last delivery on the previous page, recommended; checked in the same project/workspace), or legacy before (ISO 8601 timestamp; may omit rows with equal timestamps).", zh: "告警投递历史，按 createdAt 和 id 倒序排列。查询参数：limit（1-200，默认 50）、beforeId（上一页末条记录的 UUID，推荐，按工作区及项目验证），或旧版 before（ISO 8601 时间戳；相同时间戳的记录可能被跳过）。",
         res: `[{ id, channelId, channelName, channelType, kind, incidentId, monitorName, ok, error, createdAt }]\nkind: "incident.opened" | "incident.resolved" | "test" | "subscribers"` },
     ],
   },

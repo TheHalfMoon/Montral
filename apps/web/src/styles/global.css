@@ -821,3 +821,4 @@ a.muted:hover{color:var(--ink)}
 .seg>[role=radio][aria-disabled=true]{opacity:.45;cursor:not-allowed}
 .seg>[role=radio]:focus-visible{outline:2px solid var(--focus);outline-offset:1px}
 @media (max-width:560px){.seg.stack-sm>[role=radio]{place-items:center start;text-align:left;padding:8px 12px}}
+.log-more{display:flex;justify-content:center;padding:14px 0 2px;font-size:13px}

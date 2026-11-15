@@ -8,10 +8,16 @@ import { audit, auditChanges } from "../audit";
 /** Alert delivery history for the current project, newest first. */
 export const alertLog = new Hono<AppEnv>().get(
   "/",
-  zValidator("query", z.object({ limit: z.coerce.number().int().min(1).max(200).default(50), before: z.string().datetime().optional() })),
+  zValidator("query", z.object({
+    limit: z.coerce.number().int().min(1).max(200).default(50),
+    before: z.string().datetime().optional(), // legacy timestamp cursor
+    beforeId: z.string().uuid().optional(), // preferred stable keyset cursor
+  })),
   async (c) => {
-    const { limit, before } = c.req.valid("query");
-    return c.json(await c.get("repo").listDeliveries(c.get("orgId"), c.get("projectId"), { limit, before: before ? new Date(before) : undefined }));
+    const { limit, before, beforeId } = c.req.valid("query");
+    return c.json(await c.get("repo").listDeliveries(c.get("orgId"), c.get("projectId"), {
+      limit, before: before && !beforeId ? new Date(before) : undefined, beforeId,
+    }));
   },
 );
 

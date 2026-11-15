@@ -889,4 +889,5 @@ export const zh: Record<string, string> = {
   "Delete request": "删除请求",
   Visibility: "可见范围", "Change role to admin": "改为管理员", "Change role to member": "改为成员", "Role updated.": "角色已更新。",
   "Could not change the role": "无法更改角色",
+  "Load older deliveries": "加载更早的发送记录", "Showing every delivery kept.": "已显示保留的全部发送记录。",
 };

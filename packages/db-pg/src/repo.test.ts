@@ -46,6 +46,57 @@ describe.skipIf(!url)("withinLimit", () => {
   });
 });
 
+describe.skipIf(!url)("alert delivery keyset pagination", () => {
+  const orgId = `alert-keyset-${crypto.randomUUID()}`;
+  let projectId = "";
+  let otherProjectId = "";
+  beforeAll(async () => {
+    await db.insert(schema.organization).values({ id: orgId, name: "Keyset test", slug: orgId, createdAt: new Date() });
+    const [visible, hidden] = await db.insert(schema.project)
+      .values([{ organizationId: orgId, name: "Visible" }, { organizationId: orgId, name: "Hidden" }])
+      .returning({ id: schema.project.id });
+    projectId = visible.id;
+    otherProjectId = hidden.id;
+  });
+  afterAll(async () => {
+    await db.delete(schema.organization).where(eq(schema.organization.id, orgId));
+  });
+
+  it("reaches every row in a 350-row timestamp tie, with deterministic order and scoped cursors", async () => {
+    const at = new Date("2026-11-15T10:00:00.000Z");
+    await db.insert(schema.alertDelivery).values(Array.from({ length: 350 }, (_, i) => ({
+      organizationId: orgId, projectId,
+      channelName: `recipient ${i}`, channelType: "email", kind: "test", ok: true,
+      createdAt: at,
+    })));
+    // Workspace-wide events are included, events belonging to other projects are not.
+    const [shared] = await db.insert(schema.alertDelivery).values({
+      organizationId: orgId, channelName: "workspace-wide", channelType: "email", kind: "test", ok: true, createdAt: at,
+    }).returning({ id: schema.alertDelivery.id });
+    const [hidden] = await db.insert(schema.alertDelivery).values({
+      organizationId: orgId, projectId: otherProjectId, channelName: "other project",
+      channelType: "email", kind: "test", ok: true, createdAt: at,
+    }).returning({ id: schema.alertDelivery.id });
+
+    const ids: string[] = [];
+    let beforeId: string | undefined;
+    for (let pageNo = 0; pageNo < 20; pageNo++) {
+      const page = await repo.listDeliveries(orgId, projectId, { limit: 30, beforeId });
+      if (!page.length) break;
+      ids.push(...page.map((row) => row.id));
+      beforeId = page[page.length - 1].id;
+    }
+    expect(ids).toHaveLength(351);
+    expect(new Set(ids).size).toBe(351);
+    expect(ids).toContain(shared.id);
+    expect(ids).not.toContain(hidden.id);
+    expect(await repo.listDeliveries(orgId, projectId, { limit: 30, beforeId: hidden.id })).toEqual([]);
+    // A cursor from a deleted row is also refused rather than paging from another scope.
+    await db.delete(schema.alertDelivery).where(eq(schema.alertDelivery.id, hidden.id));
+    expect(await repo.listDeliveries(orgId, projectId, { limit: 30, beforeId: hidden.id })).toEqual([]);
+  });
+});
+
 // Needs a migrated Postgres; skipped when DATABASE_URL is not set.
 describe.skipIf(!url)("monitors and maintenance", () => {
   const orgId = `test-org-${crypto.randomUUID()}`;

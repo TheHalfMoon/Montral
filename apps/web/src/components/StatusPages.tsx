@@ -238,7 +238,7 @@ export function StatusPageEditor({ id }: { id: string }) {
               if (!m) return null;
               return (
                 <div className="comp-r" key={c.monitorId}>
-                  <span className={`dot ${m.status === "up" ? "up" : m.status === "degraded" ? "warn" : "down"}`} />
+                  <span className={`dot ${({ up: "up", degraded: "warn", down: "down", paused: "paused", pending: "pending" } as Record<string, string>)[m.status] ?? "pending"}`} />
                   <span className="comp-n">{m.name}</span>
                   <input className="in comp-g" aria-label={t("Group")} value={c.groupName} placeholder={t("Group")} onChange={(e) => setComps(comps.map((x, k) => (k === i ? { ...x, groupName: e.target.value } : x)))} />
                   <span className="comp-a">
@@ -280,7 +280,7 @@ export function StatusPageEditor({ id }: { id: string }) {
                     const m = byId.get(c.monitorId)!;
                     return (
                       <div className="prev-r" key={c.monitorId}>
-                        <span className={`dot ${m.status === "up" ? "up" : m.status === "degraded" ? "warn" : "down"}`} />
+                        <span className={`dot ${({ up: "up", degraded: "warn", down: "down", paused: "paused", pending: "pending" } as Record<string, string>)[m.status] ?? "pending"}`} />
                         <span className="prev-n">{m.name}</span>
                         {page.showLatency && m.avgLatency24h != null && <span className="mono faint">{Math.round(m.avgLatency24h)} ms</span>}
                         <span className="mono">{m.uptime24h != null ? `${m.uptime24h.toFixed(2)}%` : "—"}</span>

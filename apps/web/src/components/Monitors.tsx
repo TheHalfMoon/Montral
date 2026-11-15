@@ -223,8 +223,8 @@ export default function Monitors() {
 
       {items === null ? (
         <div className="card tbl mon-tbl">
-          <div className="tr th"><span>{t("Monitor")}</span><span>{t("Status")}</span><span>{t("Response")}</span><span>{t("Uptime 24h")}</span><span>{t("Latency")}</span><span>{t("Checked")}</span></div>
-          <SkeletonRows cols={6} />
+          <div className="tr th"><span>{t("Monitor")}</span><span>{t("Status")}</span><span className="spk">{t("Response")}</span><span>{t("Uptime 24h")}</span><span>{t("Latency")}</span><span>{t("Checked")}</span></div>
+          <SkeletonRows cols={6} cellClass={(c) => (c === 2 ? "spk" : undefined)} />
         </div>
       ) : items.length === 0 && everything ? (
         <div className="empty"><h3 style={{ fontSize: 28 }}>{t("No monitors yet")}</h3><p className="muted">{t("Choose a project to add the first one.")}</p></div>
@@ -258,7 +258,7 @@ export default function Monitors() {
             </div>
           )}
           <div className="card tbl mon-tbl">
-            <div className="tr th"><span>{t("Monitor")}</span><span>{t("Status")}</span><span>{t("Response")}</span><span>{t("Uptime 24h")}</span><span>{t("Latency")}</span><span>{t("Checked")}</span></div>
+            <div className="tr th"><span>{t("Monitor")}</span><span>{t("Status")}</span><span className="spk">{t("Response")}</span><span>{t("Uptime 24h")}</span><span>{t("Latency")}</span><span>{t("Checked")}</span></div>
             {shown.map((m) => (
               <a className="tr" key={m.id} href={`/app/monitors/${m.id}`}>
                 <div className="nm">

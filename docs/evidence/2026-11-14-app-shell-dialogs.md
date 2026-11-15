@@ -50,3 +50,20 @@ A reviewer read both diffs without editing them. Resolution:
 - `astro check` 0 errors; web unit tests 189/189 (including `lib/confirm.test.ts`); build and CSP hash check pass.
 
 The Playwright/axe matrix and PostgreSQL suites run in each PR's CI.
+
+## PR #130: status by shape and the monitor table
+
+An independent review found no medium-or-higher issue in the PR's own changes. Findings it raised, and their resolution:
+
+| Severity | Finding | Resolution |
+|---|---|---|
+| Medium (pre-existing, made more visible) | The status-page editor mapped paused and pending monitors to `down`, so they showed the outage diamond | Explicit mapping: paused → pause bars, pending → ring |
+| Low | Incident monitor dot sent paused/pending to the degraded triangle | Same explicit mapping |
+| Low | Disabled channel ("Paused") used the pending ring | `pill paused` |
+| Low | Active maintenance used the degraded triangle | New `pill maint`, an info-blue ring |
+| Low | Deliveries waiting to send drew the operational circle | `pending` / `sending` → pending ring; unit test added |
+| Low | The latest timeline update always drew the outage diamond | Diamond only while investigating; identified / monitoring use the triangle |
+| Low | `.rr.reg .dot` kept failed region dots round | Diamond override |
+| Low | Skeleton rows had 6 cells in a 5-track grid between 1025 and 1320 px | `SkeletonRows` takes a per-cell class; the response cell hides with its column |
+
+"Limit reached" for active monitors stays a triangle: hitting the cap blocks new monitors but is not an outage. "Used up" for usage meters stays a diamond, because work stops.

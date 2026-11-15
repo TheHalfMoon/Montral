@@ -24,4 +24,8 @@ describe("deliveryReason", () => {
     expect(stateClass("failed")).toBe("down");
     expect(stateClass("skipped")).toBe("");
   });
+  it("shows deliveries still on their way as pending", () => {
+    expect(stateClass("pending")).toBe("pending");
+    expect(stateClass("sending")).toBe("pending");
+  });
 });

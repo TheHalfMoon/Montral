@@ -4,9 +4,15 @@
 
 [![Montral CI](https://github.com/TheHalfMoon/Montral/actions/workflows/montral-ci.yml/badge.svg)](https://github.com/TheHalfMoon/Montral/actions/workflows/montral-ci.yml)
 
-> **Private engineering preview — NOT deployed, NOT taking payments, NOT production-qualified.**
+> **Engineering preview — NOT a public deployment, NOT taking payments, NOT production-qualified.**
 
 Montral is one independently maintained product with a single active runtime and authentication model. It monitors websites, APIs and services; creates incident and status pages; accepts test webhooks; and exposes private operations over REST and OAuth-enabled MCP.
+
+## Delivery model: web-first
+
+Montral runs as a responsive **website and web application** with a browser-installable **PWA** (standalone window and home-screen icon on supported browsers). It is **not** currently a separately packaged Windows/macOS desktop app. The PWA caches only the static application shell and versioned assets; authenticated data, live checks and operations require the server. We will consider a native desktop client only after demand and distribution costs justify it.
+
+See the [web-first architecture decision and acceptance gates](docs/WEB-FIRST.md) and [release status](docs/RELEASE-GATES.md). The Threshold identity, marketing site, dashboard and public status pages are all web surfaces; an editable visual-design source needs separate verification for pixel-perfect approval.
 
 ## Current integrated product
 

@@ -876,7 +876,7 @@ export interface Repo {
   getProjectAlerting(orgId: string, projectId: string): Promise<ProjectAlerting | null>;
   saveProjectAlerting(orgId: string, projectId: string, v: ProjectAlerting): Promise<ProjectAlerting | null>;
   /** Deliveries of the project (and workspace-wide ones), newest first. */
-  listDeliveries(orgId: string, projectId: string, o: { limit: number; before?: Date }): Promise<AlertDelivery[]>;
+  listDeliveries(orgId: string, projectId: string, o: { limit: number; before?: Date; beforeId?: string }): Promise<AlertDelivery[]>;
   /**
    * Confirmed subscribers of the pages showing this monitor. For an incident without a monitor (`monitorId` null) they are
    * those of the pages of `projectId` (a page without a project counts as the workspace's oldest project's).

@@ -51,6 +51,25 @@ class QualificationEvidenceTests(unittest.TestCase):
     def test_invalid_sha_fails(self):
         self.assertTrue(module.verify("abc", fixture()))
 
+    def test_later_failed_run_supersedes_earlier_success(self):
+        runs = fixture()
+        latest = dict(runs[0], databaseId=1000, conclusion="failure")
+        runs.append(latest)
+        self.assertTrue(module.verify(SHA, runs))
+
+    def test_later_pending_run_supersedes_earlier_success(self):
+        runs = fixture()
+        latest = dict(runs[0], databaseId=1000,
+                      status="in_progress", conclusion=None)
+        runs.append(latest)
+        self.assertTrue(module.verify(SHA, runs))
+
+    def test_older_failure_does_not_mask_latest_success(self):
+        runs = fixture()
+        older = dict(runs[0], databaseId=0, conclusion="failure")
+        runs.append(older)
+        self.assertEqual(module.verify(SHA, runs), [])
+
     def test_unrelated_runs_do_not_affect_result(self):
         runs = fixture()
         runs.append({"name": "Unrelated", "headSha": SHA, "event": "push"})

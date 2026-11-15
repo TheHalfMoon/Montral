@@ -1,8 +1,24 @@
 # Montral release gates
 
-**November 15 integration — combined-main gate open:** `main@3fe4a5e46f52a4220b2a2162b4166286372bde04` now includes SSO revocation-race fix #149 and the complete web stack #129–#135 (all eight PRs had 11/11 passing checks on their individual exact heads). The merged-combination `main` push checks have **not yet been independently verified** for this head. A dedicated non-release qualification PR has been opened to run the full matrix against the combined tree. No release, tag, image, package, deployment or commercial activation is authorized. Community remains HOLD; Cloud/BYOC remain NO-GO pending external gates.
+**Latest integrated-main qualification (2026-11-15):** `main@2bbbca8f1efa87fd3f408037170f3f10b5338009` includes #149, the web-first/PWA stack (#129–#135, #152), secretless phone management (#151), and scoped dependency security updates (#153). All **11/11 GitHub Actions push workflows completed successfully on this exact main SHA**. This is integrated CI qualification, **not** authorization to publish, deploy, tag or release. It does not establish independent penetration testing, physical Safari/VoiceOver coverage, real-provider readiness or a complete dependency audit. Community stays HOLD; Cloud and Enterprise BYOC stay NO-GO.
 
-**Previously verified integrated-main qualification (2026-11-15, historical baseline):** `main@d49e2cf0919f1f411bacc64e57c3340d6f63c16d` includes the merged upload budgets, bounded project cache, channel project authority, safe login return paths, measurement-input revision fences, atomic status-access revisions and final-project deletion protection (#136, #137, #140-#145). All **11/11 integrated GitHub Actions push workflows succeeded on this exact commit**; each listed implementation PR passed all 16 exact-head checks. Local status-access full API qualification passed 1,607 tests with zero failures and 31 skips. Hosted CI and focused independent engineering reviews do not constitute an exhaustive security audit, physical-device qualification or real-provider validation. The managed source audit remains partial. Community publication stays HOLD until `GREEN LIGHT MONTRAL`; Cloud and Enterprise BYOC remain NO-GO on external provider, infrastructure, legal/privacy and security gates. Historical evidence below retains its original scope.
+| Exact-main push workflow | GitHub Actions run | Result |
+|---|---|---|
+| Montral source integrity | [43729744337](https://github.com/TheHalfMoon/Montral/actions/runs/43729744337) | SUCCESS |
+| Windows Docker prerequisite safety | [43729744253](https://github.com/TheHalfMoon/Montral/actions/runs/43729744253) | SUCCESS (preflight only, not physical Windows Docker QA) |
+| Montral browser checks | [43729744252](https://github.com/TheHalfMoon/Montral/actions/runs/43729744252) | SUCCESS |
+| Montral Terraform provider | [43729744260](https://github.com/TheHalfMoon/Montral/actions/runs/43729744260) | SUCCESS |
+| Montral upgrade, rollback and disaster recovery | [43729744384](https://github.com/TheHalfMoon/Montral/actions/runs/43729744384) | SUCCESS |
+| Montral cross-browser and accessibility | [43729744421](https://github.com/TheHalfMoon/Montral/actions/runs/43729744421) | SUCCESS (hosted browsers, not physical VoiceOver) |
+| Montral failover qualification | [43729744305](https://github.com/TheHalfMoon/Montral/actions/runs/43729744305) | SUCCESS |
+| Montral Docker Compose qualification | [43729744438](https://github.com/TheHalfMoon/Montral/actions/runs/43729744438) | SUCCESS |
+| Montral app CI | [43729744474](https://github.com/TheHalfMoon/Montral/actions/runs/43729744474) | SUCCESS |
+| Montral macOS PostgreSQL 18 qualification | [43729744282](https://github.com/TheHalfMoon/Montral/actions/runs/43729744282) | SUCCESS |
+| Montral load qualification | [43729744446](https://github.com/TheHalfMoon/Montral/actions/runs/43729744446) | SUCCESS |
+
+All 11 results were checked with `gh run list --commit 2bbbca8f1efa87fd3f408037170f3f10b5338009`, filtered to exact-SHA `push` runs. The prior qualification at `d49e2cf` is retained below as historical evidence.
+
+**Previously verified integrated-main qualification (historical):** `main@d49e2cf0919f1f411bacc64e57c3340d6f63c16d` passed 11/11 exact-SHA integrated push workflows for the earlier upload-budget, project-cache, authority, login-return, measurement revision, status-access and deletion-protection changes (#136, #137, #140–#145). That evidence remains a historical baseline, not qualification for subsequent changes. Hosted CI and first-party reviews are not an independent security audit or physical-device qualification.
 
 Publication of any kind (tag, GitHub release, Docker image, npm package, Terraform provider, deployment) requires the
 owner's explicit `GREEN LIGHT MONTRAL`. This file has three parts: the **historical self-hosted candidate gates**,

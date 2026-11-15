@@ -88,12 +88,11 @@ export default function Alerting() {
   const olderLog = async () => {
     if (!log) return;
     const gen = logGen.current;
-    const limit = nextLimit(log, LOG_PAGE);
     setLoadingOlder(true);
     try {
-      const page = await api.alertLog(limit, nextBefore(log));
+      const page = await api.alertLog(LOG_PAGE, log[log.length - 1]?.id);
       if (gen !== logGen.current) return;
-      const next = appendPage(log, page, limit);
+      const next = appendPage(log, page, LOG_PAGE);
       setLog(next.rows);
       setMoreLog(next.more);
     } catch (e) { if (gen === logGen.current) toast((e as Error).message, "err"); } finally { setLoadingOlder(false); }

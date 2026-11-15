@@ -24,7 +24,9 @@ Real-PostgreSQL `apps/api/src/push.e2e.test.ts` checks that:
 4. A second signed-in user cannot list or delete the first user's row by UUID.
 5. API keys tied to the user also receive summaries without token and can perform owner-scoped deletion.
 
-**Qualification required:** both PostgreSQL matrix legs, API and web TypeScript/build, browser journeys, and full repository CI on the branch. A passing synthetic test does not verify production proxy logs or any native APNs network transmission.
+A cross-browser signed-in Playwright journey additionally registers a synthetic phone, intercepts the account dashboard's summaries response, verifies the token is absent, removes it by UUID, verifies the deletion URL excludes the token and checks the final server state. It runs in the existing Chromium/Firefox/WebKit/mobile matrix.
+
+**Qualification required:** both PostgreSQL matrix legs, API and web TypeScript/build, browser journeys, and full repository CI on the final branch head. A passing synthetic test does not verify production proxy logs or any native APNs network transmission.
 
 ## Residual risk and limits
 

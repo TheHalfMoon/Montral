@@ -24,6 +24,8 @@ jobs:
         run: |
           node scripts/verify-no-remote-fonts.mjs --negative-control
           node scripts/landing-csp.mjs --check
+      - name: Test exact-main qualification evidence guard
+        run: python3 -m unittest discover -s scripts -p test_verify_main_workflows.py
       - name: Verify Montral license
         run: |
           test -s LICENSE

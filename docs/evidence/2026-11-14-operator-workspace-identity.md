@@ -1,6 +1,6 @@
 # Private attribution for new workspace operator actions
 
-Status: implemented on the engineering branch; hosted qualification and merge pending.
+Status: merged in #126 (`d73c7fd`) after 16/16 exact-head PR checks. Included in `main@d49e2cf` with all 11/11 integrated workflows successful, verified November 15. Local preparation notes below are chronological evidence, not current merge status.
 
 ## Scope and invariants
 

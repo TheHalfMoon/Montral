@@ -125,20 +125,22 @@ The source audit found the following executable work beyond the earlier historic
 
 | ID | Item | Sev | Status |
 |---|---|---|---|
-| SEC-JSON | CRUD and private/public MCP JSON parsing lacked pre-parse byte/deadline bounds | P0 | Implemented on this branch; qualification/merge pending. Shared original-stream reader; 4 MiB CRUD / 5 MiB MCP, 10 seconds; `docs/evidence/2026-11-14-json-validation-budget.md`. |
-| SEC-CACHE | Client-selected project cache has unbounded cardinality and key lengths | P2 | Confirmed source path; bounded eviction and canonical selection remain executable. |
-| SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Implemented on this branch; qualification/merge pending. Mutation authority precedes dependency lookup; hidden consumers receive a generic conflict. `docs/evidence/2026-11-14-channel-project-authority.md`. |
-| SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Implemented on this branch; qualification/merge pending. Actual-project write validation, repository selection and delivery/retry/escalation boundaries retain shared channels. `docs/evidence/2026-11-14-channel-project-authority.md`. |
-| SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Confirmed source path; bounded envelope ingestion remains executable. Default example is disabled/unconfigured; no deployed exposure is claimed. |
+| SEC-JSON | CRUD and private/public MCP JSON parsing lacked pre-parse byte/deadline bounds | P0 | Merged #136 (`481443b`), 16/16 PR checks. Shared original-stream reader; 4 MiB CRUD / 5 MiB MCP, 10 seconds; `docs/evidence/2026-11-14-json-validation-budget.md`. |
+| SEC-CACHE | Client-selected project cache has unbounded cardinality and key lengths | P2 | Merged #137 (`1ed74b8`), 16/16 PR checks. Canonical selections and 1,024-entry eviction bound; `docs/evidence/2026-11-14-project-selection-cache.md`. |
+| SEC-CHANNEL-READ | Channel deletion conflicts can reveal monitors outside a restricted project's grant | P2 | Merged #141 (`7d56728`), 16/16 PR checks. Mutation authority precedes dependency lookup; hidden consumers receive a generic conflict. `docs/evidence/2026-11-14-channel-project-authority.md`. |
+| SEC-CHANNEL-USE | Explicit monitor channel IDs can route through another project's destination | P2 | Merged #141, 16/16 PR checks. Actual-project write validation, repository selection and delivery/retry/escalation boundaries retain shared channels. Same evidence file. |
+| SEC-EDGE | Configured optional Edge probe reads incomplete unauthenticated uploads without a deadline | P2 | Merged into main by #140 (`5727add`), 16/16 PR checks. Incoming envelope has 64 KiB / 10-second bounds. Earlier #138 landed on a dependency branch; #140 is the main integration. `docs/evidence/2026-11-14-edge-upload-deadline.md`. |
 | OBS-REQUEST-BODY | HTTP body, DNS assertions, browser secrets and expiry-window edits admitted older observation snapshots | P1 | Merged in #143. Reuses the measurement revision fence, preserving unchanged stored values and metadata edits. Full database regression suite added to hosted jobs. `docs/evidence/2026-11-14-request-body-observation-revision.md`. |
-| SEC-LOGIN-REDIRECT | Login return-path normalization could create an external destination | P2 | Implemented on this branch; qualification/merge pending. Shared control/network-path guard runs before and after locale stripping. `docs/evidence/2026-11-14-login-return-path.md`. |
+| SEC-LOGIN-REDIRECT | Login return-path normalization could create an external destination | P2 | Merged #142 (`db14bf6`), 16/16 PR checks. Shared control/network-path guard runs before and after locale stripping. `docs/evidence/2026-11-14-login-return-path.md`. |
 
-## Status-access findings under qualification
+## Status-access findings
 
 | ID | Gap | Severity | Status |
 |---|---|---|---|
-| SEC-STATUS-VERSION | Concurrent protection edits could reuse a revision and retain outsider grants or subscriber eligibility | P2 | Implemented on this branch; qualification/merge pending. Atomic current-row access revision update. `docs/evidence/2026-11-14-status-access-races.md`. |
-| SEC-STATUS-SUBSCRIBE | An in-flight subscription could adopt a revision newer than its access proof | P2 | Implemented on this branch; qualification/merge pending. Bind subscriber eligibility to the middleware-authorized page/version. Same evidence file. |
+| SEC-STATUS-VERSION | Concurrent protection edits could reuse a revision and retain outsider grants or subscriber eligibility | P2 | Merged #144 (`d49e2cf`), 16/16 PR checks. Atomic current-row access revision update. `docs/evidence/2026-11-14-status-access-races.md`. |
+| SEC-STATUS-SUBSCRIBE | An in-flight subscription could adopt a revision newer than its access proof | P2 | Merged #144, 16/16 PR checks. Bind subscriber eligibility to the middleware-authorized page/version. Same evidence file. |
+
+Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e57c3340d6f63c16d`, all 11/11 push workflows successful. This includes #143 and #145 as well as the fixes above. The managed source security audit is still partial; this qualification does not establish whole-repository security clearance or production readiness.
 
 ## Project deletion invariant
 

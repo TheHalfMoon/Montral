@@ -1,6 +1,6 @@
 # Bounded project-selection cache
 
-Status: local implementation and independent review complete; hosted qualification and merge remain required.
+Status: merged in #137 (`1ed74b8`) after 16/16 exact-head PR checks. Included in `main@d49e2cf` with all 11/11 integrated workflows successful, verified November 15. Local preparation notes below are chronological evidence, not current merge status.
 
 ## Finding and change
 

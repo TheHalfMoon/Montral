@@ -823,3 +823,5 @@ a.muted:hover{color:var(--ink)}
 @media (max-width:560px){.seg.stack-sm>[role=radio]{place-items:center start;text-align:left;padding:8px 12px}}
 .log-more{display:flex;justify-content:center;padding:14px 0 2px;font-size:13px}
 .replay-count{margin:22px 0 0;padding-top:14px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}.replay-count b{color:var(--ink);font-weight:600;margin:0 6px 0 4px}
+.sess{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--r-md)}.sess li{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 14px;border-top:1px solid var(--line)}.sess li:first-child{border-top:0}.sess-d{display:grid;gap:2px;min-width:0}.sess-d b{font-weight:600}.sess-d small{color:var(--muted);font-size:12.5px}.pw-change{display:grid;gap:12px;max-width:520px}.chk{display:flex;align-items:center;gap:8px;font-size:14px}
+.sess-stale{display:grid;gap:10px}.sess-stale p{margin:0}.sess-acts{display:flex;gap:8px;flex-wrap:wrap}

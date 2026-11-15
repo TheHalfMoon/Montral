@@ -155,6 +155,12 @@ Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e
 **P2**, merged in #148. Ordinary member sessions and keys could create destinations despite manager-only destination changes. Apply the same current-membership role guard to creation, preserving member operational edits. Evidence: `docs/evidence/2026-11-15-channel-creation-role.md`.
 
 
+## Active SSO callback race follow-up
+
+| ID | Gap | Severity | Status |
+|---|---|---|---|
+| SEC-SSO-CALLBACK | A callback could finish after its connection's issuer/client was changed and its old sessions invalidated, then mark a fresh session against stale connection settings | P1 | Proposed branch `fix/sso-callback-connection-revision-20261115`, **not merged or qualified**. Single-statement revision/row-lock marker, stale-session refusal, monotonic owner settings revision, real-PostgreSQL regression. Exact-head CI and independent review required. `docs/evidence/2026-11-15-sso-callback-revision-fence.md`. |
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

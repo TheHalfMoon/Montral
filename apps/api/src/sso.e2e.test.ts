@@ -9,7 +9,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createAuth } from "./auth";
 import { recheckSsoDomains } from "./sso-domains";
 import { setSsoOptionsForTests } from "./sso-oidc";
-import { removedFrom } from "./sso-store";
+import { connectionById, markSsoSession, removedFrom } from "./sso-store";
 
 const url = process.env.TEST_DATABASE_URL;
 const origin = "http://localhost:8787";
@@ -239,6 +239,41 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await q("SELECT 1 FROM sso_connection WHERE organization_id = $1", [ownerA.orgId])).length).toBe(1);
   });
 
+  it("fences a delayed SSO session marker to the connection's exact revision", async () => {
+    const old = await connectionById(q, env as never, connA);
+    expect(old?.configRevision).toBeTruthy();
+    const settings = { issuer: idpA.issuer, clientId: idpA.clientId, domains: [domainA], defaultRole: "member" };
+    // Even two no-op settings saves must produce distinct revisions. An old callback
+    // cannot become valid again when the owner restores identical provider settings.
+    const one = await call("/api/sso", { method: "PUT", jar: ownerA.jar, body: settings });
+    expect(one.status, one.text).toBe(200);
+    const middle = await connectionById(q, env as never, connA);
+    const two = await call("/api/sso", { method: "PUT", jar: ownerA.jar, body: settings });
+    expect(two.status, two.text).toBe(200);
+    const current = await connectionById(q, env as never, connA);
+    expect(middle?.configRevision).not.toBe(old?.configRevision);
+    expect(current?.configRevision).not.toBe(middle?.configRevision);
+
+    // Use an existing normal session so PostgreSQL's sso_session foreign key is exercised.
+    const [normal] = await q<{ id: string }>(
+      `SELECT s.id FROM session s LEFT JOIN sso_session ss ON ss.session_id = s.id
+       WHERE s.user_id = $1::text AND ss.session_id IS NULL ORDER BY s.created_at DESC LIMIT 1`,
+      [ownerA.id],
+    );
+    expect(normal).toBeDefined();
+    try {
+      expect(await markSsoSession(q, normal.id, old!)).toBe(false);
+      expect(await markSsoSession(q, normal.id, middle!)).toBe(false);
+      expect(await q("SELECT 1 FROM sso_session WHERE session_id = $1::text", [normal.id])).toHaveLength(0);
+      expect(await markSsoSession(q, normal.id, current!)).toBe(true);
+      expect(await q<{ connection_id: string }>("SELECT connection_id FROM sso_session WHERE session_id = $1::text", [normal.id]))
+        .toEqual([{ connection_id: connA }]);
+    } finally {
+      // Do not leave the owner's regular sign-in relabeled as SSO for later tests.
+      await q("DELETE FROM sso_session WHERE session_id = $1::text", [normal.id]);
+    }
+  });
+
   it("tests discovery, refusing private and plain-http providers without SSO_ALLOW_PRIVATE_IDP", async () => {
     const ok = await call("/api/sso/test", { method: "POST", jar: ownerA.jar, body: { issuer: idpA.issuer } });
     expect(ok.status, ok.text).toBe(200);
@@ -290,6 +325,45 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     // signing out ends the Montral session
     expect((await call("/api/auth/sign-out", { method: "POST", jar: again, body: {} })).status).toBe(200);
     expect((await call("/api/me", { jar: again })).status).toBe(401);
+  });
+
+  it("refuses an in-flight OIDC callback after an owner saves the connection", async () => {
+    // Alice is already linked, so the regression isolates session minting from JIT provisioning.
+    const email = `alice@${domainA}`;
+    const aliceId = (await userIdOf(email))!;
+    expect(aliceId).toBeTruthy();
+    const before = await q<{ n: number }>(
+      "SELECT count(*)::int AS n FROM session WHERE user_id = $1::text", [aliceId],
+    );
+    const jar = new Jar();
+    const start = await call("/api/auth/sso/start", { method: "POST", jar, body: { email } });
+    expect(start.status, start.text).toBe(200);
+    const { callback } = idpA.authorize(start.body.url, { sub: "alice-sub", email, email_verified: true });
+    const cb = new URL(callback);
+    const sentBefore = idpA.requests.filter((r) => r.path === "/token").length;
+    // The synthetic provider records /token at the start of its deliberate response delay.
+    // Save the connection while that old callback is already exchanging its code.
+    idpA.delayMs = 1800;
+    try {
+      const pending = call(cb.pathname + cb.search, { jar });
+      await vi.waitFor(
+        () => expect(idpA.requests.filter((r) => r.path === "/token").length).toBeGreaterThan(sentBefore),
+        { timeout: 10000, interval: 20 },
+      );
+      const updated = await call("/api/sso", {
+        method: "PUT", jar: ownerA.jar,
+        body: { issuer: idpA.issuer, clientId: idpA.clientId, domains: [domainA], defaultRole: "member" },
+      });
+      expect(updated.status, updated.text).toBe(200);
+      const callbackResult = await pending;
+      expect(callbackResult.status).toBe(302);
+      expect(failure(callbackResult.location ?? "")).toBe("connection_disabled");
+      expect((await call("/api/me", { jar })).status).toBe(401);
+      expect(await q<{ n: number }>("SELECT count(*)::int AS n FROM session WHERE user_id = $1::text", [aliceId]))
+        .toEqual(before);
+    } finally {
+      idpA.delayMs = 0;
+    }
   });
 
   it("sends the client secret only to the token endpoint it was entered for", async () => {

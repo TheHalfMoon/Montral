@@ -123,7 +123,8 @@ export const ssoAdmin = new Hono<AppEnv>()
       await q(c)(
         `UPDATE sso_connection SET issuer = $2::text, client_id = $3::text, client_secret_enc = coalesce($4::text, client_secret_enc),
                 token_endpoint = CASE WHEN $4::text IS NULL THEN token_endpoint ELSE $8::text END, default_role = $5::text,
-                require_sso = $6::boolean, enabled = $7::boolean, updated_at = now() WHERE id = $1::uuid`,
+                require_sso = $6::boolean, enabled = $7::boolean,
+                updated_at = greatest(updated_at + interval '1 microsecond', clock_timestamp()) WHERE id = $1::uuid`,
         [id, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled, tokenEndpoint],
       );
       // links are keyed on issuer and subject, so links of another issuer can never match again: remove them

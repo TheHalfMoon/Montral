@@ -189,6 +189,37 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
     await checkA11y(page, testInfo, "webhook-inbox");
   });
 
+  await test.step("destructive dialog: cancel preserves the inbox, confirm removes it exactly once", async () => {
+    const inboxButton = page.getByRole("button", { name: `Synthetic inbox ${who.id}`, exact: true });
+    const row = inboxButton.locator("..");
+    const remove = row.getByRole("button", { name: "Delete", exact: true });
+
+    await remove.click();
+    const dialog = page.getByRole("dialog", { name: "Are you sure?" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText("Delete this inbox and all captured events?");
+    // The non-destructive choice is initially focused; Escape must be equivalent to Cancel.
+    await expect(dialog.getByRole("button", { name: "Cancel" })).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(inboxButton).toBeVisible();
+    const before = await (await page.request.get("/api/hooks/inboxes")).json() as {
+      inboxes: { id: string; name: string }[];
+    };
+    const existing = before.inboxes.find((i) => i.name === `Synthetic inbox ${who.id}`);
+    expect(existing).toBeDefined();
+
+    await remove.click();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole("button", { name: "Delete inbox", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(inboxButton).toHaveCount(0);
+    const after = await (await page.request.get("/api/hooks/inboxes")).json() as {
+      inboxes: { id: string; name: string }[];
+    };
+    expect(after.inboxes.some((i) => i.id === existing!.id)).toBe(false);
+  });
+
   await test.step("on-call page: schedule, who is on call, timeline, overrides and escalation policy are accessible", async () => {
     const me = await (await page.request.get("/api/me")).json() as { userId: string };
     const created = await page.request.post("/api/oncall/schedules", { data: {

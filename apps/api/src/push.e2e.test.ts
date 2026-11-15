@@ -66,6 +66,14 @@ describe.skipIf(!url)("push devices and the push channel", () => {
     expect(again.body).toMatchObject({ environment: "production", locale: "en", name: null });
     const list = await call(base, ada, "GET", "/push/devices");
     expect(list.body).toHaveLength(1);
+    // Legacy mobile endpoint intentionally retains token; the web projection does not.
+    expect(list.body[0].token).toBe(token);
+    const summary = await call(base, ada, "GET", "/push/devices/summaries");
+    expect(summary.status).toBe(200);
+    expect(summary.body).toHaveLength(1);
+    expect(summary.body[0]).toMatchObject({ id: put.body.id, platform: "ios", environment: "production", locale: "en" });
+    expect(summary.body[0]).not.toHaveProperty("token");
+    expect(JSON.stringify(summary.body)).not.toContain(token);
 
     // critical alerts are opt-in, default off, and a later registration without the flag keeps the choice
     expect(again.body.critical).toBe(false);
@@ -79,6 +87,14 @@ describe.skipIf(!url)("push devices and the push channel", () => {
       expect((await call(base, ada, "PUT", "/push/devices", bad)).status).toBe(400);
     }
 
+    // A malformed UUID cannot reach SQL, and a real UUID deletes only this user's row.
+    expect((await call(base, ada, "DELETE", "/push/devices/by-id/not-a-uuid")).status).toBe(400);
+    expect((await call(base, ada, "GET", "/push/devices")).body).toHaveLength(1);
+    expect((await call(base, ada, "DELETE", `/push/devices/by-id/${put.body.id}`)).status).toBe(204);
+    expect((await call(base, ada, "GET", "/push/devices/summaries")).body).toEqual([]);
+
+    // Existing iOS token-based callers remain compatible.
+    await call(base, ada, "PUT", "/push/devices", { token, platform: "ios", environment: "production" });
     expect((await call(base, ada, "DELETE", `/push/devices/${token}`)).status).toBe(204);
     expect((await call(base, ada, "GET", "/push/devices")).body).toEqual([]);
   });
@@ -89,8 +105,13 @@ describe.skipIf(!url)("push devices and the push channel", () => {
     await call(base, a, "PUT", "/push/devices", { token, platform: "ios", environment: "production" });
     await call(base, b, "PUT", "/push/devices", { token, platform: "ios", environment: "production" });
     expect((await call(base, a, "GET", "/push/devices")).body).toEqual([]);
-    expect((await call(base, b, "GET", "/push/devices")).body).toHaveLength(1);
-    // a cannot delete b's device
+    const bList = (await call(base, b, "GET", "/push/devices")).body;
+    expect(bList).toHaveLength(1);
+    const privateId = bList[0].id;
+    // Neither the token nor the row ID can delete another user's phone.
+    expect((await call(base, a, "GET", "/push/devices/summaries")).body).toEqual([]);
+    expect((await call(base, a, "DELETE", `/push/devices/by-id/${privateId}`)).status).toBe(204);
+    expect((await call(base, b, "GET", "/push/devices/summaries")).body).toHaveLength(1);
     expect((await call(base, a, "DELETE", `/push/devices/${token}`)).status).toBe(204);
     expect((await call(base, b, "GET", "/push/devices")).body).toHaveLength(1);
   });
@@ -105,7 +126,11 @@ describe.skipIf(!url)("push devices and the push channel", () => {
     expect(put.status).toBe(200);
     expect((await call(base, u, "GET", "/push/devices")).body).toHaveLength(1);
     expect((await call(base, viaKey, "GET", "/push/devices", undefined, h)).body[0].token).toBe(token);
-    expect((await call(base, viaKey, "DELETE", `/push/devices/${token}`, undefined, h)).status).toBe(204);
+    const safe = await call(base, viaKey, "GET", "/push/devices/summaries", undefined, h);
+    expect(safe.body).toHaveLength(1);
+    expect(safe.body[0]).not.toHaveProperty("token");
+    expect((await call(base, viaKey, "DELETE", `/push/devices/by-id/${safe.body[0].id}`, undefined, h)).status).toBe(204);
+    expect((await call(base, u, "GET", "/push/devices")).body).toEqual([]);
   });
 
   it("creates the Mobile app channel for managed workspaces only, once, and only when APNs is configured", async () => {

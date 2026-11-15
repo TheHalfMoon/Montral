@@ -220,8 +220,8 @@ export const TOOLS: Tool[] = [
       {
         q: l("Does Montral have on-call scheduling?", "Montral 有值班排班吗？"),
         a: l(
-          "No. You can repeat reminders and escalate to other channels when an incident stays unacknowledged, and acknowledge it from the iOS app, but there is no rota or phone-call paging. PagerDuty works as a channel if you already use it for that.",
-          "没有。你可以设置重复提醒，并在事件长时间未确认时升级到其他渠道，也可以在 iOS 应用里确认事件，但没有排班表和电话告警。如果你已在用 PagerDuty，可以把它作为一个告警渠道。",
+          "Yes. Montral supports on-call rotations, overrides, and escalation policies for unacknowledged incidents. You can acknowledge from the web dashboard. Direct phone-call paging requires an external provider and is not included by default; PagerDuty can be configured as an alert channel.",
+          "有。Montral 支持值班轮换、临时覆盖及未确认事件的升级策略。你可以在网页控制台确认事件。直接拨打电话需要外部服务提供商，默认不包含；你也可以将 PagerDuty 配置为告警渠道。",
         ),
       },
       faqPricing("Better Stack"),
@@ -726,8 +726,8 @@ export const SEGMENTS: Segment[] = [
       {
         title: l("An alert that does not get lost", "不会被漏掉的告警"),
         body: l(
-          "Send the first alert to Slack and PagerDuty. Set repeat reminders at an interval you choose, and add escalation levels that notify further channels when the incident is still unacknowledged after a number of minutes. Acknowledging the incident, including from the iOS app, stops the repeats.",
-          "第一条告警发送到 Slack 和 PagerDuty。可按所选间隔设置重复提醒，并添加升级层级：事件在若干分钟后仍未确认时，通知更多渠道。确认事件（包括在 iOS 应用里确认）即可停止重复。",
+          "Send the first alert to Slack and PagerDuty. Set repeat reminders at an interval you choose, and add escalation levels that notify further channels when the incident is still unacknowledged after a number of minutes. Acknowledging the incident from the Montral web dashboard stops the repeats.",
+          "第一条告警发送到 Slack 和 PagerDuty。可按所选间隔设置重复提醒，并添加升级层级：事件在若干分钟后仍未确认时，通知更多渠道。在 Montral 网页控制台确认事件即可停止重复。",
         ),
         uses: ["PagerDuty", "Slack", l("reminders", "重复提醒").en, l("escalation", "升级").en],
       },

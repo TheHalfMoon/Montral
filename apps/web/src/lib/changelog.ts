@@ -26,6 +26,16 @@ export interface ChangelogEntry {
 
 /** Community entries, newest first within a day. Cloud-only entries are added by changelog-cloud.ts. */
 export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
+  { id: "web-first-phone-install", date: "2026-11-16", edition: "community",
+    title: { en: "Install Montral as a web app", zh: "将 Montral 安装为网页应用" },
+    summary: { en: "The phone installation guide now explains Safari and browser-based PWA setup, without advertising an unverified native TestFlight beta.", zh: "手机安装指南现在介绍 Safari 和浏览器中的 PWA 安装方式，不再宣传未经验证的原生 TestFlight 测试版。" },
+    points: [
+      { en: "Use the same web app in a browser or from your device's Home Screen, on a server you control.", zh: "可以从浏览器或设备主屏幕使用同一个网页应用，连接自己管理的服务器。" },
+      { en: "Only the static shell is cached; live monitoring, alerts and account data still require the server.", zh: "只缓存静态界面；实时监控、告警和账号数据仍需要连接服务器。" },
+      { en: "APNs integration remains available for separately built clients; no native Montral iOS app is distributed.", zh: "APNs 接口仍供另行构建的兼容客户端使用；Montral 不提供原生 iOS 应用。" },
+    ],
+    link: { href: "/ios", label: { en: "Read the phone install guide", zh: "阅读手机安装指南" } },
+  },
   { id: "threshold-identity", date: "2026-11-14", edition: "community",
     title: { en: "A new look: the Threshold identity", zh: "全新视觉：Threshold 品牌形象" },
     summary: { en: "Montral has a new mark, colours and typography, and a rebuilt home page.", zh: "Montral 换上了新的标志、配色和字体，并重新设计了首页。" },
@@ -826,20 +836,6 @@ export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
     ],
   },
   {
-    id: "ios-testflight-beta",
-    date: "2026-10-17",
-    edition: "community",
-    title: { en: "iOS app in public beta", zh: "iOS 应用公开测试" },
-    summary: {
-      en: "The Montral iOS app is in public beta on TestFlight.",
-      zh: "Montral iOS 应用现已通过 TestFlight 公开测试。",
-    },
-    points: [
-      { en: "Join the beta from the iOS page with one tap on TestFlight.", zh: "在 iOS 页面点一下即可通过 TestFlight 加入测试。" },
-    ],
-    link: { href: "/ios", label: { en: "Join the iOS beta", zh: "加入 iOS 测试" } },
-  },
-  {
     id: "not-found-page",
     date: "2026-10-16",
     edition: "community",
@@ -905,45 +901,31 @@ export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
       { en: "The verification email is sent automatically at sign-up, so the banner only tells you where it went. You can still request a new one from the Account page.", zh: "验证邮件会在注册时自动发送，提示条只告知发送到哪个邮箱，避免重复点击多发一封；仍可在“账号”页重新发送。" },
     ],
   },
-  {
-    id: "ios-app-page",
-    date: "2026-10-14",
-    edition: "community",
-    title: { en: "iOS app page", zh: "iOS 应用页面" },
-    summary: {
-      en: "The website now has a page for the Montral iOS app, linked from the footer.",
-      zh: "网站新增 iOS 应用页面，并在页脚提供入口。",
-    },
-    points: [
-      { en: "The page says what the app does and shows where to install it, or that it is coming soon.", zh: "页面介绍应用的功能，并给出安装入口；尚未发布时显示“即将上线”。" },
-    ],
-    link: { href: "/ios", label: { en: "See the iOS app page", zh: "查看 iOS 应用页面" } },
-  },
+
   {
     id: "push-notifications-ios",
     date: "2026-10-14",
     edition: "community",
-    title: { en: "Push alerts to the iOS app", zh: "iOS 应用推送告警" },
+    title: { en: "APNs support for compatible clients", zh: "支持兼容客户端的 APNs 推送" },
     summary: {
-      en: "Alerts can now arrive as push notifications on the phones of your workspace members.",
-      zh: "告警现在可以作为推送通知，发送到工作区成员的手机上。",
+      en: "The API can deliver push alerts to registered devices from separately built iOS clients when APNs is configured.",
+      zh: "配置 APNs 后，API 可以向由另行构建的兼容 iOS 客户端注册的设备发送推送告警。",
     },
     points: [
-      { en: "Add a Mobile app (push) channel and every member who signed in on the app gets down and recovery alerts, in their own language.", zh: "添加“手机 App 推送”渠道后，在应用中登录过的每位成员都会收到宕机与恢复告警，并使用各自的语言。" },
-      { en: "The first phone an owner or admin registers creates the channel for the workspace, so alerts start without any setup.", zh: "所有者或管理员注册第一台手机时会自动为工作区创建该渠道，无需额外设置。" },
-      { en: "Self-hosted servers need their own Apple push key; the setup is described in the self-hosting guide.", zh: "自托管服务器需要配置自己的 Apple 推送密钥，步骤见自托管指南。" },
+      { en: "A compatible, separately signed client must register its device before the push channel can send down and recovery alerts.", zh: "兼容且单独签名的客户端必须先注册设备，推送渠道才能发送故障与恢复告警。" },
+      { en: "An owner or admin registering the first device can create the workspace's Mobile app channel when APNs is configured.", zh: "在配置 APNs 后，所有者或管理员注册首台设备时可为工作区创建手机应用渠道。" },
+      { en: "Self-hosted servers require an Apple push key and matching app bundle id. Montral does not currently distribute a native iOS app.", zh: "自托管服务器需要 Apple 推送密钥以及匹配的应用包 ID。Montral 目前不提供原生 iOS 应用。" },
     ],
-    cloud: { en: "Push is set up on the hosted service; nothing to configure.", zh: "托管服务已配置好推送，无需设置。" },
-    link: { href: "/docs/self-host#apns", label: { en: "Read the push setup guide", zh: "阅读推送配置指南" } },
+    link: { href: "/docs/self-host#apns", label: { en: "Read the APNs setup guide", zh: "阅读 APNs 配置指南" } },
   },
   {
     id: "api-key-qr-code",
     date: "2026-10-14",
     edition: "community",
-    title: { en: "Connect the mobile app with a QR code", zh: "用二维码连接移动应用" },
+    title: { en: "Share an API key with compatible clients", zh: "通过二维码连接兼容客户端" },
     summary: {
-      en: "A new API key now comes with a QR code that the mobile app can scan.",
-      zh: "新建 API 密钥后会同时显示二维码，移动应用扫一下即可连接。",
+      en: "A new API key can be shared using a QR code with a separately configured compatible client.",
+      zh: "新建 API 密钥后可通过二维码交给另行配置的兼容客户端。",
     },
     points: [
       { en: "The code carries this server's address and the new key, shown once with the key, so keep it private.", zh: "二维码包含此服务器地址和新密钥，与密钥一起只显示一次，请勿外传。" },
@@ -969,8 +951,8 @@ export const COMMUNITY_ENTRIES: ChangelogEntry[] = [
     edition: "community",
     title: { en: "Sign in with GitHub and connect it to your account", zh: "GitHub 登录与账号关联" },
     summary: {
-      en: "GitHub can be connected to an existing account, and the mobile app can sign in with it.",
-      zh: "可以把 GitHub 关联到现有账号，移动应用也能用它登录。",
+      en: "GitHub can be connected to an existing account; native client sign-in handoff is available as an API for separately developed clients.",
+      zh: "可以把 GitHub 关联到现有账号；单独开发的原生客户端也可使用 API 登录交接机制。",
     },
     points: [
       { en: "Account has a Connected accounts block to connect or disconnect GitHub, even when its email differs from yours.", zh: "账号页新增“已关联的账号”，可关联或取消关联 GitHub，GitHub 邮箱可以与账号邮箱不同。" },

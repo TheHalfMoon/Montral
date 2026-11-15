@@ -26,6 +26,8 @@ export type SsoConnection = {
   domains: string[] | null;
   /** the token endpoint the client secret was entered for (workspace connections); null: not pinned */
   tokenEndpoint: string | null;
+  /** Exact DB revision captured at callback lookup; null only for the operator's env-backed provider. */
+  configRevision: string | null;
 };
 
 const list = (v: string | undefined) => [...new Set(String(v ?? "").split(/[\s,]+/).map((d) => d.trim().toLowerCase().replace(/^@/, "")).filter(Boolean))];
@@ -37,10 +39,10 @@ export function instanceConnection(env: Pick<Bindings, "OIDC_ISSUER" | "OIDC_CLI
   const secret = String(env.OIDC_CLIENT_SECRET ?? "");
   if (!issuer || !clientId || !secret) return null;
   const domains = list(env.OIDC_ALLOWED_DOMAINS);
-  return { id: INSTANCE_CONNECTION, orgId: null, issuer, clientId, secret: async () => secret, defaultRole: "member", enabled: true, requireSso: false, domains: domains.length ? domains : null, tokenEndpoint: null };
+  return { id: INSTANCE_CONNECTION, orgId: null, issuer, clientId, secret: async () => secret, defaultRole: "member", enabled: true, requireSso: false, domains: domains.length ? domains : null, tokenEndpoint: null, configRevision: null };
 }
 
-type Row = { id: string; organization_id: string; issuer: string; client_id: string; client_secret_enc: string; token_endpoint: string | null; default_role: Role; require_sso: boolean; enabled: boolean; domains: string[] | null };
+type Row = { id: string; organization_id: string; issuer: string; client_id: string; client_secret_enc: string; token_endpoint: string | null; default_role: Role; require_sso: boolean; enabled: boolean; domains: string[] | null; config_revision: string };
 
 const toConnection = (r: Row, serverSecret: string): SsoConnection => ({
   id: r.id,
@@ -53,9 +55,10 @@ const toConnection = (r: Row, serverSecret: string): SsoConnection => ({
   requireSso: r.require_sso,
   domains: r.domains ?? [],
   tokenEndpoint: r.token_endpoint,
+  configRevision: r.config_revision,
 });
 
-const SELECT = `SELECT c.id::text AS id, c.organization_id, c.issuer, c.client_id, c.client_secret_enc, c.token_endpoint, c.default_role, c.require_sso, c.enabled,
+const SELECT = `SELECT c.id::text AS id, c.organization_id, c.issuer, c.client_id, c.client_secret_enc, c.token_endpoint, c.default_role, c.require_sso, c.enabled, c.updated_at::text AS config_revision,
        coalesce((SELECT array_agg(d.domain ORDER BY d.domain) FROM sso_domain d WHERE d.connection_id = c.id AND d.verified_at IS NOT NULL), '{}') AS domains
   FROM sso_connection c`;
 
@@ -169,8 +172,35 @@ export async function linkIdentity(q: Query, p: { userId: string; connectionId: 
   );
 }
 
-export async function markSsoSession(q: Query, sessionId: string, connectionId: string) {
-  await q(`INSERT INTO sso_session (session_id, connection_id) VALUES ($1::text, $2::text) ON CONFLICT (session_id) DO NOTHING`, [sessionId, connectionId]);
+/**
+ * Bind an SSO session to the exact live workspace connection the callback authenticated with.
+ *
+ * The shared row lock makes insertion order with an owner's UPDATE/DELETE unambiguous:
+ * - marker first: the subsequent configuration change waits, then revokes it;
+ * - configuration change first: the stale revision cannot create a marker.
+ * This is a single statement (and therefore one transaction even without a scoped caller).
+ */
+export async function markSsoSession(q: Query, sessionId: string, conn: SsoConnection): Promise<boolean> {
+  if (conn.orgId === null) {
+    // An instance provider is controlled by deployment env, not sso_connection.
+    await q(`INSERT INTO sso_session (session_id, connection_id) VALUES ($1::text, $2::text) ON CONFLICT (session_id) DO NOTHING`, [sessionId, conn.id]);
+    return true;
+  }
+  if (!conn.configRevision) return false;
+  const rows = await q<{ session_id: string }>(
+    `WITH live AS MATERIALIZED (
+       SELECT c.id::text AS connection_id FROM sso_connection c
+         WHERE c.id = $2::uuid AND c.organization_id = $3::text
+           AND c.enabled AND c.updated_at = $4::timestamptz
+         FOR SHARE
+     )
+     INSERT INTO sso_session (session_id, connection_id)
+       SELECT $1::text, connection_id FROM live
+       ON CONFLICT (session_id) DO NOTHING
+       RETURNING session_id`,
+    [sessionId, conn.id, conn.orgId, conn.configRevision],
+  );
+  return rows.length === 1;
 }
 
 // ── require SSO ────────────────────────────────────────────────────────────────────────────────────────────────────

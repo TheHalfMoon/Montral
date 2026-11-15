@@ -15,7 +15,7 @@ This is an accuracy and external-link safety defect in an unreleased product, **
 - Correct the footer label to **Install web app** (same path for compatibility).
 - Remove unverified native beta/iOS page changelog entries, add a dated web-first/PWA entry, and describe existing APNs API support as **compatible separately built clients only**. Public copy does not claim an official native iOS release or a configured hosted APNs service.
 - Revise the account phone-management text without changing the existing owner-scoped APNs device API or its regression tests. Existing registered-device metadata remains functional for compatible clients.
-- Correct the outdated comparison that said on-call rotations did not exist, while explicitly distinguishing on-call scheduling from external phone-call paging.
+- Correct the outdated FAQ, shared capability-gap list, competitor-specific comparisons and segment limitations that said on-call rotations did not exist. Montral already has schedules, overrides and escalation policies; native SMS/voice calling remains unavailable without an external provider. Clarify that browser journeys include a restricted script step, not an arbitrary remote-code execution feature.
 
 ## Verification required
 

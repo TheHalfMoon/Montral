@@ -37,6 +37,10 @@ describe("web-first product claims", () => {
   it("does not advertise obsolete on-call limitations in public comparisons", () => {
     expect(comparisons).toContain("Montral supports on-call rotations, overrides, and escalation policies");
     expect(comparisons).not.toContain("there is no rota or phone-call paging");
+    expect(comparisons).not.toContain("no on-call rotation schedules");
+    expect(comparisons).not.toContain("no on-call schedule features");
+    expect(comparisons).not.toContain("but has no rota");
+    expect(comparisons).toContain("On-call rotation schedules, overrides and escalation policies are supported.");
     expect(comparisons).not.toContain("from the iOS app");
   });
 

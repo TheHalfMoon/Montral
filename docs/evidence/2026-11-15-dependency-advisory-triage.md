@@ -22,8 +22,8 @@ A second registry/OSV audit of the uploaded branch head `f39bc6c4f3b728568f411f9
 
 ## Residual and blocked items
 
-- `fast-uri@3.1.8` has advisory matches, while an available fully clean major release is 4.x. We are **not** forcing that breaking transitive upgrade without identifying dependents and testing them; evaluate exposure and migration separately.
-- `esbuild@0.18.20` remains in the lockfile alongside newer versions and has an advisory about browser access to a development server. Determine whether any production artifact or public dev server uses that old nested copy; never expose development servers.
+- `fast-uri@3.1.8` has advisory matches; its traced lockfile path is `@astrojs/check` -> Astro/Volar language service -> `volar-service-yaml` -> `yaml-language-server` -> `ajv@8.20.0` -> `fast-uri`. Astro check is a **development** dependency, not a known HTTP runtime import. The upstream AJV version still requires `fast-uri@^3.0.1`; fully patched 4.x is a breaking major. Do not override it blindly. Validate built artifacts before accepting the residual exposure.
+- `esbuild@0.18.20` remains alongside newer versions. Its traced lockfile path is `drizzle-kit@0.31.11` -> deprecated `@esbuild-kit/esm-loader` -> `@esbuild-kit/core-utils` -> `esbuild@0.18.20`. `drizzle-kit` is only a **development** dependency of `@montral/db-pg`. The advisory concerns access to a development server; Montral must never expose dev servers. Replacing the deprecated loader via a Drizzle migration-tool upgrade needs separate migration testing, not a forced incompatible esbuild override.
 - Audit coverage is not complete, so it cannot certify all dependencies, transitive license compliance or supply-chain provenance.
 - `pnpm install --lockfile-only --ignore-scripts` regenerated the lockfile without executing dependency lifecycle scripts. The local engineering PC has Node 24.19.0, below the repository's declared minimum; local results are **not** runtime qualification.
 

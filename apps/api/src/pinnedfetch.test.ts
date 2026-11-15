@@ -2,6 +2,8 @@ import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, describe, expect, it } from "vitest";
 import { brotliCompressSync, deflateRawSync, deflateSync, gzipSync } from "node:zlib";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { pinnedFetch } from "./pinnedfetch";
 
 describe("pinnedFetch", () => {
@@ -13,6 +15,37 @@ describe("pinnedFetch", () => {
     await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
     return (s.address() as AddressInfo).port;
   };
+
+  it.each([600, 999])("rejects upstream status %s without terminating the process", async (status) => {
+    // Isolate the real HTTP callback: an uncaught exception must fail this child, not the test runner.
+    const script = `
+      import { createServer } from 'node:http';
+      import { pinnedFetch } from ${JSON.stringify(new URL("./pinnedfetch.ts", import.meta.url).href)};
+      const server = createServer((_req, res) => res.writeHead(${status}).end('invalid status'));
+      await new Promise(done => server.listen(0, '127.0.0.1', done));
+      let rejected = false;
+      try {
+        await pinnedFetch('http://pinned.test:' + server.address().port + '/', {}, ['127.0.0.1']);
+      } catch (error) {
+        if (!(error instanceof TypeError) || error.message !== 'fetch failed') throw error;
+        rejected = true;
+      } finally {
+        server.closeAllConnections();
+        await new Promise(done => server.close(done));
+      }
+      if (!rejected) throw new Error('Invalid upstream status was accepted');
+      console.log('process survived');
+    `;
+    const result = await promisify(execFile)(process.execPath, ["--input-type=module", "-e", script], { timeout: 8000, maxBuffer: 16_384 });
+    expect(result.stdout.trim()).toBe("process survived");
+  }, 10_000);
+
+  it("preserves a valid nonstandard status instead of turning it into a transport failure", async () => {
+    const port = await serve((_req, res) => res.writeHead(599).end("upstream unavailable"));
+    const response = await pinnedFetch(`http://pinned.test:${port}/`, {}, ["127.0.0.1"]);
+    expect(response.status).toBe(599);
+    expect(await response.text()).toBe("upstream unavailable");
+  });
 
   it("dials the pinned address while keeping the name in the URL and Host header", async () => {
     const port = await serve((req, res) => res.end(JSON.stringify({ host: req.headers.host, url: req.url, enc: req.headers["accept-encoding"], x: req.headers["x-a"] })));

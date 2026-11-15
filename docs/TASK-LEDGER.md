@@ -144,6 +144,10 @@ The source audit found the following executable work beyond the earlier historic
 
 **P1**, merged in #145. Concurrent authorized deletions must leave at least one project and preserve that project's data. Atomic repository guard and real PostgreSQL regression: `docs/evidence/2026-11-14-project-delete-race.md`.
 
+## Upstream response conversion under qualification
+
+**P0**, implemented on this branch; qualification/merge pending. A monitored public hostname could terminate the shared Node process with an upstream status outside Web Response's accepted range. Callback errors now become failed checks. Evidence: `docs/evidence/2026-11-15-pinned-response-errors.md`.
+
 ## External dependencies (cannot be closed in engineering)
 
 - Real SMTP/Resend deliverability, live APNs push, live payment provider: need accounts and owner approval.

@@ -110,7 +110,7 @@ configuration and are not part of the repository.
 | 69 | Suspension edges: queued checks, cached public statuses and webhook capture | P3 | Partial: webhook capture serialization #105, Montral cache bypass #107, queued check lookup/start guards #109 and in-flight observation/heartbeat DB fence #116 (`b624cfe`, 16/16 exact-head CI) are **merged**. Already-started outbound requests, meter charges, claimed alert deliveries, older replica behavior and previously delivered external caches remain limitations. Evidence: `docs/evidence/2026-11-13-queued-check-suspension-gate.md`, `docs/evidence/2026-11-13-inflight-observation-suspension.md` |
 | 70 | #76's PR body lists as a limitation that a session created before 2FA was enabled counts once 2FA is on (operator gate) | P2 | Superseded on `main`: the review fix in #76 added `operator_mfa_session`; `docs/OPERATOR.md` (operator identity, item 3) now requires a session created by a second-factor sign-in within 12 h, and the enrolling session is not recorded. Covered by `operator.e2e` and the #82 write-route negative tests |
 | 71 | Operator plane UI and drain events in a platform audit trail are covered by rows 54 and 63 | — | See rows 54, 63 |
-| 72 | Replica restart coverage test lows: a restart window ends when Docker reports the replica healthy, so it may include a few seconds after it is serving; the negative control exercises the gate, not where the snapshots are taken; an in-flight `curl` completing after `kill` may cause a false failure (#80) | P3 | Accepted for now |
+| 72 | Replica restart coverage test lows: restart windows may include a few seconds after a container reports healthy; the negative control exercises the coverage gate. Terminating a request generator before its in-flight curl completed caused a 46-versus-45 webhook count failure | P3 | In-flight request accounting corrected by #149 (`ead9740`): generator stops cooperatively and drains bounded curls before row-count comparison; the strict zero-loss/unique-write assertion is retained. Other timing/negative-control limits remain accepted |
 | 73 | BYOC: avoid requests to external Google Fonts hosts in the end-user browser | P3 | Done (#90, `47ac15d`): app, static landings and preview use system font fallback; CSP disallows remote font hosts; source and BYOC HTML guards prevent regressions. The broader current-main release qualification is tracked separately. |
 
 | 74 | On-call override GET could exceed strict 90-day millisecond range | P2 | Done (#108, 16/16 exact-head CI): use one clock capture for both bounds. Evidence: `docs/evidence/2026-11-12-oncall-range-boundary.md` |
@@ -118,13 +118,13 @@ configuration and are not part of the repository.
 | 75 | Session-only platform operator console | P2 | Done: #110 merged (`8435564`), 11/11 exact-head CI and 11/11 integrated push CI; per-region read-only history added by #111. Server MFA authorization unchanged. Evidence: `docs/evidence/2026-11-13-operator-console.md` |
 | 76 | Threshold identity, design tokens, self-hosted fonts and public landing page; edition-aware Billing navigation | P1 | Done: #127 merged (`e278a57`), 16/16 exact-head CI after independent review (1 high, 2 medium, 5 low fixed) and two axe fixes found by CI; 11/11 integrated push CI on `e278a57`. Evidence: `docs/evidence/2026-11-14-threshold-foundation.md` |
 | 77 | App shell: Cmd/Ctrl+K command menu (pages, monitors, open incidents, actions), Ink sidebar, shared status shapes | P2 | Done: #128 merged (`0d83ef3`), 16/16 exact-head CI after independent review (2 high and 4 medium in the stacked dialog work, command-menu items fixed in #128). Evidence: `docs/evidence/2026-11-14-app-shell-dialogs.md` |
-| 78 | Accessible dialogs: shared Modal (dialog role, focus trap, Escape, focus return) for 7 hand-built dialogs; in-app confirmation replaces 21 native confirm() boxes with specific, translated verbs | P2 | In review: #129 |
-| 79 | Status by shape app-wide (pills, dots, timeline, public status page, 404: circle / triangle / diamond / pause / ring) and a monitor table whose name column no longer collapses between 1025 and 1320 px | P2 | In review |
-| 80 | Team role changes (owners/admins promote or demote members via Better Auth updateMemberRole; members see no actions) and keyboard-accessible segmented choices (7 controls become a real radio group) | P2 | In review |
-| 81 | Alert delivery log paging: "Load older deliveries" pages GET /alert-log with before, without skipping rows that share a timestamp at the page boundary | P3 | In review |
-| 82 | Webhook replay attempt counter: owners/admins see this month's replay attempts (GET /hooks/replay-usage, closes the ledger 56 UI gap), labelled not billed, refreshed after each replay | P3 | In review |
-| 83 | Account sessions (list devices, sign out one or every other session) and change password while signed in (Better Auth list/revoke sessions, changePassword) | P2 | In review |
-| 84 | Account phones: list push devices registered by the iOS app and remove one (GET/DELETE /push/devices); hidden on servers without Apple push and no phones | P3 | In review |
+| 78 | Accessible dialogs: shared Modal (dialog role, focus trap, Escape, focus return) for 7 hand-built dialogs; in-app confirmation replaces 21 native confirm() boxes with specific, translated verbs | P2 | Merged #129 (`a26c5d9`), 11/11 exact-head PR workflows. Destructive dialog E2E and per-request focus reset included. Independent review and combined-main requalification pending. |
+| 79 | Status by shape app-wide (pills, dots, timeline, public status page, 404: circle / triangle / diamond / pause / ring) and a monitor table whose name column no longer collapses between 1025 and 1320 px | P2 | Merged #130 (`8c87abc`), 11/11 exact-head PR workflows; independent review and combined-main requalification pending. |
+| 80 | Team role changes (owners/admins promote or demote members via Better Auth updateMemberRole; members see no actions) and keyboard-accessible segmented choices (7 controls become a real radio group) | P2 | Merged #131 (`89de750`), 11/11 exact-head PR workflows; independent review and combined-main requalification pending. |
+| 81 | Alert delivery log paging: "Load older deliveries" pages GET /alert-log with before, without skipping rows that share a timestamp at the page boundary | P3 | Merged #132 (`cd968eb`), 11/11 exact-head PR workflows. Uses `(created_at DESC, id DESC)` with scoped `beforeId` keyset, with 351-tied-delivery real-PG regression. The legacy `before` timestamp API remains compatible; independent review and combined-main requalification pending. |
+| 82 | Webhook replay attempt counter: owners/admins see this month's replay attempts (GET /hooks/replay-usage, closes the ledger 56 UI gap), labelled not billed, refreshed after each replay | P3 | Merged #133 (`9d9fe64`), 11/11 exact-head PR workflows. Replay counter is not billed; independent review and combined-main requalification pending. |
+| 83 | Account sessions (list devices, sign out one or every other session) and change password while signed in (Better Auth list/revoke sessions, changePassword) | P2 | Merged #134 (`d598348`), 11/11 exact-head PR workflows; independent review and combined-main requalification pending. |
+| 84 | Account phones: list push devices registered by the iOS app and remove one (GET/DELETE /push/devices); hidden on servers without Apple push and no phones | P3 | Merged #135 (`3fe4a5e`), 11/11 exact-head PR workflows; independent review and combined-main requalification pending. |
 
 ## Active security audit follow-ups (2026-11-14)
 
@@ -155,7 +155,7 @@ Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e
 
 ## Upstream response conversion under qualification
 
-**P0**, implemented on this branch; qualification/merge pending. A monitored public hostname could terminate the shared Node process with an upstream status outside Web Response's accepted range. Callback errors now become failed checks. Evidence: `docs/evidence/2026-11-15-pinned-response-errors.md`.
+**P0 fixed:** #147 merged (`bd5659e`, followed by #149), with exact-head CI evidence. Invalid upstream HTTP status codes are mapped to a failed monitor check instead of terminating the Node process. No production incident is asserted. Evidence: `docs/evidence/2026-11-15-pinned-response-errors.md`.
 
 ## Notification destination creation under qualification
 
@@ -166,7 +166,11 @@ Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e
 
 | ID | Gap | Severity | Status |
 |---|---|---|---|
-| SEC-SSO-CALLBACK | A callback could finish after its connection's issuer/client was changed and its old sessions invalidated, then mark a fresh session against stale connection settings | P1 | Proposed branch `fix/sso-callback-connection-revision-20261115`, **not merged or qualified**. Single-statement revision/row-lock marker, stale-session refusal, monotonic owner settings revision, real-PostgreSQL regression. Exact-head CI and independent review required. `docs/evidence/2026-11-15-sso-callback-revision-fence.md`. |
+| SEC-SSO-CALLBACK | A callback could finish after its connection's issuer/client was changed and its old sessions invalidated, then mark a fresh session against stale connection settings | P1 | Merged #149 (`ead9740`), 11/11 exact-head PR workflows, including PostgreSQL 17/18 SSO callback race tests. A stale callback cannot mark a session after connection revision changes, and a new session is cleaned up. Independent security review and combined-main requalification still required. `docs/evidence/2026-11-15-sso-callback-revision-fence.md`. |
+
+## Integrated November 15 change stack (pending full combined-main qualification)
+
+Security #149 and web #129–#135 are now merged to `main@3fe4a5e46f52a4220b2a2162b4166286372bde04`. All eight PRs passed **11/11 workflows individually** before merge. This fact does **not** prove the combined head's full push CI, physical Safari/VoiceOver, live-provider coverage, or an independent audit. A dedicated integration qualification pull request follows, with no release/tag/deployment authorized. The old `d49e2cf` 11/11 main run remains historical, not qualification for these additions.
 
 ## External dependencies (cannot be closed in engineering)
 

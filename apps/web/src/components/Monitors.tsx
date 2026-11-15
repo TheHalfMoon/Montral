@@ -12,6 +12,7 @@ import { ProjectBadge, ProjectStrip, ScopeChip, useProjects } from "./AllProject
 import { draftsOf, JourneyEditor, journeyOf, SECRET_MASK, type StepDraft } from "./BrowserJourney";
 import OnboardingChecklist from "./Onboarding";
 import { showOnboarding } from "../lib/onboarding";
+import Modal from "./Modal";
 
 const TYPE_LABEL: Record<Monitor["type"], string> = { http: "HTTP", tcp: "TCP", dns: "DNS", heartbeat: "CRON", postgres: "PG", mysql: "MYSQL", redis: "REDIS", websocket: "WS", domain: "DOMAIN", certificate: "CERT", ping: "PING", browser: "WEB" };
 
@@ -407,7 +408,7 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
     }
   }
   return (
-    <div className="modal">
+    <Modal onClose={onClose} busy={busy} backdropClose={false}>
       <form className="card mform" onSubmit={submit}>
         <div className="mhead">
           <h2 style={{ fontSize: 30 }}>{monitor ? t("Edit monitor") : t("New monitor")}</h2>
@@ -627,6 +628,6 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
           </div>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }

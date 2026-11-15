@@ -3,6 +3,8 @@ import { t } from "../lib/i18n";
 import { useEffect, useState } from "react";
 import { api, type DomainCheckError, type Monitor, type StatusPage, type Subscriber, type ShareLink } from "../lib/api";
 import { mounted } from "../lib/mounted";
+import { ask } from "../lib/confirm";
+import Modal from "./Modal";
 
 export default function StatusPages() {
   const [pages, setPages] = useState<StatusPage[] | null>(null);
@@ -64,7 +66,7 @@ function Create({ onClose }: { onClose: () => void }) {
     } catch (e) { setErr((e as Error).message); setBusy(false); }
   }
   return (
-    <div className="modal status-create-overlay" onClick={onClose}>
+    <Modal onClose={onClose} busy={busy} className="status-create-overlay">
       <form className="card status-create-form" onClick={(e) => e.stopPropagation()} onSubmit={submit}>
         <h2 style={{ fontSize: 30 }}>{t("New status page")}</h2>
         <div className="status-create-fields">
@@ -76,7 +78,7 @@ function Create({ onClose }: { onClose: () => void }) {
           <button type="button" className="btn" onClick={onClose}>{t("Cancel")}</button><button className="btn primary" disabled={busy}>{busy ? t("Creating…") : t("Create")}</button>
         </div>
       </form>
-    </div>
+    </Modal>
   );
 }
 
@@ -146,7 +148,7 @@ export function StatusPageEditor({ id }: { id: string }) {
         </div>
         <div className="ph-actions">
           <button className="btn danger-l" disabled={!!pending} onClick={async () => {
-            if (!confirm(t("Delete this status page?"))) return;
+            if (!(await ask(t("Delete this status page?"), t("Delete status page")))) return;
             setPending("delete");
             try { await api.deleteStatusPage(id); navigate("/app/status-pages"); } catch (e) { setErr((e as Error).message); setPending(""); }
           }}>{pending === "delete" ? t("Deleting…") : t("Delete")}</button>
@@ -384,14 +386,14 @@ function AccessPanel({ id }: { id: string }) {
             <span>{l.label || t("Unnamed link")}<br /><small className="faint">{l.lastUsedAt ? `${t("Last used")} ${new Date(l.lastUsedAt).toLocaleString()}` : t("Never used")}</small></span>
             <span className="muted">{l.revokedAt ? t("Revoked") : active(l) ? `${t("Expires")} ${new Date(l.expiresAt).toLocaleDateString()}` : t("Expired")}</span>
             {active(l)
-              ? <button className="btn sm" disabled={busy} onClick={() => { if (confirm(t("Revoke this link? Anyone using it loses access at once."))) void run(async () => { await api.revokeShareLink(id, l.id); await load(); }); }}>{t("Revoke")}</button>
+              ? <button className="btn sm" disabled={busy} onClick={async () => { if ((await ask(t("Revoke this link? Anyone using it loses access at once."), t("Revoke")))) void run(async () => { await api.revokeShareLink(id, l.id); await load(); }); }}>{t("Revoke")}</button>
               : <span />}
           </div>
         ))}
       </div>}
       <div style={{ marginTop: 16, display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-        <button type="button" className="btn sm" disabled={busy} onClick={() => {
-          if (confirm(t("Sign out everyone outside the workspace? They need the password or a share link again."))) {
+        <button type="button" className="btn sm" disabled={busy} onClick={async () => {
+          if ((await ask(t("Sign out everyone outside the workspace? They need the password or a share link again."), t("Sign everyone out")))) {
             void run(async () => { await api.revokeStatusAccess(id); setNote(t("Everyone outside the workspace was signed out.")); });
           }
         }}>{t("Sign everyone out")}</button>
@@ -441,8 +443,8 @@ function CustomDomain({ page, onChange }: { page: StatusPage; onChange: (p: Part
           <input className="in mono" inputMode="url" autoComplete="off" spellCheck={false} maxLength={253} placeholder="status.example.com" value={domain} onChange={(e) => setDomain(e.target.value)} />
         </label>
         <button className="btn" disabled={!!busy || !domain.trim()}>{busy === "save" ? t("Saving…") : t("Save domain")}</button>
-        {page.customDomain && <button type="button" className="btn danger-l" disabled={!!busy} onClick={() => {
-          if (!confirm(t("Remove the custom domain? The page stops being served there at once."))) return;
+        {page.customDomain && <button type="button" className="btn danger-l" disabled={!!busy} onClick={async () => {
+          if (!(await ask(t("Remove the custom domain? The page stops being served there at once."), t("Remove domain")))) return;
           void run("remove", async () => {
             await api.clearStatusDomain(page.id);
             setDomain("");

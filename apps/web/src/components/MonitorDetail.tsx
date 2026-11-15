@@ -11,6 +11,7 @@ import { regionRunState } from "../lib/regions";
 import { MonitorForm } from "./Monitors";
 import QuotaNotice, { type QuotaRefusal } from "./QuotaNotice";
 import { quotaRefusal } from "../lib/usage-alerts";
+import { ask } from "../lib/confirm";
 
 type Detail = Monitor & { results: CheckResult[]; regionStats: RegionStat[]; incidents: Incident[]; stats: { uptime24h: number | null; uptime7d: number | null; avg24h: number | null; p95: number | null } };
 const every = (s: number) => (s % 3600 === 0 ? `${s / 3600} h` : s % 60 === 0 ? `${s / 60} min` : `${s} s`);
@@ -260,7 +261,7 @@ export default function MonitorDetail({ id }: { id: string }) {
             ))}
           </div>
 
-          <button className="btn danger-l" disabled={!!pending} onClick={() => confirm(t("Delete this monitor?")) && act("delete", async () => { await api.deleteMonitor(id); navigate("/app"); })}>{pending === "delete" ? t("Deleting…") : t("Delete monitor")}</button>
+          <button className="btn danger-l" disabled={!!pending} onClick={async () => (await ask(t("Delete this monitor?"), t("Delete monitor"))) && act("delete", async () => { await api.deleteMonitor(id); navigate("/app"); })}>{pending === "delete" ? t("Deleting…") : t("Delete monitor")}</button>
         </div>
       </div>
     </>

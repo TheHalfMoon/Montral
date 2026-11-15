@@ -3,6 +3,7 @@ import { api, ApiError, type Channel, type EscalationPolicy, type OncallLayer, t
 import { t } from "../lib/i18n";
 import { useBusy } from "../lib/use-busy";
 import { oncallOverrideRange } from "../lib/oncall-range";
+import { ask } from "../lib/confirm";
 
 const DAY = 86_400_000;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -134,7 +135,7 @@ function ScheduleEditor({ schedule, members, me, onSaved, onCancel, onDeleted, o
     });
   };
   const remove = () => run(async () => {
-    if (!schedule || !confirm(t("Delete this schedule? Escalation steps can no longer page whoever is on call on it."))) return;
+    if (!schedule || !(await ask(t("Delete this schedule? Escalation steps can no longer page whoever is on call on it."), t("Delete schedule")))) return;
     try { await api.deleteOncallSchedule(schedule.id, schedule.version); await onDeleted?.(); } catch (x) { setErr(message(x)); }
   });
 
@@ -366,7 +367,7 @@ function Policies({ members, schedules, manager, nameOf }: { members: OncallMemb
           </div>
           {manager && <span style={{ display: "flex", gap: 6 }}>
             <button className="btn sm" onClick={() => setEditing({ ...p, steps: p.steps.map((s) => ({ ...s })) })}>{t("Edit")}<span className="sr-only"> {p.name}</span></button>
-            <button className="btn sm" disabled={busy} onClick={() => run(async () => { if (!confirm(t("Delete this policy? Monitors using it go back to their project's escalation levels."))) return; try { await api.deleteEscalationPolicy(p.id, p.version); await load(); } catch (x) { setErr(message(x)); } })}>{t("Delete")}<span className="sr-only"> {p.name}</span></button>
+            <button className="btn sm" disabled={busy} onClick={() => run(async () => { if (!(await ask(t("Delete this policy? Monitors using it go back to their project's escalation levels."), t("Delete policy")))) return; try { await api.deleteEscalationPolicy(p.id, p.version); await load(); } catch (x) { setErr(message(x)); } })}>{t("Delete")}<span className="sr-only"> {p.name}</span></button>
           </span>}
         </div>
       ))}
@@ -428,7 +429,7 @@ function CalendarFeed() {
       {state?.active && !link && <p className="faint" style={{ margin: 0 }}>{t("A link is active since {date}.").replace("{date}", state.createdAt ? new Date(state.createdAt).toLocaleDateString() : "—")}</p>}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <button className="btn sm" disabled={busy} onClick={() => run(async () => {
-          if (state?.active && !confirm(t("Replace the link? Your current link stops working at once."))) return;
+          if (state?.active && !(await ask(t("Replace the link? Your current link stops working at once."), t("Replace link")))) return;
           try { const r = await api.createOncallCalendar(!!state?.active); setLink(r.url); setNote(r.replaced ? t("New link created. Your previous link has stopped working.") : ""); setState({ active: true, createdAt: r.createdAt }); } catch (x) { setErr(message(x)); }
         })}>{state?.active ? t("Replace link") : t("Create link")}</button>
         {state?.active && <button className="btn sm" disabled={busy} onClick={() => run(async () => { try { await api.revokeOncallCalendar(); setLink(""); setState({ active: false, createdAt: null }); } catch (x) { setErr(message(x)); } })}>{t("Turn off link")}</button>}

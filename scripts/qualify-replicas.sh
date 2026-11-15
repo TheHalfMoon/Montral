@@ -154,9 +154,13 @@ restart_inbox="$(api POST /api/hooks/inboxes '{"name":"Restart inbox"}')"
 restart_inbox_id="$(json "['id']" <<<"$restart_inbox")"
 restart_path="$(json "['path']" <<<"$restart_inbox")"
 # about 100 posts a minute: under the inbox receive limit (120 per minute), so every post must be accepted
-( set +e; while :; do curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -H "origin: $base" -b "$jar" "$base/api/monitors" >> "$codes"; sleep 0.1; done ) &
+# Killing the generator subshell can orphan curl: PostgreSQL may commit its POST
+# before the response is written to $posts, making exact storage checks flaky.
+# Cooperative stop + bounded drain preserves the real exactly-once assertion.
+stop_traffic="$work/stop-traffic"
+( set +e; while [[ ! -e "$stop_traffic" ]]; do curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -H "origin: $base" -b "$jar" "$base/api/monitors" >> "$codes"; sleep 0.1; done ) &
 load_pid=$!
-( set +e; n=0; while :; do n=$((n + 1)); curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -X POST -H 'content-type: application/json' --data "{\"restart\":${n}}" "$base$restart_path" >> "$posts"; sleep 0.6; done ) &
+( set +e; n=0; while [[ ! -e "$stop_traffic" ]]; do n=$((n + 1)); curl -s --max-time 15 -o /dev/null -w '%{http_code}\n' -X POST -H 'content-type: application/json' --data "{\"restart\":${n}}" "$base$restart_path" >> "$posts"; sleep 0.6; done ) &
 post_pid=$!
 sleep 5
 for id in $(app_ids); do
@@ -173,7 +177,11 @@ for _ in $(seq 1 120); do
   [[ $(wc -l < "$codes") -ge 100 && $(wc -l < "$posts") -ge 40 ]] && break
   sleep 1
 done
-kill "$load_pid" "$post_pid" 2>/dev/null || true; wait "$load_pid" "$post_pid" 2>/dev/null || true; load_pid=""; post_pid=""
+# Both curls have a 15 s deadline. Drain all in-flight requests to record their
+# final response before comparing client acknowledgements against stored rows.
+touch "$stop_traffic"
+wait "$load_pid" "$post_pid"
+load_pid=""; post_pid=""
 total="$(wc -l < "$codes")"
 bad="$(grep -vc '^200$' "$codes" || true)"
 (( total >= 100 )) || { echo "only ${total} requests during the rolling restart" >&2; exit 1; }

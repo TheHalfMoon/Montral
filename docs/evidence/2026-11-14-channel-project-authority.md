@@ -1,5 +1,7 @@
 # Channel project authority
 
+Status: merged in #141 (`7d56728`) after 16/16 exact-head checks, included in `main@d49e2cf` with all 11/11 integrated workflows successful. Final isolated full API run passed 1,595 with zero failures and 31 skips. The preparation notes below are chronological evidence; pending reruns in those notes are superseded by this result.
+
 ## Boundary
 
 Two distinct findings share this fix: scoped channel-delete conflicts disclosed other projects' monitor identities, and explicit monitor channel references could select another project's destination. Workspace-wide channels remain shared recipients. Project-bound channels may receive only events from their own project and organization.

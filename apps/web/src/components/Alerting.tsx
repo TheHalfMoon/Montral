@@ -5,7 +5,7 @@ import { api, ago, type AlertDelivery, type Channel, type OncallSchedule, type P
 import { deliveryReason, deliveryState, stateClass } from "../lib/delivery";
 import { ask } from "../lib/confirm";
 import Modal from "./Modal";
-import { appendPage, nextBefore, nextLimit } from "../lib/log-pages";
+import { appendPage } from "../lib/log-pages";
 import { toast } from "../lib/toast";
 
 const TYPES: { id: Channel["type"]; label: string; desc: string }[] = [

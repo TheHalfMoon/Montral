@@ -37,13 +37,16 @@ def verify(sha: str, runs: list[dict]) -> list[str]:
         if not matches:
             errors.append(f"{name}: missing exact-SHA push run")
             continue
-        # Multiple attempts are allowed only when each is the same exact SHA.
-        # GitHub's databaseId distinguishes runs; never mix evidence from other commits.
-        if not any(r.get("status") == "completed"
-                   and r.get("conclusion") == "success"
-                   and isinstance(r.get("databaseId"), int)
-                   and r["databaseId"] > 0 for r in matches):
-            errors.append(f"{name}: no completed successful run with a valid run ID")
+        # Newer workflow runs supersede older successes on this SHA.
+        # GitHub CLI returns the latest attempt for each databaseId.
+        valid = [run for run in matches
+                 if type(run.get("databaseId")) is int and run["databaseId"] > 0]
+        if not valid:
+            errors.append(f"{name}: no valid workflow run ID")
+            continue
+        latest = max(valid, key=lambda run: run["databaseId"])
+        if latest.get("status") != "completed" or latest.get("conclusion") != "success":
+            errors.append(f"{name}: latest exact-SHA push run is not successful")
     return errors
 
 

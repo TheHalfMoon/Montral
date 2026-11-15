@@ -176,7 +176,7 @@ export async function linkIdentity(q: Query, p: { userId: string; connectionId: 
  * Bind an SSO session to the exact live workspace connection the callback authenticated with.
  *
  * The shared row lock makes insertion order with an owner's UPDATE/DELETE unambiguous:
- * - marker first: the subsequent configuration change waits, then revokes it;
+ * - marker first: the owner's update/delete waits; an issuer/client replacement or delete then revokes it;
  * - configuration change first: the stale revision cannot create a marker.
  * This is a single statement (and therefore one transaction even without a scoped caller).
  */

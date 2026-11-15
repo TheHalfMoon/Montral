@@ -1576,10 +1576,23 @@ export function createRepo(db: Db): Repo {
           and(
             eq(schema.alertDelivery.organizationId, orgId),
             or(eq(schema.alertDelivery.projectId, projectId), isNull(schema.alertDelivery.projectId)),
-            o.before ? lt(schema.alertDelivery.createdAt, o.before) : undefined,
+            // Stable keyset even when thousands of deliveries share one timestamp. The
+            // cursor is resolved within this same workspace/project scope (workspace-wide
+            // deliveries are visible too), so other tenants' row IDs reveal nothing.
+            // Preserve the older timestamp-only cursor for existing API clients.
+            o.beforeId
+              ? sql`exists (
+                  select 1 from alert_delivery boundary
+                  where boundary.id = ${o.beforeId}::uuid
+                    and boundary.organization_id = ${orgId}
+                    and (boundary.project_id = ${projectId}::uuid or boundary.project_id is null)
+                    and (${schema.alertDelivery.createdAt}, ${schema.alertDelivery.id})
+                        < (boundary.created_at, boundary.id)
+                )`
+              : o.before ? lt(schema.alertDelivery.createdAt, o.before) : undefined,
           ),
         )
-        .orderBy(desc(schema.alertDelivery.createdAt))
+        .orderBy(desc(schema.alertDelivery.createdAt), desc(schema.alertDelivery.id))
         .limit(o.limit),
     async subscribersFor(orgId, monitorId, projectId) {
       const base = db

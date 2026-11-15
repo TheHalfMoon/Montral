@@ -24,7 +24,11 @@ const summary = (d: PushDevice) => ({ id: d.id, platform: d.platform, environmen
 /** Registrations of phones for push alerts. They belong to the signed-in person (session or API key), not to a workspace. */
 export const push = new Hono<AppEnv>()
   .get("/devices", async (c) => c.json((await c.get("repo").listPushDevices(c.get("userId"))).map(shape)))
-  .get("/devices/summaries", async (c) => c.json((await c.get("repo").listPushDevices(c.get("userId"))).map(summary)))
+  .get("/devices/summaries", async (c) => {
+    const userId = c.get("userId");
+    if (!userId) return c.json({ error: "This credential is not tied to a user" }, 403);
+    return c.json((await c.get("repo").listPushDevices(userId)).map(summary));
+  })
   .put("/devices", zValidator("json", body), async (c) => {
     const repo = c.get("repo");
     const userId = c.get("userId");

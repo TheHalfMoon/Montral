@@ -6,6 +6,7 @@ import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
 import { ask } from "../lib/confirm";
 import Modal from "./Modal";
+import Segmented from "./Segmented";
 
 type Key = { id: string; name: string | null; start: string | null; createdAt: string; metadata?: { projectIds?: string[] } | null };
 
@@ -156,10 +157,7 @@ export default function ApiKeys() {
             <h2 style={{ fontSize: 30 }}>{t("New API key")}</h2>
             <label className="fld">{t("Name")}<input className="in" required autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder={t("CI deploy hook")} /></label>
             <div className="fld">{t("Project access")}
-              <div className="seg">
-                <i className={all ? "on" : ""} onClick={() => setAll(true)}>{t("All projects")}</i>
-                <i className={!all ? "on" : ""} onClick={() => setAll(false)}>{t("Selected projects")}</i>
-              </div>
+              <Segmented label={t("Project access")} value={all ? "all" : "some"} onChange={(v) => setAll(v === "all")} options={[{ value: "all", label: t("All projects") }, { value: "some", label: t("Selected projects") }]} />
               {!all && (
                 <div style={{ display: "grid", gap: 2, marginTop: 6, padding: 6, border: "1px solid var(--line)", borderRadius: 12, maxHeight: 180, overflow: "auto" }}>
                   {projects.map((p) => (

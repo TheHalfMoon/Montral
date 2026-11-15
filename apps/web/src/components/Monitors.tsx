@@ -13,6 +13,7 @@ import { draftsOf, JourneyEditor, journeyOf, SECRET_MASK, type StepDraft } from 
 import OnboardingChecklist from "./Onboarding";
 import { showOnboarding } from "../lib/onboarding";
 import Modal from "./Modal";
+import Segmented from "./Segmented";
 
 const TYPE_LABEL: Record<Monitor["type"], string> = { http: "HTTP", tcp: "TCP", dns: "DNS", heartbeat: "CRON", postgres: "PG", mysql: "MYSQL", redis: "REDIS", websocket: "WS", domain: "DOMAIN", certificate: "CERT", ping: "PING", browser: "WEB" };
 
@@ -438,13 +439,19 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
           </label>
         )}
         <div className="fld">{t("Check every")}
-          <div className="seg">
-            {![60, 300, 900].includes(f.intervalSec) && <i className="on">{f.intervalSec}s</i>}
-            {([[60, "1 minute"], [300, "5 minutes"], [900, "15 minutes"]] as const).map(([v, l]) => {
-              const locked = f.type !== "heartbeat" && v < floor && v < (monitor?.intervalSec ?? Infinity);
-              return <i key={v} className={`${f.intervalSec === v ? "on" : ""}${locked ? " locked" : ""}`} title={locked ? t("Not available on your plan") : undefined} onClick={() => !locked && set("intervalSec", v)}>{t(l)}</i>;
-            })}
-          </div>
+          <Segmented
+            label={t("Check every")}
+            value={f.intervalSec}
+            onChange={(v) => set("intervalSec", v)}
+            options={[
+              // an interval set elsewhere (API, import) stays visible and selected
+              ...(![60, 300, 900].includes(f.intervalSec) ? [{ value: f.intervalSec, label: `${f.intervalSec}s` }] : []),
+              ...([[60, "1 minute"], [300, "5 minutes"], [900, "15 minutes"]] as const).map(([v, l]) => {
+                const locked = f.type !== "heartbeat" && v < floor && v < (monitor?.intervalSec ?? Infinity);
+                return { value: v as number, label: t(l), locked, title: locked ? t("Not available on your plan") : undefined };
+              }),
+            ]}
+          />
         </div>
         {f.type !== "heartbeat" && (
           <div style={{ display: "grid", gridTemplateColumns: f.type === "http" ? "1fr 1fr" : "1fr", gap: 10 }}>

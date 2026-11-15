@@ -7,6 +7,7 @@ import { authClient } from "../lib/auth-client";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
 import { SSO_ERRORS, startSso } from "../lib/sso";
+import Segmented from "./Segmented";
 
 type Me = { name?: string; email?: string; locale?: string | null; emailVerified?: boolean; twoFactorEnabled?: boolean | null };
 
@@ -278,9 +279,7 @@ export default function Account() {
           <div className="card sect">
             <h3>{t("Language")}</h3>
             <p className="muted" style={{ marginBottom: 12 }}>{t("Used for the app and for emails we send you, such as alerts, invitations and password resets.")}</p>
-            <div className="seg" style={{ maxWidth: 360 }}>
-              {(Object.keys(LOCALES) as Locale[]).map((l) => <i key={l} className={current === l ? "on" : ""} onClick={() => pick(l)}>{LOCALES[l]}</i>)}
-            </div>
+            <Segmented label={t("Language")} style={{ maxWidth: 360 }} value={current} onChange={(l) => pick(l)} options={(Object.keys(LOCALES) as Locale[]).map((l) => ({ value: l, label: LOCALES[l] }))} />
             {saved && <p className="faint" style={{ marginTop: 10, fontSize: 13 }}>{t("Saved")}</p>}
           </div>
         )}

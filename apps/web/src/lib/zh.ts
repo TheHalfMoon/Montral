@@ -887,4 +887,6 @@ export const zh: Record<string, string> = {
   "Are you sure?": "确定要继续吗？", "End series": "结束系列", "Delete policy": "删除策略", "Delete connection": "删除连接",
   "Delete status page": "删除状态页", "Sign everyone out": "全部登出", "Remove domain": "移除域名", "Delete inbox": "删除收件箱",
   "Delete request": "删除请求",
+  Visibility: "可见范围", "Change role to admin": "改为管理员", "Change role to member": "改为成员", "Role updated.": "角色已更新。",
+  "Could not change the role": "无法更改角色",
 };

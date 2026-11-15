@@ -195,7 +195,7 @@ export async function markSsoSession(q: Query, sessionId: string, conn: SsoConne
          FOR SHARE
      )
      INSERT INTO sso_session (session_id, connection_id)
-       SELECT $1::text, connection_id FROM live
+       SELECT $1::text, connection_id FROM live WHERE true
        ON CONFLICT (session_id) DO NOTHING
        RETURNING session_id`,
     [sessionId, conn.id, conn.orgId, conn.configRevision],

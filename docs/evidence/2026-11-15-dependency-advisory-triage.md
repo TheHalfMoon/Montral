@@ -16,6 +16,10 @@ Only dependency and lockfile changes, no application behavior changes:
 
 Upgrade simulation against registry metadata reported these resolved versions as patched, with no known OSV advisories at the time of the check. Astro's minor update was **review-recommended** because its minimum Node version increased; the repository already requires Node 22.23.4+/24.22.1+, consistent with that requirement. Simulation is not a substitute for application tests.
 
+## Candidate lockfile re-audit
+
+A second registry/OSV audit of the uploaded branch head `f39bc6c4f3b728568f411f9083b3ab4063895ec0` checked **606 of 609** entries and reported **2 known-vulnerable dependency versions** (down from 10 of 566 checked on the baseline). The remaining findings were exactly `fast-uri@3.1.8` and `esbuild@0.18.20`. The audit remains **partial**: only 100 entries received full license/install-script detail, and three entries were not advisory-checked. This is a decrease in known-vulnerable versions, not a guarantee of exploitability or a complete security assessment.
+
 ## Residual and blocked items
 
 - `fast-uri@3.1.8` has advisory matches, while an available fully clean major release is 4.x. We are **not** forcing that breaking transitive upgrade without identifying dependents and testing them; evaluate exposure and migration separately.

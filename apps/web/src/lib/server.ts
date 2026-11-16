@@ -6,7 +6,7 @@ export const API_ORIGIN: string = (typeof process !== "undefined" ? process.env.
 
 /** Where "Powered by Montral" points: the product's own site. Set PRODUCT_URL (a Worker var, or the process environment) to change it. */
 export const PRODUCT_URL: string =
-  (typeof process !== "undefined" ? process.env.PRODUCT_URL : undefined) ?? (env as { PRODUCT_URL?: string }).PRODUCT_URL ?? import.meta.env.PRODUCT_URL ?? "https://montral.invalid";
+  (typeof process !== "undefined" ? process.env.PRODUCT_URL : undefined) ?? (env as { PRODUCT_URL?: string }).PRODUCT_URL ?? import.meta.env.PRODUCT_URL ?? "https://github.com/TheHalfMoon/Montral";
 
 /** In production the API Worker is reached through a service binding (a same-zone fetch would not hit its route). */
 // (in `astro dev` the binding points at a Worker that is not running, so use API_ORIGIN there)

@@ -346,8 +346,8 @@ export const TOOLS: Tool[] = [
     name: "Uptime Kuma",
     title: l("Uptime Kuma alternative", "Uptime Kuma 替代方案"),
     description: l(
-      "Montral vs Uptime Kuma: two open-source, self-hostable uptime tools compared, with multi-region probes, a hosted option and an API.",
-      "Montral 与 Uptime Kuma 对比：两个开源、可自托管的可用性监控工具，涉及多区域探针、托管选项与 API。",
+      "Compare Montral and Uptime Kuma: open-source uptime tools, multi-region probes and an API. Montral Cloud is not publicly available.",
+      "Montral 与 Uptime Kuma 对比：两个开源、可自托管的可用性监控工具，涉及多区域探针、API，以及尚未公开上线的未来 Cloud 版本。",
     ),
     lede: l(
       "Uptime Kuma is a popular open-source tool you run yourself. Montral is also open source and self-hostable, and differs in multi-region probes, workspaces with roles and an MCP server. Montral Cloud is not publicly launched.",

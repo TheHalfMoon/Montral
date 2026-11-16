@@ -24,8 +24,12 @@ export function summarizeAdvisoryReport(report) {
     result[severity] = count;
   }
   const total = SEVERITIES.reduce((count, severity) => count + result[severity], 0);
-  if (total === 0 && Object.keys(report.advisories).length > 0) {
+  const advisoryCount = Object.keys(report.advisories).length;
+  if (total === 0 && advisoryCount > 0) {
     throw new Error("pnpm audit metadata reports zero issues but includes advisories");
+  }
+  if (total > 0 && advisoryCount === 0) {
+    throw new Error("pnpm audit metadata reports issues but includes no advisory records");
   }
   return {
     counts: result,

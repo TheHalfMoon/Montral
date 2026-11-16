@@ -81,7 +81,7 @@ Astro.response.headers.set("cache-control", privateResponse || hist.privateRespo
 ---
 <Base title={`${data.page.title} · Status`}>
   <Fragment slot="head">
-    {!hideBrand && <meta name="generator" content="montral.invalid" />}
+    {!hideBrand && <meta name="generator" content="Montral" />}
     <link rel="canonical" href={canon} />
     <link rel="alternate" type="application/rss+xml" title={`${data.page.title} status`} href={`${base}${feed("rss.xml")}`} />
     {!customDomain && <link rel="alternate" hreflang="en" href={`${base}/status/${slug}`} />}

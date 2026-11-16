@@ -25,7 +25,7 @@ describe("account session refresh sequence", () => {
   });
 
   it("wires the fence and clears both identity and rows for network and freshness errors", () => {
-    const account = readFileSync(new URL("../components/Account.tsx", import.meta.url), "utf8");
+    const account = readFileSync(new URL("../components/Account.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
     const sessions = account.slice(account.indexOf("function Sessions()"), account.indexOf("function PasswordChange()"));
     expect(sessions).toContain("const version = requestFence.current.start()");
     expect(sessions.match(/requestFence\.current\.isLatest\(version\)/g)).toHaveLength(2);

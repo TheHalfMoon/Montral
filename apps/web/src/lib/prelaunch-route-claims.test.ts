@@ -22,7 +22,7 @@ describe("public Web-first copy before Cloud launch", () => {
       expect(page).toContain("Montral Cloud \u5c1a\u672a\u516c\u5f00\u4e0a\u7ebf");
     }
     expect(seo).not.toContain("a hosted option and an API");
-    expect(seo).toContain("future Cloud edition that is not publicly launched");
+    expect(seo).toContain("Montral Cloud is not publicly available.");
   });
 
   it("identifies Cloud changelog content as development history, not an active service", () => {

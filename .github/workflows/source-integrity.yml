@@ -26,6 +26,19 @@ jobs:
           node scripts/landing-csp.mjs --check
       - name: Test exact-main qualification evidence guard
         run: python3 -m unittest discover -s scripts -p test_verify_main_workflows.py
+      - name: Prepare free pnpm advisory audit (no package installation)
+        uses: pnpm/action-setup@v4
+        with:
+          version: "10.0.0"
+          run_install: false
+      - name: Prepare supported Node.js for advisory audit
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.22.1"
+      - name: Enforce high/critical production-lock advisory gate
+        run: |
+          node --test scripts/verify-dependency-advisories.test.mjs
+          node scripts/verify-dependency-advisories.mjs
       - name: Verify Montral license
         run: |
           test -s LICENSE

@@ -1,11 +1,12 @@
 import { t } from "../lib/i18n";
 import { LOCALES, type Locale } from "../lib/i18n";
 import { go, switchLocale } from "../lib/locale-path";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, type PushDevice } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { authClient } from "../lib/auth-client";
 import { attemptAuthAction, changePasswordWithCleanup } from "../lib/account-auth-actions";
+import { createLatestRequestFence } from "../lib/account-session-fence";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
 import { SSO_ERRORS, startSso } from "../lib/sso";
@@ -284,33 +285,47 @@ function Sessions() {
   const [stale, setStale] = useState(false);
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState("");
+  // A later refresh supersedes earlier responses (e.g. after a session was revoked).
+  const requestFence = useRef(createLatestRequestFence());
   const load = async () => {
+    const version = requestFence.current.start();
     setErr(""); setStale(false);
-    const [l, s] = await Promise.all([authClient.listSessions(), authClient.getSession()]);
-    if (l.error) {
+    // A previous session id must not authorize sign-out buttons while identity is unresolved.
+    setCurrent(null);
+    setList(null);
+    try {
+      const [l, s] = await Promise.all([authClient.listSessions(), authClient.getSession()]);
+      if (!requestFence.current.isLatest(version)) return;
+      if (l.error) {
+        setList([]);
+        if (l.error.code === "SESSION_NOT_FRESH") setStale(true);
+        else setErr(t("Could not load sessions."));
+        return;
+      }
+      // The client may hand back Date objects or ISO strings. A malformed date is a load failure.
+      const iso = (v: unknown) => new Date(v as string | Date).toISOString();
+      const rows: Sess[] = (l.data ?? []).map((row) => ({
+        id: row.id, token: row.token, userAgent: row.userAgent, ipAddress: row.ipAddress,
+        createdAt: iso(row.createdAt), updatedAt: iso(row.updatedAt),
+      })).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+      setCurrent((s.data as { session?: { id: string } } | null)?.session?.id ?? null);
+      setList(rows);
+    } catch {
+      if (!requestFence.current.isLatest(version)) return;
+      setCurrent(null);
       setList([]);
-      if (l.error.code === "SESSION_NOT_FRESH") setStale(true);
-      else setErr(t("Could not load sessions."));
-      return;
+      setErr(t("Could not load sessions."));
     }
-    setCurrent((s.data as { session?: { id: string } } | null)?.session?.id ?? null);
-    // the client may hand back Date objects or ISO strings; keep ISO strings
-    const iso = (v: unknown) => new Date(v as string | Date).toISOString();
-    const rows: Sess[] = (l.data ?? []).map((s) => ({ id: s.id, token: s.token, userAgent: s.userAgent, ipAddress: s.ipAddress, createdAt: iso(s.createdAt), updatedAt: iso(s.updatedAt) }))
-      .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
-    setList(rows);
   };
   useEffect(() => {
-    const reload = () => { load().catch(() => { setList([]); setErr(t("Could not load sessions.")); }); };
+    const reload = () => { void load(); };
     reload();
     window.addEventListener(SESSIONS_CHANGED, reload);
-    return () => window.removeEventListener(SESSIONS_CHANGED, reload);
+    return () => {
+      requestFence.current.invalidate();
+      window.removeEventListener(SESSIONS_CHANGED, reload);
+    };
   }, []);
-  // Do not present cached rows as current when a refresh fails after a security action.
-  const refreshAfterAction = async () => {
-    try { await load(); }
-    catch { setCurrent(null); setList(null); setErr(t("Could not load sessions.")); }
-  };
   const end = async (s: Sess) => {
     setBusy(s.id);
     try {
@@ -320,7 +335,7 @@ function Sessions() {
         return;
       }
       toast(t("Signed out of that session."));
-      await refreshAfterAction();
+      await load();
     } finally { setBusy(""); }
   };
   const endOthers = async () => {
@@ -333,7 +348,7 @@ function Sessions() {
         return;
       }
       toast(t("Signed out of every other session."));
-      await refreshAfterAction();
+      await load();
     } finally { setBusy(""); }
   };
   const others = current === null ? [] : (list ?? []).filter((s) => s.id !== current);

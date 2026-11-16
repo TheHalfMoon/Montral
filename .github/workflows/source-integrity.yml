@@ -13,6 +13,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -55,6 +57,12 @@ jobs:
         run: |
           node --test scripts/verify-secret-scanner.test.mjs
           node scripts/verify-secret-scanner.mjs
+      - name: Reject newly committed secrets after archived source baseline
+        env:
+          GITLEAKS_BIN: ${{ runner.temp }}/gitleaks
+        run: |
+          node --test scripts/verify-secret-history.test.mjs
+          node scripts/verify-secret-history.mjs
       - name: Verify Montral license
         run: |
           test -s LICENSE

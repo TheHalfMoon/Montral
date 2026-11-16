@@ -1,47 +1,44 @@
 ---
 import Doc from "../layouts/Doc.astro";
-import { iosInstall } from "../lib/ios";
-const install = iosInstall();
+// Keep /ios as a stable link for existing bookmarks. Montral's current delivery is web-first.
 ---
-<Doc titleZh="iOS 应用" descriptionZh="Montral iOS 应用：在手机上查看监控和故障，接收推送告警并确认故障。" description="The Montral iOS app: see your monitors and incidents, get push alerts and acknowledge an incident from your phone." title="iOS app" updated="2026-10-14">
+<Doc
+  title="Install the web app"
+  titleZh="安装网页应用"
+  description="Use the Montral monitoring dashboard in your browser or add its web app to your home screen. No native iOS app is distributed."
+  descriptionZh="在浏览器中使用 Montral 监控面板，或将网页应用添加到主屏幕。目前不提供原生 iOS 应用。"
+  updated="2026-11-16"
+>
   <div lang="en">
-    <h1>Montral for iOS</h1>
-    <p class="lede">Your monitors, incidents and status in your pocket. Get a push alert the moment a monitor goes down and acknowledge the incident without opening a laptop.</p>
-    {install.kind === "soon" && <p><strong>Coming soon.</strong> The app is not public yet. Follow the <a href="/changelog">changelog</a> to hear when it is available.</p>}
-    {install.kind === "testflight" && <p><a class="btn" href={install.url}><strong>Join the beta on TestFlight</strong></a></p>}
-    {install.kind === "appstore" && <p><a class="btn" href={install.url}><strong>Download on the App Store</strong></a></p>}
-    <h2>What you can do</h2>
-    <ul>
-      <li>See every monitor and its current status, and open incidents at a glance.</li>
-      <li>Receive push alerts for down and recovery events, in your own language.</li>
-      <li>Acknowledge an incident from the notification or the incident list.</li>
-      <li>Sign in with your account, with two-factor authentication and a trusted device that stays trusted for 30 days.</li>
-    </ul>
-    <h2>Requirements</h2>
-    <ul>
-      <li>An Montral account on <a href="/signup">montral.invalid</a>, or your own self-hosted server.</li>
-      <li>An iPhone running a current version of iOS.</li>
-    </ul>
-    <p>Questions or problems? Open an issue on <a href="https://github.com/TheHalfMoon/Montral">GitHub</a>. See also our <a href="/privacy">Privacy Policy</a> and <a href="/terms">Terms</a>.</p>
+    <h1>Montral on your phone</h1>
+    <p class="lede">Montral is a responsive web app. Open it in your browser or install it as a Progressive Web App (PWA) on a supported device. No native Montral iOS app or TestFlight beta is distributed with this project.</p>
+    <p><a class="btn" href="/app"><strong>Open Montral web app</strong></a></p>
+    <h2>Install on iPhone or iPad</h2>
+    <ol>
+      <li>Open your Montral server in Safari and sign in.</li>
+      <li>Tap <strong>Share</strong>, then <strong>Add to Home Screen</strong>.</li>
+      <li>Tap <strong>Add</strong>. Open Montral from your Home Screen like other apps.</li>
+    </ol>
+    <h2>Install on a computer or Android</h2>
+    <p>In a compatible browser, open your Montral server and choose the browser's <strong>Install app</strong> or <strong>Add to Home screen</strong> option if offered. You can always use the regular browser tab instead.</p>
+    <h2>What works offline?</h2>
+    <p>Only the static interface shell and versioned assets can be cached. Live monitors, incidents, alerts and account information require a connection to your Montral server. Installing the PWA does not create a separate native client or enable APNs notifications.</p>
+    <p>See <a href="/docs/self-host">self-hosting instructions</a> or <a href="https://github.com/TheHalfMoon/Montral">the source on GitHub</a>. Public hosting and native app distribution have not been announced.</p>
   </div>
   <div lang="zh-CN">
-    <h1>Montral iOS 应用</h1>
-    <p class="lede">监控、故障和状态尽在手机。监控一旦宕机立刻收到推送，不必打开电脑就能确认故障。</p>
-    {install.kind === "soon" && <p><strong>即将上线。</strong>应用暂未公开发布，可关注<a href="/changelog">更新日志</a>获取上线消息。</p>}
-    {install.kind === "testflight" && <p><a class="btn" href={install.url}><strong>通过 TestFlight 加入测试</strong></a></p>}
-    {install.kind === "appstore" && <p><a class="btn" href={install.url}><strong>在 App Store 下载</strong></a></p>}
-    <h2>你可以做什么</h2>
-    <ul>
-      <li>一眼查看所有监控的当前状态和未解决的故障。</li>
-      <li>接收宕机与恢复的推送告警，并使用你自己的语言。</li>
-      <li>在通知或故障列表中直接确认故障。</li>
-      <li>使用账号登录，支持两步验证，受信任设备 30 天内无需再次输入验证码。</li>
-    </ul>
-    <h2>使用要求</h2>
-    <ul>
-      <li>在 <a href="/signup">montral.invalid</a> 注册的账号，或你自己部署的服务器。</li>
-      <li>运行较新 iOS 版本的 iPhone。</li>
-    </ul>
-    <p>有问题？欢迎在 <a href="https://github.com/TheHalfMoon/Montral">GitHub</a> 提 issue。另见<a href="/privacy">隐私政策</a>和<a href="/terms">服务条款</a>。</p>
+    <h1>在手机上使用 Montral</h1>
+    <p class="lede">Montral 是响应式网页应用。你可以在浏览器中使用，也可以在支持的设备上将其安装为渐进式网页应用（PWA）。本项目目前不提供原生 iOS 应用或 TestFlight 公开测试版。</p>
+    <p><a class="btn" href="/app"><strong>打开 Montral 网页应用</strong></a></p>
+    <h2>在 iPhone 或 iPad 上安装</h2>
+    <ol>
+      <li>在 Safari 中打开自己的 Montral 服务器并登录。</li>
+      <li>点击<strong>分享</strong>，然后选择<strong>添加到主屏幕</strong>。</li>
+      <li>点击<strong>添加</strong>，即可从主屏幕打开 Montral。</li>
+    </ol>
+    <h2>在电脑或 Android 上安装</h2>
+    <p>在兼容的浏览器中打开 Montral 服务器。如果浏览器提供<strong>安装应用</strong>或<strong>添加到主屏幕</strong>选项，可以选择该选项，也可以继续使用普通浏览器标签页。</p>
+    <h2>离线时可以使用什么？</h2>
+    <p>只有静态界面和带版本的资源文件可以缓存。实时监控、故障、告警和账号信息仍需要连接 Montral 服务器。安装 PWA 并不会创建独立原生客户端，也不会自动启用 APNs 推送。</p>
+    <p>请参阅<a href="/docs/self-host">自托管指南</a>或<a href="https://github.com/TheHalfMoon/Montral">GitHub 源码</a>。尚未宣布公共托管服务或原生应用发行计划。</p>
   </div>
 </Doc>

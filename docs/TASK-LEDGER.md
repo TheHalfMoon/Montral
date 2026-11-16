@@ -6,6 +6,19 @@ intention or documentation alone. Publication stays on hold until the owner says
 
 Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** later.
 
+## Security and exact-main release checkpoint (2026-11-16, 20:08 Asia/Riyadh)
+
+This is a **dated evidence snapshot**, not a production or release authorization; historical rows below remain unchanged. See [full exact-SHA CI evidence](evidence/2026-11-16-exact-main-qualification.md).
+
+| Change / gate | Evidence | Status at checkpoint |
+|---|---|---|
+| #170, #171, #174 | Narrow transitive esbuild advisory mitigation, read-only dependency advisory CI gate, and contradictory-audit-report fail-closed fix | **Merged**, with **11/11 exact-main PUSH workflows** at `4e378620a1035a9c1ddc455ceb4fbf13bebf8390` |
+| #173 | Gitleaks v8.30.1 SHA-256-pinned current-tree scan with 21 exact reviewed synthetic test/doc matches, 0 new; 12/12 unit tests | **Merged** as `fa6bce8`; **11/11 exact-main push workflows succeeded** at the latest main including macOS |
+| #175 | Non-shallow, post-baseline commit-history secret scan; detects committed-then-deleted token patterns; 9/9 unit tests and real Windows/macOS qualification | **OPEN** awaiting 16/16 exact-head PR CI; no integration claim |
+| #169 | Native GitHub security scanners unavailable; 65 old pattern matches in six historical commits, including removed checksum manifest and vendor samples | **OPEN**: archived vendor example status unverified, not implicitly approved or revoked |
+| #168 | Physical Safari automation on changed public landing HTML | **OPEN**: owner-controlled Safari Allow Remote Automation setting disabled; historical 8/8 not current-page proof |
+| #158 / authorization | Draft legal/privacy content; independent security/provider/privacy/operations review | **OPEN**: Community publication HOLD pending `GREEN LIGHT MONTRAL`; Cloud/BYOC NO-GO |
+
 ## Release blockers and defects
 
 | # | Item | Sev | Status | Evidence |

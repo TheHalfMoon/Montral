@@ -14,6 +14,8 @@ describe("prelaunch hosted-service claims", () => {
     expect(comparisons).toContain("Cloud is not publicly available or priced yet");
     expect(comparisons).not.toContain("The hosted service has plans");
     expect(comparisons).not.toContain("you either use the hosted service or run it yourself");
+    expect(comparisons).not.toContain("depends on the hosted plan");
+    expect(comparisons).not.toContain("取决于托管套餐");
     expect(useCases).toContain("Cloud is not publicly available or priced yet");
     expect(useCases).not.toContain("The hosted service has plans");
     expect(useCases).toContain("Cloud 尚未公开上线或定价");

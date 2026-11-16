@@ -567,8 +567,8 @@ export const SEGMENTS: Segment[] = [
       },
     ],
     statusPage: l(
-      "Give each client a status page that shows only their monitors, with a title and a light or dark theme. The page can carry a link to the client's own site. Whether the Montral branding can be hidden depends on the hosted plan; a self-hosted instance can always hide it. A client's status page lives under your domain unless you self-host it on theirs.",
-      "为每个客户创建只展示其监控项的状态页，可设置标题以及浅色或深色主题，并附上指向客户官网的链接。能否隐藏 Montral 品牌标识取决于托管套餐；自托管实例始终可以隐藏。除非你把它自托管在客户的域名下，否则客户的状态页位于你的域名之下。",
+      "Give each client a status page that shows only their monitors, with a title and a light or dark theme. The page can carry a link to the client's own site. Montral Community self-hosted instances can hide branding; the policy for any future Cloud edition has not been published. A client's status page lives under your domain unless you self-host it on theirs.",
+      "为每个客户创建只展示其监控项的状态页，可设置标题以及浅色或深色主题，并附上指向客户官网的链接。Montral Community 自托管实例可隐藏品牌标识；未来 Cloud 版本的相关政策尚未公布。除非你把它自托管在客户的域名下，否则客户的状态页位于你的域名之下。",
     ),
     alerting: l(
       "Alert channels belong to a project, so each client's channels stay separate from the others. Use email for clients, Slack or Telegram for your own team, and add PagerDuty only for the clients whose sites you carry an on-call duty for.",

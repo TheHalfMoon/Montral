@@ -5,7 +5,7 @@ import type { L } from "../../lib/changelog";
 
 const l = (en: string, zh: string): L => ({ en, zh });
 const faq: Faq[] = [
-  { q: l("What is Montral?", "Montral 是什么？"), a: l("Montral is open-source uptime monitoring with incidents, alerts and public status pages. It runs as a hosted service, in one Docker container with Postgres, or on Cloudflare Workers.", "Montral 是开源的可用性监控，包含事件、告警和公开状态页。它可以作为托管服务使用，也可以用一个 Docker 容器加 Postgres 运行，或部署在 Cloudflare Workers 上。") },
+  { q: l("What is Montral?", "Montral 是什么？"), a: l("Montral is open-source uptime monitoring with incidents, alerts and public status pages. The free Community edition runs with Docker and PostgreSQL or on Cloudflare Workers with PostgreSQL; Montral Cloud is not publicly available.", "Montral 是开源的可用性监控，包含事件、告警和公开状态页。免费的 Community 版可通过 Docker 与 PostgreSQL 自托管，也可部署到 Cloudflare Workers 并使用 PostgreSQL；Montral Cloud 尚未公开上线。") },
   { q: l("Which monitor types does Montral support?", "Montral 支持哪些监控类型？"), a: MONTRAL.types },
   { q: l("What is missing from Montral?", "Montral 缺少什么？"), a: l(MONTRAL_GAPS.map((g) => g.en).join(" "), MONTRAL_GAPS.map((g) => g.zh).join("")) },
 ];

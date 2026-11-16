@@ -720,7 +720,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
     </ul>
     <h3>工作方式</h3>
     <p>成员在应用里注册自己的手机；<code>push</code> 渠道会通知工作区中所有已注册设备的成员，并按各自的语言显示。所有者或管理员注册手机时，如果工作区还没有该渠道，会自动创建名为 <em>Mobile app</em> 的渠道。Apple 反馈已失效的手机会被自动清除。</p>
-    <p><strong>重要：</strong>APNs 密钥绑定你的 Apple 团队和应用的 bundle id，手机令牌也只对产生它的应用有效。因此官方 Montral 应用只能接收托管服务发出的推送。自托管服务器上，推送适用于你自己用自己的 bundle id 和密钥构建并签名的应用。让官方应用接收自托管服务器推送的中继服务尚未实现。</p>
+    <p><strong>重要：</strong>APNs 密钥绑定你的 Apple 团队和应用的 bundle id，手机令牌也只对产生它的应用有效。本仓库不提供已签名发布的 Montral 官方原生应用。自托管服务器的 APNs 推送只适用于你使用自己的 bundle id 和密钥另行构建并签名的兼容应用；这里也没有为第三方原生客户端提供推送中继。</p>
     <h2 id="custom-domains-zh">状态页自定义域名</h2>
     <p>Docker（Node）服务器可以在独立的主机名（如 <code>status.example.com</code>）上提供状态页。<strong>Cloudflare Workers 部署不支持自定义域名</strong>：在那里设置时 API 会拒绝（<code>400</code>，code 为 <code>custom_domain_unsupported</code>）。</p>
     <p>Montral 不签发证书。由你的反向代理为该域名终止 TLS，并携带原始 <code>Host</code> 头把请求转发给 Montral。</p>

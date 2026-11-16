@@ -1,7 +1,7 @@
 ---
 import Doc from "../../layouts/Doc.astro";
 ---
-<Doc titleZh="多区域检测" descriptionZh="从多个区域检测同一个监控：多区域检测如何工作、如何得出结论，以及如何用 Docker、Node 或 Vercel 运行自己的探针。" description="Check a monitor from several regions: how multi-region checks work, how a verdict is reached, and how to run your own probes in Docker, on Node or on Vercel." title="Multi-region checks" updated="2026-10-12" toc>
+<Doc titleZh="多区域检测" descriptionZh="从多个区域检测同一个监控：多区域检测如何工作、如何得出结论，以及如何用 Docker、Node 或 Vercel 运行自己的探针。" description="Check a monitor from several regions: how multi-region checks work, how a verdict is reached, and how to run your own probes in Docker, on Node or on Vercel." title="Multi-region checks" updated="2026-11-16" toc>
   <div lang="en">
     <h1>Multi-region checks</h1>
     <p class="lede">Check one monitor from several places in the world, so a bad route or a regional outage does not look like your site being down, and so you can see how fast it is for people far from you.</p>
@@ -15,7 +15,7 @@ import Doc from "../../layouts/Doc.astro";
     <h2 id="use">Using regions</h2>
     <ol>
       <li>Open a monitor (or create one) and find <strong>Check from</strong>. It lists the regions this deployment offers, with <strong>Auto</strong> first. The field only appears when at least one region besides <code>auto</code> is configured.</li>
-      <li>Tick the regions you want. On the hosted service the limit shown next to the label depends on your plan; a self-hosted deployment has no limit, so a monitor can use every region you have configured.</li>
+      <li>Tick the regions you want. Community self-hosting has no plan quota for regions; you can select from the probes configured by your operator. Any future Cloud region limits would require published plans.</li>
       <li>Save. The next scheduled run goes out from every region you picked. The estimate on the form multiplies the number of checks per month by the number of regions.</li>
     </ol>
     <p>A saved region that has since been removed from the deployment is shown as <em>No longer available</em>. Untick it and save, or the monitor keeps skipping it.</p>
@@ -53,7 +53,7 @@ import Doc from "../../layouts/Doc.astro";
     <p>The scheduler sends the check (type, target, method, expected status, keyword, timeout and headers) to each probe over HTTPS. The probe runs it and answers with the outcome. Probes are stateless: they store nothing and hold no database credentials.</p>
     <p>Requests are signed with <code>HMAC-SHA256</code> over <code>timestamp.body</code> using a shared secret (<code>PROBE_SECRET</code>), and a timestamp more than 60 seconds off is rejected, so a captured request cannot be replayed later. Without a valid signature a probe would be an open proxy, so it answers 401. A probe also refuses private and internal addresses whatever the signature says, so it cannot be used to reach into someone's network.</p>
     <h2 id="run">Running your own probes</h2>
-    <p>On the hosted service the available regions are already set up. When you self-host, you run the probes yourself. A probe is the small app in <code>apps/probe</code>, and it runs anywhere you can run Node:</p>
+    <p>Montral Cloud is not publicly available. In Community self-hosting, you run and configure the probes yourself. A probe is the small app in <code>apps/probe</code>, and it runs anywhere you can run Node:</p>
     <table class="vars">
       <thead><tr><th>Where</th><th>How</th></tr></thead>
       <tbody>
@@ -98,7 +98,7 @@ PROBE_REGIONS={
     <h2 id="use-zh">如何使用</h2>
     <ol>
       <li>打开监控项（或新建），找到<strong>检查位置</strong>。它列出当前部署提供的区域，<strong>Auto</strong> 排在最前。只有配置了 <code>auto</code> 之外的区域，这个字段才会出现。</li>
-      <li>勾选想用的区域，不超过标签旁显示的上限。托管服务的上限取决于套餐；自托管时，一个监控项最多可选 10 个区域。</li>
+      <li>勾选想用的区域，不超过标签旁显示的上限。Community 自托管版没有按套餐设置的区域额度，但只能选择运维已配置的探针。未来 Cloud 的区域上限须待套餐公布后才能确定。</li>
       <li>保存。之后每次定时检测都会从你选的所有区域同时发出。表单上的月度估算会按区域数乘以检查次数。</li>
     </ol>
     <p>已保存、但后来从部署中移除的区域会显示为<em>不再可用</em>。取消勾选并保存即可，否则监控项会一直跳过它。</p>
@@ -136,7 +136,7 @@ PROBE_REGIONS={
     <p>调度器通过 HTTPS 把检测内容（类型、目标、方法、期望状态码、关键字、超时和请求头）发给每个探针，探针执行后返回结果。探针是无状态的：不保存任何数据，也不持有数据库凭据。</p>
     <p>请求使用共享密钥（<code>PROBE_SECRET</code>）对 <code>timestamp.body</code> 做 <code>HMAC-SHA256</code> 签名，时间戳与探针时钟相差超过 60 秒会被拒绝，因此截获的请求之后无法重放。没有有效签名，探针就成了开放代理，所以会返回 401。探针还会无视签名，始终拒绝私有和内网地址，因此不能被用来探测别人的内网。</p>
     <h2 id="run-zh">运行你自己的探针</h2>
-    <p>托管服务的可用区域已经配置好。自托管时，探针需要你自己运行。探针就是 <code>apps/probe</code> 里的小应用，能跑 Node 的地方都能运行：</p>
+    <p>Montral Cloud 尚未公开上线。使用 Community 自托管版时，需要自行运行并配置探针。探针就是 <code>apps/probe</code> 里的小应用，能跑 Node 的地方都能运行：</p>
     <table class="vars">
       <thead><tr><th>位置</th><th>方式</th></tr></thead>
       <tbody>

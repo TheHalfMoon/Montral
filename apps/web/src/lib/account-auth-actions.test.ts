@@ -5,9 +5,19 @@ import { attemptAuthAction, changePasswordWithCleanup } from "./account-auth-act
 describe("Better Auth account security mutation failures", () => {
   it("integrates guarded actions into account session and password UI", () => {
     const account = readFileSync(new URL("../components/Account.tsx", import.meta.url), "utf8");
+    expect(account).toContain("attemptAuthAction(() => authClient.twoFactor.enable(");
+    expect(account).toContain("attemptAuthAction(() => authClient.twoFactor.verifyTotp(");
+    expect(account).toContain("attemptAuthAction(() => authClient.twoFactor.disable(");
+    expect(account).toContain("attemptAuthAction(() => authClient.deleteUser(");
+    expect(account).toContain("attemptAuthAction(() => authClient.signIn.social(");
+    expect(account).toContain("attemptAuthAction(() => authClient.linkSocial(");
+    expect(account).toContain("attemptAuthAction(() => authClient.unlinkAccount(");
+    expect(account).toContain("if (!r) return fail();");
     expect(account).toContain("attemptAuthAction(() => authClient.revokeSession(");
     expect(account).toContain("attemptAuthAction(() => authClient.revokeOtherSessions())");
     expect(account).toContain("const outcome = await changePasswordWithCleanup(");
+    expect(account).toContain('outcome.kind === "change-unconfirmed"');
+    expect(account).toContain('outcome.kind === "changed-revoke-unconfirmed"');
     expect(account).toContain('outcome.kind === "changed-revoke-failed"');
     expect(account).toContain('setErr(t("Could not load sessions."))');
   });
@@ -21,7 +31,7 @@ describe("Better Auth account security mutation failures", () => {
   it("does not attempt other-session revocation when the password update rejected", async () => {
     const revoke = vi.fn(async () => ({ error: null }));
     const result = await changePasswordWithCleanup(async () => { throw new Error("offline"); }, revoke);
-    expect(result).toEqual({ kind: "change-failed", error: undefined });
+    expect(result).toEqual({ kind: "change-unconfirmed" });
     expect(revoke).not.toHaveBeenCalled();
   });
 
@@ -41,11 +51,15 @@ describe("Better Auth account security mutation failures", () => {
     expect(revoke).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["server refusal", async () => ({ error: { status: 503 } })],
-    ["transport rejection", async () => { throw new Error("connection lost after password was changed"); }],
-  ])("never claims the password failed after the cleanup %s", async (_cause, revoke) => {
-    const outcome = await changePasswordWithCleanup(async () => ({ error: null }), revoke);
+  it("reports a failed revoke after a confirmed password change", async () => {
+    const outcome = await changePasswordWithCleanup(async () => ({ error: null }), async () => ({ error: { status: 503 } }));
     expect(outcome).toEqual({ kind: "changed-revoke-failed" });
+  });
+
+  it("reports unknown revocation status after transport loss, not a failed password change", async () => {
+    const outcome = await changePasswordWithCleanup(async () => ({ error: null }), async () => {
+      throw new Error("connection lost after password was changed");
+    });
+    expect(outcome).toEqual({ kind: "changed-revoke-unconfirmed" });
   });
 });

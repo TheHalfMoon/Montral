@@ -14,10 +14,12 @@ export async function attemptAuthAction<T extends AccountActionResult>(request: 
 }
 
 export type PasswordChangeOutcome =
-  | { kind: "change-failed"; error?: AccountActionError }
+  | { kind: "change-failed"; error: AccountActionError }
+  | { kind: "change-unconfirmed" }
   | { kind: "changed" }
   | { kind: "changed-revoked" }
-  | { kind: "changed-revoke-failed" };
+  | { kind: "changed-revoke-failed" }
+  | { kind: "changed-revoke-unconfirmed" };
 
 /** Password changes and other-session revocation are separate mutations.
  * If the second mutation fails, the password has STILL changed: never prompt the
@@ -28,8 +30,11 @@ export async function changePasswordWithCleanup(
   revokeOthers?: () => Promise<AccountActionResult>,
 ): Promise<PasswordChangeOutcome> {
   const changed = await attemptAuthAction(change);
-  if (!changed || changed.error) return { kind: "change-failed", error: changed?.error };
+  // A rejected transport does not prove whether the server committed the write.
+  if (!changed) return { kind: "change-unconfirmed" };
+  if (changed.error) return { kind: "change-failed", error: changed.error };
   if (!revokeOthers) return { kind: "changed" };
   const revoked = await attemptAuthAction(revokeOthers);
-  return !revoked || revoked.error ? { kind: "changed-revoke-failed" } : { kind: "changed-revoked" };
+  if (!revoked) return { kind: "changed-revoke-unconfirmed" };
+  return revoked.error ? { kind: "changed-revoke-failed" } : { kind: "changed-revoked" };
 }

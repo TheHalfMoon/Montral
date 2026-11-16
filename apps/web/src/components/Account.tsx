@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, type PushDevice } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { authClient } from "../lib/auth-client";
+import { attemptAuthAction, changePasswordWithCleanup } from "../lib/account-auth-actions";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
 import { SSO_ERRORS, startSso } from "../lib/sso";
@@ -36,27 +37,33 @@ function Security({ me, reload, hasPassword }: { me: Me; reload: () => void; has
   }
   async function enable(e: React.SyntheticEvent) {
     e.preventDefault(); reset(); setBusy(true);
-    const r = await authClient.twoFactor.enable({ password: pw });
-    if (r.error || !r.data || !("totpURI" in r.data)) return fail(r.error?.message);
+    const r = await attemptAuthAction(() => authClient.twoFactor.enable({ password: pw }));
+    if (!r || r.error || !r.data || !("totpURI" in r.data)) return fail(r?.error?.message);
     const uri = r.data.totpURI;
-    setSetup({ uri, secret: new URL(uri).searchParams.get("secret") ?? "", qr: await QRCode.toDataURL(uri, { margin: 1, width: 180 }), codes: r.data.backupCodes });
-    setPw(""); setBusy(false);
+    try {
+      const qr = await QRCode.toDataURL(uri, { margin: 1, width: 180 });
+      setSetup({ uri, secret: new URL(uri).searchParams.get("secret") ?? "", qr, codes: r.data.backupCodes });
+      setPw("");
+      setBusy(false);
+    } catch { fail(); }
   }
   async function confirm(e: React.SyntheticEvent) {
     e.preventDefault(); reset(); setBusy(true);
-    const r = await authClient.twoFactor.verifyTotp({ code });
+    const r = await attemptAuthAction(() => authClient.twoFactor.verifyTotp({ code }));
+    if (!r) return fail();
     if (r.error) return fail(t("That code is not valid. Try the current one from your app."));
     setSetup(null); setCode(""); setBusy(false); ok(t("Two-step verification is on.")); reload();
   }
   async function disable(e: React.SyntheticEvent) {
     e.preventDefault(); reset(); setBusy(true);
-    const r = await authClient.twoFactor.disable({ password: pw });
-    if (r.error) return fail(r.error.message);
+    const r = await attemptAuthAction(() => authClient.twoFactor.disable({ password: pw }));
+    if (!r || r.error) return fail(r?.error?.message);
     setPw(""); setBusy(false); ok(t("Two-step verification is off.")); reload();
   }
   async function remove(e: React.SyntheticEvent) {
     e.preventDefault(); reset(); setBusy(true);
-    const r = await authClient.deleteUser(pw ? { password: pw } : {});
+    const r = await attemptAuthAction(() => authClient.deleteUser(pw ? { password: pw } : {}));
+    if (!r) return fail();
     if (r.error) {
       // without a password the server asks for a recent sign-in instead
       if (!pw && r.error.code === "SESSION_EXPIRED") { setStale(true); setBusy(false); return; }
@@ -66,8 +73,8 @@ function Security({ me, reload, hasPassword }: { me: Me; reload: () => void; has
   }
   async function reauth() {
     setBusy(true);
-    const r = await authClient.signIn.social({ provider: "github", callbackURL: "/app/account?reauth=1" });
-    if (r.error) fail(r.error.message);
+    const r = await attemptAuthAction(() => authClient.signIn.social({ provider: "github", callbackURL: "/app/account?reauth=1" }));
+    if (!r || r.error) fail(r?.error?.message);
   }
   return (
     <>
@@ -170,15 +177,15 @@ function ConnectedAccounts({ accounts, load }: { accounts: Linked[] | null; load
   const onlyWay = accounts.length <= 1;
   async function connect() {
     setErr(""); setBusy(true);
-    const r = await authClient.linkSocial({ provider: "github", callbackURL: "/app/account?linked=1", errorCallbackURL: "/app/account?link_error=1" });
-    if (r.error) { setErr(r.error.message ?? t("Something went wrong")); toast(t("Something went wrong"), "err"); setBusy(false); }
+    const r = await attemptAuthAction(() => authClient.linkSocial({ provider: "github", callbackURL: "/app/account?linked=1", errorCallbackURL: "/app/account?link_error=1" }));
+    if (!r || r.error) { setErr(r?.error?.message ?? t("Something went wrong")); toast(t("Something went wrong"), "err"); setBusy(false); }
   }
   async function disconnect() {
     if (!linked) return;
     setErr(""); setBusy(true);
-    const r = await authClient.unlinkAccount({ accountId: linked.id });
+    const r = await attemptAuthAction(() => authClient.unlinkAccount({ accountId: linked.id }));
     setBusy(false);
-    if (r.error) { setErr(r.error.message ?? t("Something went wrong")); toast(t("Something went wrong"), "err"); return; }
+    if (!r || r.error) { setErr(r?.error?.message ?? t("Something went wrong")); toast(t("Something went wrong"), "err"); return; }
     toast(t("GitHub disconnected."));
     load();
   }
@@ -299,21 +306,34 @@ function Sessions() {
     window.addEventListener(SESSIONS_CHANGED, reload);
     return () => window.removeEventListener(SESSIONS_CHANGED, reload);
   }, []);
+  // Do not present cached rows as current when a refresh fails after a security action.
+  const refreshAfterAction = async () => {
+    try { await load(); }
+    catch { setCurrent(null); setList(null); setErr(t("Could not load sessions.")); }
+  };
   const end = async (s: Sess) => {
     setBusy(s.id);
     try {
-      const r = await authClient.revokeSession({ token: s.token });
-      if (r.error) toast(r.error.message ?? t("Could not sign out that session."), "err"); else toast(t("Signed out of that session."));
-      await load();
+      const r = await attemptAuthAction(() => authClient.revokeSession({ token: s.token }));
+      if (!r || r.error) {
+        toast(r?.error?.message ?? t("Could not sign out that session."), "err");
+        return;
+      }
+      toast(t("Signed out of that session."));
+      await refreshAfterAction();
     } finally { setBusy(""); }
   };
   const endOthers = async () => {
     if (!(await ask(t("Sign out everywhere except this device? Each of those sessions will need to sign in again."), t("Sign out other sessions")))) return;
     setBusy("others");
     try {
-      const r = await authClient.revokeOtherSessions();
-      if (r.error) toast(r.error.message ?? t("Could not sign out the other sessions."), "err"); else toast(t("Signed out of every other session."));
-      await load();
+      const r = await attemptAuthAction(() => authClient.revokeOtherSessions());
+      if (!r || r.error) {
+        toast(r?.error?.message ?? t("Could not sign out the other sessions."), "err");
+        return;
+      }
+      toast(t("Signed out of every other session."));
+      await refreshAfterAction();
     } finally { setBusy(""); }
   };
   const others = current === null ? [] : (list ?? []).filter((s) => s.id !== current);
@@ -377,17 +397,27 @@ function PasswordChange() {
       // Never let Better Auth revoke sessions inside the password change: it would delete this session as well and
       // create a new one, which a workspace that requires single sign-on refuses, leaving the person signed out
       // everywhere. Ending the other sessions is a separate call that keeps this one.
-      const r = await authClient.changePassword({ currentPassword: cur, newPassword: next, revokeOtherSessions: false });
-      if (r.error) {
-        const code = r.error.code;
-        setErr(code === "INVALID_PASSWORD" ? t("The current password is not right.") : code === "PASSWORD_TOO_SHORT" ? t("Use at least 8 characters.") : r.error.status === 429 ? t("Too many attempts. Wait a minute and try again.") : t("Could not change the password."));
+      const outcome = await changePasswordWithCleanup(
+        () => authClient.changePassword({ currentPassword: cur, newPassword: next, revokeOtherSessions: false }),
+        others ? () => authClient.revokeOtherSessions() : undefined,
+      );
+      if (outcome.kind === "change-unconfirmed") {
+        setErr(t("Could not confirm whether your password changed. Verify your sign-in before retrying."));
+        return;
+      }
+      if (outcome.kind === "change-failed") {
+        const code = outcome.error?.code;
+        setErr(code === "INVALID_PASSWORD" ? t("The current password is not right.")
+          : code === "PASSWORD_TOO_SHORT" ? t("Use at least 8 characters.")
+          : outcome.error?.status === 429 ? t("Too many attempts. Wait a minute and try again.")
+          : t("Could not change the password."));
         return;
       }
       setCur(""); setNext("");
-      if (others) {
-        const o = await authClient.revokeOtherSessions();
-        toast(o.error ? t("Password changed, but the other sessions could not be signed out.") : t("Password changed. Other sessions were signed out."), o.error ? "err" : "ok");
-      } else toast(t("Password changed."));
+      if (outcome.kind === "changed-revoke-unconfirmed") toast(t("Password changed, but we could not confirm that the other sessions were signed out."), "err");
+      else if (outcome.kind === "changed-revoke-failed") toast(t("Password changed, but the other sessions could not be signed out."), "err");
+      else if (outcome.kind === "changed-revoked") toast(t("Password changed. Other sessions were signed out."));
+      else toast(t("Password changed."));
       window.dispatchEvent(new Event(SESSIONS_CHANGED));
     } finally { setBusy(false); }
   };

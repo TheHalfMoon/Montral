@@ -899,7 +899,7 @@ export const zh: Record<string, string> = {
   Sessions: "会话", "Devices and browsers signed in to your account. A session you sign out stops working within 5 minutes.": "已登录你账户的设备和浏览器。退出的会话将在 5 分钟内失效。",
   "Signed in": "登录于", "This device": "本设备", "Signing out…": "正在退出…",
   "Use at least 8 characters.": "请至少使用 8 个字符。", "The new password must differ from the current one.": "新密码必须与当前密码不同。", "The current password is not right.": "当前密码不正确。", "Too many attempts. Wait a minute and try again.": "尝试次数过多，请稍等一分钟再试。", "Password changed, but the other sessions could not be signed out.": "密码已修改，但无法退出其他会话。",
-  "Could not change the password.": "无法修改密码。", "Password changed. Other sessions were signed out.": "密码已修改，其他会话已退出。", "Password changed.": "密码已修改。",
+  "Could not change the password.": "无法修改密码。", "Could not confirm whether your password changed. Verify your sign-in before retrying.": "无法确认密码是否已修改。重试前请先确认能否使用新密码登录。", "Password changed, but we could not confirm that the other sessions were signed out.": "密码已修改，但无法确认其他会话是否已退出。", "Password changed. Other sessions were signed out.": "密码已修改，其他会话已退出。", "Password changed.": "密码已修改。",
   "Current password": "当前密码", "At least 8 characters.": "至少 8 个字符。", "Sign out of every other session": "退出其他所有会话", "Change password": "修改密码",
   // account: phones
   iPhone: "iPhone", "Stop push alerts to {name}? The app turns them back on the next time it registers the phone. To stop them for good, also sign that phone out under Sessions.": "停止向 {name} 推送告警？应用下次注册该手机时会重新开启。若要彻底停止，请同时在“会话”中退出该手机。",

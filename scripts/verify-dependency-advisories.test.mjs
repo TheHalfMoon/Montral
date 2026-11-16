@@ -67,3 +67,29 @@ test("array-shaped advisories and counts are not accepted", () => {
   brokenCounts.metadata.vulnerabilities = [];
   assert.throws(() => summarizeAdvisoryReport(brokenCounts), /vulnerability metadata/);
 });
+
+test("positive vulnerability counts with no advisory records are always rejected", () => {
+  for (const severity of ["info", "low", "moderate", "high", "critical"]) {
+    const incomplete = report({ [severity]: 1 });
+    assert.throws(() => summarizeAdvisoryReport(incomplete), /no advisory records/);
+    assert.throws(() => parseAdvisoryOutput(JSON.stringify(incomplete)), /no advisory records/);
+  }
+});
+
+test("advisory record count need not match affected dependency count", () => {
+  const result = summarizeAdvisoryReport(report(
+    { low: 3, moderate: 2 },
+    { "one-shared-advisory": { severity: "moderate" } },
+  ));
+  assert.equal(result.total, 5);
+  assert.equal(result.blocked, false);
+});
+
+test("one advisory with critical and moderate exposures still blocks", () => {
+  const result = summarizeAdvisoryReport(report(
+    { critical: 1, moderate: 4 },
+    { "one-shared-advisory": { severity: "critical" } },
+  ));
+  assert.equal(result.total, 5);
+  assert.equal(result.blocked, true);
+});

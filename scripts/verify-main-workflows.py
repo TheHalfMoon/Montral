@@ -45,6 +45,12 @@ def verify(sha: str, runs: list[dict]) -> list[str]:
             errors.append(f"{name}: no valid workflow run ID")
             continue
         latest = max(valid, key=lambda run: run["databaseId"])
+        # Conflicting records for the same run ID cannot establish success.
+        same_id = [run for run in valid if run["databaseId"] == latest["databaseId"]]
+        if any((run.get("status"), run.get("conclusion")) !=
+               (latest.get("status"), latest.get("conclusion")) for run in same_id):
+            errors.append(f"{name}: conflicting latest workflow run evidence")
+            continue
         if latest.get("status") != "completed" or latest.get("conclusion") != "success":
             errors.append(f"{name}: latest exact-SHA push run is not successful")
     return errors

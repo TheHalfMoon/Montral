@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8");
@@ -46,5 +48,23 @@ describe("prelaunch hosted-service claims", () => {
     expect(terms).toContain("Legal review and owner authorization");
     expect(privacy).toContain("legal/privacy review");
     expect(privacy).toContain("a draft outline of possible processing");
+  });
+});
+
+// The Node production web is built before Vitest in CI. Source-level checks
+// cannot catch a dropped Astro head slot, so also verify rendered static HTML.
+const distClient = fileURLToPath(new URL("../../dist/client/", import.meta.url));
+describe.skipIf(!existsSync(distClient))("built public legal pages", () => {
+  it.each(["terms", "privacy"])("%s is non-indexed and has no visible placeholder links", (route) => {
+    const file = join(distClient, route + ".html");
+    expect(existsSync(file), "missing built page: " + file).toBe(true);
+    const html = readFileSync(file, "utf8");
+    const head = /<head(?:\s[^>]*)?>([\s\S]*?)<\/head>/i.exec(html)?.[1] ?? "";
+    expect(head).toMatch(/<meta\b(?=[^>]*\bname=["']robots["'])(?=[^>]*\bcontent=["']noindex,nofollow["'])[^>]*>/i);
+    const visible = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+    expect(visible).toContain("Not in force.");
+    expect(visible).toContain("\u5c1a\u672a\u751f\u6548");
+    expect(visible).not.toMatch(/montral\.invalid/i);
+    expect(visible).not.toMatch(/The hosted service has plans/i);
   });
 });

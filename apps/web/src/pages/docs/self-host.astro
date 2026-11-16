@@ -305,7 +305,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
       <li><code>userName</code> is the email address and cannot be changed; filters <code>userName eq</code> and <code>externalId eq</code> are supported. Replacing the token revokes the old one; turning SCIM off keeps the records but stops the gate.</li>
     </ul>
     <h2 id="apns">iOS push notifications (APNs)</h2>
-    <p>The Montral iOS app can receive alerts as push notifications. The server sends them through Apple's APNs, so it needs an APNs credential. Push is off until all four variables below are set; <code>GET /api/config</code> then reports <code>push.apns: true</code> and the <em>Mobile app (push)</em> channel type appears under Alerting.</p>
+    <p>Montral's API can deliver push alerts to separately built, APNs-compatible iOS clients; this project does not currently distribute a native iOS app. The server sends notifications through Apple's APNs, so it needs an APNs credential. Push is off until all four variables below are set; <code>GET /api/config</code> then reports <code>push.apns: true</code> and the <em>Mobile app (push)</em> channel type appears under Alerting.</p>
     <h3>What you need</h3>
     <ul>
       <li>An Apple Developer account and an App ID for the app, with the Push Notifications capability.</li>
@@ -327,7 +327,7 @@ PROBE_REGIONS={"us-east":"https://probe.example.app/api/probe/us-east","eu-centr
     </ul>
     <h3>How it works</h3>
     <p>People register their phone from the app; a <code>push</code> channel then alerts every member of the workspace who has a registered device, each in their own language. Registering a phone as an owner or admin creates a <em>Mobile app</em> channel for you if the workspace has none. Phones that Apple reports as no longer valid are forgotten automatically.</p>
-    <p><strong>Important:</strong> an APNs key is tied to your Apple team and the app's bundle id, and a phone's token only works with the app that produced it. The official Montral app can therefore receive push only from the hosted service. On a self-hosted server push works for an app you build and sign yourself with your own bundle id and key. A relay that would let the official app receive push from self-hosted servers is not implemented.</p>
+    <p><strong>Important:</strong> an APNs key is tied to your Apple team and the app's bundle id, and a phone's token only works with the app that produced it. This repository does not ship an official signed native app. On a self-hosted server APNs works only with an app you separately build and sign with your own bundle id and key. No push relay for third-party native clients is provided.</p>
     <h2 id="custom-domains">Custom domains for status pages</h2>
     <p>A status page can be served on its own hostname, such as <code>status.example.com</code>, by the Docker (Node) server. <strong>Cloudflare Workers deployments do not support custom domains</strong>: the API refuses to set one there (<code>400</code>, code <code>custom_domain_unsupported</code>).</p>
     <p>Montral does not issue certificates. Your reverse proxy terminates TLS for the domain and forwards requests to Montral with the original <code>Host</code> header.</p>

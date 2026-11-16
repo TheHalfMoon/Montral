@@ -405,7 +405,7 @@ function PasswordChange() {
 }
 
 /**
- * Phones that receive push alerts for this person (registered by the iOS app). Hidden on a server without Apple push
+ * Phones registered by a separately configured compatible APNs client. Hidden on a server without Apple push
  * and no phones, so nothing suggests push delivery that this deployment cannot make. The account UI fetches metadata and removes by device ID; raw APNs tokens
  * never enter browser state or request URLs.
  */
@@ -430,10 +430,10 @@ function Phones() {
   return (
     <div className="card sect">
       <h3>{t("Phones")}</h3>
-      <p className="muted" style={{ marginBottom: 12 }}>{t("Phones signed in to the Montral iOS app receive push alerts from the channels you are part of.")}</p>
+      <p className="muted" style={{ marginBottom: 12 }}>{t("Phones registered by a separately configured APNs-compatible client can receive push alerts when the server is configured.")}</p>
       {apns === false && <p className="muted" role="status">{t("Push delivery is not configured on this server, so these phones get no alerts.")}</p>}
       {devices.length === 0
-        ? <p className="muted">{t("No phones yet.")} <a className="auth-link" href="/ios">{t("Get the iOS app")}</a></p>
+        ? <p className="muted">{t("No phones yet. Registration requires a compatible, separately configured native client.")}</p>
         : (
           <ul className="sess">
             {devices.map((d) => (

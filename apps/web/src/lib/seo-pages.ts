@@ -73,8 +73,8 @@ export const MONTRAL = {
 /** What Montral cannot do today. Every item was checked: there is no code path for it. */
 export const MONTRAL_GAPS: L[] = [
   l("TLS certificate and ICMP ping checks need the Node runtime (the Docker image); a Cloudflare Workers deployment cannot run them. Ping in Docker needs unprivileged ICMP, which Docker allows by default.", "TLS 证书与 ICMP ping 检测需要 Node 运行时（Docker 镜像）；部署在 Cloudflare Workers 上时无法运行。Docker 中的 ping 需要允许非特权 ICMP，Docker 默认允许。"),
-  l("Browser (multi-step) checks run only on the self-hosted server with the optional browser-runner service, from a fixed set of steps: no scripted checks with your own code, and no real user monitoring.", "浏览器（多步骤）检测只能在配置了可选 browser-runner 服务的自托管服务器上运行，且只支持固定的步骤类型：不支持用你自己的代码编写的脚本化检测，也没有真实用户监控。"),
-  l("No SMS or phone-call alerts and no on-call rotation schedules. Escalation works by channel and by minutes unacknowledged.", "没有短信或电话告警，也没有值班排班表。升级按告警渠道和未确认的分钟数进行。"),
+  l("Browser (multi-step) checks run only on the self-hosted server with the optional browser-runner service. Journeys include predefined actions and a restricted page script step, not arbitrary server-side code; real user monitoring is not included.", "浏览器（多步骤）检测需要可选的自托管 browser-runner 服务。流程支持预定义操作及受限制的页面脚本步骤，但不执行任意服务器端代码，也不包含真实用户监控。"),
+  l("No built-in SMS or phone-call alerts. On-call rotation schedules, overrides and escalation policies are supported.", "默认不提供短信或电话告警。Montral 支持值班轮换排班、临时覆盖和升级策略。"),
   l("Database monitors check that the server answers; they send no credentials and run no queries.", "数据库监控只检查服务端是否应答，不发送凭据，也不执行查询。"),
 ];
 
@@ -112,8 +112,8 @@ const faqImport = (name: string): Faq => ({
 const faqGaps = (name: string): Faq => ({
   q: l(`What does ${name} do that Montral does not?`, `${name} 有哪些 Montral 没有的功能？`),
   a: l(
-    "Montral has no scripted browser checks with your own code, and no SMS, phone-call or on-call schedule features. Its TLS certificate and ICMP ping checks run only on the Node runtime, and its browser (multi-step) checks only on the self-hosted server with the browser-runner service, not on Cloudflare Workers. If you rely on one of those, check whether the other tool covers it before you switch.",
-    "Montral 不支持用你自己的代码编写的浏览器脚本检测，也没有短信、电话告警或值班排班功能；其 TLS 证书与 ICMP ping 检测只能在 Node 运行时中运行，浏览器（多步骤）检测只能在配置了 browser-runner 服务的自托管服务器上运行，Cloudflare Workers 上均不可用。如果你依赖其中之一，切换前请先确认。",
+    "Montral does not include native SMS or phone-call paging. It does include on-call schedules and escalation policies. Its TLS certificate and ICMP ping checks need the Node runtime, and its browser (multi-step) checks require the optional self-hosted browser-runner service rather than Cloudflare Workers. Browser journeys support defined steps and a restricted script step; Montral does not collect real-user monitoring data.",
+    "Montral 默认不提供短信或电话呼叫，但支持值班排班和升级策略。TLS 证书与 ICMP ping 检测需要 Node 运行时；浏览器（多步骤）检测需要可选的自托管 browser-runner 服务，不能在 Cloudflare Workers 上执行。浏览器流程支持预定义步骤和受限制的脚本步骤；不收集真实用户监控数据。",
   ),
 });
 const faqPricing = (name: string): Faq => ({
@@ -195,7 +195,7 @@ export const TOOLS: Tool[] = [
       { topic: l("Pricing", "价格"), montral: l("Free to self-host. The hosted service has plans; check the current ones", "自托管免费。托管服务有各档套餐，请查看最新方案"), them: l("Check their current pricing", "请查看其最新价格") },
     ],
     theyHave: [
-      l("On-call schedules and phone-call or SMS alerts. Montral escalates by channel after a number of minutes unacknowledged, but has no rota.", "值班排班表以及电话、短信告警。Montral 在事件未确认若干分钟后按渠道升级，但没有排班表。"),
+      l("Built-in phone-call or SMS paging. Montral has on-call rotations and escalation policies, but no built-in outbound phone-call or SMS provider.", "内置电话或短信呼叫。Montral 已有值班轮换和升级策略，但不包含内置电话或短信服务。"),
       l("Log management next to monitoring. Montral does not collect logs.", "监控之外还有日志管理。Montral 不收集日志。"),
     ],
     bestThem: [
@@ -220,8 +220,8 @@ export const TOOLS: Tool[] = [
       {
         q: l("Does Montral have on-call scheduling?", "Montral 有值班排班吗？"),
         a: l(
-          "No. You can repeat reminders and escalate to other channels when an incident stays unacknowledged, and acknowledge it from the iOS app, but there is no rota or phone-call paging. PagerDuty works as a channel if you already use it for that.",
-          "没有。你可以设置重复提醒，并在事件长时间未确认时升级到其他渠道，也可以在 iOS 应用里确认事件，但没有排班表和电话告警。如果你已在用 PagerDuty，可以把它作为一个告警渠道。",
+          "Yes. Montral supports on-call rotations, overrides, and escalation policies for unacknowledged incidents. You can acknowledge from the web dashboard. Direct phone-call paging requires an external provider and is not included by default; PagerDuty can be configured as an alert channel.",
+          "有。Montral 支持值班轮换、临时覆盖及未确认事件的升级策略。你可以在网页控制台确认事件。直接拨打电话需要外部服务提供商，默认不包含；你也可以将 PagerDuty 配置为告警渠道。",
         ),
       },
       faqPricing("Better Stack"),
@@ -726,8 +726,8 @@ export const SEGMENTS: Segment[] = [
       {
         title: l("An alert that does not get lost", "不会被漏掉的告警"),
         body: l(
-          "Send the first alert to Slack and PagerDuty. Set repeat reminders at an interval you choose, and add escalation levels that notify further channels when the incident is still unacknowledged after a number of minutes. Acknowledging the incident, including from the iOS app, stops the repeats.",
-          "第一条告警发送到 Slack 和 PagerDuty。可按所选间隔设置重复提醒，并添加升级层级：事件在若干分钟后仍未确认时，通知更多渠道。确认事件（包括在 iOS 应用里确认）即可停止重复。",
+          "Send the first alert to Slack and PagerDuty. Set repeat reminders at an interval you choose, and add escalation levels that notify further channels when the incident is still unacknowledged after a number of minutes. Acknowledging the incident from the Montral web dashboard stops the repeats.",
+          "第一条告警发送到 Slack 和 PagerDuty。可按所选间隔设置重复提醒，并添加升级层级：事件在若干分钟后仍未确认时，通知更多渠道。在 Montral 网页控制台确认事件即可停止重复。",
         ),
         uses: ["PagerDuty", "Slack", l("reminders", "重复提醒").en, l("escalation", "升级").en],
       },
@@ -757,7 +757,7 @@ export const SEGMENTS: Segment[] = [
       "告警渠道包括 Slack、Discord、Microsoft Teams、Google Chat、Mattermost、飞书 / Lark、Telegram、ntfy、Gotify、Pushover、PagerDuty、Webhook 和邮件。Webhook 会收到一个 JSON POST，可接入聊天机器人或你自己的工具。每个渠道的发送结果都会记录，方便查看哪条告警已发出、哪条失败。",
     ),
     limits: [
-      l("No on-call rotation schedules or phone-call paging; escalation is by channel and minutes unacknowledged.", "没有值班排班表和电话告警；升级按渠道和未确认的分钟数进行。"),
+      l("No built-in phone-call or SMS paging; on-call rotations and escalation policies are supported.", "默认不提供电话或短信呼叫；支持值班轮换和升级策略。"),
       l("Database monitors check reachability only.", "数据库监控只检查连通性。"),
       l("ICMP ping and TLS certificate monitors need the Node runtime and do not run on Cloudflare Workers.", "ICMP ping 与 TLS 证书监控需要 Node 运行时，不能在 Cloudflare Workers 上运行。"),
       l("Multi-region covers HTTP, TCP and WebSocket monitors only.", "多区域检测仅适用于 HTTP、TCP 和 WebSocket 监控。"),

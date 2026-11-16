@@ -8,8 +8,8 @@ export function getStaticPaths() {
 const { segment } = Astro.props as { segment: Segment };
 const langs = [{ attr: "en", k: "en" }, { attr: "zh-CN", k: "zh" }] as const;
 const ui = {
-  en: { scen: "What to monitor", status: "Status page", alerts: "Alert routing", limits: "Limits to know about", faq: "Questions", ctaT: "Set it up in Montral", ctaP: "Run the free Community edition on your own infrastructure. Montral Cloud is not publicly available yet. The source is on GitHub under the MIT license.", start: "Start monitoring", self: "Self-host guide", all: "All use cases", cmp: "Compare with other tools", regions: "Multi-region checks", mcp: "MCP server", api: "API reference", embed: "Embed status" },
-  zh: { scen: "监控什么", status: "状态页", alerts: "告警路由", limits: "需要了解的限制", faq: "常见问题", ctaT: "在 Montral 中设置", ctaP: "Community 版可免费自托管，Montral Cloud 尚未公开上线。源码在 GitHub，采用 MIT 许可证。", start: "开始监控", self: "自托管指南", all: "全部使用场景", cmp: "与其他工具对比", regions: "多区域检测", mcp: "MCP 服务", api: "API 参考", embed: "嵌入状态" },
+  en: { scen: "What to monitor", status: "Status page", alerts: "Alert routing", limits: "Limits to know about", faq: "Questions", ctaT: "Run Montral yourself", ctaP: "Run the free Community edition on your own infrastructure. Montral Cloud is not publicly available yet. The source is on GitHub under the MIT license.", start: "Self-host Montral", self: "Read the docs", all: "All use cases", cmp: "Compare with other tools", regions: "Multi-region checks", mcp: "MCP server", api: "API reference", embed: "Embed status" },
+  zh: { scen: "监控什么", status: "状态页", alerts: "告警路由", limits: "需要了解的限制", faq: "常见问题", ctaT: "自行部署 Montral", ctaP: "Community 版可免费自托管，Montral Cloud 尚未公开上线。源码在 GitHub，采用 MIT 许可证。", start: "自托管 Montral", self: "阅读文档", all: "全部使用场景", cmp: "与其他工具对比", regions: "多区域检测", mcp: "MCP 服务", api: "API 参考", embed: "嵌入状态" },
 } as const;
 ---
 <SeoShell title={segment.title} description={segment.description} path={`/for/${segment.slug}`} faq={segment.faq}>
@@ -36,7 +36,7 @@ const ui = {
       <div class="cta">
         <h2>{ui[k].ctaT}</h2>
         <p>{ui[k].ctaP}</p>
-        <div class="btns"><a class="btn-s primary" href="/app">{ui[k].start}</a><a class="btn-s" href="/docs/self-host">{ui[k].self}</a></div>
+        <div class="btns"><a class="btn-s primary" href="/docs/self-host">{ui[k].start}</a><a class="btn-s" href="/docs">{ui[k].self}</a></div>
       </div>
       <p class="related">
         <a href="/for">{ui[k].all}</a>

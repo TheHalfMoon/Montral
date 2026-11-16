@@ -5,7 +5,7 @@ import type { L } from "../../lib/changelog";
 
 const l = (en: string, zh: string): L => ({ en, zh });
 const faq: Faq[] = [
-  { q: l("Can I use Montral for free?", "Montral 可以免费使用吗？"), a: l("The software is MIT-licensed and free to self-host. The hosted service has plans; check the current ones.", "软件采用 MIT 许可证，自托管免费。托管服务有各档套餐，请查看最新方案。") },
+  { q: l("Can I use Montral for free?", "Montral 可以免费使用吗？"), a: l("Montral Community is MIT-licensed and free to self-host; you pay for your own infrastructure. Cloud is not publicly available or priced yet.", "Montral Community 采用 MIT 许可证，可免费自托管；你仅需支付自己的基础设施费用。Cloud 尚未公开上线或定价。") },
   { q: l("Which monitor types are there?", "有哪些监控类型？"), a: l("HTTP and HTTPS, TCP, DNS, heartbeat, and PostgreSQL, MySQL / MariaDB and Redis reachability.", "HTTP 与 HTTPS、TCP、DNS、心跳，以及 PostgreSQL、MySQL / MariaDB 和 Redis 连通性。") },
 ];
 const langs = [{ attr: "en", k: "en" }, { attr: "zh-CN", k: "zh" }] as const;

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { api, type PushDevice } from "../lib/api";
 import { ask } from "../lib/confirm";
 import { authClient } from "../lib/auth-client";
+import { attemptAuthAction, changePasswordWithCleanup } from "../lib/account-auth-actions";
 import QRCode from "qrcode";
 import { toast } from "../lib/toast";
 import { SSO_ERRORS, startSso } from "../lib/sso";
@@ -299,21 +300,34 @@ function Sessions() {
     window.addEventListener(SESSIONS_CHANGED, reload);
     return () => window.removeEventListener(SESSIONS_CHANGED, reload);
   }, []);
+  // Do not present cached rows as current when a refresh fails after a security action.
+  const refreshAfterAction = async () => {
+    try { await load(); }
+    catch { setCurrent(null); setList(null); setErr(t("Could not load sessions.")); }
+  };
   const end = async (s: Sess) => {
     setBusy(s.id);
     try {
-      const r = await authClient.revokeSession({ token: s.token });
-      if (r.error) toast(r.error.message ?? t("Could not sign out that session."), "err"); else toast(t("Signed out of that session."));
-      await load();
+      const r = await attemptAuthAction(() => authClient.revokeSession({ token: s.token }));
+      if (!r || r.error) {
+        toast(r?.error?.message ?? t("Could not sign out that session."), "err");
+        return;
+      }
+      toast(t("Signed out of that session."));
+      await refreshAfterAction();
     } finally { setBusy(""); }
   };
   const endOthers = async () => {
     if (!(await ask(t("Sign out everywhere except this device? Each of those sessions will need to sign in again."), t("Sign out other sessions")))) return;
     setBusy("others");
     try {
-      const r = await authClient.revokeOtherSessions();
-      if (r.error) toast(r.error.message ?? t("Could not sign out the other sessions."), "err"); else toast(t("Signed out of every other session."));
-      await load();
+      const r = await attemptAuthAction(() => authClient.revokeOtherSessions());
+      if (!r || r.error) {
+        toast(r?.error?.message ?? t("Could not sign out the other sessions."), "err");
+        return;
+      }
+      toast(t("Signed out of every other session."));
+      await refreshAfterAction();
     } finally { setBusy(""); }
   };
   const others = current === null ? [] : (list ?? []).filter((s) => s.id !== current);
@@ -377,17 +391,22 @@ function PasswordChange() {
       // Never let Better Auth revoke sessions inside the password change: it would delete this session as well and
       // create a new one, which a workspace that requires single sign-on refuses, leaving the person signed out
       // everywhere. Ending the other sessions is a separate call that keeps this one.
-      const r = await authClient.changePassword({ currentPassword: cur, newPassword: next, revokeOtherSessions: false });
-      if (r.error) {
-        const code = r.error.code;
-        setErr(code === "INVALID_PASSWORD" ? t("The current password is not right.") : code === "PASSWORD_TOO_SHORT" ? t("Use at least 8 characters.") : r.error.status === 429 ? t("Too many attempts. Wait a minute and try again.") : t("Could not change the password."));
+      const outcome = await changePasswordWithCleanup(
+        () => authClient.changePassword({ currentPassword: cur, newPassword: next, revokeOtherSessions: false }),
+        others ? () => authClient.revokeOtherSessions() : undefined,
+      );
+      if (outcome.kind === "change-failed") {
+        const code = outcome.error?.code;
+        setErr(code === "INVALID_PASSWORD" ? t("The current password is not right.")
+          : code === "PASSWORD_TOO_SHORT" ? t("Use at least 8 characters.")
+          : outcome.error?.status === 429 ? t("Too many attempts. Wait a minute and try again.")
+          : t("Could not change the password."));
         return;
       }
       setCur(""); setNext("");
-      if (others) {
-        const o = await authClient.revokeOtherSessions();
-        toast(o.error ? t("Password changed, but the other sessions could not be signed out.") : t("Password changed. Other sessions were signed out."), o.error ? "err" : "ok");
-      } else toast(t("Password changed."));
+      if (outcome.kind === "changed-revoke-failed") toast(t("Password changed, but the other sessions could not be signed out."), "err");
+      else if (outcome.kind === "changed-revoked") toast(t("Password changed. Other sessions were signed out."));
+      else toast(t("Password changed."));
       window.dispatchEvent(new Event(SESSIONS_CHANGED));
     } finally { setBusy(false); }
   };

@@ -12,7 +12,8 @@ This is a source copy/release-gate inconsistency, **not evidence of any real cus
 
 - `apps/web/src/lib/seo-pages.ts` and `apps/web/src/pages/for/index.astro`: Community self-hosting is described as free software requiring the operator's own infrastructure. A Cloud edition is explicitly **not publicly available or priced**. This applies to pricing FAQs, comparison tables, hosting mode, use-case copy and relevant features. No secret commercial prices or invented subscription terms were added.
 - `apps/web/src/pages/terms.astro` and `apps/web/src/pages/privacy.astro`: both static English/Chinese documents carry **unapproved draft / not in force** headings and intros, `noindex,nofollow` metadata, revised dates and no fictitious operational domains or contact mailboxes. Legacy clauses remain in the document as working material *for legal counsel*, not binding terms. A qualified legal reviewer must approve an entirely accurate final policy/terms for the future operator before launch.
-- `apps/web/src/lib/hosted-readiness-copy.test.ts` guards EN/ZH Cloud unavailability and draft legal/not-indexed status against regressions. Source-level tests do not replace a legal or browser inspection.
+- `apps/web/src/pages/docs/self-host.astro`: update both duplicated English and Chinese `LEGAL_LINKS` setup instructions to state that the bundled terms/privacy documents are unapproved drafts and must be replaced by the operator's applicable legally reviewed policies before enabling sign-up consent.
+- `apps/web/src/lib/hosted-readiness-copy.test.ts` guards EN/ZH Cloud unavailability, self-host operator warnings, and draft legal/not-indexed status against regressions. Source-level tests do not replace a legal or browser inspection.
 
 ## Scope and verification limits
 

@@ -6,6 +6,7 @@ const comparisons = source("./seo-pages.ts");
 const useCases = source("../pages/for/index.astro");
 const terms = source("../pages/terms.astro");
 const privacy = source("../pages/privacy.astro");
+const selfHostGuide = source("../pages/docs/self-host.astro");
 
 describe("prelaunch hosted-service claims", () => {
   it("describes available Community self-hosting without presenting Cloud as a live paid service", () => {
@@ -29,6 +30,13 @@ describe("prelaunch hosted-service claims", () => {
     expect(html).not.toContain("montral.invalid");
     expect(html).not.toContain('href="mailto:legal@montral.invalid"');
     expect(html).not.toContain('href="mailto:privacy@montral.invalid"');
+  });
+
+  it("warns operators that bundled legal drafts must be replaced before enabling sign-up consent", () => {
+    expect(selfHostGuide).toContain("unapproved, nonoperative hosted-policy drafts");
+    expect(selfHostGuide).toContain("未批准、未生效的托管政策草案");
+    expect(selfHostGuide).not.toContain("pages describe the hosted service at montral.invalid");
+    expect(selfHostGuide).not.toContain("描述的是 montral.invalid 托管服务");
   });
 
   it("keeps a real security-reporting location while reserving future hosted contacts for owner review", () => {

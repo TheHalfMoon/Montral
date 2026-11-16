@@ -2,7 +2,7 @@ import { t } from "../lib/i18n";
 import { useEffect, useRef, useState } from "react";
 import { authClient } from "../lib/auth-client";
 import { AuthShell } from "./AuthShell";
-import { nextPath as safeNext } from "../lib/next-path";
+import { offerSignupLink, nextPath as safeNext } from "../lib/next-path";
 import { lp } from "../lib/locale-path";
 import { SSO_ERRORS, startSso } from "../lib/sso";
 
@@ -37,7 +37,7 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
   const [busy, setBusy] = useState(false);
   const [github, setGithub] = useState(false);
   // false when the operator closed registration: only invited people can still create an account
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState<boolean | null>(null);
   // password accepted, second step pending
   const [twoStep, setTwoStep] = useState(false);
   const [code, setCode] = useState("");
@@ -212,7 +212,7 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
           )}
         </div>
       )}
-      {!login && !open && (
+      {!login && open === false && (
         <p className="muted" style={{ fontSize: 13.5, textAlign: "center", marginTop: 14 }}>
           {t("Sign-ups are closed here. Only people who were invited to a workspace can create an account, using the invited email address.")}
         </p>
@@ -223,7 +223,7 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
         </p>
       )}
       <p className="muted auth-foot">
-        {login ? (open || location.search ? <>{t("New here?")} <a href={`/signup${location.search}`} className="auth-link">{t("Create an account")}</a></> : null) : <>{t("Have an account?")} <a href={`/login${location.search}`} className="auth-link">{t("Sign in")}</a></>}
+        {login ? (offerSignupLink(open, location.search) ? <>{t("New here?")} <a href={`/signup${location.search}`} className="auth-link">{t("Create an account")}</a></> : null) : <>{t("Have an account?")} <a href={`/login${location.search}`} className="auth-link">{t("Sign in")}</a></>}
       </p>
     </AuthShell>
   );

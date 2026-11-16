@@ -70,6 +70,16 @@ class QualificationEvidenceTests(unittest.TestCase):
         runs.append(older)
         self.assertEqual(module.verify(SHA, runs), [])
 
+    def test_conflicting_latest_duplicate_id_fails(self):
+        runs = fixture()
+        runs.append(dict(runs[0], conclusion="failure"))
+        self.assertTrue(module.verify(SHA, runs))
+
+    def test_identical_latest_duplicate_id_is_idempotent(self):
+        runs = fixture()
+        runs.append(dict(runs[0]))
+        self.assertEqual(module.verify(SHA, runs), [])
+
     def test_unrelated_runs_do_not_affect_result(self):
         runs = fixture()
         runs.append({"name": "Unrelated", "headSha": SHA, "event": "push"})

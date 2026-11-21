@@ -23,6 +23,18 @@ test("landing page renders with its scripts, no console errors and no CSP violat
   expect(guard.failedResponses, "unexpected failed requests on the landing page").toEqual([]);
 });
 
+test("landing monitor copy is rendered as text, not HTML", async ({ page }) => {
+  await page.goto("/");
+  await page.evaluate(() => {
+    const app = window as unknown as { MON: Array<{ m: string }>; renderMonitors: () => void };
+    app.MON[0].m = '<img src=x onerror="document.body.dataset.xss=1">';
+    app.renderMonitors();
+  });
+  await expect(page.locator("#mons .mon-n img")).toHaveCount(0);
+  await expect(page.locator("#mons .mon-n small").first()).toHaveText('<img src=x onerror="document.body.dataset.xss=1">');
+  await expect(page.locator("body")).not.toHaveAttribute("data-xss", "1");
+});
+
 test("sign-in page is accessible", async ({ page, guard }, testInfo) => {
   await page.goto("/login");
   await expect(page.locator("form.auth-fields input[type=email]")).toBeVisible();

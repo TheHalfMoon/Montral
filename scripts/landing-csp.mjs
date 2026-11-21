@@ -8,6 +8,7 @@
 // covers every script on the page.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
+import { scriptTags } from "./html-script-tags.mjs";
 
 const DIR = new URL("../apps/web/public/", import.meta.url);
 const PAGES = ["index.html", "es.html", "ja.html", "zh-Hans.html"];
@@ -27,14 +28,14 @@ const policy = (hash) => [
   "form-action 'self'",
 ].join("; ");
 
-const META = /<meta http-equiv="content-security-policy" content="[^"]*">\n/;
+const META = /<meta http-equiv="content-security-policy" content="[^"]*">\n/i;
 const problems = [];
 let bodyScript = null;
 for (const name of PAGES) {
   const file = new URL(name, DIR);
   const original = readFileSync(file, "utf8");
   let html = original.replace(META, "");
-  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  const inline = scriptTags(html).filter(([, attrs]) => attrs.trim() === "");
   // first run: the page still carries its big inline script; move it out (it is identical on every page)
   if (inline.length === 2) {
     if (bodyScript !== null && bodyScript !== inline[1][1]) problems.push(`${name}: page script differs from the other pages`);
@@ -45,7 +46,7 @@ for (const name of PAGES) {
     continue;
   }
   if (/\son[a-z]+="/i.test(html) || /href="javascript:/i.test(html)) problems.push(`${name}: inline event handlers or javascript: URLs are not allowed`);
-  const prePaint = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)][0][1];
+  const prePaint = scriptTags(html).filter(([, attrs]) => attrs.trim() === "")[0][2];
   const hash = createHash("sha256").update(prePaint).digest("base64");
   html = html.replace('<meta charset="utf-8">\n', `<meta charset="utf-8">\n<meta http-equiv="content-security-policy" content="${policy(hash)}">\n`);
   if (!html.includes("content-security-policy")) problems.push(`${name}: no <meta charset="utf-8"> line to anchor the policy`);

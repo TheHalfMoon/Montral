@@ -12,9 +12,24 @@ import { ROOT, read } from "./helpers";
 const overlay = read("docker-compose.byoc.yml");
 
 function appEnvironment(yml: string): Map<string, string> {
-  const block = yml.match(/^ {2}montral:\n(?: {4}.*\n|\s*\n)*? {4}environment:\n((?: {6}.*\n|\s*\n)+)/m);
-  if (!block) throw new Error("no environment block for the montral service");
-  return new Map([...block[1].matchAll(/^ {6}([A-Z][A-Z0-9_]*):\s*(.*)$/gm)].map((m) => [m[1], m[2].trim()]));
+  const lines = yml.split(/\r?\n/);
+  const service = lines.findIndex((line) => /^ {2}montral:\s*(?:#.*)?$/.test(line));
+  if (service < 0) throw new Error("no environment block for the montral service");
+  let environment = -1;
+  for (let i = service + 1; i < lines.length; i++) {
+    if (/^ {2}\S/.test(lines[i])) break;
+    if (/^ {4}environment:\s*(?:#.*)?$/.test(lines[i])) { environment = i; break; }
+  }
+  if (environment < 0) throw new Error("no environment block for the montral service");
+  const values = new Map<string, string>();
+  for (let i = environment + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() && !/^ {6}\S/.test(line)) break;
+    const value = /^ {6}([A-Z][A-Z0-9_]*):\s*(.*)$/.exec(line);
+    if (value) values.set(value[1], value[2].trim());
+  }
+  if (!values.size) throw new Error("no environment block for the montral service");
+  return values;
 }
 
 describe("docker-compose.byoc.yml", () => {
@@ -50,6 +65,11 @@ describe("docker-compose.byoc.yml", () => {
     for (const k of ["SMTP_URL", "SMTP_HOST", "RESEND_API_KEY", "GITHUB_CLIENT_ID", "OIDC_ISSUER", "APNS_KEY", "PROBE_REGIONS", "TURNSTILE_SITE_KEY", "PLAUSIBLE_DOMAIN", "LEMONSQUEEZY_API_KEY", "MONTRAL_BILLING_ENABLED"]) {
       expect(env.has(k), k).toBe(false);
     }
+  });
+
+  it("rejects a malformed service block with many blank lines without regex backtracking", () => {
+    const malformed = `  montral:\n${"\n".repeat(50_000)}   `;
+    expect(() => appEnvironment(malformed)).toThrow("no environment block for the montral service");
   });
 });
 

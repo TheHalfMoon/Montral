@@ -4,6 +4,11 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8");
+const visibleText = (html: string) => html.replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "").replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "");
+
+it("ignores case-insensitive script and style blocks with whitespace before their closing angle bracket", () => {
+  expect(visibleText("before<SCRIPT>hidden()</SCRIPT ><style>hidden</style   >after")).toBe("beforeafter");
+});
 const comparisons = source("./seo-pages.ts");
 const useCases = source("../pages/for/index.astro");
 const terms = source("../pages/terms.astro");
@@ -61,7 +66,7 @@ describe.skipIf(!existsSync(distClient))("built public legal pages", () => {
     const html = readFileSync(file, "utf8");
     const head = /<head(?:\s[^>]*)?>([\s\S]*?)<\/head>/i.exec(html)?.[1] ?? "";
     expect(head).toMatch(/<meta\b(?=[^>]*\bname=["']robots["'])(?=[^>]*\bcontent=["']noindex,nofollow["'])[^>]*>/i);
-    const visible = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+    const visible = visibleText(html);
     expect(visible).toContain("Not in force.");
     expect(visible).toContain("\u5c1a\u672a\u751f\u6548");
     expect(visible).not.toMatch(/montral\.invalid/i);

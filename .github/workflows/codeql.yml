@@ -26,7 +26,7 @@ jobs:
       - name: Set up supported Go toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: terraform-provider-montral/go.sum
       - name: Check reachable Go vulnerabilities
         working-directory: terraform-provider-montral
@@ -56,7 +56,7 @@ jobs:
         if: matrix.language == 'go'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.27.3"
+          go-version: "1.27.4"
           cache-dependency-path: terraform-provider-montral/go.sum
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4

@@ -22,7 +22,7 @@ Reference pages for each resource and data source are in [`docs/`](docs/) (tfplu
 
 ## Build from source
 
-Requirements: Go 1.27.3 (see `go.mod`), and Terraform or OpenTofu.
+Requirements: Go 1.27.4 (see `go.mod`), and Terraform or OpenTofu.
 
 ```sh
 cd terraform-provider-montral

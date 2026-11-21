@@ -135,8 +135,35 @@ Remaining, in planned order (see `docs/TASK-LEDGER.md`):
    first-load banners, SCIM/SSO during suspension, `past_due_since` backfill, operator UI, live
    billing provider verification, probe registration and credentials.
 
-Grafana OnCall and other incident-response tools named in the brief are not yet in
-the table: their entries need the same primary-source verification before they are added.
+Grafana OnCall and other incident-response tools named in the brief are covered by
+the dated first-party-source addendum below; this does not make the historical table a live qualification.
+
+### Incident-response research addendum (2026-11-22)
+
+This addendum records a narrow, first-party-source comparison for the previously open
+ledger item 22. It supplements the capability snapshot above; it does not requalify
+the older matrix or imply feature parity. Competitor product scope and lifecycle
+statements were checked against their official documentation on the date shown.
+
+| Product | Verified capability / lifecycle fact | Montral comparison and product implication |
+|---|---|---|
+| Grafana OnCall OSS / Grafana Cloud IRM | Grafana's official migration guide says OnCall OSS entered maintenance mode on 2025-03-11 and was scheduled to be archived on 2026-03-24. Its documented migration surface includes integrations, escalation chains, routes, and on-call schedules; schedules can be represented in Terraform or via the API. | Montral already has schedules, escalation policies, REST, MCP, and a Terraform provider. Treat OSS as a migration/legacy reference rather than an active feature target. Grafana Cloud IRM is a distinct hosted destination; this does not establish its current operational status or pricing. |
+| incident.io | Its product documentation describes a hosted lifecycle spanning alert routing and on-call, incident response in Slack or Microsoft Teams, status pages, investigations, and post-incident follow-ups. Its API overview documents incident creation, configuration-as-code, programmatic escalations, on-call lookup, and SDKs for multiple languages. | Montral has alert integrations, on-call/escalation, incident timelines, status pages, postmortems, REST/MCP, and Terraform. A candidate opportunity to assess is integrated responder collaboration and workflow automation around incident channels. This is a hypothesis for user research and threat-modeling, not a confirmed Montral gap or commitment to build. |
+| PagerDuty + Atlassian Statuspage | Atlassian documents an integration that consumes PagerDuty incident webhooks and can create/update/resolve Statuspage incidents and degrade components, with rules and templates. | Montral already sends incident alerts to PagerDuty and supports status-page incidents, but the reviewed evidence does not establish an equivalent inbound PagerDuty-to-status-page automation. Validate demand and authorization semantics before implementing bidirectional sync. |
+| Checkly | Official alerting docs describe retries/backoff, configurable thresholds, failure/degradation/recovery alert types, and channel subscriptions scoped to checks. | Montral has incident detection thresholds, retries for notification delivery, reminders, and escalation policies. Checkly's per-check and location-aware alert policy is a potential workflow comparison; do not infer a missing feature without checking Montral's configuration and probe behavior first. |
+| Datadog | Official synthetic HTTP-test docs describe scheduled, on-demand, and CI runs from managed or private locations; alert conditions can combine a time window with an `n`-of-`N` location failure condition and retry attempts. | Montral's edge probes and region-confirmation path need their own current implementation/behavior evidence before asserting equivalent quorum semantics. Multi-region alert confirmation is an engineering assessment candidate. |
+
+First-party sources checked 2026-11-22:
+
+- Grafana OnCall lifecycle and migration: <https://grafana.com/docs/grafana-cloud/observe-and-act/respond-to-incidents/set-up/migrate/oncall-oss/>; <https://grafana.com/blog/grafana-oncall-maintenance-mode/>
+- incident.io product overview and API: <https://docs.incident.io/getting-started/what-is-incident-io>; <https://docs.incident.io/integrations/api-overview>
+- Atlassian Statuspage + PagerDuty integration: <https://support.atlassian.com/statuspage/docs/set-up-a-pagerduty-integration/>
+- Checkly alert policies: <https://www.checklyhq.com/docs/communicate/alerts/overview/>
+- Datadog synthetic HTTP tests and alert conditions: <https://docs.datadoghq.com/synthetics/api_tests/http_tests/>
+
+Research limitations: this was documentation research, not a hands-on trial, exhaustive
+feature audit, customer-demand study, or independent validation of vendor availability.
+No new Montral product behavior is claimed by this addendum.
 
 ## Sources
 

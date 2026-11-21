@@ -1337,6 +1337,32 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     }
   }, 20_000);
 
+  it("does not let a stale negative SSO-requirement cache authorize an old API key", async () => {
+    const owner = await signUp("replica-cache-owner");
+    const domain = `replica-cache-${rand}.test`;
+    const connection = await configure(owner, idpA, domain);
+    const member = await signUp("replica-cache-member", `replica-cache-member-${rand}@${domain}`);
+    await join(owner, member.email, member.jar);
+    const created = await call("/api/auth/api-key/create", {
+      method: "POST", jar: member.jar,
+      body: { name: "pre-SSO key", metadata: { organizationId: owner.orgId } },
+    });
+    expect(created.status, created.text).toBe(200);
+    expect(await asKey(created.body.key)).toBe(200); // primes this process's cached “not required” result
+
+    // Simulate another replica enabling SSO. Its local cache invalidation cannot clear this process's Map.
+    await q("UPDATE sso_connection SET require_sso = true WHERE id = $1::uuid", [connection]);
+    await q(
+      `DELETE FROM session s USING member m
+       WHERE m.organization_id = $1 AND m.user_id = s.user_id
+         AND NOT ('owner' = ANY (string_to_array(replace(m.role, ' ', ''), ',')))
+         AND NOT EXISTS (SELECT 1 FROM sso_session x WHERE x.session_id = s.id AND x.connection_id = $2)`,
+      [owner.orgId, connection],
+    );
+
+    expect(await asKey(created.body.key)).toBe(403);
+  });
+
   it("never logs a client secret, a code or an id_token", () => {
     const text = logged.join("\n");
     for (const secret of [idpA.clientSecret, idpB.clientSecret, ...idpA.issued, ...idpB.issued]) expect(text).not.toContain(secret);

@@ -218,17 +218,10 @@ export async function ssoRequiredFor(q: Query, userId: string): Promise<{ orgId:
   return rows.map((r) => ({ orgId: r.organization_id, connectionId: r.connection_id }));
 }
 
-// which connection a workspace requires: asked on every session request, so remembered briefly per isolate
-const requirementCache = new Map<string, { connectionId: string | null; until: number }>();
-export const REQUIREMENT_TTL_MS = 30_000;
-export const forgetSsoRequirement = (orgId: string) => requirementCache.delete(orgId);
-
+// Read the policy from PostgreSQL on every authorization check. A per-process negative cache can survive an owner
+// enabling require-SSO on another replica and temporarily authorize old sessions or derived credentials.
 export async function ssoRequirementOf(q: Query, orgId: string): Promise<string | null> {
-  const hit = requirementCache.get(orgId);
-  if (hit && hit.until > Date.now()) return hit.connectionId;
   const [row] = await q<{ id: string }>(`SELECT id::text AS id FROM sso_connection WHERE organization_id = $1::text AND enabled AND require_sso`, [orgId]);
-  if (requirementCache.size > 5000) requirementCache.clear();
-  requirementCache.set(orgId, { connectionId: row?.id ?? null, until: Date.now() + REQUIREMENT_TTL_MS });
   return row?.id ?? null;
 }
 

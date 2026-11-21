@@ -28,6 +28,7 @@ jobs:
           docker build --file Dockerfile --tag montral-app:security-scan .
           docker build --file Dockerfile --target browser-runner --tag montral-browser-runner:security-scan .
           docker build --file apps/probe/Dockerfile --tag montral-probe:security-scan .
+          docker build --file Dockerfile.postgres --tag montral-postgres:security-scan .
           docker pull postgres:18.7-alpine
       - name: Download Trivy 0.76.2 with a pinned checksum
         shell: bash
@@ -50,7 +51,7 @@ jobs:
             montral-app:security-scan \
             montral-browser-runner:security-scan \
             montral-probe:security-scan \
-            postgres:18.7-alpine; do
+            montral-postgres:security-scan; do
             if ! "$RUNNER_TEMP/trivy" image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --timeout 20m "$image"; then
               status=1
             fi

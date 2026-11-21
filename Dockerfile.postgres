@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+# Rebuild gosu with a current Go toolchain and install Alpine security updates in the shipped database image.
+# gosu v1.20 resolves to upstream commit 29b939aa5bd4dc588af765b8248f6e39150d2565.
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS gosu-build
+ARG TARGETOS
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go install github.com/tianon/gosu@v1.20
+
+FROM postgres:18.7-alpine
+RUN apk upgrade --no-cache
+COPY --from=gosu-build /go/bin/gosu /usr/local/bin/gosu

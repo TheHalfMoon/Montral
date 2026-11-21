@@ -14,6 +14,44 @@ permissions:
   actions: read
   security-events: write
 jobs:
+  container-image-audit:
+    name: Container image vulnerability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the source tree
+        uses: actions/checkout@v4
+      - name: Build the shipped images
+        run: |
+          docker build --file Dockerfile --tag montral-app:security-scan .
+          docker build --file Dockerfile --target browser-runner --tag montral-browser-runner:security-scan .
+          docker build --file apps/probe/Dockerfile --tag montral-probe:security-scan .
+          docker pull postgres:18.6-alpine
+      - name: Download Trivy 0.76.2 with a pinned checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="0.76.2"
+          bundle="$RUNNER_TEMP/trivy_${version}_Linux-64bit.tar.gz"
+          curl --fail --location --silent --show-error --retry 3 --output "$bundle" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${version}/trivy_${version}_Linux-64bit.tar.gz"
+          echo "bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf  $bundle" | sha256sum --check --status
+          tar -xzf "$bundle" -C "$RUNNER_TEMP" trivy
+          chmod +x "$RUNNER_TEMP/trivy"
+          test "$("$RUNNER_TEMP/trivy" --version | awk '/^Version:/ { print $2 }')" = "$version"
+      - name: Reject HIGH or CRITICAL findings in shipped images
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image in \
+            montral-app:security-scan \
+            montral-browser-runner:security-scan \
+            montral-probe:security-scan \
+            postgres:18.6-alpine; do
+            "$RUNNER_TEMP/trivy" image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 --timeout 20m "$image"
+          done
   go-dependency-audit:
     name: Go dependency vulnerability audit
     runs-on: ubuntu-latest

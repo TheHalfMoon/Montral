@@ -1,25 +1,25 @@
 # Montral release gates
 
-**Latest main security checkpoint (2026-11-21):** exact `main@07abcfaf438731afbf4da679ef7e55e252b6514e`; all 12/12 required exact-main push workflows succeeded. Latest alert snapshot: zero open CodeQL, Dependabot, and secret-scanning alerts (11 CodeQL fixed, 14 dismissed with evidence). This is not security clearance. The 65 historical Gitleaks matches include one owner/provider-unverified archived vendor example; #169 remains open. See [completion checkpoint](evidence/2026-11-21-completion-checkpoint.md). Community publication HOLD; Cloud/BYOC NO-GO; no owner `GREEN LIGHT MONTRAL`.
+**Verified product-code main baseline (2026-11-21):** exact `main@99556c862c7a68c3fd5b957023eae0d8ebd9a1a7`; all 12/12 required exact-main `push` workflows succeeded. Latest recorded open-alert snapshot: zero CodeQL, Dependabot and secret-scanning alerts (11 CodeQL fixed, 14 evidence-backed dismissals). This is not security clearance. The 65 historical Gitleaks matches include one owner/provider-unverified archived vendor example; #169 remains open. A fresh bounded Codex Security Workbench scan completed with 7/7 workstreams and a report, but was not a line-by-line or runtime assessment; the earlier scan remains incomplete. See [security qualification evidence](evidence/2026-11-21-security-qualification-update.md). Community publication HOLD; Cloud/BYOC NO-GO; no owner `GREEN LIGHT MONTRAL`.
 
-**Previous exact-main qualification (`98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`):** all 12/12 required push workflows succeeded on that earlier SHA. The repository's fail-closed `scripts/verify-main-workflows.py` verifier passed against its exact-SHA `push` run records. The newest SHA and run IDs are in the completion checkpoint above.
+**Verified baseline qualification (`99556c862c7a68c3fd5b957023eae0d8ebd9a1a7`):** all 12/12 required `push` workflows succeeded on this SHA. These exact-SHA records were fetched from GitHub and passed the repository's fail-closed `scripts/verify-main-workflows.py`. See the [security qualification evidence](evidence/2026-11-21-security-qualification-update.md).
 
 | Exact-main push workflow | GitHub Actions run | Result on this SHA |
 |---|---|---|
-| Windows Docker prerequisite safety | [44899983517](https://github.com/TheHalfMoon/Montral/actions/runs/44899983517) | SUCCESS |
-| Montral source integrity | [44899983511](https://github.com/TheHalfMoon/Montral/actions/runs/44899983511) | SUCCESS |
-| Montral Terraform provider | [44899983309](https://github.com/TheHalfMoon/Montral/actions/runs/44899983309) | SUCCESS |
-| Montral cross-browser and accessibility | [44899983345](https://github.com/TheHalfMoon/Montral/actions/runs/44899983345) | SUCCESS |
-| Montral failover qualification | [44899983387](https://github.com/TheHalfMoon/Montral/actions/runs/44899983387) | SUCCESS |
-| Montral upgrade, rollback and disaster recovery | [44899983329](https://github.com/TheHalfMoon/Montral/actions/runs/44899983329) | SUCCESS |
-| Montral browser checks | [44899983402](https://github.com/TheHalfMoon/Montral/actions/runs/44899983402) | SUCCESS |
-| Montral Docker Compose qualification | [44899983393](https://github.com/TheHalfMoon/Montral/actions/runs/44899983393) | SUCCESS |
-| Montral app CI | [44899983307](https://github.com/TheHalfMoon/Montral/actions/runs/44899983307) | SUCCESS |
-| Montral macOS PostgreSQL 18 qualification | [44899983524](https://github.com/TheHalfMoon/Montral/actions/runs/44899983524) | SUCCESS |
-| Montral load qualification | [44899983327](https://github.com/TheHalfMoon/Montral/actions/runs/44899983327) | SUCCESS |
-| Montral CodeQL code scanning | [44899983350](https://github.com/TheHalfMoon/Montral/actions/runs/44899983350) | SUCCESS |
+| Montral load qualification | [44925891646](https://github.com/TheHalfMoon/Montral/actions/runs/44925891646) | SUCCESS |
+| Montral macOS PostgreSQL 18 qualification | [44925891632](https://github.com/TheHalfMoon/Montral/actions/runs/44925891632) | SUCCESS |
+| Montral app CI | [44925891607](https://github.com/TheHalfMoon/Montral/actions/runs/44925891607) | SUCCESS |
+| Montral upgrade, rollback and disaster recovery | [44925891608](https://github.com/TheHalfMoon/Montral/actions/runs/44925891608) | SUCCESS |
+| Montral Docker Compose qualification | [44925891801](https://github.com/TheHalfMoon/Montral/actions/runs/44925891801) | SUCCESS |
+| Montral source integrity | [44925891624](https://github.com/TheHalfMoon/Montral/actions/runs/44925891624) | SUCCESS |
+| Windows Docker prerequisite safety | [44925891716](https://github.com/TheHalfMoon/Montral/actions/runs/44925891716) | SUCCESS |
+| Montral browser checks | [44925891692](https://github.com/TheHalfMoon/Montral/actions/runs/44925891692) | SUCCESS |
+| Montral Terraform provider | [44925891734](https://github.com/TheHalfMoon/Montral/actions/runs/44925891734) | SUCCESS |
+| Montral CodeQL code scanning | [44925891754](https://github.com/TheHalfMoon/Montral/actions/runs/44925891754) | SUCCESS |
+| Montral failover qualification | [44925891827](https://github.com/TheHalfMoon/Montral/actions/runs/44925891827) | SUCCESS |
+| Montral cross-browser and accessibility | [44925891689](https://github.com/TheHalfMoon/Montral/actions/runs/44925891689) | SUCCESS |
 
-The historical 12 run records above were collected with `gh run list --commit 98239eafb6ba29e7ed73e224e4e5dc281e2c16d2 --event push`. The exact-main verifier reported `PASS: 12 exact-main push workflows successful for 98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`. This is integration evidence, not a security clearance or authorization to publish, deploy, tag, or release.
+The 12 run records above were collected with `gh run list --commit 99556c862c7a68c3fd5b957023eae0d8ebd9a1a7 --event push`. They are integration evidence, not a security clearance or authorization to publish, deploy, tag, or release. The prior 98239 qualification is historical; its evidence remains in [the 2026-11-21 completion checkpoint](evidence/2026-11-21-completion-checkpoint.md).
 
 **Historical integrated-main qualification (2026-11-15):** `main@2bbbca8f1efa87fd3f408037170f3f10b5338009` includes #149, the web-first/PWA stack (#129–#135, #152), secretless phone management (#151), and scoped dependency security updates (#153). All **11/11 GitHub Actions push workflows completed successfully on this exact main SHA**. This is integrated CI qualification, **not** authorization to publish, deploy, tag or release. It does not establish independent penetration testing, physical Safari/VoiceOver coverage, real-provider readiness or a complete dependency audit. Community stays HOLD; Cloud and Enterprise BYOC stay NO-GO.
 
@@ -69,7 +69,7 @@ Every CI gate below passed on GitHub Actions at `b01e28e` (`main` after #73). Ru
 | G10 | Terraform provider acceptance (unpublished) | PASS | 42950068326: 22 TestAcc passed, 0 skipped, 0 failed |
 | G11 | Vendored source integrity | PASS | 42950068583 |
 | G12 | Review of every merged change, all findings fixed or recorded | PASS, with a recorded process gap | `docs/FINAL-REPORT.md` §2 (agent reviews in the engineering sessions, mostly not posted to GitHub). The former gaps (#47/#48 fixes not re-reviewed, #53 security review) were closed by re-reviews on 2026-11-10 (ledger 33); accepted lows in ledger 26–41. Two GitHub review comments (#63, #67) were missed before merge and fixed by #71 and #70; the agent re-reviews are session records, not GitHub reviews |
-| G13 | No open critical, high or medium security finding | **BLOCKED**: issue #183 reports 25 open CodeQL alerts (19 high, 6 medium scanner severity); per-alert validation is pending SARIF. Issue #169 historical patterns are unresolved. | [Current security evidence](evidence/2026-11-21-security-alert-status-recheck.md); no third-party penetration test |
+| G13 | No open critical, high or medium security finding | **BLOCKED: unable to establish this gate**. #183 triage is complete (11 fixes, 14 evidence-backed false-positive dismissals), but the archived vendor-example pattern under #169 remains unverified; the fresh source-only scan is bounded and not a line-by-line/runtime assessment, and no independent external security assessment or penetration test is claimed. This does not establish that a high-severity vulnerability exists. | [Current security qualification evidence](evidence/2026-11-21-security-qualification-update.md); [CodeQL triage evidence](evidence/2026-11-21-codeql-alert-triage.md) |
 | G14 | Several replicas behind a load balancer (one host) | PASS | 42950068358: REPLICAS_PASS (one session, client attribution, webhooks once, rolling restart 0 failures, no run executed by both replicas, one incident) |
 | G15 | Native Safari on physical Apple hardware — public landing | PASS (scoped) | #62: Safari 26.6.2 / macOS 26.6.2, real WebDriver session, 8/8 at `dc02d02`; the signed-in app is not covered (see below) |
 

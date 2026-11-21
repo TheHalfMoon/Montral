@@ -1,13 +1,13 @@
 # Montral release-readiness report
 
-**Latest exact-main security and CI checkpoint (2026-11-21):** fetched `origin/main` is `07abcfaf438731afbf4da679ef7e55e252b6514e`; all **12/12 exact-SHA push workflows passed**. The latest alert snapshot is zero open CodeQL, Dependabot, and secret-scanning alerts; 11 CodeQL alerts were fixed and 14 source-validated false positives dismissed. The 65 historical Gitleaks matches include one archived vendor-example sample whose operational use and validity remain unknown. No independent external security audit, native physical-device qualification, or real-provider validation is claimed. See [current completion checkpoint](evidence/2026-11-21-completion-checkpoint.md). Community publication stays HOLD; Cloud and Enterprise BYOC remain NO-GO.
+**Verified product-code main baseline (2026-11-21):** `main@99556c862c7a68c3fd5b957023eae0d8ebd9a1a7`; all **12/12 exact-SHA push workflows passed**. The latest recorded alert snapshot is zero open CodeQL, Dependabot and secret-scanning alerts; CodeQL triage has 11 fixes and 14 evidence-backed false-positive dismissals. The 65 historical Gitleaks matches include one archived vendor example whose operational deployment and any resulting credential's validity/rotation remain unknown. A prior local Workbench scan remains incomplete; a separate fresh source scan completed with a report and 7/7 workstreams across 1,046 indexed files, but was not line-by-line or runtime testing and is not a zero-vulnerability conclusion. No independent external security audit, signed-in native Safari/VoiceOver or physical iOS qualification, or real-provider validation is claimed. See [security qualification evidence](evidence/2026-11-21-security-qualification-update.md). Community publication stays HOLD; Cloud and Enterprise BYOC remain NO-GO.
 
 
 **Historical integration status (2026-11-13; superseded by the current qualification above): FULL PRODUCT NO-GO; COMMUNITY PUBLICATION HOLD.** The code-integrated `main` baseline inspected for this report (before the documentation-only update) is **`b624cfe`**. PRs #113 (SSO suspension), #114 (first-tab notices), #115 (legacy plan-catalog meter warnings) and #116 (in-flight observation/heartbeat suspension fence) are **merged** as `09735b9`, `2e0dc98`, `cffb9b5` and `b624cfe` respectively. Each PR passed **16/16 exact-head GitHub checks** before merging. The final integrated **`main@b624cfe` push CI is not yet proven complete**, so do not represent its aggregate checks as green until the exact-head runs finish. A disposable local integration merge of #114–#116 had zero conflicts, full monorepo typechecking passed, and 41/41 targeted unit tests passed; this is not a substitute for final hosted PostgreSQL/browser validation. Historical self-hosted candidate `3fbc6e6` remains prior evidence, not authorization to publish the current main.
 
 Montral Cloud and Enterprise BYOC remain NO-GO pending external provider validation, authorized production infrastructure, legal/privacy review, resilience testing and independent security assessment. No release, tag, live payment, deployment or spend is authorized.
 
-**Status: CORE ENGINEERING QUALIFIED; SECURITY TRIAGE IN PROGRESS — PUBLICATION HOLD.**
+**Status: ENGINEERING QUALIFICATION IS REVISION-SCOPED; SECURITY AND RELEASE QUALIFICATION REMAIN INCOMPLETE — PUBLICATION HOLD.**
 Nothing is released, deployed, packaged, published or tagged; that requires the owner's explicit authorization
 (`GREEN LIGHT MONTRAL`). A public repository is not release authorization. No paid service was enabled and no cost was
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
@@ -21,11 +21,11 @@ prioritised task list is [TASK-LEDGER.md](TASK-LEDGER.md); the competitor compar
 
 | Target | Decision | Why |
 |---|---|---|
-| **Self-hosted Docker release (Community)** | **GO-eligible, once `GREEN LIGHT MONTRAL` is given** | Ships from `3fbc6e6`. Every release blocker in the ledger is closed with evidence, and every mandatory gate in [RELEASE-GATES.md](RELEASE-GATES.md) §A passes. All ten CI workflows passed at `b01e28e` and again at the candidate `3fbc6e6` on Linux (PostgreSQL 17 and the exact shipped 18.6 image) and macOS ARM64. The Docker image, compose stack, upgrade from `17f55c1`, rollback and disaster recovery are qualified. No critical, high or medium security finding is open; open items are low severity and listed. |
+| **Self-hosted Docker release (Community)** | **HOLD** | Current security qualification is incomplete. #169 retains an owner/provider-unverified historical vendor example; the local Codex Security scan has no committed Workbench completion/report; independent security and legal/privacy approvals remain outstanding. Historical CI on `3fbc6e6` does not qualify current main for publication. The owner's `GREEN LIGHT MONTRAL` is also required. |
 | **Public hosted service (SaaS)** | **NO-GO** | No production host or deployment authorization. No external SMTP, APNs or payment provider qualification. No multi-node or multi-region capacity qualification, no managed PITR, no third-party penetration test. |
 
 Per delivery model (SaaS stages #74–#84, requalified at `3fbc6e6`; see §12 and [RELEASE-GATES.md](RELEASE-GATES.md) §S):
-**Community** GO-eligible, pending the owner's release decision; **Montral Cloud** NO-GO; **Enterprise BYOC** NO-GO —
+**Community** HOLD; **Montral Cloud** NO-GO; **Enterprise BYOC** NO-GO —
 reference qualified, not commercially released.
 
 ## 2. Work merged in this round (since `17f55c1`)

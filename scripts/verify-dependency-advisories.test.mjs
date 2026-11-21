@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parseAdvisoryOutput, summarizeAdvisoryReport } from "./verify-dependency-advisories.mjs";
+
+const packageJson = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+const lockfile = readFileSync(new URL("../pnpm-lock.yaml", import.meta.url), "utf8");
 
 const counts = (updates = {}) => ({
   info: 0, low: 0, moderate: 0, high: 0, critical: 0, ...updates,
@@ -8,6 +12,13 @@ const counts = (updates = {}) => ({
 const report = (updates = {}, advisories = {}) => ({
   metadata: { vulnerabilities: counts(updates) },
   advisories,
+});
+
+test("AJV resolves fast-uri to the fixed 3.1.9 release", () => {
+  assert.equal(packageJson.pnpm.overrides["ajv@8.20.0>fast-uri"], "3.1.9");
+  assert.match(lockfile, /^  fast-uri@3\.1\.9:\n    resolution: \{integrity: sha512-[^\n]+\}$/m);
+  assert.doesNotMatch(lockfile, /^  fast-uri@3\.1\.8:/m);
+  assert.match(lockfile, /^  ajv@8\.20\.0:\n    dependencies:\n      fast-deep-equal: 3\.1\.3\n      fast-uri: 3\.1\.9$/m);
 });
 
 test("zero advisories allow the security gate", () => {

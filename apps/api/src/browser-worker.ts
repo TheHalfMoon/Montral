@@ -45,6 +45,7 @@ export function chromiumArgs(heapMb: number): string[] {
     "--disable-domain-reliability",
     "--disable-sync",
     "--disable-breakpad",
+    "--disable-crash-reporter",
     "--disable-client-side-phishing-detection",
     "--metrics-recording-only",
     "--mute-audio",

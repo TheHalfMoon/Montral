@@ -4,7 +4,14 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine@sha256:70bd7ddea8b6cbe5d6943cde279d6b67feb10cc924fb9100d1d8757c1575b280 AS gosu-build
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go install github.com/tianon/gosu@v1.20
+RUN apk add --no-cache git \
+ && git init /src \
+ && git -C /src remote add origin https://github.com/tianon/gosu.git \
+ && git -C /src fetch --depth 1 origin 29b939aa5bd4dc588af765b8248f6e39150d2565 \
+ && git -C /src checkout --detach FETCH_HEAD \
+ && test "$(git -C /src rev-parse HEAD)" = 29b939aa5bd4dc588af765b8248f6e39150d2565 \
+ && cd /src \
+ && CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o /go/bin/gosu .
 
 FROM postgres:18.7-alpine
 RUN apk upgrade --no-cache

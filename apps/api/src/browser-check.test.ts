@@ -201,7 +201,7 @@ describe("worker supervision", () => {
     for (const mode of ["#bad-types", "#page-text", "#bad-shot"]) {
       const out = await browserCheck({ target: "x", browser: journey(mode) }, { worker: fake });
       expect(out, mode).toMatchObject({ ok: false, inconclusive: true, error: REPORT_MALFORMED, browser: { kind: "error", error: REPORT_MALFORMED } });
-      expect(JSON.stringify(out), mode).not.toMatch(/alice@example.com|4111|<script>/);
+      expect(JSON.stringify(out), mode).not.toMatch(/alice@example.com|4111|<script\b[^>]*>/i);
     }
     const extra = await browserCheck({ target: "x", browser: journey("#extra") }, { worker: fake });
     expect(extra.ok).toBe(true);

@@ -230,7 +230,7 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
   });
 
   // Same narrow WebKit exclusion as the signed-in journey: a navigation cancelling an in-flight same-origin /api fetch.
-  const host = new URL(baseURL!).host.replace(/\./g, "\\.");
+  const host = new URL(baseURL!).host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const webkitCancelled = new RegExp(String.raw`: uncaught Fetch API cannot load http:\s?/+` + host + String.raw`/api/\S* due to access control checks\.$`);
   expect(guard.errors.filter((e) => !(browserName === "webkit" && webkitCancelled.test(e))), "console errors or uncaught exceptions").toEqual([]);
   // the only failed responses are the refusals this test answers itself

@@ -204,11 +204,14 @@ function setTheme(t){
 /* ---------- sample monitors and uptime bars (deterministic, synthetic) ---------- */
 function rng(s){return function(){s=(s*1664525+1013904223)%4294967296;return s/4294967296}}
 function bars(n,seed,w,d){
-  var r=rng(seed),out='';
+  var r=rng(seed),out=document.createDocumentFragment();
   for(var i=0;i<n;i++){
     var c=d.indexOf(i)>-1?'d':w.indexOf(i)>-1?'w':'';
     var h=c?100:(64+Math.floor(r()*36));
-    out+='<i class="'+c+'" style="height:'+h+'%"></i>';
+    var bar=document.createElement('i');
+    bar.className=c;
+    bar.style.height=h+'%';
+    out.appendChild(bar);
   }
   return out;
 }
@@ -221,17 +224,24 @@ var MON=[
 var STC={up:'st.up',deg:'st.deg',down:'st.down'};
 var box=document.getElementById('mons');
 function renderMonitors(){
-  box.innerHTML='';
+  box.replaceChildren();
   MON.forEach(function(m){
-    box.insertAdjacentHTML('beforeend',
-      '<div class="mon"><div class="mon-n"><span class="st '+m.s+'" role="img" aria-label="'+tr(STC[m.s])+'"></span><div>'+tr(m.k)+'<small>'+m.m+'</small></div></div>'+
-      '<div class="bars" aria-hidden="true">'+bars(90,m.seed,m.w,m.d)+'</div><div class="mon-v"><b>'+m.u+'</b>'+m.ms+'</div></div>');
+    var item=document.createElement('div');item.className='mon';
+    var name=document.createElement('div');name.className='mon-n';
+    var status=document.createElement('span');status.className='st '+m.s;status.setAttribute('role','img');status.setAttribute('aria-label',tr(STC[m.s]));
+    var label=document.createElement('div');label.appendChild(document.createTextNode(tr(m.k)));
+    var detail=document.createElement('small');detail.textContent=m.m;label.appendChild(detail);
+    name.append(status,label);
+    var chart=document.createElement('div');chart.className='bars';chart.setAttribute('aria-hidden','true');chart.appendChild(bars(90,m.seed,m.w,m.d));
+    var value=document.createElement('div');value.className='mon-v';
+    var uptime=document.createElement('b');uptime.textContent=m.u;value.append(uptime,document.createTextNode(m.ms));
+    item.append(name,chart,value);box.appendChild(item);
   });
 }
 document.querySelectorAll('[data-bars]').forEach(function(el){
   var num=function(a){return a?a.split(',').map(Number):[]};
   el.setAttribute('aria-hidden','true');
-  el.innerHTML=bars(90,+el.dataset.bars,num(el.dataset.w),num(el.dataset.d));
+  el.replaceChildren(bars(90,+el.dataset.bars,num(el.dataset.w),num(el.dataset.d)));
 });
 
 /* ---------- product tour tabs (WAI-ARIA tabs pattern) ---------- */

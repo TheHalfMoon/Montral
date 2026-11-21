@@ -4,6 +4,33 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = (relative: string) => readFileSync(new URL(relative, import.meta.url), "utf8");
+const isTagBoundary = (character: string) => character === ">" || character === "/" || character === " " || character === "\t" || character === "\n" || character === "\r" || character === "\f";
+function stripRawElement(html: string, name: "script" | "style"): string {
+  let lower = html.toLowerCase();
+  let cursor = 0;
+  while (cursor < html.length) {
+    const start = lower.indexOf(`<${name}`, cursor);
+    if (start < 0) break;
+    const afterName = start + name.length + 1;
+    if (!isTagBoundary(lower[afterName] ?? "")) { cursor = afterName; continue; }
+    const openEnd = lower.indexOf(">", afterName);
+    if (openEnd < 0) break;
+    let close = lower.indexOf(`</${name}`, openEnd + 1);
+    while (close >= 0 && !isTagBoundary(lower[close + name.length + 2] ?? "")) close = lower.indexOf(`</${name}`, close + name.length + 2);
+    if (close < 0) break;
+    const closeEnd = lower.indexOf(">", close + name.length + 2);
+    if (closeEnd < 0) break;
+    html = html.slice(0, start) + html.slice(closeEnd + 1);
+    lower = html.toLowerCase();
+    cursor = start;
+  }
+  return html;
+}
+const visibleText = (html: string) => stripRawElement(stripRawElement(html, "script"), "style");
+
+it("ignores case-insensitive script and style blocks with end-tag attributes", () => {
+  expect(visibleText("before<SCRIPT>hidden()</SCRIPT\t\n bar ><style>hidden</style foo >after")).toBe("beforeafter");
+});
 const comparisons = source("./seo-pages.ts");
 const useCases = source("../pages/for/index.astro");
 const terms = source("../pages/terms.astro");
@@ -61,7 +88,7 @@ describe.skipIf(!existsSync(distClient))("built public legal pages", () => {
     const html = readFileSync(file, "utf8");
     const head = /<head(?:\s[^>]*)?>([\s\S]*?)<\/head>/i.exec(html)?.[1] ?? "";
     expect(head).toMatch(/<meta\b(?=[^>]*\bname=["']robots["'])(?=[^>]*\bcontent=["']noindex,nofollow["'])[^>]*>/i);
-    const visible = html.replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, "").replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, "");
+    const visible = visibleText(html);
     expect(visible).toContain("Not in force.");
     expect(visible).toContain("\u5c1a\u672a\u751f\u6548");
     expect(visible).not.toMatch(/montral\.invalid/i);

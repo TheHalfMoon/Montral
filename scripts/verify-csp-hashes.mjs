@@ -5,6 +5,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { scriptTags } from "./html-script-tags.mjs";
 
 const root = process.argv[2] ?? "apps/web/dist/client";
 const pages = [];
@@ -21,7 +22,7 @@ let checked = 0;
 let astroPages = 0;
 for (const file of pages) {
   const html = readFileSync(file, "utf8");
-  const meta = /<meta http-equiv="content-security-policy" content="([^"]*)"/.exec(html);
+  const meta = /<meta http-equiv="content-security-policy" content="([^"]*)"/i.exec(html);
   // Hand-written files in public/ (the landing page and its translations) are not built by Astro.
   if (!html.includes("/_astro/") && !meta) continue;
   astroPages++;
@@ -30,7 +31,7 @@ for (const file of pages) {
   if (!scriptSrc) problems.push(`${relative(root, file)}: no script-src`);
   if (/'unsafe-inline'|'unsafe-eval'/.test(scriptSrc)) problems.push(`${relative(root, file)}: script-src allows unsafe-*`);
   const allowed = new Set([...scriptSrc.matchAll(/'sha256-([^']+)'/g)].map((m) => m[1]));
-  for (const m of html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)) {
+  for (const m of scriptTags(html)) {
     const attrs = m[1];
     if (/\bsrc=/.test(attrs) || !m[2].trim()) continue;
     const type = /\btype="([^"]*)"/.exec(attrs)?.[1]?.toLowerCase() ?? "";

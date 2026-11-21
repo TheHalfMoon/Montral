@@ -328,7 +328,7 @@ test("signed-in journey: monitors, status pages, password page, webhook inbox", 
   // "NetworkError when attempting to fetch resource" and fails the journey, so a missing handler is caught in two more
   // engines even if WebKit's wording ever changed. The filter matches only this exact message for this server's
   // origin and /api paths, and only in WebKit.
-  const host = new URL(baseURL!).host.replace(/\./g, "\\.");
+  const host = new URL(baseURL!).host.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const webkitCancelled = new RegExp(String.raw`: uncaught Fetch API cannot load http:\s?/+` + host + String.raw`/api/\S* due to access control checks\.$`);
   const cancelledByNavigation = (e: string) => browserName === "webkit" && webkitCancelled.test(e);
   expect(guard.errors.filter((e) => !cancelledByNavigation(e)), "console errors or uncaught exceptions during the journey").toEqual([]);

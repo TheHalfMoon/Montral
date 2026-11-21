@@ -25,7 +25,7 @@ These workflows qualify that commit only. They do not establish security clearan
 
 The latest verified GitHub snapshot reported zero open CodeQL, Dependabot, and secret-scanning alerts; the CodeQL history had 11 fixed and 14 dismissed findings. Dependabot vulnerability alerts/security updates, secret scanning/push protection, and private vulnerability reporting were enabled. Non-provider secret-pattern scanning and validity checks remained disabled. Counts are point-in-time tool records, not proof that the source is secure.
 
-Issues #183 and #169 both remain open/closed according to current repository state: #183 is closed after source validation of the 25 CodeQL records (11 fixes and 14 evidence-backed false-positive dismissals); #169 remains open for the historical vendor-example verification and broader release evidence. The GitHub advanced CodeQL workflow is preserved.
+#183 is closed after source validation of the 25 CodeQL records (11 fixes and 14 evidence-backed false-positive dismissals). #169 remains open for historical vendor-example verification and broader release evidence. The GitHub advanced CodeQL workflow is preserved.
 
 ## Full-history secret-pattern review
 

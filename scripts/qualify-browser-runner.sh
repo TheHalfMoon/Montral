@@ -80,6 +80,8 @@ grep -q 'unconfined' <<<"$secopt" && { echo "runner seccomp is unconfined" >&2; 
 echo "== PID 1 reaps: a worker killed mid-journey leaves no zombie and no Chromium behind"
 "${compose[@]}" exec -T browser-runner sh -c 'tr "\0" " " < /proc/1/cmdline' | grep -q 'docker-init' || { echo "runner PID 1 is not an init (init: true)" >&2; exit 1; }
 crash_job='{"config":{"steps":[{"action":"goto","url":"https://example.com/"},{"action":"waitFor","selector":"#never","timeoutMs":20000}],"timeoutMs":30000},"secrets":{},"policy":{"allowPrivate":false},"sandbox":true}'
+# surface Chromium's launch error before the process-supervision assertion, whose worker protocol deliberately masks it
+"${compose[@]}" exec -T browser-runner sh -c "echo '$crash_job' | node /app/browser-worker.mjs --probe >/tmp/montral-browser-probe.log 2>&1; cat /tmp/montral-browser-probe.log; grep -q '\"ok\":true' /tmp/montral-browser-probe.log"
 # start a worker directly (as the runner would), let Chromium come up, then SIGKILL the worker alone
 # (only the node process whose argv is exactly "node /app/browser-worker.mjs": this shell's own command line names it too)
 "${compose[@]}" exec -T browser-runner sh -c "cd /tmp && (echo '$crash_job' | node /app/browser-worker.mjs >/tmp/montral-browser-worker.log 2>&1 &) ; sleep 6; killed=0; for p in /proc/[0-9]*; do if [ \"\$(tr '\\0' ' ' < \$p/cmdline 2>/dev/null)\" = 'node /app/browser-worker.mjs ' ]; then kill -9 \${p#/proc/} && killed=\$((killed+1)); fi; done; echo \"  killed \$killed worker(s)\"; if [ \$killed -lt 1 ]; then cat /tmp/montral-browser-worker.log; exit 1; fi"

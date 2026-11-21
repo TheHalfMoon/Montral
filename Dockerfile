@@ -16,18 +16,16 @@ RUN node scripts/gen-migrations.mjs && pnpm --filter @montral/api build:node \
 # Optional browser-runner image for browser (multi-step) checks, used by docker-compose.browser.yml next to the default
 # app image: `docker compose -f docker-compose.yml -f docker-compose.browser.yml up -d --build`. It contains only the
 # runner service, the per-check worker and Chromium: no API server, no web build, and it is given no database URL and
-# no app secrets. Debian-based because Playwright ships no Chromium for musl (Alpine). See /docs/self-host#browser-checks.
-FROM node:22.23.4-trixie-slim AS browser-runner
-ENV NODE_ENV=production PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+# no app secrets. The runner uses the Alpine Chromium package with its explicit executable path. See /docs/self-host#browser-checks.
+FROM node:22.23.4-alpine AS browser-runner
+ENV NODE_ENV=production BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 WORKDIR /app
-# playwright-core pinned to the version apps/api and e2e use (guards/browser-runtime.test.ts keeps them equal); the
-# Chromium headless shell and its system libraries come from that version
-RUN apt-get update && apt-get upgrade -y \
+# Alpine's Chromium package provides the browser executable; Playwright-core remains pinned to the app and e2e version.
+RUN apk add --no-cache chromium \
  && npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts playwright-core@1.64.1 \
- && npx --no-install playwright-core install --with-deps --only-shell chromium \
- && rm -rf /var/lib/apt/lists/* /root/.npm /root/.cache /tmp/* \
+ && rm -rf /root/.npm /root/.cache /tmp/* \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-v1.22.22 \
- && chmod -R a+rX /ms-playwright
+ && chmod -R a+rX /usr/lib/chromium
 COPY --from=build /src/apps/api/dist/browser-runner.mjs ./browser-runner.mjs
 COPY --from=build /src/apps/api/dist/browser-worker.mjs ./browser-worker.mjs
 USER node

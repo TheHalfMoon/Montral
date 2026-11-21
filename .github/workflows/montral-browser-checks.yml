@@ -94,7 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for image in postgres:18.7-alpine node:22.23.4-alpine node:22.23.4-trixie-slim; do
+          for image in postgres:18.7-alpine node:22.23.4-alpine; do
             for attempt in 1 2 3 4 5; do
               docker pull -q "$image" && continue 2
               sleep $((attempt * 5))

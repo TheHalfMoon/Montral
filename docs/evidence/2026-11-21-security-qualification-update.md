@@ -37,7 +37,7 @@ The most recent full-history review recorded 65 pattern matches across 6 commits
 - 2 APNs test-only ephemeral key-generation code matches;
 - 1 opaque 32-character hexadecimal value in `laravel-echo-server.json.example`, under `clients[0].key`.
 
-The last match is not proven to be either a live credential or a harmless placeholder. Its operational use, provider validity and rotation status remain unknown. Only the credential owner/provider can establish those facts. No value is reproduced here; no credential was tested, changed, revoked or rotated. The scanner's raw historical report was not retained.
+Git history shows this file entered the repository in the archived vendor donor snapshot from Webhook.site commit `96b7b4275b4481eedd8a3f052aa44642eb3b4ae2`. A metadata-safe comparison against that upstream file found the archived example byte-for-byte identical, including the `clients[0].key` field; the matched value was never printed or retained. This establishes that the pattern came from the upstream sample. It does not show whether a deployment used that sample as an operational credential or whether any resulting credential was rotated. Only the credential owner/provider can establish those facts. No credential was tested, changed, revoked or rotated. The scanner's raw historical report was not retained.
 
 On exact `main@99556c8`, source-integrity run [44925891624](https://github.com/TheHalfMoon/Montral/actions/runs/44925891624) reported 229 post-baseline commits and zero new historical matches. Its current-tree scan reported 21 reviewed fixtures, zero unexpected matches and zero stale approvals. This gate prevents new matches in its configured scope; it does not clear the historical vendor example or prove that it was never operational.
 

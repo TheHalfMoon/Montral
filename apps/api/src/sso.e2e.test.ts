@@ -19,6 +19,8 @@ const env = {
   BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123",
   BETTER_AUTH_URL: origin,
   WEB_ORIGIN: origin,
+  // Isolate this file's synthetic signup traffic from the shared IP quota of parallel E2E files.
+  TRUST_PROXY: "true",
   // the synthetic identity providers listen on 127.0.0.1 over plain http
   SSO_ALLOW_PRIVATE_IDP: "true",
 };
@@ -76,6 +78,7 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
   // published TXT records: a name may hold several values (two workspaces publishing for the same domain)
   const txt = new Map<string, string[]>();
   const publish = (name: string, value: string) => txt.set(name, [...(txt.get(name) ?? []), value]);
+  let rateLimitCounter = 1;
   let idpA: SyntheticIdp;
   let idpB: SyntheticIdp;
   const rand = crypto.randomUUID().slice(0, 8);
@@ -83,12 +86,14 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
   const domainB = `corp-b-${rand}.test`;
 
   async function call(path: string, init: { method?: string; body?: unknown; jar?: Jar; key?: string; env?: object } = {}): Promise<Res> {
-    const headers: Record<string, string> = { origin };
+    // Avoid exhausting production-sized per-IP quotas when this large suite runs beside other E2E files.
+    const testIp = `2001:db8:71:${(rateLimitCounter++).toString(16)}::1`;
+    const headers: Record<string, string> = { origin, "x-forwarded-for": testIp };
     if (init.body !== undefined) headers["content-type"] = "application/json";
     const cookie = init.jar?.header();
     if (cookie) headers.cookie = cookie;
     if (init.key) headers["x-api-key"] = init.key;
-    const r = await app.fetch(new Request(origin + path, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), (init.env ?? env) as never);
+    const r = await app.fetch(new Request(origin + path, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), { ...env, ...init.env } as never);
     init.jar?.take(r.headers);
     const text = await r.text();
     let body: any = null;

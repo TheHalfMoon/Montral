@@ -18,6 +18,7 @@ Owner settings updates now compare the exact PostgreSQL `updated_at` revision re
 - A deterministic PostgreSQL regression holds the stale owner snapshot while a second owner update changes the client. The stale request receives 409 and cannot restore the old client.
 - Focused final PostgreSQL race cases on the rebased main head: **4 passed** (three callback identity variants and one stale concurrent owner update).
 - Complete SSO end-to-end and OIDC suites on a fresh disposable PostgreSQL database at the rebased head: **61 passed, 0 failed**.
+- The SSO E2E harness uses synthetic per-request documentation-range IPs with trusted-proxy parsing enabled, so its traffic does not consume parallel suites' test quota buckets. Production rate limits and runtime behavior are unchanged; rate-limit controls are exercised in their dedicated tests.
 - API TypeScript check: passed. Node API production build: passed. `scripts/verify_sources.py`: passed. `git diff --check`: passed.
 - Independent post-patch, read-only security review found no actionable issue. This review is not release approval or a full repository security audit.
 

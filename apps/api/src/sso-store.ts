@@ -63,10 +63,10 @@ const SELECT = `SELECT c.id::text AS id, c.organization_id, c.issuer, c.client_i
   FROM sso_connection c`;
 
 /** A connection by id ("instance" included), whatever its state. */
-export async function connectionById(q: Query, env: Bindings, id: string): Promise<SsoConnection | null> {
+export async function connectionById(q: Query, env: Bindings, id: string, options: { lock?: boolean } = {}): Promise<SsoConnection | null> {
   if (id === INSTANCE_CONNECTION) return instanceConnection(env);
   if (!UUID.test(id)) return null;
-  const [row] = await q<Row>(`${SELECT} WHERE c.id = $1::uuid`, [id]);
+  const [row] = await q<Row>(`${SELECT} WHERE c.id = $1::uuid${options.lock ? " FOR SHARE OF c" : ""}`, [id]);
   return row ? toConnection(row, env.BETTER_AUTH_SECRET) : null;
 }
 
@@ -310,8 +310,14 @@ export async function sessionConnection(q: Query, sessionId: string): Promise<st
 
 export type CredentialKind = "api_key";
 
-export async function recordSsoCredential(q: Query, kind: CredentialKind, credentialId: string, connectionId: string) {
-  await q(`INSERT INTO sso_credential (kind, credential_id, connection_id) VALUES ($1::text, $2::text, $3::text) ON CONFLICT DO NOTHING`, [kind, credentialId, connectionId]);
+export async function recordSsoCredential(q: Query, kind: CredentialKind, credentialId: string, connectionId: string, sessionId: string) {
+  // Revocation deletes the parent session before its derived credentials. Hold that row until this insert commits:
+  // either revocation sees and removes the new proof, or the already-revoked parent supplies no proof to copy.
+  await q(`WITH source AS (
+    SELECT x.connection_id FROM sso_session x JOIN session s ON s.id=x.session_id
+    WHERE x.session_id=$4::text AND x.connection_id=$3::text AND s.expires_at>now() FOR SHARE OF s
+  ) INSERT INTO sso_credential (kind, credential_id, connection_id)
+    SELECT $1::text, $2::text, connection_id FROM source ON CONFLICT DO NOTHING`, [kind, credentialId, connectionId, sessionId]);
 }
 
 export async function credentialVia(q: Query, kind: CredentialKind, credentialId: string, connectionId: string): Promise<boolean> {

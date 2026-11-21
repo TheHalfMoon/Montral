@@ -440,7 +440,7 @@ export function createAuth(database: Database, env: Bindings) {
           try {
             const session = ctx.context.session ?? (await getSessionFromCtx(ctx).catch(() => null));
             const connection = session ? await sessionConnection(query, session.session.id) : null;
-            if (connection) await recordSsoCredential(query, "api_key", returned.id as string, connection);
+            if (connection && session) await recordSsoCredential(query, "api_key", returned.id as string, connection, session.session.id);
           } catch {
             console.error("sso credential could not be recorded; private diagnostics suppressed");
           }

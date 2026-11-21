@@ -24,6 +24,7 @@ REQUIRED = frozenset({
     "Montral app CI",
     "Montral macOS PostgreSQL 18 qualification",
     "Montral load qualification",
+    "Montral CodeQL code scanning",
 })
 
 

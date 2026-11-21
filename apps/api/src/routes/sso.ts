@@ -11,7 +11,7 @@ import { allow } from "../ratelimit";
 import { ssoCallbackUrl } from "../sso-auth";
 import { discover, normalizeIssuer, SsoError } from "../sso-oidc";
 import { encryptSecret } from "../sso-secret";
-import { forgetSsoRequirement, instanceConnection, invalidateConnection, isOwnerRole, providerIdOf, revokeNonSsoSessions } from "../sso-store";
+import { instanceConnection, invalidateConnection, isOwnerRole, providerIdOf, revokeNonSsoSessions } from "../sso-store";
 
 /**
  * Single sign-on settings of the active workspace: one OpenID Connect connection, its email domains (each verified
@@ -153,12 +153,10 @@ export const ssoAdmin = new Hono<AppEnv>()
       const [{ n }] = await q(c)<{ n: number }>(`SELECT count(*)::int AS n FROM sso_domain WHERE connection_id = $1::uuid AND verified_at IS NOT NULL`, [id]);
       if (!n) {
         await q(c)(`UPDATE sso_connection SET require_sso = false WHERE id = $1::uuid`, [id]);
-        forgetSsoRequirement(orgId);
         await audit(c, current ? "sso.connection_update" : "sso.connection_create", { type: "sso_connection", id, projectId: null }, auditChanges({ ...input, clientSecret: secret ? "set" : undefined }, { enabled: input.enabled, requireSso: false, defaultRole: input.defaultRole }));
         return c.json({ ...(await view(c)), warning: "Saved, but single sign-on can only be required once a domain is verified" }, current ? 200 : 201);
       }
     }
-    forgetSsoRequirement(orgId);
     // switched on now: members' sessions this connection did not create are signed out (they are refused per request too)
     if (input.requireSso && input.enabled && !(current?.require_sso && current.enabled)) await revokeNonSsoSessions(q(c), orgId, id);
     await audit(c, current ? "sso.connection_update" : "sso.connection_create", { type: "sso_connection", id, projectId: null }, auditChanges({ ...input, clientSecret: secret ? "set" : undefined }, { enabled: input.enabled, requireSso: input.requireSso, defaultRole: input.defaultRole }));
@@ -168,7 +166,6 @@ export const ssoAdmin = new Hono<AppEnv>()
   .delete("/", async (c) => {
     const orgId = c.get("orgId");
     const [gone] = await q(c)<{ id: string }>(`DELETE FROM sso_connection WHERE organization_id = $1::text RETURNING id::text AS id`, [orgId]);
-    forgetSsoRequirement(orgId);
     if (!gone) return c.body(null, 204);
     await q(c)(`DELETE FROM account WHERE provider_id = $1::text`, [providerIdOf(gone.id)]);
     await invalidateConnection(q(c), gone.id);

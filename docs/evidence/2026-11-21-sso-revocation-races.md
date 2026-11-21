@@ -16,8 +16,8 @@ Owner settings updates now compare the exact PostgreSQL `updated_at` revision re
 - Before the patch, a real Hono/PostgreSQL auth after-hook held immediately before the SSO credential insert resumed after owner revocation. It inserted one proof, and the protected API key remained authorized.
 - Regression tests cover old callback refusal for an existing account, a new JIT account, and an identity-link flow; they verify no new proof/session, user, or link survives and the owner's break-glass session remains usable.
 - A deterministic PostgreSQL regression holds the stale owner snapshot while a second owner update changes the client. The stale request receives 409 and cannot restore the old client.
-- Focused final PostgreSQL race cases: pending rerun on the rebased main head.
-- Complete SSO end-to-end and OIDC suites: prior branch run **59 passed, 0 failed**; final rebased-head rerun pending.
+- Focused final PostgreSQL race cases on the rebased main head: **4 passed** (three callback identity variants and one stale concurrent owner update).
+- Complete SSO end-to-end and OIDC suites on a fresh disposable PostgreSQL database at the rebased head: **61 passed, 0 failed**.
 - API TypeScript check: passed. Node API production build: passed. `scripts/verify_sources.py`: passed. `git diff --check`: passed.
 - Independent post-patch, read-only security review found no actionable issue. This review is not release approval or a full repository security audit.
 

@@ -18,7 +18,8 @@ RUN node scripts/gen-migrations.mjs && pnpm --filter @montral/api build:node \
 # runner service, the per-check worker and Chromium: no API server, no web build, and it is given no database URL and
 # no app secrets. The runner uses the Alpine Chromium package with its explicit executable path. See /docs/self-host#browser-checks.
 FROM node:22.23.4-alpine AS browser-runner
-ENV NODE_ENV=production BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+# Chromium's crashpad/profile helpers need a writable home directory for the unprivileged runner user.
+ENV NODE_ENV=production BROWSER_EXECUTABLE_PATH=/usr/bin/chromium HOME=/tmp
 WORKDIR /app
 # Alpine's Chromium package provides the browser executable; Playwright-core remains pinned to the app and e2e version.
 RUN apk add --no-cache chromium \

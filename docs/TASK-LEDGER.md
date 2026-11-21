@@ -8,7 +8,7 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 
 ## Security and exact-main release checkpoint (2026-11-21)
 
-This is a **dated evidence snapshot**, not a production or release authorization; historical rows below remain unchanged. See [full exact-SHA CI evidence](evidence/2026-11-21-container-audit-exact-main-qualification.md).
+This is a **dated evidence snapshot**, not a production or release authorization; historical rows below remain unchanged. See the [exact-SHA CI evidence](evidence/2026-11-21-container-audit-exact-main-qualification.md) and [current security status](evidence/2026-11-21-security-alert-status-recheck.md).
 
 | Change / gate | Evidence | Status at checkpoint |
 |---|---|---|
@@ -16,7 +16,8 @@ This is a **dated evidence snapshot**, not a production or release authorization
 | #170, #171, #174 | Narrow transitive esbuild advisory mitigation, read-only dependency advisory CI gate, and contradictory-audit-report fail-closed fix | **Merged**; 11/11 exact-main PUSH workflows passed on predecessor `4e378620a1035a9c1ddc455ceb4fbf13bebf8390` |
 | #173 | Gitleaks v8.30.1 SHA-256-pinned current-tree scan with 21 exact reviewed synthetic test/doc matches, 0 new; 12/12 unit tests | **Merged** as `fa6bce8`; 11/11 exact-main push workflows passed on predecessor `fa6bce896d91ed7a01a9b703aa17abfa6e5e046b` |
 | #175 | Non-shallow, post-baseline commit-history secret scan; detects committed-then-deleted token patterns; 9/9 unit tests and real Windows/macOS qualification | **Merged**; included in the latest integrated-main revision |
-| #169 | Native GitHub security scanners unavailable; historical pattern matches in six prior commits | **OPEN**: archived vendor example status unverified, not implicitly approved or revoked |
+| #169 | Dependabot alerts/updates, secret scanning, and push protection settings now verified enabled; full-history Gitleaks recheck | **OPEN**: native alert counts unavailable through current read path; 65 historical matches remain unclassified as safe/live, including an unverified archived vendor example |
+| #183 | Triage 25 CodeQL alerts (19 high, 6 medium scanner severity) individually against main source | **OPEN**: SARIF needed to map alert locations and flows; no finding dismissed or confirmed by severity alone |
 | #168 | Physical Safari automation on changed public landing HTML | **OPEN**: owner-controlled Safari Allow Remote Automation setting disabled; historical 8/8 not current-page proof |
 | #158 / authorization | Draft legal/privacy content; independent security/provider/privacy/operations review | **OPEN**: Community publication HOLD pending `GREEN LIGHT MONTRAL`; Cloud/BYOC NO-GO |
 

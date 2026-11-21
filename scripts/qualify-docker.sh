@@ -55,9 +55,10 @@ docker build -q -t montral:qualify . >/dev/null
 wait_healthy
 
 pg_version="$("${compose[@]}" exec -T postgres psql -U montral -d montral -tAc 'SHOW server_version')"
-compose_image="$(sed -n 's/^ *image: *\(postgres:[^ ]*\) *$/\1/p' docker-compose.yml)"
-echo "postgres server ${pg_version} from ${compose_image}"
-[[ "$compose_image" == postgres:${pg_version%% *}* ]] || { echo "server version ${pg_version} does not match ${compose_image}" >&2; exit 1; }
+compose_image="$(sed -n '/^  postgres:$/,/^  [^ ]/ s/^ *image: *\([^ ]*\) *$/\1/p' docker-compose.yml)"
+postgres_base="$(sed -n 's/^FROM *\(postgres:[^ ]*\) *$/\1/p' Dockerfile.postgres)"
+echo "postgres server ${pg_version} from ${compose_image} (base ${postgres_base})"
+[[ "$compose_image" == montral-postgres:local && "$postgres_base" == postgres:${pg_version%% *}* ]] || { echo "server version ${pg_version} does not match ${compose_image} built from ${postgres_base}" >&2; exit 1; }
 [[ "$("${compose[@]}" exec -T montral id -un)" == node ]] || { echo "app container is not running as the unprivileged node user" >&2; exit 1; }
 
 echo "== app over HTTP: pages, config, sign-up, write and read"

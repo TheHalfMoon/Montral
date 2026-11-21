@@ -98,8 +98,8 @@ export const ssoAdmin = new Hono<AppEnv>()
       if (!domains.includes(d.domain)) domains.push(d.domain);
     }
     const orgId = c.get("orgId");
-    const [current] = await q(c)<{ id: string; issuer: string; client_id: string; require_sso: boolean; enabled: boolean }>(
-      `SELECT id::text AS id, issuer, client_id, require_sso, enabled FROM sso_connection WHERE organization_id = $1::text`, [orgId]);
+    const [current] = await q(c)<{ id: string; issuer: string; client_id: string; require_sso: boolean; enabled: boolean; config_revision: string }>(
+      `SELECT id::text AS id, issuer, client_id, require_sso, enabled, updated_at::text AS config_revision FROM sso_connection WHERE organization_id = $1::text`, [orgId]);
     const secret = input.clientSecret?.trim() ?? "";
     if (!current && !secret) return c.json({ error: "Enter the client secret" }, 400);
     // the stored secret was entered for one provider and client: it never follows a change of either to somewhere else
@@ -120,13 +120,15 @@ export const ssoAdmin = new Hono<AppEnv>()
     const id = current?.id ?? crypto.randomUUID();
     const enc = secret ? await encryptSecret(c.env.BETTER_AUTH_SECRET, id, secret) : null;
     if (current) {
-      await q(c)(
+      const [updated] = await q(c)<{ id: string }>(
         `UPDATE sso_connection SET issuer = $2::text, client_id = $3::text, client_secret_enc = coalesce($4::text, client_secret_enc),
                 token_endpoint = CASE WHEN $4::text IS NULL THEN token_endpoint ELSE $8::text END, default_role = $5::text,
                 require_sso = $6::boolean, enabled = $7::boolean,
-                updated_at = greatest(updated_at + interval '1 microsecond', clock_timestamp()) WHERE id = $1::uuid`,
-        [id, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled, tokenEndpoint],
+                updated_at = greatest(updated_at + interval '1 microsecond', clock_timestamp())
+          WHERE id = $1::uuid AND updated_at = $9::timestamptz RETURNING id::text AS id`,
+        [id, issuer, input.clientId, enc, input.defaultRole, input.requireSso, input.enabled, tokenEndpoint, current.config_revision],
       );
+      if (!updated) return c.json({ error: "Single sign-on settings changed while you were editing; reload and try again", code: "settings_changed" }, 409);
       // links are keyed on issuer and subject, so links of another issuer can never match again: remove them
       if (current.issuer !== issuer) await q(c)(`DELETE FROM account WHERE provider_id = $1::text`, [providerIdOf(id)]);
       // sessions and API keys the old provider or client vouched for prove nothing any more

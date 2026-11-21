@@ -19,6 +19,8 @@ const env = {
   BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123",
   BETTER_AUTH_URL: origin,
   WEB_ORIGIN: origin,
+  // Isolate this file's synthetic signup traffic from the shared IP quota of parallel E2E files.
+  TRUST_PROXY: "true",
   // the synthetic identity providers listen on 127.0.0.1 over plain http
   SSO_ALLOW_PRIVATE_IDP: "true",
 };
@@ -52,12 +54,31 @@ type Res = { status: number; body: any; text: string; headers: Headers; location
  */
 describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
   const database = url ? openDatabase(url, { max: 4 }) : null;
-  const app = createApp(openDatabase, { edition: montralEdition });
+  let credentialGate: { connectionId: string; arrived: () => void; held: Promise<void> } | null = null;
+  let settingsReadGate: { orgId: string; arrived: () => void; held: Promise<void> } | null = null;
+  let singleConnection = false;
+  const app = createApp((connection, options) => {
+    const db = openDatabase(connection, { ...options, ...(singleConnection ? { max: 1 } : {}) });
+    return { ...db, query: async <T,>(sql: string, params?: unknown[]) => {
+      const held = credentialGate;
+      const settings = settingsReadGate;
+      if (held && sql.includes("INSERT INTO sso_credential") && params?.[2] === held.connectionId) {
+        held.arrived(); await held.held;
+      }
+      const rows = await db.query<T>(sql, params);
+      if (settings && sql.includes("SELECT id::text AS id, issuer, client_id, require_sso, enabled") && params?.[0] === settings.orgId) {
+        settingsReadGate = null;
+        settings.arrived(); await settings.held;
+      }
+      return rows;
+    } };
+  }, { edition: montralEdition });
   const q = <T,>(sql: string, params?: unknown[]) => database!.query<T>(sql, params);
   const logged: string[] = [];
   // published TXT records: a name may hold several values (two workspaces publishing for the same domain)
   const txt = new Map<string, string[]>();
   const publish = (name: string, value: string) => txt.set(name, [...(txt.get(name) ?? []), value]);
+  let rateLimitCounter = 1;
   let idpA: SyntheticIdp;
   let idpB: SyntheticIdp;
   const rand = crypto.randomUUID().slice(0, 8);
@@ -65,12 +86,14 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
   const domainB = `corp-b-${rand}.test`;
 
   async function call(path: string, init: { method?: string; body?: unknown; jar?: Jar; key?: string; env?: object } = {}): Promise<Res> {
-    const headers: Record<string, string> = { origin };
+    // Avoid exhausting production-sized per-IP quotas when this large suite runs beside other E2E files.
+    const testIp = `2001:db8:71:${(rateLimitCounter++).toString(16)}::1`;
+    const headers: Record<string, string> = { origin, "x-forwarded-for": testIp };
     if (init.body !== undefined) headers["content-type"] = "application/json";
     const cookie = init.jar?.header();
     if (cookie) headers.cookie = cookie;
     if (init.key) headers["x-api-key"] = init.key;
-    const r = await app.fetch(new Request(origin + path, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), (init.env ?? env) as never);
+    const r = await app.fetch(new Request(origin + path, { method: init.method ?? "GET", headers, body: init.body === undefined ? undefined : JSON.stringify(init.body) }), { ...env, ...init.env } as never);
     init.jar?.take(r.headers);
     const text = await r.text();
     let body: any = null;
@@ -1212,6 +1235,107 @@ describe.skipIf(!url)("single sign-on with OpenID Connect (PostgreSQL)", () => {
     expect((await call("/api/sso", { jar: ownerB.jar })).body.connection).toBeNull();
     expect((await auditOf(ownerB.orgId)).map((e) => e.action)).toContain("sso.connection_delete");
   });
+
+  it.each(["existing", "new", "link"] as const)("rejects an old-client callback after replacement (%s identity)", async (kind) => {
+    const owner = await signUp("client-race-owner");
+    const domain = `client-race-${kind}-${rand}.test`;
+    const connection = await configure(owner, idpA, domain);
+    const email = `client-race-member-${rand}@${domain}`;
+    const identity = { sub: `client-race-sub-${rand}`, email, email_verified: true };
+    if (kind === "existing") expect((await sso(idpA, new Jar(), { email }, identity)).location).toBe(`${origin}/app`);
+    const linked = kind === "link" ? await signUp("link-race-member", email) : null;
+    if (linked) await join(owner, email, linked.jar);
+    const update = (clientId: string) => call("/api/sso", { method: "PUT", jar: owner.jar,
+      body: { issuer: idpA.issuer, clientId, clientSecret: idpA.clientSecret, domains: [domain], requireSso: true } });
+    const jar = linked?.jar ?? new Jar();
+    const begun = await call("/api/auth/sso/start", { method: "POST", body: linked ? { intent: "link" } : { email }, jar });
+    expect(begun.status).toBe(200);
+    expect((await update(idpA.clientId)).status).toBe(200);
+    let arrived!: () => void, release!: () => void;
+    const atToken = new Promise<void>((done) => { arrived = done; });
+    const held = new Promise<void>((done) => { release = done; });
+    const callback = new URL(idpA.authorize(begun.body.url, identity, { beforeTokenResponse: async () => { arrived(); await held; } }).callback);
+    singleConnection = true;
+    const pending = call(callback.pathname + callback.search, { jar });
+    try {
+      await atToken;
+      expect((await update(`${idpA.clientId}-replacement`)).status).toBe(200);
+      expect(await q("SELECT 1 FROM sso_session WHERE connection_id=$1", [connection])).toHaveLength(0);
+      release();
+      const result = await pending;
+      const access = await call("/api/me", { jar });
+      const proofs = await q("SELECT 1 FROM sso_session WHERE connection_id=$1", [connection]);
+      const linkedSessions = linked ? await q("SELECT 1 FROM session WHERE user_id=$1", [linked.id]) : [];
+      expect({ failure: failure(result.location ?? ""), refused: linked ? linkedSessions.length === 0 : [401, 403].includes(access.status), proofs: proofs.length })
+        .toEqual({ failure: "connection_disabled", refused: true, proofs: 0 });
+      if (kind === "new") expect(await userIdOf(email)).toBeNull();
+      if (linked) expect(await q("SELECT 1 FROM account WHERE provider_id=$1 AND user_id=$2", [`sso:${connection}`, linked.id])).toHaveLength(0);
+      expect((await call("/api/me", { jar: owner.jar })).status).toBe(200);
+    } finally {
+      release(); singleConnection = false; await pending;
+      expect((await update(idpA.clientId)).status).toBe(200);
+    }
+    if (linked) return; // The old flow must not create a persistent identity link, even though it began signed in.
+    const current = new Jar();
+    expect((await sso(idpA, current, { email }, identity)).location).toBe(`${origin}/app`);
+    expect((await call("/api/me", { jar: current })).body.organization.id).toBe(owner.orgId);
+  }, 20_000);
+
+  it("rejects a stale concurrent owner update instead of restoring an old client", async () => {
+    const owner = await signUp("settings-race-owner");
+    const domain = `settings-race-${rand}.test`;
+    const connection = await configure(owner, idpA, domain);
+    let arrived!: () => void, release!: () => void;
+    const atRead = new Promise<void>((done) => { arrived = done; });
+    const held = new Promise<void>((done) => { release = done; });
+    settingsReadGate = { orgId: owner.orgId, arrived, held };
+    const stale = call("/api/sso", { method: "PUT", jar: owner.jar,
+      body: { issuer: idpA.issuer, clientId: idpA.clientId, clientSecret: idpA.clientSecret, domains: [domain] } });
+    try {
+      await atRead;
+      const changed = await call("/api/sso", { method: "PUT", jar: owner.jar,
+        body: { issuer: idpA.issuer, clientId: `${idpA.clientId}-new`, clientSecret: idpA.clientSecret, domains: [domain] } });
+      expect(changed.status, changed.text).toBe(200);
+      expect(await q("SELECT 1 FROM sso_session WHERE connection_id=$1", [connection])).toHaveLength(0);
+      release();
+      const rejected = await stale;
+      expect({ status: rejected.status, body: rejected.body.code }).toEqual({ status: 409, body: "settings_changed" });
+      expect((await call("/api/sso", { jar: owner.jar })).body.connection.clientId).toBe(`${idpA.clientId}-new`);
+    } finally {
+      release(); settingsReadGate = null; await stale;
+    }
+  });
+
+  it("does not restore an API-key SSO proof after its parent session is revoked", async () => {
+    const owner = await signUp("key-race-owner");
+    const domain = `key-race-${rand}.test`;
+    const connection = await configure(owner, idpA, domain);
+    const email = `key-race-member-${rand}@${domain}`;
+    const identity = { sub: `key-race-sub-${rand}`, email, email_verified: true };
+    const jar = new Jar();
+    expect((await sso(idpA, jar, { email }, identity)).location).toBe(`${origin}/app`);
+    const update = (clientId: string) => call("/api/sso", { method: "PUT", jar: owner.jar,
+      body: { issuer: idpA.issuer, clientId, clientSecret: idpA.clientSecret, domains: [domain], requireSso: true } });
+    expect((await update(idpA.clientId)).status).toBe(200);
+    let arrived!: () => void, release!: () => void;
+    const atProof = new Promise<void>((done) => { arrived = done; });
+    const held = new Promise<void>((done) => { release = done; });
+    credentialGate = { connectionId: connection, arrived, held };
+    const pending = call("/api/auth/api-key/create", { method: "POST", jar,
+      body: { name: "In-flight key", metadata: { organizationId: owner.orgId } } });
+    try {
+      await atProof;
+      expect((await update(`${idpA.clientId}-replacement`)).status).toBe(200);
+      release();
+      const created = await pending;
+      expect(created.status).toBe(200);
+      const proofs = await q("SELECT 1 FROM sso_credential WHERE credential_id=$1", [created.body.id]);
+      expect({ refused: [401, 403].includes(await asKey(created.body.key)), proofs: proofs.length }).toEqual({ refused: true, proofs: 0 });
+    } finally {
+      release(); await pending; credentialGate = null;
+      expect((await update(idpA.clientId)).status).toBe(200);
+    }
+  }, 20_000);
 
   it("never logs a client secret, a code or an id_token", () => {
     const text = logged.join("\n");

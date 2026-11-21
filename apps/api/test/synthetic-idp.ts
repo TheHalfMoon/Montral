@@ -23,6 +23,8 @@ export type Tweak = {
   idToken?: string;
   /** the token endpoint answers with this status and body instead */
   tokenResponse?: { status: number; body: unknown };
+  /** Hold one valid exchange to exercise a configuration change while the callback is in flight. */
+  beforeTokenResponse?: () => Promise<void>;
   /** what the userinfo endpoint answers for this authorization's access token (default: only `sub`) */
   userinfo?: { status?: number; body?: unknown; raw?: string };
 };
@@ -180,6 +182,7 @@ export class SyntheticIdp {
       this.issued.push(idToken);
       const accessToken = b64url(randomBytes(16));
       this.userinfo.set(accessToken, grant.tweak.userinfo ?? { body: { sub: grant.user.sub } });
+      await grant.tweak.beforeTokenResponse?.();
       return json(200, { access_token: accessToken, token_type: "Bearer", expires_in: 300, id_token: idToken });
     }
     json(404, { error: "not_found" });

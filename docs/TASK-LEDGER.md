@@ -181,6 +181,10 @@ Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e
 |---|---|---|---|
 | SEC-SSO-CALLBACK | A callback could finish after its connection's issuer/client was changed and its old sessions invalidated, then mark a fresh session against stale connection settings | P1 | Merged #149 (`ead9740`), 11/11 exact-head PR workflows, including PostgreSQL 17/18 SSO callback race tests. A stale callback cannot mark a session after connection revision changes, and a new session is cleaned up. Independent security review and combined-main requalification still required. `docs/evidence/2026-11-15-sso-callback-revision-fence.md`. |
 
+## SSO revocation follow-up under qualification
+
+**P1**, this branch. In addition to #149's stale callback session fence, persistent link/JIT writes now recheck the locked connection revision before committing. Derived API-key proofs can no longer be inserted after the parent session is revoked, and a stale concurrent owner PUT receives 409 rather than restoring an earlier provider configuration with stale invalidation decisions. Local PostgreSQL regression coverage and limitations: `docs/evidence/2026-11-21-sso-revocation-races.md`. PR/hosted CI and merge qualification remain pending.
+
 ## Integrated November 15 change stack (pending full combined-main qualification)
 
 Security #149 and web #129–#135 are now merged to `main@3fe4a5e46f52a4220b2a2162b4166286372bde04`. All eight PRs passed **11/11 workflows individually** before merge. This fact does **not** prove the combined head's full push CI, physical Safari/VoiceOver, live-provider coverage, or an independent audit. A dedicated integration qualification pull request follows, with no release/tag/deployment authorized. The old `d49e2cf` 11/11 main run remains historical, not qualification for these additions.

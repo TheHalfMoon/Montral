@@ -59,6 +59,15 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
   const secure = env.BETTER_AUTH_URL.startsWith("https://");
   const cookie = flowCookie(secure);
 
+  /** Recheck and lock the exact workspace configuration before persistent callback identity writes. */
+  async function connectionIsCurrent(tq: Query, expected: SsoConnection, email: string): Promise<boolean> {
+    if (!expected.orgId) return true;
+    const current = await connectionById(tq, env, expected.id, { lock: true });
+    return !!current && current.enabled && current.orgId === expected.orgId
+      && current.configRevision === expected.configRevision
+      && current.domains !== null && current.domains.includes(emailDomain(email));
+  }
+
   async function refusal(conn: SsoConnection, reason: string, headers: Headers | undefined) {
     if (!conn.orgId) return;
     try {
@@ -145,6 +154,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
           const conn = await connectionById(q, env, flow.connection_id);
           // the connection may have been switched off, deleted or moved since the sign-in started
           if (!conn || !conn.enabled || conn.orgId !== flow.organization_id) return fail("connection_disabled");
+          if (conn.orgId && !database.transaction) return fail("connection_misconfigured");
           // A flow may have begun before an operator suspended this workspace.
           // Refuse before discovery, secret decryption, token exchange or account/identity writes.
           if (conn.orgId && await workspaceSuspended(q, conn.orgId)) return fail("connection_disabled");
@@ -194,6 +204,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
                     "SELECT id FROM organization WHERE id = $1::text FOR SHARE", [conn.orgId],
                   );
                   if (!org || await workspaceSuspended(tq, conn.orgId)) return "suspended" as const;
+                  if (!(await connectionIsCurrent(tq, conn, identity.email!))) return "suspended" as const;
                 }
                 await linkIdentity(tq, { userId: me.id, connectionId: conn.id, issuer: identity.issuer, subject: identity.subject });
                 return "linked" as const;
@@ -247,6 +258,7 @@ export function ssoPlugin(database: Database, env: Bindings, signIn: SsoSignIn) 
                   "SELECT id FROM organization WHERE id = $1::text FOR SHARE", [conn.orgId],
                 );
                 if (!org || await workspaceSuspended(tq, conn.orgId)) return "suspended";
+                if (!(await connectionIsCurrent(tq, conn, email))) return "suspended";
                 const gate = await scimGate(tq, conn.orgId, email, { lock: true });
                 if (gate !== "allowed") return gate;
               }

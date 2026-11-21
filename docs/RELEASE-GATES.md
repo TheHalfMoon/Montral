@@ -1,8 +1,8 @@
 # Montral release gates
 
-**Latest main security checkpoint (2026-11-21):** PR #186 merged as `main@98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`. The exact-main CodeQL run succeeded; 11 findings were marked fixed and 14 source-validated false positives were dismissed with individual comments. The CodeQL, Dependabot, and secret-scanning open-alert APIs returned zero after disposition/recheck; this is not security clearance. The 65 historical Gitleaks matches and archived vendor example remain unresolved under #169. Community publication HOLD; Cloud/BYOC NO-GO; no owner `GREEN LIGHT MONTRAL`.
+**Latest main security checkpoint (2026-11-21):** exact `main@07abcfaf438731afbf4da679ef7e55e252b6514e`; all 12/12 required exact-main push workflows succeeded. Latest alert snapshot: zero open CodeQL, Dependabot, and secret-scanning alerts (11 CodeQL fixed, 14 dismissed with evidence). This is not security clearance. The 65 historical Gitleaks matches include one owner/provider-unverified archived vendor example; #169 remains open. See [completion checkpoint](evidence/2026-11-21-completion-checkpoint.md). Community publication HOLD; Cloud/BYOC NO-GO; no owner `GREEN LIGHT MONTRAL`.
 
-**Exact-main qualification:** all 12/12 required push workflows succeeded on `98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`. The repository's fail-closed `scripts/verify-main-workflows.py` verifier passed against exact-SHA `push` run records.
+**Previous exact-main qualification (`98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`):** all 12/12 required push workflows succeeded on that earlier SHA. The repository's fail-closed `scripts/verify-main-workflows.py` verifier passed against its exact-SHA `push` run records. The newest SHA and run IDs are in the completion checkpoint above.
 
 | Exact-main push workflow | GitHub Actions run | Result on this SHA |
 |---|---|---|
@@ -19,7 +19,7 @@
 | Montral load qualification | [44899983327](https://github.com/TheHalfMoon/Montral/actions/runs/44899983327) | SUCCESS |
 | Montral CodeQL code scanning | [44899983350](https://github.com/TheHalfMoon/Montral/actions/runs/44899983350) | SUCCESS |
 
-The 12 run records above were collected with `gh run list --commit 98239eafb6ba29e7ed73e224e4e5dc281e2c16d2 --event push`. The exact-main verifier reported `PASS: 12 exact-main push workflows successful for 98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`. The qualification is integration evidence, not a security clearance or authorization to publish, deploy, tag, or release.
+The historical 12 run records above were collected with `gh run list --commit 98239eafb6ba29e7ed73e224e4e5dc281e2c16d2 --event push`. The exact-main verifier reported `PASS: 12 exact-main push workflows successful for 98239eafb6ba29e7ed73e224e4e5dc281e2c16d2`. This is integration evidence, not a security clearance or authorization to publish, deploy, tag, or release.
 
 **Historical integrated-main qualification (2026-11-15):** `main@2bbbca8f1efa87fd3f408037170f3f10b5338009` includes #149, the web-first/PWA stack (#129–#135, #152), secretless phone management (#151), and scoped dependency security updates (#153). All **11/11 GitHub Actions push workflows completed successfully on this exact main SHA**. This is integrated CI qualification, **not** authorization to publish, deploy, tag or release. It does not establish independent penetration testing, physical Safari/VoiceOver coverage, real-provider readiness or a complete dependency audit. Community stays HOLD; Cloud and Enterprise BYOC stay NO-GO.
 

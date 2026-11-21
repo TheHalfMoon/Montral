@@ -10,6 +10,8 @@ Severity: **P0** release blocker, **P1** high impact, **P2** important, **P3** l
 
 This is a **dated evidence snapshot**, not a production or release authorization; historical rows below remain unchanged. See the [exact-SHA CI evidence](evidence/2026-11-21-container-audit-exact-main-qualification.md) and [current security status](evidence/2026-11-21-security-alert-status-recheck.md).
 
+Continuation recheck fetched exact `main@07abcfaf438731afbf4da679ef7e55e252b6514e`; all 12 required push workflows passed on this SHA. Full-history Gitleaks recheck counted 65 historical matches (including one unverified archived vendor example), zero new matches in 228 post-baseline commits, and a 21/0/0 reviewed-fixture gate. The newest statuses and constraints are recorded in [completion checkpoint](evidence/2026-11-21-completion-checkpoint.md). Do not infer security clearance from alert counts or CI.
+
 | Change / gate | Evidence | Status at checkpoint |
 |---|---|---|
 | #181 | Checksum-verified Trivy 0.76.2 scan of shipped images; probe runtime dependency; clean app, browser-runner, probe, and PostgreSQL images | **Merged** as `d36160b`; **12/12 exact-main PUSH workflows** succeeded |

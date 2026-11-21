@@ -1,13 +1,13 @@
 # Montral release-readiness report
 
-**Latest integrated-main qualification (verified 2026-11-21):** `main@d36160b83c261839f8e0ff5e3b3cfcc2a39bf36d`, merging PR #181's shipped-container vulnerability audit and fixes, passed **12/12 exact-SHA GitHub Actions push workflows**. The PR's checksum-verified Trivy scan reported zero HIGH/CRITICAL findings in all four shipped images; the hardened browser-runner, both PostgreSQL app CI legs, macOS, failover, recovery, cross-browser, replicas, BYOC, and load checks passed. PR #175's Git-history secret scanner is also merged. Details and run links are in [the November 21 qualification evidence](evidence/2026-11-21-container-audit-exact-main-qualification.md). Hosted CI and image scanning do not constitute an exhaustive security audit, independent penetration test, physical-device qualification or real-provider validation. Issue #169 remains open; the managed security scan is unavailable and historical secret-pattern matches remain unresolved as recorded in prior evidence. Community publication stays HOLD until `GREEN LIGHT MONTRAL`; Cloud and Enterprise BYOC remain NO-GO on external provider, infrastructure, legal/privacy and security gates.
+**Latest exact-main qualification (verified 2026-11-21):** `main@b80330189b3fcf772c07510fda3e6042d5b27a5b` passed **12/12 exact-SHA GitHub Actions push workflows** after a documentation-only merge; the qualified product revision remains `d36160b83c261839f8e0ff5e3b3cfcc2a39bf36d`. The container scan and product changes are detailed in [the November 21 container audit](evidence/2026-11-21-container-audit-exact-main-qualification.md). Current security settings and the historical secret-pattern recheck are detailed in [the November 21 security status](evidence/2026-11-21-security-alert-status-recheck.md). Issue #183 reports 25 open CodeQL alerts (19 high, 6 medium scanner severity); per-alert validation is pending SARIF, and no count or severity is treated as a confirmed vulnerability without validation. Dependabot alerts, Dependabot security updates, secret scanning, and push protection settings are enabled, but the available native alert-list reads returned 404, so current open alert counts are unknown. The 65 historical Gitleaks matches remain unresolved, including an archived vendor-example value whose status cannot be established from source. These checks do not constitute an exhaustive security audit, independent penetration test, physical-device qualification or real-provider validation. Community publication stays HOLD; Cloud and Enterprise BYOC remain NO-GO.
 
 
 **Historical integration status (2026-11-13; superseded by the current qualification above): FULL PRODUCT NO-GO; COMMUNITY PUBLICATION HOLD.** The code-integrated `main` baseline inspected for this report (before the documentation-only update) is **`b624cfe`**. PRs #113 (SSO suspension), #114 (first-tab notices), #115 (legacy plan-catalog meter warnings) and #116 (in-flight observation/heartbeat suspension fence) are **merged** as `09735b9`, `2e0dc98`, `cffb9b5` and `b624cfe` respectively. Each PR passed **16/16 exact-head GitHub checks** before merging. The final integrated **`main@b624cfe` push CI is not yet proven complete**, so do not represent its aggregate checks as green until the exact-head runs finish. A disposable local integration merge of #114–#116 had zero conflicts, full monorepo typechecking passed, and 41/41 targeted unit tests passed; this is not a substitute for final hosted PostgreSQL/browser validation. Historical self-hosted candidate `3fbc6e6` remains prior evidence, not authorization to publish the current main.
 
 Montral Cloud and Enterprise BYOC remain NO-GO pending external provider validation, authorized production infrastructure, legal/privacy review, resilience testing and independent security assessment. No release, tag, live payment, deployment or spend is authorized.
 
-**Status: ENGINEERING COMPLETE FOR THE AGREED CORE CAPABILITIES — PUBLICATION HOLD.**
+**Status: CORE ENGINEERING QUALIFIED; SECURITY TRIAGE IN PROGRESS — PUBLICATION HOLD.**
 Nothing is released, deployed, packaged, published or tagged; that requires the owner's explicit authorization
 (`GREEN LIGHT MONTRAL`). A public repository is not release authorization. No paid service was enabled and no cost was
 incurred. Billing stays disabled by default and test-mode only. The Terraform provider is built from source and is not
@@ -125,7 +125,9 @@ cross-region failover; managed PITR; capacity beyond one 4-vCPU node; real netwo
 
 ## 6. Security assessment
 
-Every control below has a regression test in CI. This round added:
+**Current main security checkpoint:** The repository reports 25 open CodeQL alerts on `b803301` (19 high, 6 medium scanner severity); each requires individual validation. Native settings are enabled as recorded in [the November 21 security status](evidence/2026-11-21-security-alert-status-recheck.md), but current alert-list reads were unavailable, so zero open alerts is not claimed. The full-history Gitleaks recheck found 65 pre-baseline matches and none after the baseline; it does not prove the historical vendor-example value inactive or safe. Issues #169 and #183 remain open.
+
+The controls below describe previously implemented and tested security measures. They do not disposition the current CodeQL alerts.
 
 | Area | Control | Evidence |
 |---|---|---|
@@ -140,9 +142,7 @@ Every control below has a regression test in CI. This round added:
 | Browser script step | Runs in the page (renderer) of the isolated runner behind the same egress policy, never in Node; only `true` crosses back; fixed error strings; owners and admins only; never in a journey with secrets | #66, `browser-check.integration.test.ts` |
 | Replicas | Load balancer at a fixed, exactly trusted address (client addresses for rate limits and audit); only unsent connections are retried (nothing sent twice) | #65, `qualify-replicas.sh` |
 
-**Open security findings: none critical, high or medium** (self-assessed by independent agent reviews; see ledger rows 33–41 for accepted lows). Residual: no third-party penetration
-test; GitHub Actions pinned by tag; reverse-proxy logs must redact bearer tokens in URLs (documented); OAuth dynamic
-client registration is unauthenticated (pre-existing; clients get nothing without user consent).
+**Historical assessment only:** the old `b01e28e` review recorded no open critical, high or medium findings. That statement does not apply to current main. Issue #183 has 25 open CodeQL alerts awaiting individual triage. Residual limits also include no third-party penetration test; GitHub Actions pinned by tag; reverse-proxy logs must redact bearer tokens in URLs (documented); OAuth dynamic client registration is unauthenticated (pre-existing; clients get nothing without user consent).
 
 ## 7. Platform coverage
 

@@ -14,6 +14,23 @@ permissions:
   actions: read
   security-events: write
 jobs:
+  go-dependency-audit:
+    name: Go dependency vulnerability audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Go provider
+        uses: actions/checkout@v4
+      - name: Set up supported Go toolchain
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.3"
+          cache-dependency-path: terraform-provider-montral/go.sum
+      - name: Check reachable Go vulnerabilities
+        working-directory: terraform-provider-montral
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
   analyze:
     name: Analyze ${{ matrix.language }}
     runs-on: ubuntu-latest

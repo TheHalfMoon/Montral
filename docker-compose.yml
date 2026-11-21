@@ -113,7 +113,7 @@ services:
       SSO_ALLOW_PRIVATE_IDP: ${SSO_ALLOW_PRIVATE_IDP:-}
 
   postgres:
-    image: postgres:18.6-alpine
+    image: postgres:18.7-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: montral

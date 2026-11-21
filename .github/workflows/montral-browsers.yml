@@ -21,7 +21,7 @@ jobs:
     services:
       postgres:
         # the exact image docker-compose.yml ships
-        image: postgres:18.6-alpine
+        image: postgres:18.7-alpine
         env:
           POSTGRES_DB: montral_ci
           POSTGRES_USER: montral

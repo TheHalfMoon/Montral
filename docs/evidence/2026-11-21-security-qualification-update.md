@@ -43,18 +43,24 @@ On exact `main@99556c8`, source-integrity run [44925891624](https://github.com/T
 
 Issue [#169](https://github.com/TheHalfMoon/Montral/issues/169) remains open for owner/provider verification of that historical example and remaining independent release-security evidence. The issue's existing history review and the prior full-history findings are preserved.
 
-## Incomplete local Codex Security scan
+## Codex Security Workbench scan status
 
-A separate local Codex Security Standard scan remains incomplete and is not release evidence:
+The earlier local Standard scan remains preserved as incomplete and is not a clean-scan result:
 
-- The Workbench context still reports `running`, phase `reporting`, and `reportAvailable: false`; it records a zero-of-one report-artifact phase and `resultsRecoveryNeeded: false`.
-- Read-only diagnostics supplied for the recovery recorded SQLite integrity as OK, Workbench `completed_at` as null, and a saved manifest that says completed. The saved findings document contains zero recorded findings. Those facts do not amount to a completed Workbench scan.
-- The original `complete-scan` call timed out after 300 seconds. A supported same-scan rejoin did not return a continuation token. No completion retry, SQLite mutation, lock removal or artifact rewrite was performed.
-- These symptoms are consistent with [openai/codex#42122](https://github.com/openai/codex/issues/42122), which documents rollout-usage collection stalling before the Workbench completion commit. The local timeout's exact internal cause remains unproven.
-- The scan's recorded coverage was selective: 8 named source files from a 1,042-file inventory, no application execution, no independent reviewer and no live provider or production validation. Its empty findings document is not a zero-vulnerability conclusion.
+- Its Workbench context reported `running`, phase `reporting`, and `reportAvailable: false`; it remained at zero of one report artifacts.
+- Read-only diagnostics supplied for its recovery recorded SQLite integrity as OK, Workbench `completed_at` as null, a saved manifest that says completed, and zero recorded findings. Those facts do not amount to a completed scan.
+- Its original `complete-scan` call timed out after 300 seconds. A supported same-scan rejoin did not return a continuation token. The scan was not retried, failed, or edited.
+- These symptoms are consistent with [openai/codex#42122](https://github.com/openai/codex/issues/42122), which documents rollout-usage collection stalling before the Workbench completion commit. The exact local timeout cause remains unproven.
+- Its recorded coverage was selective: 8 named source files from a 1,042-file inventory, no application execution, no independent reviewer and no live provider or production validation. Its empty findings document is not a zero-vulnerability conclusion.
 
-The original scan remains preserved as incomplete. Any future Codex Security scan must run in a fresh, non-forked task with a separate isolated worktree and an explicitly verified commit. Accept it only after Workbench reports completion, a report is available, and its coverage is recorded. Do not use the incomplete scan to satisfy release gates.
+A separate fresh, non-forked Standard scan was then completed in an isolated, clean worktree at exact `99556c862c7a68c3fd5b957023eae0d8ebd9a1a7`:
+
+- Owning-thread readback confirmed Workbench status `complete`, reporting phase, all 3/3 report artifacts committed, a generated `report.md`, and `resultsRecoveryNeeded: false`. `scan-manifest.json`, `findings.json` and `threatmodel.md` were also confirmed present.
+- Explicit coverage records show 7/7 review workstreams closed across 1,046 indexed files. The report states that this was not a line-by-line review of every file.
+- No reportable findings were recorded by this source-only scan. It did not execute application code or tests, access external providers or production data, or provide an independent external assessment. Do not interpret its result as proof that the repository has zero vulnerabilities.
+
+The fresh scan is usable as a completed, bounded source-review record with the limitations above. Keep the earlier scan preserved separately as incomplete; do not use it as release evidence or merge it with the fresh result.
 
 ## Release status
 
-Community publication remains **HOLD**. Montral Cloud and Enterprise BYOC remain **NO-GO**. No release, deployment, production credential change, billing activation or external publication was performed. CI success and zero open alert snapshots do not replace owner/provider verification, qualified independent security assessment, legal/privacy approval or the owner's explicit `GREEN LIGHT MONTRAL`.
+Community publication remains **HOLD**. Montral Cloud and Enterprise BYOC remain **NO-GO**. No release, deployment, production credential change, billing activation or external publication was performed. CI success, zero open alert snapshots or the completed bounded source scan do not replace owner/provider verification, qualified independent security assessment, legal/privacy approval or the owner's explicit `GREEN LIGHT MONTRAL`.

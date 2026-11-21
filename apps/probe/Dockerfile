@@ -13,6 +13,7 @@ RUN pnpm --filter @montral/probe build:node
 FROM node:22.23.4-alpine
 ENV NODE_ENV=production PORT=8787
 WORKDIR /app
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-v1.22.22
 COPY --from=build /src/apps/probe/dist/server.mjs ./server.mjs
 USER node
 EXPOSE 8787

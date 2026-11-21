@@ -25,6 +25,7 @@ WORKDIR /app
 RUN npm install --no-save --no-package-lock --no-audit --no-fund --ignore-scripts playwright-core@1.64.1 \
  && npx --no-install playwright-core install --with-deps --only-shell chromium \
  && rm -rf /var/lib/apt/lists/* /root/.npm /root/.cache /tmp/* \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-v1.22.22 \
  && chmod -R a+rX /ms-playwright
 COPY --from=build /src/apps/api/dist/browser-runner.mjs ./browser-runner.mjs
 COPY --from=build /src/apps/api/dist/browser-worker.mjs ./browser-worker.mjs
@@ -37,6 +38,7 @@ CMD ["node", "browser-runner.mjs"]
 FROM node:22.23.4-alpine
 ENV NODE_ENV=production PORT=8080 WEB_DIST=/app/web
 WORKDIR /app
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /opt/yarn-v1.22.22
 COPY --from=build /src/apps/api/dist/server.mjs ./server.mjs
 COPY --from=build /src/apps/web/dist ./web
 # Ping monitors run BusyBox /bin/ping (part of the Alpine base) as this unprivileged user, through unprivileged ICMP

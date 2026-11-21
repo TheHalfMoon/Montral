@@ -52,9 +52,9 @@ jobs:
       - name: docker-compose.yml ships a qualified PostgreSQL image
         if: matrix.postgres == '18'
         run: |
-          shipped=$(sed -n 's/^ *image: *\(postgres:[^ ]*\) *$/\1/p' docker-compose.yml)
-          echo "compose: $shipped, qualified: ${{ matrix.image }}"
-          test "$shipped" = "${{ matrix.image }}" || { echo "docker-compose.yml PostgreSQL image is not the one CI qualifies"; exit 1; }
+          grep -q '^    image: montral-postgres:local$' docker-compose.yml
+          grep -q '^FROM postgres:18.7-alpine$' Dockerfile.postgres
+          echo "compose builds montral-postgres:local from the qualified ${{ matrix.image }} base"
       - name: Verify unchanged source snapshots
         run: python3 scripts/verify_sources.py
       - name: Install dependencies

@@ -30,7 +30,7 @@ jobs:
           cache-dependency-path: terraform-provider-montral/go.sum
       - name: Check reachable Go vulnerabilities
         working-directory: terraform-provider-montral
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.10.0 ./...
   analyze:
     name: Analyze ${{ matrix.language }}
     runs-on: ubuntu-latest

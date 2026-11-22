@@ -638,8 +638,9 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     } catch (error) {
       if (error instanceof BlockedTarget) return c.json({ error: error.message, code: "target_not_allowed" }, 400);
       // Fixed messages only: network errors can echo internal addresses.
-      if (signal.aborted) return c.json({ error: "The target did not answer within 10 seconds" }, 504);
-      return c.json({ error: "Could not reach the target" }, 502);
+      // Either failure can happen after the remote peer accepted the request; do not imply it is safe to retry.
+      if (signal.aborted) return c.json({ error: "The target did not answer within 10 seconds; it may have received the request", code: "replay_outcome_unknown" }, 504);
+      return c.json({ error: "Could not confirm delivery to the target; it may have received the request", code: "replay_outcome_unknown" }, 502);
     }
   });
   /**

@@ -1,6 +1,6 @@
 # Probe credential-possession validation
 
-Status: implementation is ready for review on `codex/probe-management-registration-audit`, based on `main@9381b35702e4fe37b655925f83f7bec916df5a2e`. Hosted exact-head qualification is pending. This is a narrow validation improvement, not probe registration or release/security approval.
+Status: implementation is ready for review on `codex/probe-management-registration-audit`, based on `main@9381b35702e4fe37b655925f83f7bec916df5a2e`. Merged in PR #199 at `7f1bf0265108842bc513705766e0c5874ca859d0` after all 23 exact-head hosted checks passed. The 12 exact-main workflows on this SHA are running. This is a narrow validation improvement, not probe registration or release/security approval.
 
 ## Threat model and storage boundary
 
@@ -20,4 +20,4 @@ A valid response proves that the configured endpoint can use the selected HMAC k
 - Real-PostgreSQL operator route suite: 7/7 passed. Coverage includes dedicated and shared keys, wrong-key response, wrong region, stale challenge, unreachable probe and refusal for non-operator/API-key callers.
 - API and probe TypeScript checks passed.
 - `git diff --check` passed.
-- Hosted exact-head qualification and exact-main workflows remain pending.
+- Hosted exact-head qualification passed 23/23 on PR #199. No independent reviewer was assigned (`reviewRequests` and `latestReviews` were empty); manual review was performed. Local d1 advisory triage returned medium risk and was not used as an approval gate. Exact-main workflows for `7f1bf02` are running.

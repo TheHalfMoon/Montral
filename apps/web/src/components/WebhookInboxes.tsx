@@ -277,6 +277,7 @@ export default function WebhookInboxes() {
     {/* at the foot of the page: it arrives after the page renders, and nothing below it can be pushed */}
     {replays && <p className="replay-count" data-replay-attempts={replays.attempts}>
       <span>{t("Replay attempts this month")}</span> <b className="tnum">{replays.attempts.toLocaleString(document.documentElement.lang)}</b>
+      <span className="faint">· {t("counts admitted requests, not confirmed deliveries")}</span>
       <span className="faint">· {t("counter resets on {date} (UTC)").replace("{date}", formatResetDate(new Date(`${replays.periodEnd}T00:00:00Z`), document.documentElement.lang))}{metered ? ` · ${t("not billed")}` : ""}</span>
     </p>}
   </>;

@@ -570,13 +570,14 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
     return c.body(null, 204);
   });
   /**
-   * This month's accepted outbound replay attempts for the current workspace.
+   * This month's admitted replay requests for the current workspace. The count is
+   * committed before network resolution, so it is not a delivery count.
    * No target URLs, event bodies or credentials are stored in the counter.
    * Separate from webhook event intake quota; NOT yet billable usage.
    */
   privateHooks.get("/replay-usage", requireManager, async (c) => {
     const usage = await readHookReplayUsage(c.get("database"), c.get("orgId"));
-    return c.json({ ...usage, billable: false });
+    return c.json({ ...usage, unit: "admitted_attempts", billable: false });
   });
   /**
    * Development replay: resend one captured request to a URL the manager

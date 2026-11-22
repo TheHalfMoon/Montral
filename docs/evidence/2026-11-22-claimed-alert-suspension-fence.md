@@ -1,6 +1,6 @@
 # Suspension check before claimed alert delivery
 
-Status: Implemented on a focused engineering branch; awaiting exact-head CI and independent review. This does not authorize release or deployment.
+Status: Merged in PR #197 as `5cc1345b404dcfaeca170933a4d84fb27318a735`. Exact-head PR checks passed 23/23; the exact-main verifier passed all 12/12 required push workflows for that commit. No independent human/Qodo review was available: the Qodo trial had ended and no human reviewer was requested. The change received manual technical review. This does not authorize release or deployment.
 
 ## Behavior
 

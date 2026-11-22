@@ -180,6 +180,12 @@ export async function withinCredits(
     const list = await withinPlanRegions(due, workspaceId, entitlements, onPlanSkipped);
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
     const chargedAt = new Date();
+    // A heartbeat has no outbound region charge. It must remain eligible even
+    // when a metered deployment cannot perform persistent reservation I/O.
+    for (const m of list.filter((item) => creditCost(item) === 0)) {
+      allowed.set(m.id, m);
+      onReserved?.(m, 0, chargedAt);
+    }
     // Metered region checks use a durable scheduler generation as the operation
     // identity. The reservation and monthly credit debit commit in one database
     // transaction, so retries after a process restart cannot charge twice.
@@ -188,10 +194,6 @@ export async function withinCredits(
       return;
     }
     if (wanted > 0 && entitlements.failClosed && entitlements.reserveRegionUsage) {
-      for (const m of list.filter((item) => creditCost(item) === 0)) {
-        allowed.set(m.id, m);
-        onReserved?.(m, 0, chargedAt);
-      }
       const reservable = list.filter((m) => creditCost(m) > 0 && Number.isSafeInteger(m.runGeneration) && m.runGeneration! > 0);
       const missingGeneration = list.filter((m) => creditCost(m) > 0 && !reservable.includes(m));
       if (missingGeneration.length) meteringFailed(new Error("scheduled generation unavailable"));

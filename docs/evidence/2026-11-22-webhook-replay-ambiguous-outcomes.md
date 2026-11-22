@@ -1,6 +1,6 @@
 # Webhook replay ambiguity feedback
 
-Status: implemented on `codex/webhook-replay-ambiguous-outcomes`, based on `main@9381b35702e4fe37b655925f83f7bec916df5a2e`. Hosted exact-head qualification is pending.
+Status: implemented in PR #200 on top of `main@7f1bf0265108842bc513705766e0c5874ca859d0`. Use the PR check record and its merged-main evidence for hosted qualification status.
 
 ## Confirmed gap
 
@@ -15,4 +15,4 @@ The replay endpoint increments the existing `admitted_attempts` counter before o
 
 ## Regression coverage
 
-A real PostgreSQL replay E2E passed, including a closed-port 502 and a slow local endpoint that consumed the request before timing out at 504; both responses carry `replay_outcome_unknown`. The translation tests passed 14/14. API typecheck passed. Astro reported 0 errors, 0 warnings and 6 informational hints. `git diff --check` passed. Hosted exact-head qualification is pending.
+A real PostgreSQL replay E2E passed, including a closed-port 502 and a slow local endpoint that consumed the request before timing out at 504; both responses carry `replay_outcome_unknown`. The translation tests passed 14/14. API typecheck passed. Astro reported 0 errors, 0 warnings and 6 informational hints. `git diff --check` passed. Hosted exact-head and merged-main qualification are recorded in PR #200 and its merged-main evidence.

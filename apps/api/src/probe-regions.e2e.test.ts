@@ -7,6 +7,7 @@ import { createApp } from "./app";
 import type { Edition } from "./edition";
 import { unmetered } from "./entitlements";
 import { configureProbes, resetProbeRegionCache } from "./probes";
+import { PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "./probe-protocol";
 
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests). Region ids are unique
 // to this file: the probe region table is platform-wide and other suites write to it too.
@@ -76,9 +77,9 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
   const asked: string[] = [];
   /** What each probe answers; a probe not listed is down. */
   const answers: Record<string, { ok: boolean; statusCode?: number; latencyMs?: number; error?: string }> = {};
-  /** Public health documents are synthetic; a custom answer can exercise mismatches and malformed endpoints. */
-  const healthAnswers: Record<string, { status?: number; body: string } | Error> = {};
-  const healthReads: string[] = [];
+  /** A custom proof answer exercises region mismatch, wrong-key and unavailable responses. */
+  const proofAnswers: Record<string, { region?: string; challenge?: string; signingSecret?: string; capabilities?: string[] } | Error> = {};
+  const validationRequests: Array<{ id: string; body: Record<string, unknown> }> = [];
   /** The local target: what this location's own check sees. */
   let targetStatus = 200;
   let server: Server;
@@ -93,13 +94,29 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
       if (!u.startsWith("https://probe.test/")) return realFetch(input, init);
       const id = u.split("/").pop()!;
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-      if (method === "GET") {
-        healthReads.push(id);
-        const health = healthAnswers[id];
-        if (health instanceof Error) throw health;
-        return health
-          ? new Response(health.body, { status: health.status ?? 200, headers: { "content-type": "application/json" } })
-          : new Response(JSON.stringify({ ok: true, region: id, capabilities: ["http-request-body-v1", "http-json-assertion-v1"] }), { headers: { "content-type": "application/json" } });
+      if (method === "POST") {
+        const bodyText = String(init?.body ?? "");
+        const body = JSON.parse(bodyText) as Record<string, unknown>;
+        if (body.type === PROBE_VALIDATION_TYPE) {
+          validationRequests.push({ id, body });
+          const headers = new Headers(init?.headers);
+          const timestamp = headers.get("x-montral-timestamp");
+          const key = id === "e2e-north" ? "probe-regions-e2e-north-dedicated-secret" : baseEnv.PROBE_SECRET;
+          if (typeof body.challenge !== "string"
+            || !await verifyProbe(key, { timestamp, signature: headers.get("x-montral-signature"), body: bodyText })) {
+            return new Response(JSON.stringify({ error: "invalid synthetic validation request" }), { status: 401 });
+          }
+          const answer = proofAnswers[id];
+          if (answer instanceof Error) throw answer;
+          const region = answer?.region ?? id;
+          const challenge = answer?.challenge ?? body.challenge;
+          const capabilities = answer?.capabilities ?? ["http-request-body-v1", "http-json-assertion-v1"];
+          const responseKey = answer?.signingSecret ?? key;
+          return new Response(JSON.stringify({
+            ok: true, region, challenge, capabilities,
+            signature: await signProbe(responseKey, Number(timestamp), probeCredentialProofBody(region, String(challenge), capabilities)),
+          }), { headers: { "content-type": "application/json" } });
+        }
       }
       asked.push(id);
       const a = answers[id];
@@ -141,9 +158,9 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
   }
   const reset = () => {
     for (const k of Object.keys(answers)) delete answers[k];
-    for (const k of Object.keys(healthAnswers)) delete healthAnswers[k];
+    for (const k of Object.keys(proofAnswers)) delete proofAnswers[k];
     asked.length = 0;
-    healthReads.length = 0;
+    validationRequests.length = 0;
   };
 
   /**
@@ -289,16 +306,16 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     const customer = await account();
     expect((await opSend("/api/operator/probes", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
     expect((await opSend("/api/operator/probes/e2e-west/audit", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
-    const readsBeforeDeniedValidation = healthReads.length;
+    const requestsBeforeDeniedValidation = validationRequests.length;
     expect((await opSend("/api/operator/probes/e2e-west/validate", { method: "POST", headers: { cookie: customer.cookie, origin: ORIGIN, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
-    expect(healthReads).toHaveLength(readsBeforeDeniedValidation);
+    expect(validationRequests).toHaveLength(requestsBeforeDeniedValidation);
     const authHeaders: Record<string, string>[] = [{ authorization: "Bearer synthetic-only" }, { "x-api-key": "synthetic-only" }];
     for (const authHeader of authHeaders) {
       const denied = await opSend("/api/operator/probes/e2e-west/validate", {
         method: "POST", headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json", ...authHeader }, body: "{}",
       });
       expect(denied.status).toBe(403);
-      expect(healthReads).toHaveLength(readsBeforeDeniedValidation);
+      expect(validationRequests).toHaveLength(requestsBeforeDeniedValidation);
     }
     const op = async (method: string, path: string, body?: unknown) => {
       const r = await opSend(`/api/operator${path}`, { method, headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
@@ -311,22 +328,34 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-south").credentialMode).toBe("shared");
     expect(JSON.stringify(listed.body)).not.toContain("probe-regions-e2e-north-dedicated-secret");
     expect(JSON.stringify(listed.body)).not.toContain("probe-regions-e2e-secret");
-    healthAnswers["e2e-west"] = { body: JSON.stringify({ ok: true, region: "e2e-west", capabilities: ["http-request-body-v1", "unknown-capability", "http-request-body-v1"] }) };
+    const dedicated = await op("POST", "/probes/e2e-north/validate", {});
+    expect(dedicated.body).toMatchObject({ id: "e2e-north", validated: true, credentialProof: "matched", sourceAttestation: false });
+    proofAnswers["e2e-north"] = { signingSecret: baseEnv.PROBE_SECRET };
+    expect((await op("POST", "/probes/e2e-north/validate", {})).body).toMatchObject({ id: "e2e-north", validated: false, code: "probe_credential_mismatch" });
+    delete proofAnswers["e2e-north"];
+    proofAnswers["e2e-west"] = { capabilities: ["http-request-body-v1", "unknown-capability", "http-request-body-v1"] };
     const validated = await op("POST", "/probes/e2e-west/validate", {});
     expect(validated.status).toBe(200);
-    expect(validated.body).toEqual({ id: "e2e-west", validated: true, identity: "reported_match", cryptographicAttestation: false, capabilities: ["http-request-body-v1"] });
+    expect(validated.body).toEqual({ id: "e2e-west", validated: true, identity: "reported_match", credentialProof: "matched", sourceAttestation: false, capabilities: ["http-request-body-v1"] });
     expect(JSON.stringify(validated.body)).not.toContain("https://probe.test");
     expect(JSON.stringify(validated.body)).not.toContain("probe-regions-e2e-west");
-    const healthReadsBeforeInvalidBody = healthReads.length;
+    expect(validationRequests.at(-1)).toMatchObject({ id: "e2e-west", body: { type: PROBE_VALIDATION_TYPE } });
+    expect(Object.keys(validationRequests.at(-1)!.body).sort()).toEqual(["challenge", "type"]);
+    expect(String(validationRequests.at(-1)!.body.challenge)).toMatch(/^[0-9a-f]{64}$/);
+    const requestsBeforeInvalidBody = validationRequests.length;
     expect((await op("POST", "/probes/e2e-west/validate", { target: "http://127.0.0.1/" })).status).toBe(400);
-    expect(healthReads).toHaveLength(healthReadsBeforeInvalidBody);
-    healthAnswers["e2e-west"] = { body: JSON.stringify({ ok: true, region: "e2e-north", capabilities: [] }) };
+    expect(validationRequests).toHaveLength(requestsBeforeInvalidBody);
+    proofAnswers["e2e-west"] = { region: "e2e-north" };
     expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_identity_mismatch" });
-    healthAnswers["e2e-west"] = { body: "not-json" };
+    proofAnswers["e2e-west"] = { signingSecret: "not-the-configured-key" };
+    expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_credential_mismatch" });
+    proofAnswers["e2e-west"] = { challenge: "0".repeat(64) };
+    expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_credential_mismatch" });
+    proofAnswers["e2e-west"] = new Error("synthetic malformed endpoint");
     expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_validation_unavailable" });
-    healthAnswers["e2e-west"] = new Error("synthetic unreachable probe");
+    proofAnswers["e2e-west"] = new Error("synthetic unreachable probe");
     expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_validation_unavailable" });
-    delete healthAnswers["e2e-west"];
+    delete proofAnswers["e2e-west"];
     const ids = listed.body.regions.map((r: { id: string }) => r.id);
     expect(ids).toEqual(expect.arrayContaining(Object.keys(PROBES)));
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-west")).toMatchObject({ configured: true, drained: false });

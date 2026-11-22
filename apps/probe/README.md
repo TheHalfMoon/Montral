@@ -18,6 +18,11 @@ Every request carries `x-montral-timestamp` and `x-montral-signature` (HMAC-SHA2
 A probe refuses anything unsigned or older than 60 seconds, and refuses private and internal targets whatever the
 signature says (unless its own operator sets `ALLOW_PRIVATE_TARGETS`), so it is not an open proxy.
 
+Alongside check requests, the probe accepts a bounded `probe-credential-proof-v1` challenge with no target. It returns a
+fresh HMAC signature over the challenge, configured region label and capabilities so the MFA-protected operator endpoint
+can validate possession of the existing key. This does not register the probe, provision or rotate its secret, or attest
+to its source or deployment.
+
 ## Run it as a container or on any Node host
 
 The probe is a plain Node server, so it can run on any VPS or machine in any country, with or without Docker. Build the

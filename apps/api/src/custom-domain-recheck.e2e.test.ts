@@ -78,6 +78,29 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
     expect(await routed(p.domain)).toBe(p.id);
   });
 
+  it("does not start DNS re-checks for an already-suspended workspace and resumes after unsuspension", async () => {
+    const p = await verifiedPage();
+    const [page] = await q<{ organizationId: string }>("SELECT organization_id AS \"organizationId\" FROM status_page WHERE id = $1", [p.id]);
+    await q("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator')", [page.organizationId]);
+    try {
+      let lookups = 0;
+      const counted: TxtResolver = async (name) => { lookups++; return stub(name); };
+
+      expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, counted)).toEqual({ checked: 0, matched: 0, failed: 0, withdrawn: 0, notices: 0 });
+      expect(lookups).toBe(0);
+      const suspended = await state(p.id);
+      expect(new Date(suspended.checked!).getTime()).toBe(p.t0);
+      expect(suspended.verified).not.toBeNull();
+      expect(suspended).toMatchObject({ failures: 0, error: null });
+
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
+      expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, counted)).toMatchObject({ checked: 1, matched: 1, failed: 0 });
+      expect(lookups).toBe(1);
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
+    }
+  });
+
   it("a record that disappears briefly keeps the page served, is re-checked sooner, and the streak clears when it returns", async () => {
     const p = await verifiedPage();
     txt.delete(p.rec.name);

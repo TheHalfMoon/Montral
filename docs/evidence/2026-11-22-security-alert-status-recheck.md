@@ -1,5 +1,13 @@
 # Security alert and historical secret-pattern recheck — 2026-11-22
 
+## Latest refresh after PR #203 — `main@5e9860a`
+
+After PR #203 merged, read-only GitHub APIs were checked against `main@5e9860a063d3e04c3dc1fe963bd0dbf979f11b90` on 2026-11-22. Open records remained 0 for CodeQL, Dependabot and secret scanning. Repository metadata reports Dependabot security updates, secret scanning and push protection enabled; `GET /repos/TheHalfMoon/Montral/vulnerability-alerts` returned HTTP 204. Metadata reports non-provider secret-pattern scanning and secret validity checks disabled. No repository setting was changed.
+
+The advanced CodeQL workflow remains configured and unchanged; its exact-main run [45062764169](https://github.com/TheHalfMoon/Montral/actions/runs/45062764169) succeeded on `5e9860a`. The fail-closed repository verifier also passed for all 12 exact-main `push` workflows on that SHA; run IDs are in [RELEASE-GATES.md](../RELEASE-GATES.md).
+
+This refresh does not clear the historical Gitleaks concern or change any credential. The 65 historical matches, archived vendor-example use uncertainty, incomplete Workbench scan, and issue #169 owner/provider follow-up remain as described below. Alert counts and CI are not security clearance.
+
 ## Scope and result
 
 Read-only checks were made against public repository `TheHalfMoon/Montral` at `main@6b19bdf661caad4fa3b21de23ae9239c4e9ad078` on 2026-11-22. GitHub's open-alert endpoints returned:

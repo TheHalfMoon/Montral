@@ -165,18 +165,18 @@ export async function deliverDomainNotices(query: Query, options: { limit?: numb
       }
       const lang: Lang = isLang(c.locale) ? c.locale : isLang(c.owner_locale) ? c.owner_locale : "en";
       const mail = domainNoticeMail(d.kind, lang, { domain: c.domain!, title: c.title!, reason: c.error!, url: `${appUrl().replace(/\/+$/, "")}/app/status-pages/${d.status_page_id}` });
+      // A suspension may commit after this notice was claimed. Recheck the live row immediately before provider I/O;
+      // this narrows that race but cannot make an external email request atomic with the suspension transaction.
+      const [suspension] = await query<{ one: number }>(
+        "SELECT 1 AS one FROM workspace_suspension WHERE organization_id = $1::text LIMIT 1",
+        [d.organization_id],
+      );
+      if (suspension) {
+        await finish(query, d.id, { status: "skipped", message: "skipped: workspace suspended before notice delivery" });
+        out.skipped++;
+        continue;
+      }
       try {
-        // A suspension may commit after this notice was claimed. Recheck the live row immediately before provider I/O;
-        // this narrows that race but cannot make an external email request atomic with the suspension transaction.
-        const [suspension] = await query<{ one: number }>(
-          "SELECT 1 AS one FROM workspace_suspension WHERE organization_id = $1::text LIMIT 1",
-          [d.organization_id],
-        );
-        if (suspension) {
-          await finish(query, d.id, { status: "skipped", message: "skipped: workspace suspended before notice delivery" });
-          out.skipped++;
-          continue;
-        }
         await sendEmail({ to: c.email!, subject: mail.subject, html: mail.html, text: mail.text }, true);
       } catch {
         // no provider detail (it may echo the address or credentials) reaches the log or the row

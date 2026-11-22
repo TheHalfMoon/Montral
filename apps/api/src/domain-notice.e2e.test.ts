@@ -171,6 +171,26 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
     }
   });
 
+  it("does not call the provider when the post-claim suspension lookup fails", async () => {
+    const w = await workspace();
+    await q("UPDATE status_page SET custom_domain_failing_since = now(), custom_domain_check_error = 'missing' WHERE id = $1", [w.id]);
+    const [{ id }] = await q<{ id: string }>(
+      `INSERT INTO alert_delivery (organization_id, channel_name, channel_type, kind, ok, status, attempts, target_user_id, status_page_id, monitor_name)
+       VALUES ($1, 'notice', 'email', 'domain.failing', false, 'pending', 0, $2, $3::uuid, $4) RETURNING id`,
+      [w.org, w.owner.id, w.id, w.domain],
+    );
+    const unavailableLookup = async <T,>(sql: string, params?: unknown[]) => {
+      if (sql.includes("SELECT 1 AS one FROM workspace_suspension")) throw new Error("test-only database failure");
+      return q<T>(sql, params);
+    };
+
+    expect(await deliverDomainNotices(unavailableLookup, { pageIds: [w.id] })).toEqual({ sent: 0, failed: 0, skipped: 0 });
+    expect(mails).toHaveLength(0);
+    expect(await q<{ status: string; attempts: number }>(
+      "SELECT status, attempts FROM alert_delivery WHERE id = $1::uuid", [id],
+    )).toEqual([{ status: "sending", attempts: 0 }]);
+  });
+
   it("a notice the mail server refuses is retried by the delivery machinery, and skipped once it no longer applies", async () => {
     const w = await workspace();
     txt.delete(w.rec.name);

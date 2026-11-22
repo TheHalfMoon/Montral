@@ -10,7 +10,7 @@ The final read narrows the claim-to-send race but cannot make an external email 
 
 ## Regression coverage
 
-A real PostgreSQL test claims a pending domain notice, inserts the suspension after the claim returns, and verifies the provider transport is not called and the delivery is marked skipped. The full focused `domain-notice.e2e.test.ts` file passed 5/5 against disposable PostgreSQL 18.7. API typecheck and `git diff --check` passed.
+A real PostgreSQL test claims a pending domain notice, inserts the suspension after the claim returns, and verifies the provider transport is not called and the delivery is marked skipped. A second regression makes the final suspension lookup fail and verifies that the provider is not called and the row remains in `sending` for the existing lease/sweep recovery path. The full focused `domain-notice.e2e.test.ts` file passed 6/6 against disposable PostgreSQL 18.7. API typecheck and `git diff --check` passed.
 
 ## Limits
 

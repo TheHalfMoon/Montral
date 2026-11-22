@@ -141,6 +141,36 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
     expect(sent(mails.filter((m) => m.subject.includes("withdrawn") || m.subject.includes("撤销")))).toEqual(to(w.owner, w.admin, w.adminZh));
   });
 
+  it("skips a claimed notice when suspension commits before the provider call", async () => {
+    const w = await workspace();
+    await q("UPDATE status_page SET custom_domain_failing_since = now(), custom_domain_check_error = 'missing' WHERE id = $1", [w.id]);
+    const [{ id }] = await q<{ id: string }>(
+      `INSERT INTO alert_delivery (organization_id, channel_name, channel_type, kind, ok, status, attempts, target_user_id, status_page_id, monitor_name)
+       VALUES ($1, 'notice', 'email', 'domain.failing', false, 'pending', 0, $2, $3::uuid, $4) RETURNING id`,
+      [w.org, w.owner.id, w.id, w.domain],
+    );
+    let insertedSuspension = false;
+    const suspendAfterClaim = async <T,>(sql: string, params?: unknown[]) => {
+      const result = await q<T>(sql, params);
+      if (/UPDATE alert_delivery SET status = 'sending'/.test(sql)) {
+        await q("INSERT INTO workspace_suspension (organization_id, reason, note) VALUES ($1, 'operator', 'test only')", [w.org]);
+        insertedSuspension = true;
+      }
+      return result;
+    };
+
+    try {
+      expect(await deliverDomainNotices(suspendAfterClaim, { pageIds: [w.id] })).toEqual({ sent: 0, failed: 0, skipped: 1 });
+      expect(insertedSuspension).toBe(true);
+      expect(mails).toHaveLength(0);
+      expect(await q<{ status: string; status_message: string | null }>(
+        "SELECT status, status_message FROM alert_delivery WHERE id = $1::uuid", [id],
+      )).toEqual([{ status: "skipped", status_message: "skipped: workspace suspended before notice delivery" }]);
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [w.org]);
+    }
+  });
+
   it("a notice the mail server refuses is retried by the delivery machinery, and skipped once it no longer applies", async () => {
     const w = await workspace();
     txt.delete(w.rec.name);

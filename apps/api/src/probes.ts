@@ -102,6 +102,47 @@ export function probeCredentialMode(id: string): "dedicated" | "shared" | "uncon
   return regionSecrets.has(id) ? "dedicated" : "shared";
 }
 
+export type ProbeRegionValidation =
+  | { status: "validated"; capabilities: string[] }
+  | { status: "identity_mismatch" }
+  | { status: "unavailable" };
+
+/**
+ * Check the configured probe's public health document without sending credentials or a monitor target.
+ * This verifies only that the endpoint reports the configured region id; it is not cryptographic attestation.
+ */
+export async function validateProbeRegion(id: string): Promise<ProbeRegionValidation> {
+  const probe = regions.get(id);
+  if (!probe) return { status: "unavailable" };
+  const signal = AbortSignal.timeout(5_000);
+  try {
+    const response = await fetch(probe.url, {
+      method: "GET",
+      redirect: "manual",
+      headers: { accept: "application/json" },
+      signal,
+    });
+    if (!response.ok) {
+      void response.body?.cancel().catch(() => {});
+      return { status: "unavailable" };
+    }
+    const raw = await readCapped(response, 4_096, signal);
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch { return { status: "unavailable" }; }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { status: "unavailable" };
+    const health = value as { ok?: unknown; region?: unknown; capabilities?: unknown };
+    if (health.ok !== true) return { status: "unavailable" };
+    if (health.region !== id) return { status: "identity_mismatch" };
+    const knownCapabilities = [HTTP_REQUEST_CAPABILITY, JSON_ASSERTION_CAPABILITY];
+    const capabilities = Array.isArray(health.capabilities)
+      ? [...new Set(health.capabilities.filter((item): item is string => typeof item === "string" && knownCapabilities.includes(item as typeof knownCapabilities[number])))]
+      : [];
+    return { status: "validated", capabilities };
+  } catch {
+    return { status: "unavailable" };
+  }
+}
+
 export const isRegionConfigured = (id: string) => id === AUTO || regions.has(id);
 
 /** What running a check in one region came to: an outcome, or that the region could not be asked at all. */

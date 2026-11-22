@@ -212,6 +212,15 @@ export interface ProbeRegionDrainEvent {
   createdAt: Date;
 }
 
+/** Secret-free result of an operator's challenge-response validation attempt. */
+export interface ProbeRegionValidationEvent {
+  id: number;
+  region: string;
+  outcome: "validated" | "identity_mismatch" | "credential_mismatch" | "unavailable";
+  operatorId: string;
+  createdAt: Date;
+}
+
 /** A monitor's last day from one region, for the regions it has been checked from. */
 export interface RegionStat {
   region: string;
@@ -771,6 +780,10 @@ export interface Repo {
   setProbeRegionDrain?(region: string, drain: { drained: boolean; by: string | null; note: string | null }): Promise<void>;
   /** Latest operator actions for a probe, newest first; never exposed to workspace members. */
   probeRegionDrainEvents?(region: string, limit: number): Promise<ProbeRegionDrainEvent[]>;
+  /** Persist the fixed outcome class of an operator validation attempt; no probe response or credential material. */
+  recordProbeRegionValidation?(region: string, outcome: ProbeRegionValidationEvent["outcome"], operatorId: string): Promise<void>;
+  /** Latest secret-free operator validation outcomes, newest first. */
+  probeRegionValidationEvents?(region: string, limit: number): Promise<ProbeRegionValidationEvent[]>;
   /** How many unpaused monitors list each region id. */
   monitorsPerRegion?(): Promise<Record<string, number>>;
   /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */

@@ -17,6 +17,7 @@ import {
   type Repo,
   type MonitorType,
   type ProbeRegionDrainEvent,
+  type ProbeRegionValidationEvent,
   type ImportResult,
   type Scope,
 } from "@montral/repo";
@@ -929,6 +930,19 @@ export function createRepo(db: Db): Repo {
       return records.map((r): ProbeRegionDrainEvent => ({
         id: r.id, region: r.region, action: r.action as ProbeRegionDrainEvent["action"],
         operatorId: r.operatorId, note: r.note, createdAt: r.createdAt,
+      }));
+    },
+    async recordProbeRegionValidation(region, outcome, operatorId) {
+      await db.insert(schema.probeRegionValidationEvent).values({ region, outcome, operatorId });
+    },
+    async probeRegionValidationEvents(region, limit) {
+      const t = schema.probeRegionValidationEvent;
+      const safeLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
+      const records = await db.select().from(t).where(eq(t.region, region)).orderBy(desc(t.id)).limit(safeLimit);
+      return records.map((r): ProbeRegionValidationEvent => ({
+        id: r.id, region: r.region,
+        outcome: r.outcome as ProbeRegionValidationEvent["outcome"],
+        operatorId: r.operatorId, createdAt: r.createdAt,
       }));
     },
     async monitorsPerRegion() {

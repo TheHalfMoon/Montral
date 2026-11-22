@@ -848,6 +848,8 @@ export interface Repo {
   queueDeliveries(rows: NewDelivery[]): Promise<AlertDelivery[]>;
   /** One conditional UPDATE: pending -> sending. Null when another worker holds the row or it is not due. */
   claimDelivery(id: string): Promise<AlertDelivery | null>;
+  /** Read the live operator suspension state immediately before an external alert send. */
+  organizationSuspended?(orgId: string): Promise<boolean>;
   /** Checkpoint only the current sending attempt; false means this worker no longer owns the claim. */
   markDeliveryEmailQuotaAttempt(id: string, attempts: number): Promise<boolean>;
   /**

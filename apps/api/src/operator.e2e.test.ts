@@ -1,7 +1,8 @@
 import { openDatabase } from "@montral/db-pg";
 import { createHmac } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
+import { retryDeliveries } from "./alerts";
 import { deliverDomainNotices } from "./domain-notice";
 import { montralEdition } from "./montral-edition";
 import { migrateMontralSchema } from "./schema-migrate";
@@ -510,6 +511,42 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
       expect(await inc(incS)).toEqual({ reminder_count: 0, escalation_level: 0 });
       expect((await inc(incT)).escalation_level).toBe(1);
 
+      // A retry claimed while active must recheck suspension before calling its provider.
+      const [webhook] = await db!.query<{ id: string }>(
+        `INSERT INTO alert_channel (organization_id, project_id, name, type, config, enabled)
+         VALUES ($1, $2::uuid, 'Race webhook', 'webhook', $3::jsonb, true) RETURNING id`,
+        [T, t.project, JSON.stringify({ url: "https://hooks.example.invalid/suspension-race" })],
+      );
+      const [racingDelivery] = await db!.query<{ id: string }>(
+        `INSERT INTO alert_delivery (organization_id, project_id, channel_id, channel_name, channel_type, kind, incident_id, monitor_name, ok, status, attempts, next_attempt_at)
+         VALUES ($1, $2::uuid, $3::uuid, 'Race webhook', 'webhook', 'incident.opened', $4::uuid, 'M', false, 'pending', 0, now() - interval '1 minute') RETURNING id`,
+        [T, t.project, webhook.id, incT],
+      );
+      const claimRetries = db!.repo.claimRetries.bind(db!.repo);
+      let suspendedAfterClaim = false;
+      const raceRepo = {
+        ...db!.repo,
+        claimRetries: async (limit: number) => {
+          const claimed = await claimRetries(limit);
+          if (claimed.some((item) => item.delivery.id === racingDelivery.id)) {
+            await db!.query(`INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator')`, [T]);
+            suspendedAfterClaim = true;
+          }
+          return claimed;
+        },
+      };
+      const providerFetch = vi.fn(async () => new Response("ok", { status: 200 }));
+      vi.stubGlobal("fetch", providerFetch);
+      try {
+        await retryDeliveries(raceRepo as never);
+        expect(suspendedAfterClaim).toBe(true);
+        expect(providerFetch).not.toHaveBeenCalled();
+        expect(await status(racingDelivery.id)).toBe("skipped");
+        await db!.query(`DELETE FROM workspace_suspension WHERE organization_id = $1`, [T]);
+      } finally {
+        vi.unstubAllGlobals();
+      }
+
       // claimMaintenanceReminders: a followed status page of each, a window starting within the reminder period
       const window = async (org: string) => {
         const [page] = await db!.query<{ id: string }>(
@@ -565,7 +602,7 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
       const month2 = month.replace(/^19/, "18");
       expect(await db!.repo.claimMonthlyReportsWithRecipients(month2, 1)).toEqual([T]);
     } finally {
-      await db!.query(`DELETE FROM workspace_suspension WHERE organization_id = $1`, [S]);
+      await db!.query(`DELETE FROM workspace_suspension WHERE organization_id = ANY(string_to_array($1::text, ','))`, [`${S},${T}`]);
       await db!.query(`DELETE FROM organization WHERE id = ANY(string_to_array($1::text, ','))`, [`${S},${T}`]).catch(() => {});
     }
   });

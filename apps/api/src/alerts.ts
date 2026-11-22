@@ -389,6 +389,9 @@ async function execute(repo: Repo, orgId: string, d: Pick<AlertDelivery, "id" | 
     if ((d.kind === "incident.escalated" || d.kind === "incident.reminder") && (await followUpStopped(repo, ev.incident.id))) {
       throw new Skipped("skipped: the incident was acknowledged or resolved before this alert could be sent");
     }
+    // Claiming and suspension are separate commits. Recheck immediately before provider I/O so a claim that raced
+    // with suspension does not send afterward. It cannot make the external call atomic with the suspension commit.
+    if (await repo.organizationSuspended?.(orgId)) throw new Skipped("skipped: workspace suspended before alert delivery");
     await deliver(channel, ev, alertText(ev), lang, repo, pushed);
     await repo.finishDelivery(d.id, { status: "sent", error: null, message: null });
     return true;

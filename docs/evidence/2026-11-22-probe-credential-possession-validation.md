@@ -20,4 +20,4 @@ A valid response proves that the configured endpoint can use the selected HMAC k
 - Real-PostgreSQL operator route suite: 7/7 passed. Coverage includes dedicated and shared keys, wrong-key response, wrong region, stale challenge, unreachable probe and refusal for non-operator/API-key callers.
 - API and probe TypeScript checks passed.
 - `git diff --check` passed.
-- Hosted exact-head qualification passed 23/23 on PR #199. Exact-main workflows for `7f1bf02` are running.
+- Hosted exact-head qualification passed 23/23 on PR #199. No independent reviewer was assigned (`reviewRequests` and `latestReviews` were empty); manual review was performed. Local d1 advisory triage returned medium risk and was not used as an approval gate. Exact-main workflows for `7f1bf02` are running.

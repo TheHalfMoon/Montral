@@ -269,7 +269,7 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     const { id, path } = await inbox(owner.cookie, "Replay");
     const usageBefore = await call("/api/hooks/replay-usage", { cookie: owner.cookie });
     expect(usageBefore.status).toBe(200);
-    expect(usageBefore.body).toMatchObject({ attempts: "0", billable: false });
+    expect(usageBefore.body).toMatchObject({ attempts: "0", unit: "admitted_attempts", billable: false });
     const stranger = await signUp("replay-stranger");
     expect((await call("/api/hooks/replay-usage", { cookie: stranger.cookie })).body.attempts).toBe("0");
     expect((await call(`/api/hooks/inboxes/${id}/response`, { method: "PUT", cookie: owner.cookie, body: { status: 503, body: "configured-down", headers: [{ name: "X-Mock", value: "1" }] } })).status).toBe(200);
@@ -277,6 +277,7 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     const [event] = (await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events as { id: string; response_status: number }[];
     expect(event.response_status).toBe(503);
     let seen: { headers?: IncomingHttpHeaders; body?: string } = {};
+    let target = "";
     const sink = createServer((req, res) => {
       let body = "";
       req.on("data", (c) => { body += c; });
@@ -284,7 +285,7 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     });
     await new Promise<void>((r) => sink.listen(0, "127.0.0.1", r));
     try {
-      const target = `http://127.0.0.1:${(sink.address() as AddressInfo).port}/hook`;
+      target = `http://127.0.0.1:${(sink.address() as AddressInfo).port}/hook`;
       const replayed = await call(`/api/hooks/inboxes/${id}/events/${event.id}/replay`, { method: "POST", cookie: owner.cookie, body: { url: target }, env: { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" } });
       expect(replayed.status).toBe(200);
       expect(replayed.body).toMatchObject({ status: 201, body: "sink-ok" });
@@ -293,7 +294,7 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
       expect(JSON.stringify(replayed.body)).not.toContain("configured-down");
       const usageAfter = await call("/api/hooks/replay-usage", { cookie: owner.cookie });
       expect(usageAfter.status).toBe(200);
-      expect(usageAfter.body).toMatchObject({ attempts: "1", billable: false });
+      expect(usageAfter.body).toMatchObject({ attempts: "1", unit: "admitted_attempts", billable: false });
       expect(usageAfter.body.periodStart).toMatch(/^\d{4}-\d{2}-01$/);
       expect((await call("/api/hooks/replay-usage", { cookie: stranger.cookie })).body.attempts).toBe("0");
       const rows = await q<{ attempts: string }>("SELECT attempts::text AS attempts FROM montral_hook_replay_usage WHERE organization_id=$1", [owner.orgId]);
@@ -301,6 +302,10 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     } finally {
       await new Promise((r) => sink.close(r));
     }
+    const ambiguous = await call(`/api/hooks/inboxes/${id}/events/${event.id}/replay`, { method: "POST", cookie: owner.cookie, body: { url: target }, env: { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" } });
+    expect(ambiguous.status).toBe(502);
+    const usageAfterAmbiguous = await call("/api/hooks/replay-usage", { cookie: owner.cookie });
+    expect(usageAfterAmbiguous.body).toMatchObject({ attempts: "2", unit: "admitted_attempts", billable: false });
     // Replay stores no new event/body/URL; only its monthly aggregate count persists.
     expect((await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events).toHaveLength(1);
   });

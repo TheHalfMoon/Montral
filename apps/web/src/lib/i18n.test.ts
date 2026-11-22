@@ -7,6 +7,9 @@ const [key, val] = Object.entries(zh)[0];
 describe("translate", () => {
   it("returns English for en", () => expect(translate("en", key)).toBe(key));
   it("translates for zh-CN", () => expect(translate("zh-CN", key)).toBe(val));
+  it("labels webhook replay counts as admitted requests, not delivery confirmations", () => {
+    expect(translate("zh-CN", "counts admitted requests, not confirmed deliveries")).toBe("按已受理请求计数，不代表已送达");
+  });
   it("falls back to the source text when missing", () => {
     expect(translate("zh-CN", "__no such key__")).toBe("__no such key__");
   });

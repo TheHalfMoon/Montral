@@ -907,5 +907,5 @@ export const zh: Record<string, string> = {
   "Phones registered by a separately configured APNs-compatible client can receive push alerts when the server is configured.": "由单独配置、兼容 APNs 的客户端注册的手机，可在服务器完成配置后接收推送告警。",
   "Push delivery is not configured on this server, so these phones get no alerts.": "此服务器未配置推送，这些手机不会收到告警。",
   "No phones yet. Registration requires a compatible, separately configured native client.": "还没有手机。注册需要另行配置兼容的原生客户端。", "Development build": "开发版", "Critical alerts on": "已开启危急提醒", "Push alerts on": "已开启推送告警",
-  "Replay attempts this month": "本月重放次数", "counter resets on {date} (UTC)": "计数于 {date}（UTC）清零", "not billed": "不计费",
+  "Replay attempts this month": "本月重放次数", "counts admitted requests, not confirmed deliveries": "按已受理请求计数，不代表已送达", "counter resets on {date} (UTC)": "计数于 {date}（UTC）清零", "not billed": "不计费",
 };

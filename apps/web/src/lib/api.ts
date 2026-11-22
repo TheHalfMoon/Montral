@@ -340,8 +340,8 @@ export const api = {
   },
   deleteHookInbox: (id: string) => req<void>(`/hooks/inboxes/${id}`, { method: "DELETE" }),
   deleteHookEvent: (inbox: string, event: string) => req<void>(`/hooks/inboxes/${inbox}/events/${event}`, { method: "DELETE" }),
-  /** this month's accepted replay attempts (owners and admins; 403 otherwise). A count, never billed. */
-  hookReplayUsage: () => req<{ attempts: string; periodStart: string; periodEnd: string; billable: false }>("/hooks/replay-usage"),
+  /** Authenticated admitted replay requests; this is not a delivery count or a billable meter. */
+  hookReplayUsage: () => req<{ attempts: string; periodStart: string; periodEnd: string; unit: "admitted_attempts"; billable: false }>("/hooks/replay-usage"),
   replayHookEvent: (inbox: string, event: string, url: string) =>
     req<{ status: number; contentType: string | null; body: string; truncated: boolean; durationMs: number }>(`/hooks/inboxes/${inbox}/events/${event}/replay`, { method: "POST", body: JSON.stringify({ url }) }),
   hookResponse: (id: string) => req<{ response: HookResponse | null }>(`/hooks/inboxes/${id}/response`),

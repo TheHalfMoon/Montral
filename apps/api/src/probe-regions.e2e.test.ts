@@ -76,6 +76,9 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
   const asked: string[] = [];
   /** What each probe answers; a probe not listed is down. */
   const answers: Record<string, { ok: boolean; statusCode?: number; latencyMs?: number; error?: string }> = {};
+  /** Public health documents are synthetic; a custom answer can exercise mismatches and malformed endpoints. */
+  const healthAnswers: Record<string, { status?: number; body: string } | Error> = {};
+  const healthReads: string[] = [];
   /** The local target: what this location's own check sees. */
   let targetStatus = 200;
   let server: Server;
@@ -89,6 +92,15 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
       const u = String(input instanceof Request ? input.url : input);
       if (!u.startsWith("https://probe.test/")) return realFetch(input, init);
       const id = u.split("/").pop()!;
+      const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      if (method === "GET") {
+        healthReads.push(id);
+        const health = healthAnswers[id];
+        if (health instanceof Error) throw health;
+        return health
+          ? new Response(health.body, { status: health.status ?? 200, headers: { "content-type": "application/json" } })
+          : new Response(JSON.stringify({ ok: true, region: id, capabilities: ["http-request-body-v1", "http-json-assertion-v1"] }), { headers: { "content-type": "application/json" } });
+      }
       asked.push(id);
       const a = answers[id];
       if (!a) throw new Error("connect ECONNREFUSED");
@@ -127,7 +139,12 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     monitorIds.push(r.body.id);
     return r.body as { id: string };
   }
-  const reset = () => { for (const k of Object.keys(answers)) delete answers[k]; asked.length = 0; };
+  const reset = () => {
+    for (const k of Object.keys(answers)) delete answers[k];
+    for (const k of Object.keys(healthAnswers)) delete healthAnswers[k];
+    asked.length = 0;
+    healthReads.length = 0;
+  };
 
   /**
    * An operator listed in MONTRAL_OPERATOR_USER_IDS, as in the operator control-plane e2e: `verifiedCookie` comes from a
@@ -272,6 +289,17 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     const customer = await account();
     expect((await opSend("/api/operator/probes", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
     expect((await opSend("/api/operator/probes/e2e-west/audit", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
+    const readsBeforeDeniedValidation = healthReads.length;
+    expect((await opSend("/api/operator/probes/e2e-west/validate", { method: "POST", headers: { cookie: customer.cookie, origin: ORIGIN, "content-type": "application/json" }, body: "{}" })).status).toBe(403);
+    expect(healthReads).toHaveLength(readsBeforeDeniedValidation);
+    const authHeaders: Record<string, string>[] = [{ authorization: "Bearer synthetic-only" }, { "x-api-key": "synthetic-only" }];
+    for (const authHeader of authHeaders) {
+      const denied = await opSend("/api/operator/probes/e2e-west/validate", {
+        method: "POST", headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json", ...authHeader }, body: "{}",
+      });
+      expect(denied.status).toBe(403);
+      expect(healthReads).toHaveLength(readsBeforeDeniedValidation);
+    }
     const op = async (method: string, path: string, body?: unknown) => {
       const r = await opSend(`/api/operator${path}`, { method, headers: { cookie: opCookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
@@ -283,6 +311,22 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-south").credentialMode).toBe("shared");
     expect(JSON.stringify(listed.body)).not.toContain("probe-regions-e2e-north-dedicated-secret");
     expect(JSON.stringify(listed.body)).not.toContain("probe-regions-e2e-secret");
+    healthAnswers["e2e-west"] = { body: JSON.stringify({ ok: true, region: "e2e-west", capabilities: ["http-request-body-v1", "unknown-capability", "http-request-body-v1"] }) };
+    const validated = await op("POST", "/probes/e2e-west/validate", {});
+    expect(validated.status).toBe(200);
+    expect(validated.body).toEqual({ id: "e2e-west", validated: true, identity: "reported_match", cryptographicAttestation: false, capabilities: ["http-request-body-v1"] });
+    expect(JSON.stringify(validated.body)).not.toContain("https://probe.test");
+    expect(JSON.stringify(validated.body)).not.toContain("probe-regions-e2e-west");
+    const healthReadsBeforeInvalidBody = healthReads.length;
+    expect((await op("POST", "/probes/e2e-west/validate", { target: "http://127.0.0.1/" })).status).toBe(400);
+    expect(healthReads).toHaveLength(healthReadsBeforeInvalidBody);
+    healthAnswers["e2e-west"] = { body: JSON.stringify({ ok: true, region: "e2e-north", capabilities: [] }) };
+    expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_identity_mismatch" });
+    healthAnswers["e2e-west"] = { body: "not-json" };
+    expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_validation_unavailable" });
+    healthAnswers["e2e-west"] = new Error("synthetic unreachable probe");
+    expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_validation_unavailable" });
+    delete healthAnswers["e2e-west"];
     const ids = listed.body.regions.map((r: { id: string }) => r.id);
     expect(ids).toEqual(expect.arrayContaining(Object.keys(PROBES)));
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-west")).toMatchObject({ configured: true, drained: false });
@@ -351,7 +395,7 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     const unchanged = async () => expect(await snapshot()).toEqual(seeded);
     const post = (path: string, cookie: string | null, body: string | undefined = "{}", extra: Record<string, string> = {}) =>
       send(`/api/operator${path}`, { method: "POST", headers: { origin: ORIGIN, "content-type": "application/json", ...(cookie ? { cookie } : {}), ...extra }, body });
-    const routes = ["/probes/e2e-east/drain", "/probes/e2e-central/undrain"];
+    const routes = ["/probes/e2e-east/drain", "/probes/e2e-central/undrain", "/probes/e2e-west/validate"];
 
     for (const path of routes) {
       // (1) a signed-in customer who is not an operator

@@ -6,7 +6,7 @@ import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
 import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
-import { availableRegions, isRegionConfigured, probeCredentialMode, resetProbeRegionCache } from "./probes";
+import { availableRegions, isRegionConfigured, probeCredentialMode, resetProbeRegionCache, validateProbeRegion } from "./probes";
 import { AUTO, REGION_ID } from "./regions";
 import type { ProbeRegionState } from "@montral/repo";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
@@ -407,6 +407,24 @@ export const operatorApi = new Hono<AppEnv>()
         ...stale.map((id) => ({ ...probeRegionView(id, null, byId.get(id), counts[id] ?? 0), credentialMode: "unconfigured" as const })),
       ],
     });
+  })
+  // Validate the reported region identity of an already configured endpoint. This sends no credentials or target.
+  .post("/probes/:id/validate", async (c) => {
+    const id = c.req.param("id");
+    if (!REGION_ID.test(id) || id === AUTO || !isRegionConfigured(id)) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    const operatorId = c.get("operatorId")!;
+    if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const body = await strictJsonObjectBody(c.req.raw, 2048);
+    if (Object.keys(body).length) return c.json({ error: "Validation accepts an empty object only" }, 400);
+    const result = await validateProbeRegion(id);
+    if (result.status === "identity_mismatch") {
+      return c.json({ id, validated: false, code: "probe_identity_mismatch", error: "Probe reports a different region identity" }, 409);
+    }
+    if (result.status === "unavailable") {
+      return c.json({ id, validated: false, code: "probe_validation_unavailable", error: "Probe identity could not be validated" }, 502);
+    }
+    return c.json({ id, validated: true, identity: "reported_match", cryptographicAttestation: false, capabilities: result.capabilities });
   })
   // An MFA-verified platform operator can inspect an append-only history of drain / undrain actions.
   // Customer roles and API keys are rejected by the requireOperator gate above.

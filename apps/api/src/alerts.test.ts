@@ -319,6 +319,13 @@ describe("initial alert channel fanout resilience", () => {
     expect(JSON.stringify(f.errorLog.mock.calls)).not.toContain(secret);
   });
 
+  it("skips a claimed alert when the workspace is suspended before provider delivery", async () => {
+    const f = setup({ channelsToAlert: async () => [channel("live")], organizationSuspended: async () => true });
+    await expect(dispatchAlert(f.repo as never, "synthetic-org", event)).resolves.toBeUndefined();
+    expect(f.fetchMock).not.toHaveBeenCalled();
+    expect(f.delivered).toEqual([{ id: "live", status: "skipped" }]);
+  });
+
   it("does not silence live channels if disabled-channel audit logging fails", async () => {
     const secret = "synthetic-audit-private-token";
     const f = setup({

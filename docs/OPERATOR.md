@@ -71,6 +71,10 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
   A check already running when suspension begins may still finish its outbound request and consume the credits
   reserved before suspension. On updated instances, its observation is refused if suspension has already committed;
   this does not cancel an external request or undo an existing meter charge.
+- **Alerts**: claim queries exclude suspended workspaces. A delivery claimed immediately before suspension now checks the
+  live suspension row once more before provider I/O and is marked skipped if suspension has committed. Suspension can
+  still commit after that final read while a request is starting; an already-started provider request cannot be recalled.
+  Any email allowance already reserved before the final check is not refunded.
 - **Heartbeats**: pings to the workspace's heartbeat URLs get the same 403 and record nothing.
 - **Workspace changes through Better Auth** (`/api/auth/*`, which does not pass `requireOrg`): inviting or accepting
   invitations, renaming, changing roles, removing members, deleting the workspace, and creating or changing API keys

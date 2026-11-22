@@ -1356,6 +1356,10 @@ export function createRepo(db: Db): Repo {
         .returning();
       return (row as AlertDelivery) ?? null;
     },
+    async organizationSuspended(orgId) {
+      const found = await rows<{ one: number }>(db.execute(sql`select 1 as one from workspace_suspension where organization_id = ${orgId} limit 1`));
+      return found.length > 0;
+    },
     async markDeliveryEmailQuotaAttempt(id, attempts) {
       const t = schema.alertDelivery;
       const rows = await db.update(t).set({ emailQuotaAttempted: true })

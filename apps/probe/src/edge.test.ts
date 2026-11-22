@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signProbe } from "../../api/src/probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "../../api/src/probe-protocol";
 import { handleEdgeProbe, safeTarget, type EdgeEnv } from "./edge";
 
 const secret = "a-long-secret-for-montral-edge-probes";
@@ -82,6 +82,18 @@ describe("Montral Cloudflare edge probe", () => {
   it("reports capabilities but never runs a schedule on its own", async () => {
     const r = await handleEdgeProbe(new Request("https://edge.example.invalid"), env);
     expect(await r.json()).toMatchObject({ ok: true, region: "edge-eu", capabilities: ["http-request-body-v1"] });
+  });
+  it("answers an authenticated validation challenge with a region-bound key proof and does not fetch a target", async () => {
+    const challenge = "b".repeat(64);
+    const req = await signed({ type: PROBE_VALIDATION_TYPE, challenge });
+    const timestamp = req.headers.get(TIMESTAMP_HEADER)!;
+    const fetcher = vi.fn(okFetch);
+    const res = await handleEdgeProbe(req, env, fetcher as never);
+    const proof = await res.json() as { ok: boolean; region: string; challenge: string; capabilities: string[]; signature: string };
+    expect(res.status).toBe(200);
+    expect(proof).toMatchObject({ ok: true, region: "edge-eu", challenge, capabilities: ["http-request-body-v1"] });
+    expect(fetcher).not.toHaveBeenCalled();
+    expect(await verifyProbe(secret, { timestamp, signature: proof.signature, body: probeCredentialProofBody(proof.region, challenge, proof.capabilities) })).toBe(true);
   });
   it("denies targets outside the explicit public HTTPS allowlist", () => {
     expect(safeTarget("http://example.com/", env.ALLOWED_HOSTS!)).toBeNull();

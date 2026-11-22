@@ -2,7 +2,7 @@ import { HTTP_METHODS, HTTP_REQUEST_CAPABILITY, requestBodyProblem } from "../..
 import { runCheck, type CheckInput } from "../../api/src/checker";
 import { JSON_ASSERTION_CAPABILITY, JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, jsonPathProblem } from "../../api/src/json-assertion";
 import { targetProblem } from "../../api/src/netguard";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbeWithRotation } from "../../api/src/probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbeWithRotation } from "../../api/src/probe-protocol";
 
 /**
  * Bounds the signed envelope, which is read before the signature can be checked: a 16 KiB request body (escaped) plus
@@ -74,6 +74,18 @@ export async function handleProbe(req: Request, o: { secret: string | undefined;
   if (!verified) return json(401, { error: "Bad or expired signature" });
   let raw: unknown;
   try { raw = JSON.parse(text); } catch { return json(400, { error: "Body is not valid JSON" }); }
+  if (raw && typeof raw === "object" && !Array.isArray(raw) && (raw as Record<string, unknown>).type === PROBE_VALIDATION_TYPE) {
+    const value = raw as Record<string, unknown>;
+    if (Object.keys(value).length !== 2 || typeof value.challenge !== "string" || !/^[0-9a-f]{64}$/.test(value.challenge))
+      return json(400, { error: "Invalid probe credential challenge" });
+    const timestamp = req.headers.get(TIMESTAMP_HEADER)!;
+    const region = o.region ?? null;
+    const capabilities = [HTTP_REQUEST_CAPABILITY, JSON_ASSERTION_CAPABILITY];
+    return json(200, {
+      ok: true, region, challenge: value.challenge, capabilities,
+      signature: await signProbe(o.secret, Number(timestamp), probeCredentialProofBody(region, value.challenge, capabilities)),
+    });
+  }
   const parsed = parseCheck(raw);
   if ("error" in parsed) return json(400, { error: parsed.error });
   // a signed request is still not allowed to aim the probe at a private address

@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signProbe } from "../../api/src/probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "../../api/src/probe-protocol";
 import { configureNetGuard } from "../../api/src/netguard";
 import { handleProbe, parseCheck } from "./handler";
 
@@ -23,6 +23,24 @@ describe("probe handler", () => {
   it("answers a health GET without credentials", async () => {
     const res = await handleProbe(new Request("http://probe/"), { secret, region: "fra1" });
     expect(await res.json()).toMatchObject({ ok: true, region: "fra1", capabilities: ["http-request-body-v1", "http-json-assertion-v1"] });
+  });
+
+  it("proves possession of the configured key for a fresh, region-bound validation challenge", async () => {
+    const challenge = "a".repeat(64);
+    const req = await signed({ type: PROBE_VALIDATION_TYPE, challenge });
+    const timestamp = req.headers.get(TIMESTAMP_HEADER)!;
+    const res = await handleProbe(req, { secret, region: "eu-central" });
+    const proof = await res.json() as { ok: boolean; region: string; challenge: string; capabilities: string[]; signature: string };
+    expect(res.status).toBe(200);
+    expect(proof).toMatchObject({ ok: true, region: "eu-central", challenge, capabilities: ["http-request-body-v1", "http-json-assertion-v1"] });
+    expect(await verifyProbe(secret, { timestamp, signature: proof.signature, body: probeCredentialProofBody(proof.region, challenge, proof.capabilities) })).toBe(true);
+    expect(await verifyProbe(secret, { timestamp, signature: proof.signature, body: probeCredentialProofBody("other-region", challenge, proof.capabilities) })).toBe(false);
+    expect(await verifyProbe(secret, { timestamp, signature: proof.signature, body: probeCredentialProofBody(proof.region, "b".repeat(64), proof.capabilities) })).toBe(false);
+  });
+
+  it("rejects malformed credential challenges without running a target check", async () => {
+    expect((await handleProbe(await signed({ type: PROBE_VALIDATION_TYPE, challenge: "short" }), { secret, region: "eu-central" })).status).toBe(400);
+    expect((await handleProbe(await signed({ type: PROBE_VALIDATION_TYPE, challenge: "a".repeat(64), target: "https://example.com" }), { secret, region: "eu-central" })).status).toBe(400);
   });
 
   it("is not an open proxy: unsigned, wrongly signed and stale requests are refused", async () => {

@@ -130,7 +130,7 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
 | Endpoint | Does |
 | --- | --- |
 | `GET /api/operator/probes` | Every configured region, plus any region with stored state that is no longer configured (`configured: false`): `status` (`up`, `unreachable`, `drained` or `unknown`), `credentialMode` (`dedicated`, `shared` or `unconfigured`), `lastAnswerAt`, `lastUnreachableAt`, `lastUnreachableReason`, `unreachableSince`, the drain fields and how many unpaused monitors list the region. `auto.monitors` counts monitors on this deployment's own location. Credential mode never includes a key, URL or secret fingerprint. |
-| `POST /api/operator/probes/:id/validate` | Accepts only `{}` and only an already configured region. Makes a bounded, redirect-disabled GET to that region's public health endpoint without sending a key or monitor target. It checks `ok` and the reported region ID, and returns only the match result and known capability names. This is an operational configuration check, **not cryptographic attestation, registration, or proof that the probe can authenticate signed checks**. Returns 409 for a reported identity mismatch and 502 when the endpoint cannot be validated. It is read-only and rate-limited with the operator write bucket. |
+| `POST /api/operator/probes/:id/validate` | Accepts only `{}` and only an already configured region. Sends a bounded, redirect-disabled HMAC-signed challenge to the configured probe with no key value or monitor target. The response proof binds the fresh challenge, reported region ID, and capabilities to the existing configured key. It returns only the match result and recognized capabilities. This proves possession of the configured key at the endpoint, **not source, deployment, or binary integrity**; a shared key also cannot distinguish regions using that same key. Returns 409 for an identity/key mismatch and 502 when the endpoint cannot be validated. It is read-only and rate-limited with the operator write bucket. |
 | `POST /api/operator/probes/:id/drain` | Body `{"note"?: string}` (at most 200 characters). Only a configured region; `auto` cannot be drained. |
 | `POST /api/operator/probes/:id/undrain` | Puts a region back and saves `lastUndrainedBy` and `lastUndrainedAt`. Drain and undrain refuse a body that is not a JSON object (400) or is over 2 KiB (413); an empty body is fine. |
 | `GET /api/operator/probes/:id/audit?limit=50` | Latest 1 to 100 (default 50) drain and undrain actions in descending event ID order, with action, operator ID, timestamp and optional note. Customer sessions, API keys and non-MFA operator sessions get 403. |
@@ -191,7 +191,9 @@ stored in an append-only `probe_region_drain_event` table in migration `0060`:
 - Workspace suspension actions are still recorded in the affected customer's audit log and the server log,
   not in a general platform audit table. Probe drain/undrain actions now have their own append-only platform audit
   history; the operator plane still has no unified audit history across all other actions.
-- Probe regions are still registered through `PROBE_REGIONS`: there is no API to add or remove one, no per-probe
-  credential and no secret rotation window. Probe-region credits are reserved up front and unused credits from
-  regions that returned no result are refunded after measurement; there are no persistent customer-facing counters
-  of usage by region yet.
+- Probe regions are still added and removed through deployment configuration; there is no operator registration API,
+  database storage for probe keys, automatic secret provisioning, or managed revocation. Per-region signing keys
+  through `PROBE_SECRETS` and an expiring probe-side rollover are supported. The operator can inspect credential mode
+  and challenge a configured endpoint for proof of its current key. Probe-region accounting is persisted per UTC month
+  and the metered usage API reports regional reservations, outcomes and refunds. Stale reservations remain unverified;
+  historical aggregates are not rewritten. Real probes remain deployment-managed and are not live-qualified.

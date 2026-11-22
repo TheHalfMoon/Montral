@@ -1,5 +1,5 @@
 import { HTTP_REQUEST_CAPABILITY, HTTP_METHODS, requestBodyProblem } from "../../api/src/http-request";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, verifyProbeWithRotation } from "../../api/src/probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbeWithRotation } from "../../api/src/probe-protocol";
 import { limitedBodyBytes } from "../../api/src/json-body-budget";
 
 /**
@@ -80,6 +80,16 @@ export async function handleEdgeProbe(request: Request, env: EdgeEnv, fetcher: t
   try { raw = JSON.parse(body); } catch { return json(400, { error: "Invalid JSON" }); }
   const value = raw as Record<string, unknown> | null;
   if (!value || typeof value !== "object" || Array.isArray(value)) return json(400, { error: "Invalid input" });
+  if (value.type === PROBE_VALIDATION_TYPE) {
+    if (Object.keys(value).length !== 2 || typeof value.challenge !== "string" || !/^[0-9a-f]{64}$/.test(value.challenge))
+      return json(400, { error: "Invalid probe credential challenge" });
+    const timestamp = request.headers.get(TIMESTAMP_HEADER)!;
+    const capabilities = [HTTP_REQUEST_CAPABILITY];
+    return json(200, {
+      ok: true, region, challenge: value.challenge, capabilities,
+      signature: await signProbe(env.PROBE_SECRET, Number(timestamp), probeCredentialProofBody(region, value.challenge, capabilities)),
+    });
+  }
   if (value.type !== "http" || typeof value.target !== "string") return json(400, { error: "HTTP checks only" });
   const target = safeTarget(value.target, env.ALLOWED_HOSTS);
   if (!target) return json(400, { error: "Target not in the configured public HTTPS allowlist" });

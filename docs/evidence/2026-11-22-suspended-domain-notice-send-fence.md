@@ -1,6 +1,6 @@
 # Suspension check before claimed custom-domain notice delivery
 
-Status: implemented on a focused engineering branch; hosted exact-head qualification is pending. This does not authorize release or deployment.
+Status: merged in PR #198 at `9381b35702e4fe37b655925f83f7bec916df5a2e`. All 23 exact-head hosted checks passed at `589ca69060f8072782a6e9815708b4a66882892a`. At the time of this update, 11 of 12 required exact-main push workflows had passed on `9381b357`; the load qualification remained in progress. This does not authorize release or deployment.
 
 ## Behavior
 

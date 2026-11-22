@@ -3,7 +3,7 @@ import { HTTP_REQUEST_CAPABILITY } from "./http-request";
 import { JSON_ASSERTION_CAPABILITY } from "./json-assertion";
 import type { Monitor, RegionResult, Repo } from "@montral/repo";
 import { runCheck, type CheckInput, type CheckOutcome } from "./checker";
-import { SIGNATURE_HEADER, TIMESTAMP_HEADER, signProbe } from "./probe-protocol";
+import { SIGNATURE_HEADER, TIMESTAMP_HEADER, PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "./probe-protocol";
 import { AUTO, REGION_ID, REGION_NAMES, effectiveRegions } from "./regions";
 
 /**
@@ -105,38 +105,66 @@ export function probeCredentialMode(id: string): "dedicated" | "shared" | "uncon
 export type ProbeRegionValidation =
   | { status: "validated"; capabilities: string[] }
   | { status: "identity_mismatch" }
+  | { status: "credential_mismatch" }
   | { status: "unavailable" };
 
 /**
- * Check the configured probe's public health document without sending credentials or a monitor target.
- * This verifies only that the endpoint reports the configured region id; it is not cryptographic attestation.
+ * Require a fresh HMAC proof from the configured probe using the existing configured
+ * key. No key or monitor target is sent. This proves key possession at the configured endpoint, not its source or
+ * deployment; a shared key also cannot distinguish regions that use that same key.
  */
 export async function validateProbeRegion(id: string): Promise<ProbeRegionValidation> {
   const probe = regions.get(id);
-  if (!probe) return { status: "unavailable" };
+  const signingSecret = regionSecrets.get(id) ?? secret;
+  if (!probe || !signingSecret) return { status: "unavailable" };
   const signal = AbortSignal.timeout(5_000);
   try {
-    const response = await fetch(probe.url, {
-      method: "GET",
+    // Challenge the deployment-configured endpoint using the existing HMAC key; unlike its public health document,
+    // the response binds the region and advertised capabilities to proof of key possession.
+    const random = crypto.getRandomValues(new Uint8Array(32));
+    const challenge = [...random].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const timestamp = Math.floor(Date.now() / 1000);
+    const body = JSON.stringify({ type: PROBE_VALIDATION_TYPE, challenge });
+    const proofResponse = await fetch(probe.url, {
+      method: "POST",
       redirect: "manual",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+        [TIMESTAMP_HEADER]: String(timestamp),
+        [SIGNATURE_HEADER]: await signProbe(signingSecret, timestamp, body),
+      },
+      body,
       signal,
     });
-    if (!response.ok) {
-      void response.body?.cancel().catch(() => {});
+    if (!proofResponse.ok) {
+      void proofResponse.body?.cancel().catch(() => {});
       return { status: "unavailable" };
     }
-    const raw = await readCapped(response, 4_096, signal);
-    let value: unknown;
-    try { value = JSON.parse(raw); } catch { return { status: "unavailable" }; }
-    if (!value || typeof value !== "object" || Array.isArray(value)) return { status: "unavailable" };
-    const health = value as { ok?: unknown; region?: unknown; capabilities?: unknown };
-    if (health.ok !== true) return { status: "unavailable" };
-    if (health.region !== id) return { status: "identity_mismatch" };
+    const rawProof = await readCapped(proofResponse, 4_096, signal);
+    let proof: unknown;
+    try { proof = JSON.parse(rawProof); } catch { return { status: "unavailable" }; }
+    if (!proof || typeof proof !== "object" || Array.isArray(proof)) return { status: "unavailable" };
+    const response = proof as { ok?: unknown; region?: unknown; challenge?: unknown; capabilities?: unknown; signature?: unknown };
+    if (response.ok !== true) return { status: "unavailable" };
+    if ((response.region !== null && typeof response.region !== "string")
+      || typeof response.challenge !== "string" || !/^[0-9a-f]{64}$/.test(response.challenge)
+      || !Array.isArray(response.capabilities) || response.capabilities.length > 16
+      || response.capabilities.some((item) => typeof item !== "string" || item.length > 80)
+      || typeof response.signature !== "string" || !/^[0-9a-f]{64}$/i.test(response.signature)) {
+      return { status: "credential_mismatch" };
+    }
+    const signedRegion = response.region as string | null;
+    const signedChallenge = response.challenge;
+    const signedCapabilities = response.capabilities as string[];
+    if (!await verifyProbe(signingSecret, {
+      timestamp: String(timestamp), signature: response.signature,
+      body: probeCredentialProofBody(signedRegion, signedChallenge, signedCapabilities),
+    })) return { status: "credential_mismatch" };
+    if (signedRegion !== id) return { status: "identity_mismatch" };
+    if (signedChallenge !== challenge) return { status: "credential_mismatch" };
     const knownCapabilities = [HTTP_REQUEST_CAPABILITY, JSON_ASSERTION_CAPABILITY];
-    const capabilities = Array.isArray(health.capabilities)
-      ? [...new Set(health.capabilities.filter((item): item is string => typeof item === "string" && knownCapabilities.includes(item as typeof knownCapabilities[number])))]
-      : [];
+    const capabilities = [...new Set(signedCapabilities.filter((item) => knownCapabilities.includes(item as typeof knownCapabilities[number])))];
     return { status: "validated", capabilities };
   } catch {
     return { status: "unavailable" };

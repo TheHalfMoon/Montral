@@ -10,6 +10,13 @@ const encoder = new TextEncoder();
 export const MAX_SKEW_SEC = 60;
 export const TIMESTAMP_HEADER = "x-montral-timestamp";
 export const SIGNATURE_HEADER = "x-montral-signature";
+export const PROBE_VALIDATION_TYPE = "probe-credential-proof-v1";
+export const PROBE_VALIDATION_RESPONSE_TYPE = "probe-credential-proof-response-v1";
+
+/** The response proof is bound to a fresh challenge, claimed region and advertised capabilities. */
+export function probeCredentialProofBody(region: string | null, challenge: string, capabilities: readonly string[]): string {
+  return JSON.stringify({ type: PROBE_VALIDATION_RESPONSE_TYPE, region, challenge, capabilities });
+}
 
 const hex = (buf: ArrayBuffer) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
 

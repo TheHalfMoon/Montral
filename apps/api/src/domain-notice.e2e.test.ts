@@ -164,6 +164,49 @@ describe.skipIf(!url)("custom domain withdrawal notices (PostgreSQL)", () => {
     failing = await rows(w.id, "domain.failing");
     expect(failing.find((r) => r.target_user_id === w.admin.id)).toMatchObject({ status: "skipped" });
     expect(failing.filter((r) => r.status === "sent").every((r) => r.attempts === 2)).toBe(true);
+
+    // Reuse this workspace to keep the suite-wide sign-up rate limiter isolated from unrelated E2E fixtures.
+    mails.length = 0;
+    const [{ id: raceId }] = await q<{ id: string }>(
+      `INSERT INTO alert_delivery (organization_id, channel_name, channel_type, kind, ok, status, attempts, target_user_id, status_page_id, monitor_name)
+       VALUES ($1, 'notice', 'email', 'domain.failing', false, 'pending', 0, $2, $3::uuid, $4) RETURNING id`,
+      [w.org, w.owner.id, w.id, w.domain],
+    );
+    let insertedSuspension = false;
+    const suspendAfterClaim = async <T,>(sql: string, params?: unknown[]) => {
+      const result = await q<T>(sql, params);
+      if (/UPDATE alert_delivery SET status = 'sending'/.test(sql)) {
+        await q("INSERT INTO workspace_suspension (organization_id, reason, note) VALUES ($1, 'operator', 'test only')", [w.org]);
+        insertedSuspension = true;
+      }
+      return result;
+    };
+    try {
+      expect(await deliverDomainNotices(suspendAfterClaim, { pageIds: [w.id] })).toEqual({ sent: 0, failed: 0, skipped: 1 });
+      expect(insertedSuspension).toBe(true);
+      expect(mails).toHaveLength(0);
+      expect(await q<{ status: string; status_message: string | null }>(
+        "SELECT status, status_message FROM alert_delivery WHERE id = $1::uuid", [raceId],
+      )).toEqual([{ status: "skipped", status_message: "skipped: workspace suspended before notice delivery" }]);
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [w.org]);
+    }
+
+    const [{ id: lookupId }] = await q<{ id: string }>(
+      `INSERT INTO alert_delivery (organization_id, channel_name, channel_type, kind, ok, status, attempts, target_user_id, status_page_id, monitor_name)
+       VALUES ($1, 'notice', 'email', 'domain.failing', false, 'pending', 0, $2, $3::uuid, $4) RETURNING id`,
+      [w.org, w.owner.id, w.id, w.domain],
+    );
+    const unavailableLookup = async <T,>(sql: string, params?: unknown[]) => {
+      if (sql.includes("SELECT 1 AS one FROM workspace_suspension")) throw new Error("test-only database failure");
+      return q<T>(sql, params);
+    };
+    expect(await deliverDomainNotices(unavailableLookup, { pageIds: [w.id] })).toEqual({ sent: 0, failed: 0, skipped: 0 });
+    expect(mails).toHaveLength(0);
+    expect(await q<{ status: string; attempts: number }>(
+      "SELECT status, attempts FROM alert_delivery WHERE id = $1::uuid", [lookupId],
+    )).toEqual([{ status: "sending", attempts: 0 }]);
+    await q("DELETE FROM alert_delivery WHERE id = $1::uuid", [lookupId]);
   });
 
   it("a failure to queue notices never blocks or undoes the withdrawal, and the outbox keeps the notice for the next round", async () => {

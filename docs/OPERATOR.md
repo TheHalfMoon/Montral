@@ -71,10 +71,10 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
   A check already running when suspension begins may still finish its outbound request and consume the credits
   reserved before suspension. On updated instances, its observation is refused if suspension has already committed;
   this does not cancel an external request or undo an existing meter charge.
-- **Alerts**: claim queries exclude suspended workspaces. A delivery claimed immediately before suspension now checks the
-  live suspension row once more before provider I/O and is marked skipped if suspension has committed. Suspension can
-  still commit after that final read while a request is starting; an already-started provider request cannot be recalled.
-  Any email allowance already reserved before the final check is not refunded.
+- **Alerts**: claim queries exclude suspended workspaces. A claimed incident alert or custom-domain notice checks the
+  live suspension row once more immediately before provider I/O and is marked skipped if suspension has committed.
+  Suspension can still commit after that final read while a request is starting; an already-started provider request
+  cannot be recalled. Any email allowance already reserved before the final check is not refunded.
 - **Heartbeats**: pings to the workspace's heartbeat URLs get the same 403 and record nothing.
 - **Workspace changes through Better Auth** (`/api/auth/*`, which does not pass `requireOrg`): inviting or accepting
   invitations, renaming, changing roles, removing members, deleting the workspace, and creating or changing API keys
@@ -91,9 +91,10 @@ The suspension is one row in `workspace_suspension` (migration `0058_workspace_s
   be read the call is refused; an invitation or slug that
   does not exist gets `400`.
 - **On-call calendar feeds** of the workspace's members answer 404.
-- **Alerts and mail**: alert deliveries and their retries, incident reminders, escalations, maintenance reminders to
-  status page subscribers, unchecked-browser-monitor digests, custom-domain notices and monthly reports of the workspace
-  are not claimed, so nothing is sent.
+- **Alerts and mail**: when suspension is already present at claim time, alert deliveries and their retries, incident
+  reminders, escalations, maintenance reminders to status page subscribers, unchecked-browser-monitor digests,
+  custom-domain notices and monthly reports are not claimed. Claimed incident alerts and custom-domain notices recheck
+  suspension immediately before provider I/O. An email request already started before suspension cannot be recalled.
 - **Webhook inboxes** (hosted edition): the public receiver answers 403 for the workspace's inboxes after verifying the
   secret URL and before reading or storing the request body. A wrong secret still gets the ordinary 404.
 - **Public status pages**: the page, its summary, incident history, maintenance list, RSS, iCalendar and `llms.txt`

@@ -386,15 +386,16 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
   authed.get("/usage", async (c) => {
     const e = c.get("entitlements");
     const orgId = c.get("orgId");
-    const [credits, emails, plan, activeMonitors, webhookEvents, browserSeconds] = await Promise.all([
+    const [credits, emails, plan, activeMonitors, webhookEvents, browserSeconds, regionUsage] = await Promise.all([
       e.creditBalance(orgId), e.emailBalance(orgId), e.plan(orgId), c.get("repo").activeMonitorCount(orgId),
       e.meterBalance ? e.meterBalance(orgId, "webhookEvents") : null, e.meterBalance ? e.meterBalance(orgId, "browserSeconds") : null,
+      e.regionUsageSummary ? e.regionUsageSummary(orgId) : null,
     ]);
     if (!credits && !emails && !plan) return c.json({ metered: false });
     // when the allowances reset: every meter of this preview counts the calendar month in UTC
     const periodEnd = (credits ?? emails ?? webhookEvents ?? browserSeconds)?.periodEnd ?? allowanceResetUtc();
     const canManageBilling = await isManager(c);
-    return c.json({ metered: true, ...(credits ?? {}), periodEnd, credits, emails, webhookEvents, browserSeconds, plan, activeMonitors, canManageBilling });
+    return c.json({ metered: true, ...(credits ?? {}), periodEnd, credits, emails, webhookEvents, browserSeconds, regionUsage, plan, activeMonitors, canManageBilling });
   });
   // where checks can run from on this deployment, and how many of those one monitor may use under the workspace's plan (null: no limit)
   authed.get("/regions", async (c) => {

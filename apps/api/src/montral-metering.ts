@@ -1,6 +1,6 @@
 import type { Database } from "@montral/repo";
 import type { Bindings } from "./env";
-import type { Entitlements, Plan, CreditBalance, Meter } from "./entitlements";
+import type { Entitlements, Plan, CreditBalance, Meter, RegionUsageOperation, RegionUsageReservation, RegionUsageResult, RegionUsageSummary } from "./entitlements";
 import { unmetered } from "./entitlements";
 import { billingGraceDays, billingReady, entitledPlanId, ENV_FALLBACK_PLAN_IDS, envVariantsValid, type SubscriptionEntitlementRow } from "./montral-billing";
 import { cachedPlanCatalog, PlanCatalogError, type PlanLimits } from "./plan-catalog";
@@ -128,6 +128,43 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     created_at timestamptz NOT NULL DEFAULT NOW(),
     PRIMARY KEY (organization_id,period_start,idempotency_key)
   )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS montral_region_usage_operation (
+    organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+    period_start timestamptz NOT NULL,
+    operation_key text NOT NULL CHECK (char_length(operation_key) BETWEEN 1 AND 200),
+    monitor_id text NOT NULL,
+    requested_regions text[] NOT NULL CHECK (cardinality(requested_regions) BETWEEN 1 AND 32),
+    state text NOT NULL CHECK (state IN ('reserved','settled')),
+    settlement jsonb,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    settled_at timestamptz,
+    PRIMARY KEY (organization_id,period_start,operation_key),
+    CHECK ((state='reserved' AND settlement IS NULL AND settled_at IS NULL) OR
+           (state='settled' AND settlement IS NOT NULL AND settled_at IS NOT NULL))
+  )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS montral_region_usage (
+    organization_id text NOT NULL,
+    period_start timestamptz NOT NULL,
+    operation_key text NOT NULL,
+    region text NOT NULL CHECK (region='auto' OR region ~ '^[a-z0-9][a-z0-9-]{1,23}$'),
+    state text NOT NULL CHECK (state IN ('reserved','completed','unavailable')),
+    credit_state text NOT NULL CHECK (credit_state IN ('reserved','charged','refunded')),
+    result_ok boolean,
+    status_code integer,
+    latency_ms integer,
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    settled_at timestamptz,
+    PRIMARY KEY (organization_id,period_start,operation_key,region),
+    FOREIGN KEY (organization_id,period_start,operation_key)
+      REFERENCES montral_region_usage_operation(organization_id,period_start,operation_key) ON DELETE CASCADE,
+    CHECK ((state='reserved' AND credit_state='reserved' AND result_ok IS NULL AND settled_at IS NULL) OR
+           (state='completed' AND credit_state='charged' AND result_ok IS NOT NULL AND settled_at IS NOT NULL) OR
+           (state='unavailable' AND credit_state='refunded' AND result_ok IS NULL AND settled_at IS NOT NULL)),
+    CHECK (status_code IS NULL OR status_code BETWEEN 100 AND 599),
+    CHECK (latency_ms IS NULL OR latency_ms >= 0)
+  )`);
+  await db.query(`CREATE INDEX IF NOT EXISTS montral_region_usage_period_region
+    ON montral_region_usage(organization_id,period_start,region,state,created_at)`);
   await db.query(`
     CREATE OR REPLACE FUNCTION montral_refund_credits_once(
       p_org text, p_start timestamptz, p_key text, p_credits integer
@@ -151,6 +188,151 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
         WHERE organization_id=p_org AND period_start=p_start AND kind='credits';
       INSERT INTO montral_credit_refund(organization_id,period_start,idempotency_key,credits)
         VALUES(p_org,p_start,p_key,p_credits);
+      RETURN true;
+    END;
+    $montral$
+  `);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_reserve_region_usage(
+      p_org text, p_start timestamptz, p_limit integer, p_operations jsonb
+    ) RETURNS TABLE (operation_key text, granted boolean, state text)
+    LANGUAGE plpgsql AS $montral$
+    DECLARE op jsonb; requested_regions text[]; existing_operation montral_region_usage_operation%ROWTYPE;
+      used_now integer; op_key text; monitor_key text;
+    BEGIN
+      IF p_org IS NULL OR p_start IS NULL OR p_limit IS NULL OR p_limit < 0
+        OR p_operations IS NULL OR jsonb_typeof(p_operations) IS DISTINCT FROM 'array'
+        OR jsonb_array_length(p_operations) > 10000
+        OR p_start <> (date_trunc('month', p_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') THEN
+        RAISE EXCEPTION 'invalid region usage reservation batch';
+      END IF;
+      IF EXISTS (
+        SELECT value->>'operationKey' FROM jsonb_array_elements(p_operations)
+        GROUP BY value->>'operationKey' HAVING count(*) > 1
+      ) THEN RAISE EXCEPTION 'duplicate region usage operation key'; END IF;
+      -- Acquire operation locks in a stable order, then the same monthly lock
+      -- used by ordinary credit spending. Replays and spends cannot race a debit.
+      FOR op_key IN SELECT value->>'operationKey' FROM jsonb_array_elements(p_operations) ORDER BY 1 LOOP
+        IF op_key IS NULL OR char_length(op_key) NOT BETWEEN 1 AND 200 THEN RAISE EXCEPTION 'invalid region usage operation key'; END IF;
+        PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':region:' || op_key,0));
+      END LOOP;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':credits',0));
+      SELECT used INTO used_now FROM montral_usage
+        WHERE organization_id=p_org AND period_start=p_start AND kind='credits' FOR UPDATE;
+      used_now := COALESCE(used_now,0);
+      FOR op IN SELECT value FROM jsonb_array_elements(p_operations) LOOP
+        op_key := op->>'operationKey';
+        monitor_key := op->>'monitorId';
+        IF monitor_key IS NULL OR char_length(monitor_key) NOT BETWEEN 1 AND 200
+          OR jsonb_typeof(op->'regions') IS DISTINCT FROM 'array'
+          OR jsonb_array_length(op->'regions') NOT BETWEEN 1 AND 32 THEN
+          RAISE EXCEPTION 'invalid region usage operation';
+        END IF;
+        SELECT array_agg(region ORDER BY ordinal) INTO requested_regions
+          FROM (SELECT value #>> '{}' AS region, ordinality AS ordinal
+                FROM jsonb_array_elements(op->'regions') WITH ORDINALITY) r;
+        IF EXISTS (SELECT 1 FROM unnest(requested_regions) r WHERE r IS NULL OR NOT (r='auto' OR r ~ '^[a-z0-9][a-z0-9-]{1,23}$'))
+          OR cardinality(requested_regions) <> (SELECT count(DISTINCT r) FROM unnest(requested_regions) r) THEN
+          RAISE EXCEPTION 'invalid or duplicate region id';
+        END IF;
+        SELECT * INTO existing_operation FROM montral_region_usage_operation o
+          WHERE o.organization_id=p_org AND o.period_start=p_start AND o.operation_key=op_key;
+        IF FOUND THEN
+          IF existing_operation.monitor_id <> monitor_key OR existing_operation.requested_regions <> requested_regions THEN
+            RAISE EXCEPTION 'region usage operation key reused with different input';
+          END IF;
+          operation_key := op_key; granted := true; state := existing_operation.state; RETURN NEXT;
+          CONTINUE;
+        END IF;
+        operation_key := op_key;
+        IF used_now + cardinality(requested_regions) > p_limit THEN
+          granted := false; state := 'denied'; RETURN NEXT;
+          CONTINUE;
+        END IF;
+        INSERT INTO montral_region_usage_operation
+          (organization_id,period_start,operation_key,monitor_id,requested_regions,state)
+          VALUES(p_org,p_start,op_key,monitor_key,requested_regions,'reserved');
+        INSERT INTO montral_region_usage
+          (organization_id,period_start,operation_key,region,state,credit_state)
+          SELECT p_org,p_start,op_key,r,'reserved','reserved' FROM unnest(requested_regions) r;
+        INSERT INTO montral_usage(organization_id,period_start,kind,used)
+          VALUES(p_org,p_start,'credits',cardinality(requested_regions))
+        ON CONFLICT (organization_id,period_start,kind)
+          DO UPDATE SET used=montral_usage.used + EXCLUDED.used;
+        used_now := used_now + cardinality(requested_regions);
+        granted := true; state := 'reserved'; RETURN NEXT;
+      END LOOP;
+    END;
+    $montral$
+  `);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_settle_region_usage(
+      p_org text,p_start timestamptz,p_operation_key text,p_results jsonb
+    ) RETURNS boolean LANGUAGE plpgsql AS $montral$
+    DECLARE operation montral_region_usage_operation%ROWTYPE; requested_refund integer; saved jsonb; used_now integer; changed_rows integer;
+    BEGIN
+      IF p_org IS NULL OR p_start IS NULL OR p_operation_key IS NULL
+        OR char_length(p_operation_key) NOT BETWEEN 1 AND 200
+        OR p_results IS NULL OR jsonb_typeof(p_results) IS DISTINCT FROM 'array'
+        OR p_start <> (date_trunc('month', p_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') THEN
+        RAISE EXCEPTION 'invalid region usage settlement';
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':region:' || p_operation_key,0));
+      SELECT * INTO operation FROM montral_region_usage_operation o
+        WHERE o.organization_id=p_org AND o.period_start=p_start AND o.operation_key=p_operation_key FOR UPDATE;
+      IF NOT FOUND THEN RAISE EXCEPTION 'unknown region usage reservation'; END IF;
+      IF EXISTS (
+        SELECT 1 FROM jsonb_array_elements(p_results) r
+        WHERE jsonb_typeof(r) IS DISTINCT FROM 'object'
+          OR r->>'region' IS NULL OR jsonb_typeof(r->'ok') IS DISTINCT FROM 'boolean'
+          OR (r->'statusCode' IS NOT NULL AND r->'statusCode' <> 'null'::jsonb
+              AND (jsonb_typeof(r->'statusCode') IS DISTINCT FROM 'number' OR (r->>'statusCode')::integer NOT BETWEEN 100 AND 599))
+          OR (r->'latencyMs' IS NOT NULL AND r->'latencyMs' <> 'null'::jsonb
+              AND (jsonb_typeof(r->'latencyMs') IS DISTINCT FROM 'number' OR (r->>'latencyMs')::integer < 0))
+      ) OR (SELECT count(*) FROM jsonb_array_elements(p_results)) <>
+           (SELECT count(DISTINCT r->>'region') FROM jsonb_array_elements(p_results) r)
+        OR EXISTS (SELECT 1 FROM jsonb_array_elements(p_results) r
+                   WHERE NOT (operation.requested_regions @> ARRAY[r->>'region'])) THEN
+        RAISE EXCEPTION 'region usage result does not match reservation';
+      END IF;
+      SELECT COALESCE(jsonb_object_agg(r->>'region',jsonb_build_object(
+        'ok',(r->>'ok')::boolean,
+        'statusCode',CASE WHEN r->'statusCode' IS NULL OR r->'statusCode'='null'::jsonb THEN NULL ELSE (r->>'statusCode')::integer END,
+        'latencyMs',CASE WHEN r->'latencyMs' IS NULL OR r->'latencyMs'='null'::jsonb THEN NULL ELSE (r->>'latencyMs')::integer END
+      )), '{}'::jsonb) INTO saved FROM jsonb_array_elements(p_results) r;
+      IF operation.state='settled' THEN
+        IF operation.settlement <> saved THEN RAISE EXCEPTION 'region usage operation settled with different results'; END IF;
+        RETURN false;
+      END IF;
+      requested_refund := cardinality(operation.requested_regions) - jsonb_array_length(p_results);
+      -- The aggregate row is part of the reservation's debit evidence. Keep an
+      -- incomplete/corrupt ledger reservation unverified instead of recording a
+      -- completed charge (or a refund) without its matching monthly usage row.
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':credits',0));
+      SELECT used INTO used_now FROM montral_usage
+        WHERE organization_id=p_org AND period_start=p_start AND kind='credits' FOR UPDATE;
+      IF NOT FOUND OR used_now < requested_refund THEN
+        RAISE EXCEPTION 'region usage reservation has no matching aggregate credit balance';
+      END IF;
+      IF requested_refund > 0 THEN
+        UPDATE montral_usage SET used=used-requested_refund
+          WHERE organization_id=p_org AND period_start=p_start AND kind='credits' AND used >= requested_refund;
+        IF NOT FOUND THEN RAISE EXCEPTION 'region usage reservation has no matching aggregate credit balance'; END IF;
+      END IF;
+      UPDATE montral_region_usage u SET
+        state=CASE WHEN saved ? u.region THEN 'completed' ELSE 'unavailable' END,
+        credit_state=CASE WHEN saved ? u.region THEN 'charged' ELSE 'refunded' END,
+        result_ok=CASE WHEN saved ? u.region THEN (saved->u.region->>'ok')::boolean ELSE NULL END,
+        status_code=CASE WHEN saved ? u.region THEN NULLIF(saved->u.region->>'statusCode','')::integer ELSE NULL END,
+        latency_ms=CASE WHEN saved ? u.region THEN NULLIF(saved->u.region->>'latencyMs','')::integer ELSE NULL END,
+        settled_at=NOW()
+        WHERE u.organization_id=p_org AND u.period_start=p_start AND u.operation_key=p_operation_key AND u.state='reserved';
+      GET DIAGNOSTICS changed_rows = ROW_COUNT;
+      IF changed_rows <> cardinality(operation.requested_regions) THEN
+        RAISE EXCEPTION 'region usage reservation records are incomplete';
+      END IF;
+      UPDATE montral_region_usage_operation SET state='settled',settlement=saved,settled_at=NOW()
+        WHERE organization_id=p_org AND period_start=p_start AND operation_key=p_operation_key;
       RETURN true;
     END;
     $montral$
@@ -252,7 +434,7 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_credit_refund_once_v1", "montral_monthly_outbox_quota_claim_v1"];
+  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_credit_refund_once_v1", "montral_region_usage_v1", "montral_monthly_outbox_quota_claim_v1"];
 }
 
 /** The ledger kind of a meter; anything else is refused, so a caller can never write an arbitrary kind. */
@@ -342,6 +524,69 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     );
     if (typeof rows[0]?.applied !== "boolean") throw new Error("Invalid idempotent credit refund result");
   };
+  const reserveRegionUsage = async (org: string, operations: RegionUsageOperation[], at: Date): Promise<RegionUsageReservation[]> => {
+    if (!(at instanceof Date) || Number.isNaN(at.getTime()) || !Array.isArray(operations) || operations.length > 10_000)
+      throw new Error("Invalid region usage reservation batch");
+    const keys = new Set<string>();
+    for (const op of operations) {
+      if (!op || typeof op.operationKey !== "string" || op.operationKey.length < 1 || op.operationKey.length > 200
+        || typeof op.monitorId !== "string" || op.monitorId.length < 1 || op.monitorId.length > 200
+        || !Array.isArray(op.regions) || op.regions.length < 1 || op.regions.length > 32
+        || op.regions.some((r) => typeof r !== "string" || !(r === "auto" || /^[a-z0-9][a-z0-9-]{1,23}$/.test(r)))
+        || new Set(op.regions).size !== op.regions.length || keys.has(op.operationKey))
+        throw new Error("Invalid region usage operation");
+      keys.add(op.operationKey);
+    }
+    const { start } = calendarMonthUtc(at);
+    const { limits } = await effective(org);
+    const rows = await database.query<{ operation_key: string; granted: boolean; state: string }>(
+      "SELECT operation_key,granted,state FROM montral_reserve_region_usage($1::text,$2::timestamptz,$3::integer,$4::jsonb)",
+      [org, start.toISOString(), limits.credits, JSON.stringify(operations.map((op) => ({ operationKey: op.operationKey, monitorId: op.monitorId, regions: op.regions })))],
+    );
+    if (rows.length !== operations.length || rows.some((r) => typeof r.operation_key !== "string" || typeof r.granted !== "boolean"
+      || !["denied", "reserved", "settled"].includes(r.state))) throw new Error("Invalid region usage reservation result");
+    return rows.map((r) => ({ operationKey: r.operation_key, granted: r.granted, state: r.state as RegionUsageReservation["state"] }));
+  };
+  const settleRegionUsage = async (org: string, key: string, results: RegionUsageResult[], at: Date) => {
+    if (typeof key !== "string" || key.length < 1 || key.length > 200 || !Array.isArray(results)
+      || !(at instanceof Date) || Number.isNaN(at.getTime())) throw new Error("Invalid region usage settlement");
+    const seen = new Set<string>();
+    for (const result of results) {
+      if (!result || typeof result.region !== "string" || !(result.region === "auto" || /^[a-z0-9][a-z0-9-]{1,23}$/.test(result.region))
+        || typeof result.ok !== "boolean" || (result.statusCode != null && (!Number.isSafeInteger(result.statusCode) || result.statusCode < 100 || result.statusCode > 599))
+        || (result.latencyMs != null && (!Number.isSafeInteger(result.latencyMs) || result.latencyMs < 0)) || seen.has(result.region))
+        throw new Error("Invalid region usage result");
+      seen.add(result.region);
+    }
+    const { start } = calendarMonthUtc(at);
+    const rows = await database.query<{ settled: boolean }>(
+      "SELECT montral_settle_region_usage($1::text,$2::timestamptz,$3::text,$4::jsonb) AS settled",
+      [org, start.toISOString(), key, JSON.stringify(results.map((r) => ({ region: r.region, ok: r.ok, statusCode: r.statusCode ?? null, latencyMs: r.latencyMs ?? null })))],
+    );
+    if (typeof rows[0]?.settled !== "boolean") throw new Error("Invalid region usage settlement result");
+  };
+  const regionUsageSummary = async (org: string): Promise<RegionUsageSummary> => {
+    const { start, end } = calendarMonthUtc();
+    const rows = await database.query<{
+      region: string; planned: string; completed: string; failed_results: string; unavailable: string;
+      reserved: string; unverified: string; credits_charged: string; credits_refunded: string;
+    }>(`SELECT region,COUNT(*)::text AS planned,
+        COUNT(*) FILTER (WHERE state='completed')::text AS completed,
+        COUNT(*) FILTER (WHERE state='completed' AND result_ok=false)::text AS failed_results,
+        COUNT(*) FILTER (WHERE state='unavailable')::text AS unavailable,
+        COUNT(*) FILTER (WHERE state='reserved' AND created_at >= NOW()-INTERVAL '5 minutes')::text AS reserved,
+        COUNT(*) FILTER (WHERE state='reserved' AND created_at < NOW()-INTERVAL '5 minutes')::text AS unverified,
+        COUNT(*) FILTER (WHERE credit_state='charged')::text AS credits_charged,
+        COUNT(*) FILTER (WHERE credit_state='refunded')::text AS credits_refunded
+      FROM montral_region_usage WHERE organization_id=$1 AND period_start=$2::timestamptz
+      GROUP BY region ORDER BY region`, [org, start.toISOString()]);
+    const n = (v: string) => Number(v);
+    return { periodStart: start, periodEnd: end, regions: rows.map((r) => ({
+      region: r.region, planned: n(r.planned), completed: n(r.completed), failedResults: n(r.failed_results),
+      unavailable: n(r.unavailable), reserved: n(r.reserved), unverified: n(r.unverified),
+      creditsCharged: n(r.credits_charged), creditsRefunded: n(r.credits_refunded),
+    })) };
+  };
   const reserveEmailQuotaOnce = async (org: string, key: string): Promise<{ granted: boolean; newlyReserved: boolean }> => {
     if (typeof key !== "string" || key.length < 1 || key.length > 200) throw new Error("Invalid email quota reservation key");
     const { start } = calendarMonthUtc();
@@ -398,6 +643,9 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     spendCredits: (org, count, at) => spend(org, count, "credits", at),
     refundCredits: (org, count, spentAt) => refund(org, count, "credits", spentAt),
     refundCreditsOnce,
+    reserveRegionUsage,
+    settleRegionUsage,
+    regionUsageSummary,
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
     reserveEmailQuotaOnce,

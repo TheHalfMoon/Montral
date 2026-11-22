@@ -4,7 +4,7 @@ import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminde
 import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
 import { measure, type Measured } from "./probes";
-import { withinPlanRegions } from "./regions";
+import { effectiveRegions, withinPlanRegions } from "./regions";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
 import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, browserAvailable, browserCheckWorstCaseMs, browserProbeDue } from "./browser-check";
@@ -171,7 +171,7 @@ function meteringFailed(e: unknown) {
 export async function withinCredits(
   monitors: Monitor[], entitlements: Entitlements,
   onPlanSkipped?: (skipped: Monitor[]) => Promise<unknown>,
-  onReserved?: (monitor: Monitor, credits: number, chargedAt: Date) => void,
+  onReserved?: (monitor: Monitor, credits: number, chargedAt: Date, operationKey?: string) => void,
 ): Promise<Monitor[]> {
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of monitors) byWorkspace.set(m.organizationId, [...(byWorkspace.get(m.organizationId) ?? []), m]);
@@ -180,6 +180,47 @@ export async function withinCredits(
     const list = await withinPlanRegions(due, workspaceId, entitlements, onPlanSkipped);
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
     const chargedAt = new Date();
+    // A heartbeat has no outbound region charge. It must remain eligible even
+    // when a metered deployment cannot perform persistent reservation I/O.
+    for (const m of list.filter((item) => creditCost(item) === 0)) {
+      allowed.set(m.id, m);
+      onReserved?.(m, 0, chargedAt);
+    }
+    // Metered region checks use a durable scheduler generation as the operation
+    // identity. The reservation and monthly credit debit commit in one database
+    // transaction, so retries after a process restart cannot charge twice.
+    if (wanted > 0 && entitlements.failClosed && (!entitlements.reserveRegionUsage || !entitlements.settleRegionUsage)) {
+      meteringFailed(new Error("persistent region metering unavailable"));
+      return;
+    }
+    if (wanted > 0 && entitlements.failClosed && entitlements.reserveRegionUsage) {
+      const reservable = list.filter((m) => creditCost(m) > 0 && Number.isSafeInteger(m.runGeneration) && m.runGeneration! > 0);
+      const missingGeneration = list.filter((m) => creditCost(m) > 0 && !reservable.includes(m));
+      if (missingGeneration.length) meteringFailed(new Error("scheduled generation unavailable"));
+      const operations = reservable.map((m) => ({
+        operationKey: `scheduled:${m.id}:${m.runGeneration}`,
+        monitorId: m.id,
+        regions: effectiveRegions(m),
+      }));
+      if (operations.length === 0) return;
+      try {
+        const reservations = await entitlements.reserveRegionUsage(workspaceId, operations, chargedAt);
+        const byKey = new Map(reservations.map((r) => [r.operationKey, r]));
+        for (const m of list) {
+          const cost = creditCost(m);
+          if (cost === 0) continue;
+          if (!reservable.includes(m)) continue;
+          const operationKey = `scheduled:${m.id}:${m.runGeneration}`;
+          const reservation = byKey.get(operationKey);
+          if (!reservation?.granted) continue;
+          allowed.set(m.id, m);
+          onReserved?.(m, cost, chargedAt, operationKey);
+        }
+      } catch (e) {
+        meteringFailed(e);
+      }
+      return;
+    }
     let actuallyCharged = false;
     // A failing ledger: self-hosted (unmetered) runs the checks and logs the gap, so monitoring is never silenced; a
     // metered deployment grants nothing (failClosed), so a ledger or catalog failure never runs unmetered checks. The
@@ -231,7 +272,7 @@ export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitl
   const others = await withinCredits(
     due.filter((m) => m.type !== "browser"), entitlements,
     (skipped) => Promise.all(skipped.map((m) => step("plan deferral", () => notePlanDeferral(repo, m)))),
-    (m, credits, chargedAt) => regionReservations.set(m.id, { credits, chargedAt, settlementKey: crypto.randomUUID() }),
+    (m, credits, chargedAt, operationKey) => regionReservations.set(m.id, { credits, chargedAt, settlementKey: operationKey ?? crypto.randomUUID() }),
   );
   if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
   // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and
@@ -242,6 +283,12 @@ export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitl
   const tasks: (() => Promise<void>)[] = others.map((m) => () => checkOne(repo, m, entitlements, true, async (measured) => {
     const reservation = regionReservations.get(m.id);
     if (!reservation || reservation.credits === 0) return;
+    if (entitlements.settleRegionUsage && entitlements.failClosed) {
+      await entitlements.settleRegionUsage(m.organizationId, reservation.settlementKey, measured.results.map((r) => ({
+        region: r.region, ok: r.ok, statusCode: r.statusCode, latencyMs: r.latencyMs,
+      })), reservation.chargedAt);
+      return;
+    }
     const refund = unusedRegionCredits(reservation.credits, measured);
     if (refund > 0) await refundRegionCredits(m.organizationId, refund, entitlements, reservation.chargedAt, reservation.settlementKey);
   }).then(() => {}, () => console.error(`check failed for ${m.id}`)));

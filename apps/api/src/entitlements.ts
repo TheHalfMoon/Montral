@@ -41,6 +41,12 @@ export interface Entitlements {
   refundCredits?(workspaceId: string, credits: number, spentAt?: Date): Promise<void>;
   /** Idempotent settlement for one region-check reservation. Replaying the same key and amount is a no-op. */
   refundCreditsOnce?(workspaceId: string, credits: number, spentAt: Date, idempotencyKey: string): Promise<void>;
+  /** Persistent, idempotent per-region reservations for scheduled monitoring checks. */
+  reserveRegionUsage?(workspaceId: string, operations: RegionUsageOperation[], at: Date): Promise<RegionUsageReservation[]>;
+  /** Settle a reservation from measured region results; absent results are recorded unavailable and refunded. */
+  settleRegionUsage?(workspaceId: string, operationKey: string, results: RegionUsageResult[], at: Date): Promise<void>;
+  /** Current UTC-month region usage, available only when the deployment is metered. */
+  regionUsageSummary?(workspaceId: string): Promise<RegionUsageSummary | null>;
   /** The allowance and what is used of it, for display. null when the workspace is not metered. */
   creditBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** Like `spendCredits`, for notification emails (alerts and status-page subscriber mails). System mails are never counted. */
@@ -73,6 +79,25 @@ export interface Entitlements {
   /** A meter's allowance and use, for display. Missing or null when it is not metered. */
   meterBalance?(workspaceId: string, meter: Meter): Promise<CreditBalance | null>;
 }
+
+export type RegionUsageOperation = { operationKey: string; monitorId: string; regions: string[] };
+export type RegionUsageReservation = { operationKey: string; granted: boolean; state: "denied" | "reserved" | "settled" };
+export type RegionUsageResult = { region: string; ok: boolean; statusCode?: number | null; latencyMs?: number | null };
+export type RegionUsageSummary = {
+  periodStart: Date;
+  periodEnd: Date;
+  regions: Array<{
+    region: string;
+    planned: number;
+    completed: number;
+    failedResults: number;
+    unavailable: number;
+    reserved: number;
+    unverified: number;
+    creditsCharged: number;
+    creditsRefunded: number;
+  }>;
+};
 
 /** Resource meters beyond credits and emails: captured webhook requests and browser-check runtime seconds. */
 export type Meter = "webhookEvents" | "browserSeconds";

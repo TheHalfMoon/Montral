@@ -62,6 +62,65 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
   const used = async (org: string, kind: string, start = calendarMonthUtc().start) => Number((await db!.query<{ used: number }>(
     "SELECT used FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind=$3", [org, start.toISOString(), kind]))[0]?.used ?? 0);
 
+  it("persists region reservations, serializes duplicate retries, and refunds only unverified regions once", async () => {
+    const { org } = await signup();
+    const e = createMontralEntitlements(db!, metered({ credits: 10 }));
+    const at = new Date("2026-11-22T12:00:00.000Z");
+    const operations = [{ operationKey: "scheduled:test-monitor:7", monitorId: "test-monitor", regions: ["eu-west", "us-east"] }];
+    const [first, retry] = await Promise.all([
+      e.reserveRegionUsage!(org, operations, at),
+      e.reserveRegionUsage!(org, operations, at),
+    ]);
+    expect(first).toEqual([{ operationKey: operations[0].operationKey, granted: true, state: "reserved" }]);
+    expect(retry).toEqual(first);
+    expect(await used(org, "credits", calendarMonthUtc(at).start)).toBe(2);
+    expect(await db!.query("SELECT region,state,credit_state FROM montral_region_usage WHERE organization_id=$1 AND operation_key=$2 ORDER BY region", [org, operations[0].operationKey])).toEqual([
+      { region: "eu-west", state: "reserved", credit_state: "reserved" },
+      { region: "us-east", state: "reserved", credit_state: "reserved" },
+    ]);
+
+    const results = [{ region: "eu-west", ok: false, statusCode: 503, latencyMs: 40 }];
+    await Promise.all([
+      e.settleRegionUsage!(org, operations[0].operationKey, results, at),
+      e.settleRegionUsage!(org, operations[0].operationKey, results, at),
+    ]);
+    expect(await used(org, "credits", calendarMonthUtc(at).start)).toBe(1);
+    expect(await e.regionUsageSummary!(org)).toMatchObject({ regions: [
+      { region: "eu-west", planned: 1, completed: 1, failedResults: 1, creditsCharged: 1, creditsRefunded: 0 },
+      { region: "us-east", planned: 1, completed: 0, unavailable: 1, creditsCharged: 0, creditsRefunded: 1 },
+    ] });
+    await expect(e.settleRegionUsage!(org, operations[0].operationKey, [{ region: "eu-west", ok: true }], at)).rejects.toThrow(/different results/);
+    await expect(e.reserveRegionUsage!(org, [{ ...operations[0], regions: ["eu-west"] }], at)).rejects.toThrow(/different input/);
+  });
+
+  it("fails closed when reservation debit evidence is missing and does not grant over the plan limit", async () => {
+    const { org } = await signup();
+    const at = new Date("2026-11-22T12:00:00.000Z");
+    const e = createMontralEntitlements(db!, metered({ credits: 1 }));
+    const denied = await e.reserveRegionUsage!(org, [{ operationKey: "denied", monitorId: "m-denied", regions: ["eu-west", "us-east"] }], at);
+    expect(denied).toEqual([{ operationKey: "denied", granted: false, state: "denied" }]);
+    expect(await used(org, "credits", calendarMonthUtc(at).start)).toBe(0);
+
+    const operation = { operationKey: "missing-ledger", monitorId: "m-ledger", regions: ["eu-west"] };
+    expect(await e.reserveRegionUsage!(org, [operation], at)).toMatchObject([{ granted: true, state: "reserved" }]);
+    await db!.query("DELETE FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind='credits'", [org, calendarMonthUtc(at).start.toISOString()]);
+    await expect(e.settleRegionUsage!(org, operation.operationKey, [{ region: "eu-west", ok: true }], at)).rejects.toThrow(/matching aggregate credit balance/);
+    expect(await db!.query("SELECT state FROM montral_region_usage_operation WHERE organization_id=$1 AND operation_key=$2", [org, operation.operationKey])).toEqual([{ state: "reserved" }]);
+  });
+
+  it("serializes region reservations with ordinary credit spending under the shared monthly limit", async () => {
+    const { org } = await signup();
+    const e = createMontralEntitlements(db!, metered({ credits: 3 }));
+    const at = new Date("2026-11-22T12:00:00.000Z");
+    const [reservation, spent] = await Promise.all([
+      e.reserveRegionUsage!(org, [{ operationKey: "concurrent-region", monitorId: "m-concurrent", regions: ["eu-west", "us-east"] }], at),
+      e.spendCredits(org, 2, at),
+    ]);
+    const regionCredits = reservation[0].granted ? 2 : 0;
+    expect(regionCredits + spent).toBeLessThanOrEqual(3);
+    expect(await used(org, "credits", calendarMonthUtc(at).start)).toBe(regionCredits + spent);
+  });
+
   it("widens the ledger's kind check idempotently, replacing a legacy check found by its definition", async () => {
     // simulate a table created before the resource meters: the original two-kind check under PostgreSQL's own name
     await db!.query(`ALTER TABLE montral_usage DROP CONSTRAINT IF EXISTS montral_usage_kind_v2,

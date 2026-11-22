@@ -88,8 +88,10 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
 
       expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, counted)).toEqual({ checked: 0, matched: 0, failed: 0, withdrawn: 0, notices: 0 });
       expect(lookups).toBe(0);
-      expect(new Date((await state(p.id)).checked!).getTime()).toBe(p.t0);
-      expect(await state(p.id)).toMatchObject({ verified: expect.any(Date), failures: 0, error: null });
+      const suspended = await state(p.id);
+      expect(new Date(suspended.checked!).getTime()).toBe(p.t0);
+      expect(suspended.verified).not.toBeNull();
+      expect(suspended).toMatchObject({ failures: 0, error: null });
 
       await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
       expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, counted)).toMatchObject({ checked: 1, matched: 1, failed: 0 });

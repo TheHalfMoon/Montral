@@ -17,7 +17,7 @@ import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
 import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, refundRegionCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds, unusedRegionCredits } from "../scheduler";
 import { DRAINED, drainedRegions, isRegionConfigured, runInRegion } from "../probes";
-import { AUTO, PROBE_TYPES, REGION_ID, withinPlanRegions } from "../regions";
+import { AUTO, effectiveRegions, PROBE_TYPES, REGION_ID, withinPlanRegions } from "../regions";
 
 import { HTTP_METHODS, MAX_REQUEST_BODY_BYTES, requestBodyProblem } from "../http-request";
 import { JSON_MATCH_MODES, MAX_JSON_EXPECTED_LENGTH, MAX_JSON_PATH_LENGTH, jsonPathProblem } from "../json-assertion";
@@ -701,11 +701,30 @@ export const monitors = new Hono<AppEnv>()
       // a manual check is a request like any other: it takes a credit
       const spentAt = new Date();
       const regionSettlementKey = crypto.randomUUID();
-      if (!(await spendAllOrNothing(m.organizationId, cost, c.get("entitlements"), spentAt))) {
-        return c.json({ error: "No credits left this period", code: "credits_exhausted", resetsAt: await allowanceResetsAt(c.get("entitlements"), m.organizationId, "credits", spentAt) }, 402);
+      const entitlements = c.get("entitlements");
+      const persistentRegionReservation = entitlements.failClosed && m.type !== "browser";
+      if (persistentRegionReservation) {
+        if (!entitlements.reserveRegionUsage || !entitlements.settleRegionUsage) {
+          c.header("retry-after", "30");
+          return c.json({ error: "Usage metering is unavailable; the check did not run. Try again shortly.", code: "metering_unavailable" }, 503);
+        }
+        try {
+          const reservation = await entitlements.reserveRegionUsage(m.organizationId, [{
+            operationKey: `manual:${regionSettlementKey}`,
+            monitorId: m.id,
+            regions: region !== undefined ? [region] : effectiveRegions(m),
+          }], spentAt);
+          if (reservation.length !== 1 || !reservation[0].granted) {
+            return c.json({ error: "No credits left this period", code: "credits_exhausted", resetsAt: await allowanceResetsAt(entitlements, m.organizationId, "credits", spentAt) }, 402);
+          }
+        } catch {
+          c.header("retry-after", "30");
+          return c.json({ error: "Usage metering is unavailable; the check did not run. Try again shortly.", code: "metering_unavailable" }, 503);
+        }
+      } else if (!(await spendAllOrNothing(m.organizationId, cost, entitlements, spentAt))) {
+        return c.json({ error: "No credits left this period", code: "credits_exhausted", resetsAt: await allowanceResetsAt(entitlements, m.organizationId, "credits", spentAt) }, 402);
       }
       if (region === undefined) {
-        const entitlements = c.get("entitlements");
         // a browser check also reserves its configured timeout in browser seconds, at the instant its credits were taken
         let reserved = 0;
         if (m.type === "browser") {
@@ -723,6 +742,12 @@ export const monitors = new Hono<AppEnv>()
         try {
           result = await checkOne(repo, m, entitlements, false, async (measured) => {
             if (m.type === "browser") return; // browser refunds retain their own deferred/error rules
+            if (persistentRegionReservation) {
+              await entitlements.settleRegionUsage!(m.organizationId, `manual:${regionSettlementKey}`, measured.results.map((r) => ({
+                region: r.region, ok: r.ok, statusCode: r.statusCode, latencyMs: r.latencyMs,
+              })), spentAt);
+              return;
+            }
             const unused = unusedRegionCredits(cost, measured);
             if (unused > 0) await refundRegionCredits(m.organizationId, unused, entitlements, spentAt, regionSettlementKey);
           });
@@ -740,8 +765,18 @@ export const monitors = new Hono<AppEnv>()
       if ("unreachable" in run) {
         // No verdict: the requested spot-check region did not run successfully.
         // The earlier drain guard already refuses without spending any credits.
-        await refundRegionCredits(m.organizationId, cost, c.get("entitlements"), spentAt, regionSettlementKey);
+        if (persistentRegionReservation) await entitlements.settleRegionUsage!(m.organizationId, `manual:${regionSettlementKey}`, [], spentAt);
+        else await refundRegionCredits(m.organizationId, cost, entitlements, spentAt, regionSettlementKey);
         return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
+      }
+      if (persistentRegionReservation) {
+        const outcome = run.outcome as { ok?: unknown; statusCode?: unknown; latencyMs?: unknown };
+        await entitlements.settleRegionUsage!(m.organizationId, `manual:${regionSettlementKey}`, [{
+          region,
+          ok: typeof outcome.ok === "boolean" ? outcome.ok : true,
+          statusCode: typeof outcome.statusCode === "number" ? outcome.statusCode : null,
+          latencyMs: typeof outcome.latencyMs === "number" ? outcome.latencyMs : null,
+        }], spentAt);
       }
       return c.json({ ok: true, region, result: spotCheckResult(run.outcome) });
     } finally {

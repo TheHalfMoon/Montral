@@ -4,7 +4,36 @@ import { configureProbes } from "./probes";
 import { resetSelfCheck } from "./selfcheck";
 import { configureNetGuard } from "./netguard";
 import { unmetered, type Entitlements } from "./entitlements";
-import { MESSAGE_SIZE, checkOne, resolveIncident, nextAfter, processCheckMessage, runDueChecks, slotOf, type CheckMessage } from "./scheduler";
+import { MESSAGE_SIZE, checkOne, resolveIncident, nextAfter, processCheckMessage, runDueChecks, slotOf, withinCredits, type CheckMessage } from "./scheduler";
+
+describe("persistent scheduled region reservations", () => {
+  const monitor = (over: Record<string, unknown> = {}) => ({
+    id: "m-1", organizationId: "org-1", type: "http", regions: ["auto"], paused: false,
+    ...over,
+  }) as unknown as Monitor;
+
+  it("keys metered reservations by the durable monitor run generation", async () => {
+    const reserveRegionUsage = vi.fn(async (_org, operations) => operations.map((op: { operationKey: string }) => ({ operationKey: op.operationKey, granted: true, state: "reserved" as const })));
+    const entitlements = { ...unmetered, failClosed: true, reserveRegionUsage, settleRegionUsage: vi.fn() } as unknown as Entitlements;
+    const onReserved = vi.fn();
+    const allowed = await withinCredits([monitor({ runGeneration: 12 })], entitlements, undefined, onReserved);
+    expect(allowed).toHaveLength(1);
+    expect(reserveRegionUsage).toHaveBeenCalledWith("org-1", [{ operationKey: "scheduled:m-1:12", monitorId: "m-1", regions: ["auto"] }], expect.any(Date));
+    expect(onReserved).toHaveBeenCalledWith(expect.objectContaining({ id: "m-1" }), 1, expect.any(Date), "scheduled:m-1:12");
+  });
+
+  it("fails closed without a generation and keeps Community unmetered", async () => {
+    const reserveRegionUsage = vi.fn();
+    const metered = { ...unmetered, failClosed: true, reserveRegionUsage, settleRegionUsage: vi.fn() } as unknown as Entitlements;
+    expect(await withinCredits([monitor()], metered)).toEqual([]);
+    expect(reserveRegionUsage).not.toHaveBeenCalled();
+
+    const communityReserve = vi.fn();
+    const community = { ...unmetered, reserveRegionUsage: communityReserve } as unknown as Entitlements;
+    expect(await withinCredits([monitor()], community)).toHaveLength(1);
+    expect(communityReserve).not.toHaveBeenCalled();
+  });
+});
 
 describe("queued check message validation", () => {
   it("rejects malformed timestamps and mismatched arrays before any repository operation", async () => {

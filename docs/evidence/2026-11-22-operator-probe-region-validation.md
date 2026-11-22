@@ -1,6 +1,6 @@
 # Operator probe region validation
 
-**Status:** implementation proposed from `main@7839fb77f54c3bd77643261c2c8dd661d593edb4`; hosted exact-head and integrated-main checks are pending. This is a narrow configuration check, not a probe registration or security approval.
+**Status:** the original public-health validation shipped in PR #196 (`d675cff394e7f134fa93a77c79ddc5d368be10f2`). Its behavior is superseded by the challenge-response implementation in PR #199. This document preserves the original design/evidence and is not a description of current behavior.
 
 ## Change
 
@@ -10,7 +10,7 @@ The request is read-only. A different reported region returns `409 probe_identit
 
 ## Limits
 
-The health document is public and self-reported. A matching region string does **not** prove control of the signing key, verify the probe's source or deployment, confirm that the probe can authenticate signed check requests, or register/revoke a probe. `cryptographicAttestation` is explicitly `false`. Existing `PROBE_REGIONS`, `PROBE_SECRET` and `PROBE_SECRETS` remain authoritative. No credentials were created, rotated or changed, and no probe was deployed.
+The health document is public and self-reported. A matching region string does **not** prove control of the signing key, verify the probe's source or deployment, confirm that the probe can authenticate signed check requests, or register/revoke a probe. The original response marked `cryptographicAttestation` as `false`; PR #199 replaces that public self-report with HMAC proof of configured-key possession and still explicitly does not attest probe source or deployment. Existing `PROBE_REGIONS`, `PROBE_SECRET` and `PROBE_SECRETS` remain authoritative. No credentials were created, rotated or changed, and no probe was deployed.
 
 ## Authorization and tests
 
@@ -18,6 +18,6 @@ The health document is public and self-reported. A matching region string does *
 - Local API TypeScript check: **PASS**.
 - Focused PostgreSQL `probe-regions.e2e.test.ts`: **7/7 PASS**, including successful validation, region mismatch, malformed/unreachable endpoint responses, rejected body fields, and refusal before network access for a non-operator.
 - `git diff --check`: **PASS**.
-- Hosted exact-head checks and post-merge main workflows: **pending**.
+- PR #196 was merged. The later current-main qualification for PR #198 is recorded in `docs/evidence/2026-11-22-suspended-domain-notice-send-fence.md`.
 
 No production endpoint, credentials, deployment, billing or release state changed. Community publication remains HOLD; Cloud and BYOC remain NO-GO.

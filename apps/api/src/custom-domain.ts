@@ -300,12 +300,15 @@ export async function recheckCustomDomains(
     const due = await query<{ id: string; domain: string; token: string }>(
       `UPDATE status_page SET custom_domain_checked_at = $1::timestamptz
        WHERE id IN (
-         SELECT id FROM status_page
-         WHERE custom_domain_verified_at IS NOT NULL AND custom_domain IS NOT NULL AND custom_domain_token IS NOT NULL
-           AND ($5::text IS NULL OR id::text = ANY(string_to_array($5::text, ',')))
-           AND (custom_domain_checked_at IS NULL OR custom_domain_checked_at <= $1::timestamptz - make_interval(secs =>
-                 CASE WHEN custom_domain_failing_since IS NULL THEN $2::double precision ELSE $3::double precision END))
-         ORDER BY (custom_domain_failing_since IS NULL), custom_domain_checked_at NULLS FIRST, id
+         SELECT candidate.id FROM status_page candidate
+         WHERE candidate.custom_domain_verified_at IS NOT NULL AND candidate.custom_domain IS NOT NULL AND candidate.custom_domain_token IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM workspace_suspension ws WHERE ws.organization_id = candidate.organization_id
+           )
+           AND ($5::text IS NULL OR candidate.id::text = ANY(string_to_array($5::text, ',')))
+           AND (candidate.custom_domain_checked_at IS NULL OR candidate.custom_domain_checked_at <= $1::timestamptz - make_interval(secs =>
+                 CASE WHEN candidate.custom_domain_failing_since IS NULL THEN $2::double precision ELSE $3::double precision END))
+         ORDER BY (candidate.custom_domain_failing_since IS NULL), candidate.custom_domain_checked_at NULLS FIRST, candidate.id
          LIMIT $4
          FOR UPDATE SKIP LOCKED)
        RETURNING id, custom_domain AS domain, custom_domain_token AS token`,

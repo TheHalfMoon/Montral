@@ -24,6 +24,7 @@ const PROBES = {
 const baseEnv = {
   DATABASE_URL: url, BETTER_AUTH_SECRET: "probe-regions-e2e-only-secret-not-for-production", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron",
   PROBE_SECRET: "probe-regions-e2e-secret", PROBE_REGIONS: JSON.stringify(PROBES),
+  PROBE_SECRETS: JSON.stringify({ "e2e-north": "probe-regions-e2e-north-dedicated-secret" }),
   // the monitored target is a local server, so this location's own check can confirm or refute the probes
   ALLOW_PRIVATE_TARGETS: "true",
 };
@@ -278,6 +279,10 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
 
     const listed = await op("GET", "/probes");
     expect(listed.status).toBe(200);
+    expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-north").credentialMode).toBe("dedicated");
+    expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-south").credentialMode).toBe("shared");
+    expect(JSON.stringify(listed.body)).not.toContain("probe-regions-e2e-north-dedicated-secret");
+    expect(JSON.stringify(listed.body)).not.toContain("probe-regions-e2e-secret");
     const ids = listed.body.regions.map((r: { id: string }) => r.id);
     expect(ids).toEqual(expect.arrayContaining(Object.keys(PROBES)));
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-west")).toMatchObject({ configured: true, drained: false });

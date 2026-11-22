@@ -6,7 +6,7 @@ import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
 import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
-import { availableRegions, isRegionConfigured, resetProbeRegionCache } from "./probes";
+import { availableRegions, isRegionConfigured, probeCredentialMode, resetProbeRegionCache } from "./probes";
 import { AUTO, REGION_ID } from "./regions";
 import type { ProbeRegionState } from "@montral/repo";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
@@ -403,8 +403,8 @@ export const operatorApi = new Hono<AppEnv>()
     return c.json({
       auto: { monitors: counts[AUTO] ?? 0 },
       regions: [
-        ...configured.map((r) => probeRegionView(r.id, r.name, byId.get(r.id), counts[r.id] ?? 0)),
-        ...stale.map((id) => probeRegionView(id, null, byId.get(id), counts[id] ?? 0)),
+        ...configured.map((r) => ({ ...probeRegionView(r.id, r.name, byId.get(r.id), counts[r.id] ?? 0), credentialMode: probeCredentialMode(r.id) })),
+        ...stale.map((id) => ({ ...probeRegionView(id, null, byId.get(id), counts[id] ?? 0), credentialMode: "unconfigured" as const })),
       ],
     });
   })

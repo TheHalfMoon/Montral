@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { configureProbes, isRegionConfigured, parseProbeRegions, parseProbeSecrets, availableRegions, combine, measure, runInRegion } from "./probes";
+import { configureProbes, isRegionConfigured, parseProbeRegions, parseProbeSecrets, availableRegions, probeCredentialMode, combine, measure, runInRegion } from "./probes";
 import { signProbe, verifyProbe } from "./probe-protocol";
 import { effectiveRegions } from "./regions";
 
@@ -114,6 +114,11 @@ describe("PROBE_SECRETS credential isolation", () => {
     try {
       configureProbes({ PROBE_REGIONS: JSON.stringify(urls), PROBE_SECRET: "shared-legacy-probe-key", PROBE_SECRETS: JSON.stringify({ "region-north": keys["region-north"] }) });
       expect(availableRegions().map(({ id }) => id)).toEqual(["auto", "region-north", "region-south"]);
+      expect(probeCredentialMode("region-north")).toBe("dedicated");
+      expect(probeCredentialMode("region-south")).toBe("shared");
+      expect(probeCredentialMode("unknown-region")).toBe("unconfigured");
+      expect(JSON.stringify(availableRegions())).not.toContain(keys["region-north"]);
+      expect(JSON.stringify(availableRegions())).not.toContain("shared-legacy-probe-key");
     } finally { configureProbes({}); }
   });
 });

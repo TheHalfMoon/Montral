@@ -96,6 +96,12 @@ export function availableRegions(): { id: string; name: string }[] {
   return [{ id: AUTO, name: "Auto" }, ...[...regions.values()].map(({ id, name }) => ({ id, name }))];
 }
 
+/** Report only which configured signing-key path is active; never return credential material. */
+export function probeCredentialMode(id: string): "dedicated" | "shared" | "unconfigured" {
+  if (!regions.has(id)) return "unconfigured";
+  return regionSecrets.has(id) ? "dedicated" : "shared";
+}
+
 export const isRegionConfigured = (id: string) => id === AUTO || regions.has(id);
 
 /** What running a check in one region came to: an outcome, or that the region could not be asked at all. */

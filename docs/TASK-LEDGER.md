@@ -180,23 +180,23 @@ Integrated qualification verified on November 15: `main@d49e2cf0919f1f411bacc64e
 **P2**, merged in #148. Ordinary member sessions and keys could create destinations despite manager-only destination changes. Apply the same current-membership role guard to creation, preserving member operational edits. Evidence: `docs/evidence/2026-11-15-channel-creation-role.md`.
 
 
-## Active SSO callback race follow-up
+## SSO callback race fix — integrated
 
 | ID | Gap | Severity | Status |
 |---|---|---|---|
-| SEC-SSO-CALLBACK | A callback could finish after its connection's issuer/client was changed and its old sessions invalidated, then mark a fresh session against stale connection settings | P1 | Merged #149 (`ead9740`), 11/11 exact-head PR workflows, including PostgreSQL 17/18 SSO callback race tests. A stale callback cannot mark a session after connection revision changes, and a new session is cleaned up. Independent security review and combined-main requalification still required. `docs/evidence/2026-11-15-sso-callback-revision-fence.md`. |
+| SEC-SSO-CALLBACK | A callback could finish after its connection's issuer/client was changed and its old sessions invalidated, then mark a fresh session against stale connection settings | P1 | Fixed in #149 (`ead9740`), 11/11 exact-head PR workflows, including PostgreSQL 17/18 callback-race tests. A stale callback cannot mark a session after connection revision changes, and a new session is cleaned up. The fix is integrated in `main@5cc1345`; all 12/12 exact-main push workflows passed. This integrated CI does not claim an independent external security assessment. `docs/evidence/2026-11-15-sso-callback-revision-fence.md`. |
 
-## SSO revocation follow-up under qualification
+## SSO revocation races — integrated
 
-**P1**, this branch. In addition to #149's stale callback session fence, persistent link/JIT writes now recheck the locked connection revision before committing. Derived API-key proofs can no longer be inserted after the parent session is revoked, and a stale concurrent owner PUT receives 409 rather than restoring an earlier provider configuration with stale invalidation decisions. Local PostgreSQL regression coverage and limitations: `docs/evidence/2026-11-21-sso-revocation-races.md`. PR/hosted CI and merge qualification remain pending.
+**P1 fixed in #178** (merge `9020318`), with 16/16 exact-head PR checks. Persistent link/JIT writes recheck the locked connection revision before committing. Derived API-key proofs cannot be inserted after the parent session is revoked, and a stale concurrent owner PUT receives 409 rather than restoring an earlier provider configuration with stale invalidation decisions. This fix is integrated in `main@5cc1345`; all 12/12 exact-main push workflows passed. Regression coverage and residual limitations: `docs/evidence/2026-11-21-sso-revocation-races.md`. This is not an independent external security assessment.
 
-## SSO policy propagation across replicas
+## SSO policy propagation across replicas — integrated
 
-**P1, implemented on `fix/sso-requirement-cache-coherence-20261121`; hosted qualification pending.** A scoped agent-assisted review found that a process-local cached “SSO not required” result could survive an owner enabling SSO on another replica, allowing an old API key or agent token to act without an SSO proof for up to 30 seconds. A real-PostgreSQL regression reproduced the old API key returning 200 after the other-replica policy change. Authorization now reads the current policy from PostgreSQL for each check; the same regression now returns 403. Local SSO/OIDC suites passed 62/62; API typecheck, production build, source verification and diff check passed. The tradeoff is one indexed policy lookup per protected authorization request; current qualification does not specifically benchmark SSO request throughput. Evidence: `docs/evidence/2026-11-21-sso-requirement-cache-coherence.md`. The focused review is not a whole-repository security audit; managed Deep Scan remains blocked by the missing host permission profile.
+**P1 fixed in #179** (merge `7d695d1`), with 16/16 exact-head PR checks. A real-PostgreSQL regression reproduced an old API key returning 200 after another replica enabled SSO; authorization now reads current policy from PostgreSQL and the regression returns 403. Local SSO/OIDC suites passed 62/62, and the fix is integrated in `main@5cc1345` with all 12/12 exact-main push workflows passed. The one indexed policy lookup per protected authorization request has not been separately benchmarked for throughput. Evidence: `docs/evidence/2026-11-21-sso-requirement-cache-coherence.md`. This focused fix and its CI do not establish whole-repository security clearance; the managed Deep Scan limitation remains recorded separately.
 
-## Integrated November 15 change stack (pending full combined-main qualification)
+## Historical November 15 change stack — combined-main qualification complete
 
-Security #149 and web #129–#135 are now merged to `main@3fe4a5e46f52a4220b2a2162b4166286372bde04`. All eight PRs passed **11/11 workflows individually** before merge. This fact does **not** prove the combined head's full push CI, physical Safari/VoiceOver, live-provider coverage, or an independent audit. A dedicated integration qualification pull request follows, with no release/tag/deployment authorized. The old `d49e2cf` 11/11 main run remains historical, not qualification for these additions.
+Security #149 and web #129–#135 were merged to `main@3fe4a5e46f52a4220b2a2162b4166286372bde04`; all eight PRs passed **11/11 workflows individually** before merge. Their combined-main qualification was subsequently completed at `main@2bbbca8f1efa87fd3f408037170f3f10b5338009` with all 11/11 exact-SHA push workflows successful. The latest integrated-main qualification is at `main@5cc1345b404dcfaeca170933a4d84fb27318a735` and recorded in `docs/RELEASE-GATES.md`. These CI results do not prove physical Safari/VoiceOver coverage, live-provider coverage, an independent audit, or release authorization.
 
 ## November 15 integrated-main qualification (non-release)
 

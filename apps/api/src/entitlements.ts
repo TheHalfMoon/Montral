@@ -39,6 +39,8 @@ export interface Entitlements {
    * never given back.
    */
   refundCredits?(workspaceId: string, credits: number, spentAt?: Date): Promise<void>;
+  /** Idempotent settlement for one region-check reservation. Replaying the same key and amount is a no-op. */
+  refundCreditsOnce?(workspaceId: string, credits: number, spentAt: Date, idempotencyKey: string): Promise<void>;
   /** The allowance and what is used of it, for display. null when the workspace is not metered. */
   creditBalance(workspaceId: string): Promise<CreditBalance | null>;
   /** Like `spendCredits`, for notification emails (alerts and status-page subscriber mails). System mails are never counted. */

@@ -145,6 +145,28 @@ describe.skipIf(!url)("Montral sandbox billing PostgreSQL verification", () => {
     expect(await used(current.start)).toBe(20);
   });
 
+  it("applies a region settlement refund once under concurrent replay and rejects key reuse with a different amount", async () => {
+    const { org } = await signup();
+    const limits = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });
+    const period = calendarMonthUtc(new Date("2026-10-15T12:00:00Z"));
+    await db!.query("INSERT INTO montral_usage(organization_id,period_start,kind,used) VALUES($1,$2::timestamptz,'credits',10)", [org, period.start.toISOString()]);
+    const key = crypto.randomUUID();
+    await Promise.all([
+      ...Array.from({ length: 8 }, () => limits.refundCreditsOnce!(org, 3, period.start, key)),
+      limits.spendCredits(org, 5, period.start),
+    ]);
+    const rows = await db!.query<{ used: number }>(
+      "SELECT used FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind='credits'", [org, period.start.toISOString()]);
+    expect(Number(rows[0]?.used)).toBe(12);
+    const refunds = await db!.query<{ count: string }>(
+      "SELECT COUNT(*)::text AS count FROM montral_credit_refund WHERE organization_id=$1 AND period_start=$2::timestamptz AND idempotency_key=$3", [org, period.start.toISOString(), key]);
+    expect(refunds[0]?.count).toBe("1");
+    await expect(limits.refundCreditsOnce!(org, 2, period.start, key)).rejects.toThrow(/different amount/);
+    const afterMismatch = await db!.query<{ used: number }>(
+      "SELECT used FROM montral_usage WHERE organization_id=$1 AND period_start=$2::timestamptz AND kind='credits'", [org, period.start.toISOString()]);
+    expect(Number(afterMismatch[0]?.used)).toBe(12);
+  });
+
   it("enforces monthly credits and email budgets with concurrent PostgreSQL spending", async () => {
     const { org } = await signup();
     const limits = createMontralEntitlements(db!, { ...config, MONTRAL_METERING_ENABLED: "true" });

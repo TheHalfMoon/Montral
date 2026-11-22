@@ -225,13 +225,13 @@ export type CheckManyOptions = { browserBudgetMs?: number; now?: () => number };
 
 export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitlements, opts: CheckManyOptions = {}) {
   // Browser monitors are charged one by one just before their journey is launched (browserTask), the rest up front.
-  const regionReservations = new Map<string, { credits: number; chargedAt: Date }>();
+  const regionReservations = new Map<string, { credits: number; chargedAt: Date; settlementKey: string }>();
   const browser = due.filter((m) => m.type === "browser");
   // a multi-region monitor skipped because a metered plan could not be read counts on its deferral streak
   const others = await withinCredits(
     due.filter((m) => m.type !== "browser"), entitlements,
     (skipped) => Promise.all(skipped.map((m) => step("plan deferral", () => notePlanDeferral(repo, m)))),
-    (m, credits, chargedAt) => regionReservations.set(m.id, { credits, chargedAt }),
+    (m, credits, chargedAt) => regionReservations.set(m.id, { credits, chargedAt, settlementKey: crypto.randomUUID() }),
   );
   if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
   // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and
@@ -243,7 +243,7 @@ export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitl
     const reservation = regionReservations.get(m.id);
     if (!reservation || reservation.credits === 0) return;
     const refund = unusedRegionCredits(reservation.credits, measured);
-    if (refund > 0) await refundCredits(m.organizationId, refund, entitlements, reservation.chargedAt);
+    if (refund > 0) await refundRegionCredits(m.organizationId, refund, entitlements, reservation.chargedAt, reservation.settlementKey);
   }).then(() => {}, () => console.error(`check failed for ${m.id}`)));
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of browser) (byWorkspace.get(m.organizationId) ?? byWorkspace.set(m.organizationId, []).get(m.organizationId)!).push(m);
@@ -441,6 +441,15 @@ export async function notePlanDeferral(repo: Repo, m: Monitor, now = Date.now())
 export async function refundCredits(workspace: string, credits: number, entitlements: Entitlements, spentAt?: Date) {
   if (!entitlements.refundCredits) return;
   await entitlements.refundCredits(workspace, credits, spentAt).catch(() => console.error("credit refund failed"));
+}
+
+/** The region-check result settlement may be retried by a caller; its debit reversal must not be applied twice. */
+export async function refundRegionCredits(workspace: string, credits: number, entitlements: Entitlements, spentAt: Date, settlementKey: string) {
+  if (credits <= 0 || !Number.isSafeInteger(credits) || !entitlements.refundCreditsOnce) {
+    if (credits > 0) await refundCredits(workspace, credits, entitlements, spentAt);
+    return;
+  }
+  await entitlements.refundCreditsOnce(workspace, credits, spentAt, settlementKey).catch(() => console.error("credit refund failed"));
 }
 
 export type CheckResultKind = "done" | "deferred" | "error" | "skipped";

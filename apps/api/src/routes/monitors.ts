@@ -15,7 +15,7 @@ import { BROWSER_MIN_INTERVAL_SEC, browserCreationProblem, browserRuntimeHealth,
 import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secretRefs, type BrowserConfig } from "../browser-steps";
 import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
-import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds, unusedRegionCredits } from "../scheduler";
+import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, refundRegionCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds, unusedRegionCredits } from "../scheduler";
 import { DRAINED, drainedRegions, isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, PROBE_TYPES, REGION_ID, withinPlanRegions } from "../regions";
 
@@ -700,6 +700,7 @@ export const monitors = new Hono<AppEnv>()
       const cost = region !== undefined ? 1 : creditCost(m);
       // a manual check is a request like any other: it takes a credit
       const spentAt = new Date();
+      const regionSettlementKey = crypto.randomUUID();
       if (!(await spendAllOrNothing(m.organizationId, cost, c.get("entitlements"), spentAt))) {
         return c.json({ error: "No credits left this period", code: "credits_exhausted", resetsAt: await allowanceResetsAt(c.get("entitlements"), m.organizationId, "credits", spentAt) }, 402);
       }
@@ -723,7 +724,7 @@ export const monitors = new Hono<AppEnv>()
           result = await checkOne(repo, m, entitlements, false, async (measured) => {
             if (m.type === "browser") return; // browser refunds retain their own deferred/error rules
             const unused = unusedRegionCredits(cost, measured);
-            if (unused > 0) await refundCredits(m.organizationId, unused, entitlements, spentAt);
+            if (unused > 0) await refundRegionCredits(m.organizationId, unused, entitlements, spentAt, regionSettlementKey);
           });
         } catch (error) {
           await refundBrowserSeconds(m.organizationId, unusedBrowserSeconds(reserved, Date.now() - started, "error"), entitlements, spentAt);
@@ -739,7 +740,7 @@ export const monitors = new Hono<AppEnv>()
       if ("unreachable" in run) {
         // No verdict: the requested spot-check region did not run successfully.
         // The earlier drain guard already refuses without spending any credits.
-        await refundCredits(m.organizationId, cost, c.get("entitlements"), spentAt);
+        await refundRegionCredits(m.organizationId, cost, c.get("entitlements"), spentAt, regionSettlementKey);
         return c.json({ error: run.unreachable, code: "probe_unreachable", region }, 502);
       }
       return c.json({ ok: true, region, result: spotCheckResult(run.outcome) });

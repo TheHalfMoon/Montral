@@ -120,6 +120,41 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     created_at timestamptz NOT NULL DEFAULT NOW(),
     PRIMARY KEY (organization_id,period_start,kind,idempotency_key)
   )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS montral_credit_refund (
+    organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+    period_start timestamptz NOT NULL,
+    idempotency_key text NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+    credits integer NOT NULL CHECK (credits > 0),
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (organization_id,period_start,idempotency_key)
+  )`);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_refund_credits_once(
+      p_org text, p_start timestamptz, p_key text, p_credits integer
+    ) RETURNS boolean LANGUAGE plpgsql AS $montral$
+    DECLARE previous integer;
+    BEGIN
+      IF p_org IS NULL OR p_start IS NULL OR p_key IS NULL
+        OR char_length(p_key) NOT BETWEEN 1 AND 200 OR p_credits IS NULL OR p_credits <= 0
+        OR p_start <> (date_trunc('month', p_start AT TIME ZONE 'UTC') AT TIME ZONE 'UTC') THEN
+        RAISE EXCEPTION 'invalid idempotent credit refund';
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':refund:' || p_key,0));
+      SELECT credits INTO previous FROM montral_credit_refund
+        WHERE organization_id=p_org AND period_start=p_start AND idempotency_key=p_key;
+      IF FOUND THEN
+        IF previous <> p_credits THEN RAISE EXCEPTION 'credit refund key reused with a different amount'; END IF;
+        RETURN false;
+      END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':credits',0));
+      UPDATE montral_usage SET used=GREATEST(0,used-p_credits)
+        WHERE organization_id=p_org AND period_start=p_start AND kind='credits';
+      INSERT INTO montral_credit_refund(organization_id,period_start,idempotency_key,credits)
+        VALUES(p_org,p_start,p_key,p_credits);
+      RETURN true;
+    END;
+    $montral$
+  `);
   await db.query(`
     CREATE OR REPLACE FUNCTION montral_spend_usage_once(
       p_org text, p_start timestamptz, p_kind text, p_key text, p_limit integer
@@ -217,7 +252,7 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_monthly_outbox_quota_claim_v1"];
+  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_credit_refund_once_v1", "montral_monthly_outbox_quota_claim_v1"];
 }
 
 /** The ledger kind of a meter; anything else is refused, so a caller can never write an arbitrary kind. */
@@ -297,6 +332,16 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
       [org, start.toISOString(), count, kind],
     );
   };
+  const refundCreditsOnce = async (org: string, count: number, spentAt: Date, key: string) => {
+    if (!Number.isSafeInteger(count) || count <= 0 || typeof key !== "string" || key.length < 1 || key.length > 200)
+      throw new Error("Invalid idempotent credit refund");
+    const { start } = calendarMonthUtc(validAt(spentAt));
+    const rows = await database.query<{ applied: boolean }>(
+      "SELECT montral_refund_credits_once($1::text,$2::timestamptz,$3::text,$4::integer) AS applied",
+      [org, start.toISOString(), key, count],
+    );
+    if (typeof rows[0]?.applied !== "boolean") throw new Error("Invalid idempotent credit refund result");
+  };
   const reserveEmailQuotaOnce = async (org: string, key: string): Promise<{ granted: boolean; newlyReserved: boolean }> => {
     if (typeof key !== "string" || key.length < 1 || key.length > 200) throw new Error("Invalid email quota reservation key");
     const { start } = calendarMonthUtc();
@@ -352,6 +397,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     failClosed: true,
     spendCredits: (org, count, at) => spend(org, count, "credits", at),
     refundCredits: (org, count, spentAt) => refund(org, count, "credits", spentAt),
+    refundCreditsOnce,
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
     reserveEmailQuotaOnce,

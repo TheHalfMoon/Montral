@@ -413,11 +413,18 @@ export const operatorApi = new Hono<AppEnv>()
     const id = c.req.param("id");
     if (!REGION_ID.test(id) || id === AUTO || !isRegionConfigured(id)) return c.json({ error: "Not found" }, 404);
     const repo = c.get("repo");
+    if (!repo.recordProbeRegionValidation) return c.json({ error: "Probe validation audit is not available on this backend" }, 501);
     const operatorId = c.get("operatorId")!;
     if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
     const body = await strictJsonObjectBody(c.req.raw, 2048);
     if (Object.keys(body).length) return c.json({ error: "Validation accepts an empty object only" }, 400);
     const result = await validateProbeRegion(id);
+    try {
+      await repo.recordProbeRegionValidation(id, result.status, operatorId);
+    } catch {
+      // Do not report a validation outcome as complete if its operator audit could not be persisted.
+      return c.json({ error: "Probe validation result could not be recorded" }, 503);
+    }
     if (result.status === "identity_mismatch") {
       return c.json({ id, validated: false, code: "probe_identity_mismatch", error: "Probe reports a different region identity" }, 409);
     }
@@ -435,11 +442,17 @@ export const operatorApi = new Hono<AppEnv>()
     const id = c.req.param("id");
     if (!REGION_ID.test(id) || id === AUTO) return c.json({ error: "Not found" }, 404);
     const repo = c.get("repo");
-    if (!repo.probeRegionDrainEvents) return c.json({ error: "Probe region audit is not available on this backend" }, 501);
+    if (!repo.probeRegionDrainEvents || !repo.probeRegionValidationEvents) return c.json({ error: "Probe region audit is not available on this backend" }, 501);
     const limit = Number(c.req.query("limit") ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
-    const events = await repo.probeRegionDrainEvents(id, limit);
-    return c.json({ region: id, events: events.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })) });
+    const [events, validationEvents] = await Promise.all([
+      repo.probeRegionDrainEvents(id, limit), repo.probeRegionValidationEvents(id, limit),
+    ]);
+    return c.json({
+      region: id,
+      events: events.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })),
+      validationEvents: validationEvents.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })),
+    });
   })
   // A drained region is not asked by the scheduler (within DRAIN_TTL_MS on every server); monitors that list it
   // confirm from their other regions or this location. Only a configured region can be drained; any can be undrained.

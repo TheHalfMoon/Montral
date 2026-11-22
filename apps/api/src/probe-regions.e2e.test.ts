@@ -322,6 +322,8 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
       return { status: r.status, body: (await r.json().catch(() => null)) as any };
     };
 
+    const validationIdsBefore = new Set<number>((await op("GET", "/probes/e2e-west/audit")).body.validationEvents.map((event: { id: number }) => event.id));
+
     const listed = await op("GET", "/probes");
     expect(listed.status).toBe(200);
     expect(listed.body.regions.find((r: { id: string }) => r.id === "e2e-north").credentialMode).toBe("dedicated");
@@ -355,6 +357,29 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_validation_unavailable" });
     proofAnswers["e2e-west"] = new Error("synthetic unreachable probe");
     expect((await op("POST", "/probes/e2e-west/validate", {})).body).toMatchObject({ id: "e2e-west", validated: false, code: "probe_validation_unavailable" });
+    const validationAudit = await op("GET", "/probes/e2e-west/audit?limit=20");
+    const recorded = validationAudit.body.validationEvents.filter((event: { id: number }) => !validationIdsBefore.has(event.id));
+    expect(recorded.map((event: { outcome: string }) => event.outcome)).toEqual([
+      "unavailable", "unavailable", "credential_mismatch", "credential_mismatch", "identity_mismatch", "validated",
+    ]);
+    expect(JSON.stringify(recorded)).not.toMatch(/probe\.test|probe-regions-e2e-(?:secret|north-dedicated-secret)|challenge|signature|capabilities/i);
+    await expect(db!.query(`UPDATE probe_region_validation_event SET outcome='validated' WHERE id=$1`, [recorded[0].id])).rejects.toThrow();
+    await expect(db!.query(`DELETE FROM probe_region_validation_event WHERE id=$1`, [recorded[0].id])).rejects.toThrow();
+    expect((await opSend("/api/operator/probes/e2e-west/audit", { headers: { cookie: customer.cookie, origin: ORIGIN } })).status).toBe(403);
+    const idsBeforeFailedAudit = new Set<number>(validationAudit.body.validationEvents.map((event: { id: number }) => event.id));
+    await db!.query(`CREATE FUNCTION public.test_fail_probe_validation_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic audit write failure'; END $$`);
+    await db!.query(`CREATE TRIGGER test_fail_probe_validation_audit BEFORE INSERT ON public.probe_region_validation_event FOR EACH ROW EXECUTE FUNCTION public.test_fail_probe_validation_audit()`);
+    try {
+      proofAnswers["e2e-west"] = {};
+      const unrecorded = await op("POST", "/probes/e2e-west/validate", {});
+      expect(unrecorded.status).toBe(503);
+      expect(unrecorded.body).toEqual({ error: "Probe validation result could not be recorded" });
+      const afterFailedAudit = await op("GET", "/probes/e2e-west/audit?limit=20");
+      expect(afterFailedAudit.body.validationEvents.every((event: { id: number }) => idsBeforeFailedAudit.has(event.id))).toBe(true);
+    } finally {
+      await db!.query("DROP TRIGGER test_fail_probe_validation_audit ON public.probe_region_validation_event");
+      await db!.query("DROP FUNCTION public.test_fail_probe_validation_audit()");
+    }
     delete proofAnswers["e2e-west"];
     const ids = listed.body.regions.map((r: { id: string }) => r.id);
     expect(ids).toEqual(expect.arrayContaining(Object.keys(PROBES)));

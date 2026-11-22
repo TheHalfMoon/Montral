@@ -352,6 +352,7 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       req.on("data", (c) => { body += c; });
       req.on("end", () => {
         seen = { method: req.method, headers: req.headers, body };
+        if (req.url === "/slow") return; // the client timeout is ambiguous: the server accepted the replay but never answered
         if (req.url === "/binary") { res.writeHead(200, { "content-type": "application/octet-stream" }); res.end(Buffer.alloc(100, 0xff)); return; }
         res.writeHead(req.url === "/redirect" ? 302 : 201, { "content-type": "text/plain", location: "http://169.254.169.254/" });
         // Multibyte text: truncation must count bytes, not characters.
@@ -380,14 +381,21 @@ describe.skipIf(!url)("Montral webhook production-path PostgreSQL E2E", () => {
       // Redirects are reported, never followed.
       const redirected = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/redirect" }, allowed);
       expect(redirected.body.status).toBe(302);
+      // This endpoint consumes the replay but withholds its response until the caller times out.
+      const timedOut = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/slow" }, allowed);
+      expect(timedOut.status).toBe(504);
+      expect(timedOut.body.code).toBe("replay_outcome_unknown");
+      expect(timedOut.body.error).toMatch(/may have received the request/);
+      expect(seen.body).toBe(first.body);
     } finally {
       await new Promise((r) => sink.close(r));
     }
     // A closed port is a fixed, non-revealing error.
     const unreachable = await a("POST", `/inboxes/${id}/events/${first.id}/replay`, { url: sinkUrl + "/gone" }, { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" });
     expect(unreachable.status).toBe(502);
+    expect(unreachable.body.code).toBe("replay_outcome_unknown");
+    expect(unreachable.body.error).toMatch(/may have received the request/);
     expect(JSON.stringify(unreachable.body)).not.toMatch(/127\.0\.0\.1|ECONNREFUSED/);
-
     expect((await a("DELETE", `/inboxes/${id}/events/${first.id}`)).status).toBe(204);
     expect((await a("DELETE", `/inboxes/${id}/events/${first.id}`)).status).toBe(404);
     const remaining = (await a("GET", `/inboxes/${id}/events`)).body.events as { id: string }[];

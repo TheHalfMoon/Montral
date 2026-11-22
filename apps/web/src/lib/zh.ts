@@ -710,6 +710,7 @@ export const zh: Record<string, string> = {
   Headers: "请求头", Body: "正文", "Delete this captured request? This cannot be undone.": "删除这条已捕获的请求？此操作无法撤销。",
   "https://your-dev-endpoint.example/webhook": "https://your-dev-endpoint.example/webhook", "Replay to URL": "重放到的 URL", Replay: "重放", "Delete event": "删除事件",
   "Sends this request's method, body and stored headers to the URL. Private and internal addresses are refused, redirects are not followed, and nothing about the replay is stored.": "将此请求的方法、正文和已保存的请求头发送到该 URL。私有和内部地址会被拒绝，不跟随重定向，重放不会保存任何记录。",
+  "The delivery outcome is unknown. The target may have processed this replay; retry only if duplicate delivery is acceptable.": "投递结果未知。目标可能已经处理了此次重放；只有能够接受重复投递时才重试。",
   "first 4 KiB": "前 4 KiB", "(empty body)": "（空正文）",
   "Receiver response": "接收端响应",
   "This inbox answers captured requests with the response below.": "此收件箱用下面的响应回复已捕获的请求。",

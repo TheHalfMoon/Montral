@@ -10,6 +10,9 @@ describe("translate", () => {
   it("labels webhook replay counts as admitted requests, not delivery confirmations", () => {
     expect(translate("zh-CN", "counts admitted requests, not confirmed deliveries")).toBe("按已受理请求计数，不代表已送达");
   });
+  it("warns that a timed-out webhook replay may have reached its target", () => {
+    expect(translate("zh-CN", "The delivery outcome is unknown. The target may have processed this replay; retry only if duplicate delivery is acceptable.")).toContain("投递结果未知");
+  });
   it("falls back to the source text when missing", () => {
     expect(translate("zh-CN", "__no such key__")).toBe("__no such key__");
   });

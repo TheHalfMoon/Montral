@@ -291,16 +291,20 @@ function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; 
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<ReplayResult | null>(null);
   const [error, setError] = useState("");
+  const [outcomeUnknown, setOutcomeUnknown] = useState(false);
   const replay = async (e: React.SyntheticEvent) => {
-    e.preventDefault(); setBusy(true); setError(""); setResult(null);
+    e.preventDefault(); setBusy(true); setError(""); setOutcomeUnknown(false); setResult(null);
     try { setResult(await api.replayHookEvent(inbox, event.id, url.trim())); }
-    catch (x) { setError((x as Error).message); }
+    catch (x) {
+      if (x instanceof ApiError && x.code === "replay_outcome_unknown") setOutcomeUnknown(true);
+      else setError((x as Error).message);
+    }
     // an attempt is counted even when the target answers with an error, so refresh the count either way
     finally { setBusy(false); onReplayed?.(); }
   };
   const remove = async () => {
     if (!(await ask(t("Delete this captured request? This cannot be undone."), t("Delete request")))) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setOutcomeUnknown(false);
     try { await api.deleteHookEvent(inbox, event.id); onDeleted(); }
     catch (x) { setError((x as Error).message); setBusy(false); }
   };
@@ -313,6 +317,7 @@ function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; 
     </form>
     <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Sends this request's method, body and stored headers to the URL. Private and internal addresses are refused, redirects are not followed, and nothing about the replay is stored.")}</p>
     {error && <p className="err" role="alert">{error}</p>}
+    {outcomeUnknown && <p className="err" role="alert">{t("The delivery outcome is unknown. The target may have processed this replay; retry only if duplicate delivery is acceptable.")}</p>}
     {result && <div role="status">
       <b>{t("Response")} {result.status}</b> <span className="muted">· {result.durationMs} ms{result.truncated ? " · " + t("first 4 KiB") : ""}</span>
       <pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.body || t("(empty body)")}</pre>

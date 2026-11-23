@@ -93,6 +93,25 @@ describe.skipIf(!url)("Montral resource meters PostgreSQL verification", () => {
     await expect(e.reserveRegionUsage!(org, [{ ...operations[0], regions: ["eu-west"] }], at)).rejects.toThrow(/different input/);
   });
 
+  it("keeps region usage summaries isolated between workspaces", async () => {
+    const first = await signup();
+    const second = await signup();
+    const env = metered({ credits: 10 });
+    const e = createMontralEntitlements(db!, env);
+    const at = new Date();
+    await e.reserveRegionUsage!(first.org, [{ operationKey: "tenant-isolation", monitorId: "monitor-first", regions: ["tenant-north"] }], at);
+    await e.reserveRegionUsage!(second.org, [{ operationKey: "tenant-isolation", monitorId: "monitor-second", regions: ["tenant-south"] }], at);
+
+    const firstUsage = await first.call("GET", "/usage", undefined, env);
+    const secondUsage = await second.call("GET", "/usage", undefined, env);
+    expect(firstUsage.status).toBe(200);
+    expect(secondUsage.status).toBe(200);
+    expect(firstUsage.body.regionUsage.regions).toMatchObject([{ region: "tenant-north", planned: 1, reserved: 1 }]);
+    expect(firstUsage.body.regionUsage.regions).toHaveLength(1);
+    expect(secondUsage.body.regionUsage.regions).toMatchObject([{ region: "tenant-south", planned: 1, reserved: 1 }]);
+    expect(secondUsage.body.regionUsage.regions).toHaveLength(1);
+  });
+
   it("fails closed when reservation debit evidence is missing and does not grant over the plan limit", async () => {
     const { org } = await signup();
     const at = new Date("2026-11-22T12:00:00.000Z");

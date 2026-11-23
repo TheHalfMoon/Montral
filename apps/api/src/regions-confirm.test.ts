@@ -402,7 +402,8 @@ describe("scheduled region credit reconciliation", () => {
     answers["ap-southeast"] = { ok: true, statusCode: 200 };
     const { entitlements, records } = meter();
     await checkMany(repoFor([{ region: "eu-central", enabled: false }]), [due()], entitlements);
-    expect(asked).toEqual(["us-east", "ap-southeast"]);
+    // Remote probes run concurrently, so observation order depends on response timing.
+    expect([...asked].sort()).toEqual(["ap-southeast", "us-east"]);
     expect(records[0].regions).toEqual(["us-east", "ap-southeast"]);
     expect(records.map(({ kind, n }) => [kind, n])).toEqual([["reserve", 2], ["settle", 2]]);
   });

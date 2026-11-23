@@ -25,6 +25,9 @@ export type OperatorProbeAuditEvent = {
 export type OperatorProbeLifecycleEvent = {
   id: number; region: string; action: "activate" | "deactivate"; operatorId: string; createdAt: string;
 };
+export type OperatorProbeValidation = {
+  id: string; validated: true; identity: "reported_match"; credentialProof: "matched"; sourceAttestation: false; capabilities: string[];
+};
 export type OperatorPlatformAuditEvent = {
   source: "workspace" | "probe"; id: string;
   action: "workspace.suspend" | "workspace.unsuspend" | "probe.drain" | "probe.undrain";
@@ -72,6 +75,7 @@ export function makeOperatorApi(fetcher: typeof fetch = fetch) {
     unsuspend: (id: string) => call<{ id: string; suspended: false }>(`/workspaces/${encodeURIComponent(id)}/unsuspend`, {}),
     probes: () => call<{ auto: { monitors: number }; regions: OperatorRegion[] }>("/probes"),
     probeAudit: (id: string) => call<{ region: string; events: OperatorProbeAuditEvent[]; lifecycleEvents: OperatorProbeLifecycleEvent[] }>(`/probes/${encodeURIComponent(id)}/audit?limit=50`),
+    validateProbe: (id: string) => call<OperatorProbeValidation>(`/probes/${encodeURIComponent(id)}/validate`, {}),
     drain: (id: string, note: string) => call<{ id: string; drained: true }>(`/probes/${encodeURIComponent(id)}/drain`, { note }),
     undrain: (id: string) => call<{ id: string; drained: false }>(`/probes/${encodeURIComponent(id)}/undrain`, {}),
     deactivate: (id: string) => call<{ id: string; enabled: false; changed: boolean }>(`/probes/${encodeURIComponent(id)}/deactivate`, {}),

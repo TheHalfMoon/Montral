@@ -184,6 +184,22 @@ export default function OperatorConsole() {
     } finally { setBusy(false); }
   }
 
+  async function validateProbe(region: OperatorRegion) {
+    if (accessRevoked.current || busy) return;
+    setBusy(true); setError(""); setFeedback("");
+    try {
+      const result = await operatorApi.validateProbe(region.id);
+      if (accessRevoked.current) return;
+      setFeedback(`Credential-possession validation succeeded for ${result.id}. Activate within five minutes; this does not attest probe software or deployment.`);
+    } catch (err) {
+      setError(err instanceof OperatorRequestError && err.status === 409
+        ? "Probe identity or credential proof did not match. The region was not validated."
+        : err instanceof OperatorRequestError && err.status === 502
+          ? "The probe could not be reached or validated."
+          : failure(err));
+    } finally { setBusy(false); }
+  }
+
   async function showProbeAudit(id: string) {
     if (accessRevoked.current) return;
     if (auditRegion === id) {
@@ -288,6 +304,8 @@ export default function OperatorConsole() {
                 onClick={() => { setProbeLifecycleEditing({ id: r.id, enabled: !r.enabled }); setProbeEditing(null); setProbeConfirm(""); }}>
                 {r.enabled ? "Deactivate" : "Activate"}
               </button>}
+              {r.configured && <button type="button" className="btn sm" disabled={busy}
+                onClick={() => void validateProbe(r)}>Validate</button>}
               {(r.configured || r.drained) && <button type="button" className="btn sm" disabled={busy}
                 onClick={() => { setProbeEditing(probeEditing === r.id ? null : r.id); setProbeConfirm(""); setProbeNote(""); }}>
                 {r.drained ? "Undrain" : "Drain"}

@@ -27,6 +27,7 @@ test("operator console is denied by default and confirms every synthetic state c
 
   let suspended = false;
   let drained = false;
+  let enabled = true;
   let denyProbeOnFirstMock = true;
   const posted: { path: string; body: Record<string, unknown> }[] = [];
   const workspace = () => ({
@@ -35,7 +36,7 @@ test("operator console is denied by default and confirms every synthetic state c
     ownerEmail: "owner@synthetic.test", suspended, plan: "synthetic",
   });
   const region = () => ({
-    id: "synthetic-east", name: "Synthetic East", configured: true, status: drained ? "drained" : "up",
+    id: "synthetic-east", name: "Synthetic East", configured: true, status: !enabled ? "deactivated" : drained ? "drained" : "up", enabled,
     monitors: 3, drained, lastAnswerAt: "2026-01-01T00:00:00.000Z", lastUnreachableAt: null,
     lastUnreachableReason: null, drainedAt: null,
   });
@@ -49,8 +50,13 @@ test("operator console is denied by default and confirms every synthetic state c
       else if (path === "/workspaces/synthetic-org-1/unsuspend") suspended = false;
       else if (path === "/probes/synthetic-east/drain") drained = true;
       else if (path === "/probes/synthetic-east/undrain") drained = false;
+      else if (path === "/probes/synthetic-east/deactivate") enabled = false;
+      else if (path === "/probes/synthetic-east/activate") enabled = true;
+      else if (path === "/probes/synthetic-east/validate") return answer(route, 200, {
+        id: "synthetic-east", validated: true, identity: "reported_match", credentialProof: "matched", sourceAttestation: false, capabilities: [],
+      });
       else return answer(route, 404, { error: "Not found" });
-      return answer(route, 200, { id: path.split("/")[2], suspended, drained });
+      return answer(route, 200, { id: path.split("/")[2], suspended, drained, enabled, changed: true });
     }
     if (path === "/workspaces") return answer(route, 200, { workspaces: [workspace()], next: null });
     if (path === "/workspaces/synthetic-org-1/suspension-history") return answer(route, 200, {
@@ -71,6 +77,9 @@ test("operator console is denied by default and confirms every synthetic state c
       region: "synthetic-east",
       events: [{ id: 19, region: "synthetic-east", action: "drain", operatorId: "synthetic-operator",
         note: "Synthetic maintenance", createdAt: "2026-01-01T00:00:00.000Z" }],
+      lifecycleEvents: posted.filter((p) => p.path === "/probes/synthetic-east/activate" || p.path === "/probes/synthetic-east/deactivate")
+        .map((p, i) => ({ id: i + 1, region: "synthetic-east", action: p.path.endsWith("/activate") ? "activate" : "deactivate",
+          operatorId: "synthetic-operator", createdAt: "2026-01-01T00:00:00.000Z" })).reverse(),
     });
     return answer(route, 404, { error: "Not found" });
   });
@@ -122,6 +131,20 @@ test("operator console is denied by default and confirms every synthetic state c
   await probes.getByRole("button", { name: "Confirm undrain" }).click();
   await expect(probes.getByRole("button", { name: "Drain", exact: true })).toBeVisible();
   expect(posted[3]?.path).toBe("/probes/synthetic-east/undrain");
+
+  await probes.getByRole("button", { name: "Validate", exact: true }).click();
+  await expect(page.getByRole("status")).toContainText("Credential-possession validation succeeded");
+  await probes.getByRole("button", { name: "Deactivate", exact: true }).click();
+  await probes.getByLabel(/Type region ID/).fill("synthetic-east");
+  await probes.getByRole("button", { name: "Confirm deactivation" }).click();
+  await expect(probes.getByRole("button", { name: "Activate", exact: true })).toBeVisible();
+  await probes.getByRole("button", { name: "Activate", exact: true }).click();
+  await probes.getByLabel(/Type region ID/).fill("synthetic-east");
+  await probes.getByRole("button", { name: "Confirm activation" }).click();
+  await expect(probes.getByRole("button", { name: "Deactivate", exact: true })).toBeVisible();
+  expect(posted.slice(4).map((p) => p.path)).toEqual([
+    "/probes/synthetic-east/validate", "/probes/synthetic-east/deactivate", "/probes/synthetic-east/activate",
+  ]);
   await checkA11y(page, testInfo, "operator-console-synthetic");
 
   // A successful search begun under the old session must not reopen an operator UI after

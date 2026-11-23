@@ -25,11 +25,12 @@ export function regionLocked(current: string[], id: string, max: number): boolea
 /** Current scheduler eligibility, not the historical success/failure result.
  * On downgrades the first configured regions are retained, while later regions
  * are skipped. A drained probe is never asked even if it remains configured. */
-export type RegionRunState = "active" | "plan-capped" | "drained" | "historical";
-export function regionRunState(configured: readonly string[], region: string, max: number | null, drained: ReadonlySet<string>): RegionRunState {
+export type RegionRunState = "active" | "plan-capped" | "drained" | "deactivated" | "historical";
+export function regionRunState(configured: readonly string[], region: string, max: number | null, drained: ReadonlySet<string>, deactivated: ReadonlySet<string> = new Set()): RegionRunState {
   const index = [...new Set(configured)].indexOf(region);
   if (index === -1) return "historical";
   if (max !== null && index >= Math.max(1, max)) return "plan-capped";
+  if (region !== AUTO && deactivated.has(region)) return "deactivated";
   if (region !== AUTO && drained.has(region)) return "drained";
   return "active";
 }

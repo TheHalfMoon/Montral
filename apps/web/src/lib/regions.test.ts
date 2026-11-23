@@ -28,6 +28,10 @@ describe("regionRunState", () => {
     expect(regionRunState(configured, "us-east", null, drained)).toBe("active");
     expect(regionRunState(configured, "auto", null, drained)).toBe("historical");
   });
+  it("marks an operator-deactivated region as not currently checked", () => {
+    expect(regionRunState(["us-east", "eu-central"], "eu-central", null, new Set(), new Set(["eu-central"]))).toBe("deactivated");
+    expect(regionRunState(["us-east"], "eu-central", null, new Set(), new Set(["eu-central"]))).toBe("historical");
+  });
   it("marks regions beyond a downgraded plan cap even when also drained", () => {
     const configured = ["us-east", "eu-central", "ap-southeast"];
     const drained = new Set(["eu-central", "ap-southeast"]);

@@ -951,6 +951,8 @@ export const probeRegionState = pgTable(
   "probe_region_state",
   {
     region: text("region").primaryKey(),
+    /** Persistently deactivated by an operator. Existing/configured probes remain enabled by default. */
+    enabled: boolean("enabled").notNull().default(true),
     drained: boolean("drained").notNull().default(false),
     drainedAt: timestamp("drained_at", { withTimezone: true }),
     drainedBy: text("drained_by"),
@@ -1017,6 +1019,24 @@ export const probeRegionValidationEvent = pgTable(
     check("probe_region_validation_event_region_chk", sql`char_length(${t.region}) between 1 and 24`),
     check("probe_region_validation_event_outcome_chk", sql`${t.outcome} in ('validated','identity_mismatch','credential_mismatch','unavailable')`),
     check("probe_region_validation_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
+  ],
+);
+
+/** Append-only, secret-free record of explicit activation/deactivation of a configured probe region. */
+export const probeRegionLifecycleEvent = pgTable(
+  "probe_region_lifecycle_event",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    region: text("region").notNull(),
+    action: text("action").notNull(),
+    operatorId: text("operator_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("probe_region_lifecycle_event_region_id_idx").on(t.region, t.id),
+    check("probe_region_lifecycle_event_region_chk", sql`char_length(${t.region}) between 1 and 24`),
+    check("probe_region_lifecycle_event_action_chk", sql`${t.action} in ('activate','deactivate')`),
+    check("probe_region_lifecycle_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
   ],
 );
 

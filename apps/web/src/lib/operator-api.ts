@@ -9,8 +9,8 @@ export type OperatorWorkspaceDetail = OperatorWorkspace & {
   usage: { credits: unknown; emails: unknown };
 };
 export type OperatorRegion = {
-  id: string; name: string; status: "up" | "unreachable" | "drained" | "unknown";
-  configured: boolean; drained: boolean; monitors: number;
+  id: string; name: string; status: "up" | "unreachable" | "drained" | "deactivated" | "unknown";
+  configured: boolean; enabled: boolean; drained: boolean; monitors: number;
   lastAnswerAt: string | null; lastUnreachableAt: string | null;
   lastUnreachableReason: string | null; drainedAt: string | null;
 };
@@ -21,6 +21,9 @@ export type OperatorSuspensionEvent = {
 export type OperatorProbeAuditEvent = {
   id: number; region: string; action: "drain" | "undrain";
   operatorId: string; note: string | null; createdAt: string;
+};
+export type OperatorProbeLifecycleEvent = {
+  id: number; region: string; action: "activate" | "deactivate"; operatorId: string; createdAt: string;
 };
 export type OperatorPlatformAuditEvent = {
   source: "workspace" | "probe"; id: string;
@@ -68,9 +71,11 @@ export function makeOperatorApi(fetcher: typeof fetch = fetch) {
       call<{ id: string; suspended: true }>(`/workspaces/${encodeURIComponent(id)}/suspend`, { reason, note }),
     unsuspend: (id: string) => call<{ id: string; suspended: false }>(`/workspaces/${encodeURIComponent(id)}/unsuspend`, {}),
     probes: () => call<{ auto: { monitors: number }; regions: OperatorRegion[] }>("/probes"),
-    probeAudit: (id: string) => call<{ region: string; events: OperatorProbeAuditEvent[] }>(`/probes/${encodeURIComponent(id)}/audit?limit=50`),
+    probeAudit: (id: string) => call<{ region: string; events: OperatorProbeAuditEvent[]; lifecycleEvents: OperatorProbeLifecycleEvent[] }>(`/probes/${encodeURIComponent(id)}/audit?limit=50`),
     drain: (id: string, note: string) => call<{ id: string; drained: true }>(`/probes/${encodeURIComponent(id)}/drain`, { note }),
     undrain: (id: string) => call<{ id: string; drained: false }>(`/probes/${encodeURIComponent(id)}/undrain`, {}),
+    deactivate: (id: string) => call<{ id: string; enabled: false; changed: boolean }>(`/probes/${encodeURIComponent(id)}/deactivate`, {}),
+    activate: (id: string) => call<{ id: string; enabled: true; changed: boolean }>(`/probes/${encodeURIComponent(id)}/activate`, {}),
   };
 }
 

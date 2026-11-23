@@ -19,7 +19,7 @@ import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
  * whether or not they are signed in, so the API tells a non-operator nothing about workspaces or operators.
  *
  * What an operator can do: list and look up workspaces (name, slug, size, owner email, plan and usage, suspension) and
- * suspend or unsuspend one; list probe regions with their health and drain or undrain one. Monitor targets, alert
+ * suspend or unsuspend one; list probe regions with their health and drain, undrain, deactivate or reactivate one. Monitor targets, alert
  * channels, incidents and member lists are not exposed here.
  */
 
@@ -154,12 +154,13 @@ export const PROBE_DRAIN_NOTE_MAX = 200;
 /** One region's line in the operator view: configuration, drain flag, last-seen health and how many monitors use it. */
 export function probeRegionView(id: string, name: string | null, state: ProbeRegionState | undefined, monitors: number, now = Date.now()) {
   const iso = (d: Date | null | undefined) => (d ? new Date(d).toISOString() : null);
-  const status = state?.drained ? "drained"
+  const status = state?.enabled === false ? "deactivated"
+    : state?.drained ? "drained"
     : state?.unreachableSince ? "unreachable"
     : state?.lastAnswerAt && now - new Date(state.lastAnswerAt).getTime() <= PROBE_SILENT_AFTER_MS ? "up"
     : "unknown";
   return {
-    id, name: name ?? id, configured: name !== null, status, monitors,
+    id, name: name ?? id, configured: name !== null, status, monitors, enabled: state?.enabled ?? true,
     drained: state?.drained ?? false, drainedAt: iso(state?.drainedAt), drainedBy: state?.drainedBy ?? null, drainNote: state?.drainNote ?? null,
     lastUndrainedAt: iso(state?.lastUndrainedAt), lastUndrainedBy: state?.lastUndrainedBy ?? null,
     lastAnswerAt: iso(state?.lastAnswerAt), lastUnreachableAt: iso(state?.lastUnreachableAt),
@@ -167,8 +168,28 @@ export function probeRegionView(id: string, name: string | null, state: ProbeReg
   };
 }
 
-function logProbeAction(operatorId: string, action: "drain" | "undrain", region: string) {
+function logProbeAction(operatorId: string, action: "drain" | "undrain" | "activate" | "deactivate", region: string) {
   console.log(`operator action: ${action} region=${region} operator=${operatorId}`);
+}
+
+async function changeProbeEnabled(c: Context<AppEnv>, enabled: boolean) {
+  const id = c.req.param("id");
+  if (!id || !REGION_ID.test(id) || id === AUTO || !isRegionConfigured(id)) return c.json({ error: "Not found" }, 404);
+  const repo = c.get("repo");
+  if (!repo.setProbeRegionEnabled) return c.json({ error: "Probe lifecycle is not available on this backend" }, 501);
+  const operatorId = c.get("operatorId")!;
+  if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+  const body = await strictJsonObjectBody(c.req.raw, 2048);
+  if (Object.keys(body).length) return c.json({ error: "Lifecycle actions accept an empty object only" }, 400);
+  let result: Awaited<ReturnType<NonNullable<typeof repo.setProbeRegionEnabled>>>;
+  try { result = await repo.setProbeRegionEnabled(id, enabled, operatorId); }
+  catch { return c.json({ error: "Probe lifecycle action could not be recorded" }, 503); }
+  if (result.validationRequired) return c.json({ error: "A successful credential-possession validation from the last five minutes is required", code: "probe_activation_requires_recent_validation" }, 409);
+  if (result.changed) {
+    resetProbeRegionCache();
+    logProbeAction(operatorId, enabled ? "activate" : "deactivate", id);
+  }
+  return c.json({ id, enabled: result.enabled, changed: result.changed });
 }
 
 type Query = <T>(sql: string, params?: unknown[]) => Promise<T[]>;
@@ -408,6 +429,8 @@ export const operatorApi = new Hono<AppEnv>()
       ],
     });
   })
+  .post("/probes/:id/deactivate", (c) => changeProbeEnabled(c, false))
+  .post("/probes/:id/activate", (c) => changeProbeEnabled(c, true))
   // Validate an already configured endpoint's reported region and proof of its existing signing credential.
   .post("/probes/:id/validate", async (c) => {
     const id = c.req.param("id");
@@ -442,16 +465,17 @@ export const operatorApi = new Hono<AppEnv>()
     const id = c.req.param("id");
     if (!REGION_ID.test(id) || id === AUTO) return c.json({ error: "Not found" }, 404);
     const repo = c.get("repo");
-    if (!repo.probeRegionDrainEvents || !repo.probeRegionValidationEvents) return c.json({ error: "Probe region audit is not available on this backend" }, 501);
+    if (!repo.probeRegionDrainEvents || !repo.probeRegionValidationEvents || !repo.probeRegionLifecycleEvents) return c.json({ error: "Probe region audit is not available on this backend" }, 501);
     const limit = Number(c.req.query("limit") ?? 50);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
-    const [events, validationEvents] = await Promise.all([
-      repo.probeRegionDrainEvents(id, limit), repo.probeRegionValidationEvents(id, limit),
+    const [events, validationEvents, lifecycleEvents] = await Promise.all([
+      repo.probeRegionDrainEvents(id, limit), repo.probeRegionValidationEvents(id, limit), repo.probeRegionLifecycleEvents(id, limit),
     ]);
     return c.json({
       region: id,
       events: events.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })),
       validationEvents: validationEvents.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })),
+      lifecycleEvents: lifecycleEvents.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })),
     });
   })
   // A drained region is not asked by the scheduler (within DRAIN_TTL_MS on every server); monitors that list it

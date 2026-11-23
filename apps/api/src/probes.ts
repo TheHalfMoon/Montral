@@ -240,6 +240,7 @@ export function resetProbeCapabilities() { capable.clear(); }
 
 export const NOT_CONFIGURED = "Region is not configured on this deployment";
 export const DRAINED = "Region is drained by the operator";
+export const DEACTIVATED = "Region is deactivated by the operator";
 
 export async function runInRegion(region: string, input: CheckInput, repo?: Repo): Promise<RegionRun> {
   if (region === AUTO) {
@@ -250,6 +251,7 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
   if (!probe) return { region, unreachable: NOT_CONFIGURED };
   // a drained region is not asked at all: its monitors confirm from their other regions (see `measure`)
   if ((await drainedRegions(repo)).has(region)) return { region, unreachable: DRAINED };
+  if ((await deactivatedRegions(repo)).has(region)) return { region, unreachable: DEACTIVATED };
   const run = await askProbe(probe, input, regionSecrets.get(region) ?? secret);
   // capability gaps say nothing about the probe's health; anything else is a sign of life, or of trouble
   if ("outcome" in run) noteHealth(repo, region, true);
@@ -259,8 +261,30 @@ export async function runInRegion(region: string, input: CheckInput, repo?: Repo
 
 /** How long the drained set read from the database is reused by this process. */
 const DRAIN_TTL_MS = 15_000;
-let drainCache: { at: number; drained: Set<string> } | null = null;
-let drainLoad: Promise<Set<string>> | null = null;
+type RegionStateSnapshot = { at: number; drained: Set<string>; deactivated: Set<string> };
+let regionStateCache: RegionStateSnapshot | null = null;
+let regionStateLoad: Promise<RegionStateSnapshot | null> | null = null;
+let lastRegionStateWarningAt = 0;
+
+async function probeRegionStateSnapshot(repo?: Repo): Promise<RegionStateSnapshot | null> {
+  if (!repo?.probeRegionStates) return null;
+  if (regionStateCache && Date.now() - regionStateCache.at < DRAIN_TTL_MS) return regionStateCache;
+  regionStateLoad ??= repo.probeRegionStates().then((states) => {
+    regionStateCache = {
+      at: Date.now(),
+      drained: new Set(states.filter((st) => st.drained).map((st) => st.region)),
+      deactivated: new Set(states.filter((st) => st.enabled === false).map((st) => st.region)),
+    };
+    return regionStateCache;
+  }, () => {
+    if (Date.now() - lastRegionStateWarningAt >= 60_000) {
+      lastRegionStateWarningAt = Date.now();
+      console.warn("probe region state unavailable");
+    }
+    return null;
+  }).finally(() => { regionStateLoad = null; });
+  return regionStateLoad;
+}
 
 /**
  * The regions an operator drained (repo `probeRegionStates`), cached briefly and loaded once for concurrent checks. If
@@ -269,15 +293,21 @@ let drainLoad: Promise<Set<string>> | null = null;
  */
 export async function drainedRegions(repo?: Repo): Promise<Set<string>> {
   if (!repo?.probeRegionStates) return new Set();
-  if (drainCache && Date.now() - drainCache.at < DRAIN_TTL_MS) return drainCache.drained;
-  drainLoad ??= repo.probeRegionStates().then(
-    (states) => (drainCache = { at: Date.now(), drained: new Set(states.filter((st) => st.drained).map((st) => st.region)) }).drained,
-    () => {
-      console.warn("probe region state unavailable; last known drains kept");
-      return drainCache?.drained ?? new Set<string>();
-    },
-  ).finally(() => { drainLoad = null; });
-  return drainLoad;
+  const snapshot = await probeRegionStateSnapshot(repo);
+  if (snapshot) return snapshot.drained;
+  // Preserve the last known operator drains if the DB read fails.
+  return regionStateCache?.drained ?? new Set();
+}
+
+/**
+ * Persistent operator deactivation is separate from a temporary drain. A failed state read fails closed for configured
+ * remote probes; after a successful read, that state is cached for the same short cross-request window as drains.
+ */
+export async function deactivatedRegions(repo?: Repo): Promise<Set<string>> {
+  if (!repo?.probeRegionStates) return new Set();
+  const snapshot = await probeRegionStateSnapshot(repo);
+  // If the lifecycle state cannot be read, fail closed for all configured remote endpoints.
+  return snapshot?.deactivated ?? new Set(availableRegions().filter((r) => r.id !== AUTO).map((r) => r.id));
 }
 
 /**
@@ -303,7 +333,8 @@ function noteHealth(repo: Repo | undefined, region: string, answered: boolean, r
 
 /** Forgets cached drains and health-write throttling (tests, and an operator drain in this process). */
 export function resetProbeRegionCache() {
-  drainCache = null;
+  regionStateCache = null;
+  lastRegionStateWarningAt = 0;
   healthWritten.clear();
 }
 

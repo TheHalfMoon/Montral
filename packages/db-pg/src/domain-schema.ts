@@ -1011,6 +1011,7 @@ export const probeRegionValidationEvent = pgTable(
     id: bigserial("id", { mode: "number" }).primaryKey(),
     region: text("region").notNull(),
     outcome: text("outcome").notNull(),
+    configurationFingerprint: text("configuration_fingerprint"),
     operatorId: text("operator_id").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -1018,6 +1019,7 @@ export const probeRegionValidationEvent = pgTable(
     index("probe_region_validation_event_region_id_idx").on(t.region, t.id),
     check("probe_region_validation_event_region_chk", sql`char_length(${t.region}) between 1 and 24`),
     check("probe_region_validation_event_outcome_chk", sql`${t.outcome} in ('validated','identity_mismatch','credential_mismatch','unavailable')`),
+    check("probe_region_validation_event_fingerprint_chk", sql`${t.configurationFingerprint} is null or ${t.configurationFingerprint} ~ '^[0-9a-f]{64}$'`),
     check("probe_region_validation_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
   ],
 );

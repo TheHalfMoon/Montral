@@ -456,6 +456,13 @@
       "when": 1795409210184,
       "tag": "0064_pale_devos",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1795413220533,
+      "tag": "0065_lucky_spectrum",
+      "breakpoints": true
     }
   ]
 }

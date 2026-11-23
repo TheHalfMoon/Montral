@@ -6,7 +6,7 @@ import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
 import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
-import { availableRegions, isRegionConfigured, probeCredentialMode, resetProbeRegionCache, validateProbeRegion } from "./probes";
+import { availableRegions, isRegionConfigured, probeCredentialMode, probeConfigurationFingerprint, resetProbeRegionCache, validateProbeRegion } from "./probes";
 import { AUTO, REGION_ID } from "./regions";
 import type { ProbeRegionState } from "@montral/repo";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
@@ -182,7 +182,11 @@ async function changeProbeEnabled(c: Context<AppEnv>, enabled: boolean) {
   const body = await strictJsonObjectBody(c.req.raw, 2048);
   if (Object.keys(body).length) return c.json({ error: "Lifecycle actions accept an empty object only" }, 400);
   let result: Awaited<ReturnType<NonNullable<typeof repo.setProbeRegionEnabled>>>;
-  try { result = await repo.setProbeRegionEnabled(id, enabled, operatorId); }
+  let configurationFingerprint: string | null = null;
+  try {
+    if (enabled) configurationFingerprint = await probeConfigurationFingerprint(id, c.env.BETTER_AUTH_SECRET);
+    result = await repo.setProbeRegionEnabled(id, enabled, operatorId, configurationFingerprint);
+  }
   catch { return c.json({ error: "Probe lifecycle action could not be recorded" }, 503); }
   if (result.validationRequired) return c.json({ error: "A successful credential-possession validation from the last five minutes is required", code: "probe_activation_requires_recent_validation" }, 409);
   if (result.changed) {
@@ -441,9 +445,9 @@ export const operatorApi = new Hono<AppEnv>()
     if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
     const body = await strictJsonObjectBody(c.req.raw, 2048);
     if (Object.keys(body).length) return c.json({ error: "Validation accepts an empty object only" }, 400);
-    const result = await validateProbeRegion(id);
+    const result = await validateProbeRegion(id, c.env.BETTER_AUTH_SECRET);
     try {
-      await repo.recordProbeRegionValidation(id, result.status, operatorId);
+      await repo.recordProbeRegionValidation(id, result.status, operatorId, result.configurationFingerprint);
     } catch {
       // Do not report a validation outcome as complete if its operator audit could not be persisted.
       return c.json({ error: "Probe validation result could not be recorded" }, 503);

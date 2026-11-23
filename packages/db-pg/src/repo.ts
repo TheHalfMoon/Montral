@@ -924,7 +924,7 @@ export function createRepo(db: Db): Repo {
         }
       });
     },
-    async setProbeRegionEnabled(region, enabled, operatorId) {
+    async setProbeRegionEnabled(region, enabled, operatorId, configurationFingerprint) {
       const t = schema.probeRegionState;
       return db.transaction(async (tx) => {
         // Serialize first-time state creation and transitions for a region, even when no health row exists yet.
@@ -936,11 +936,13 @@ export function createRepo(db: Db): Repo {
         if (enabled) {
           const [lastValidation] = await tx.select({
             outcome: schema.probeRegionValidationEvent.outcome,
+            configurationFingerprint: schema.probeRegionValidationEvent.configurationFingerprint,
             fresh: sql<boolean>`${schema.probeRegionValidationEvent.createdAt} >= now() - interval '5 minutes'`,
           })
             .from(schema.probeRegionValidationEvent).where(eq(schema.probeRegionValidationEvent.region, region))
             .orderBy(desc(schema.probeRegionValidationEvent.id)).limit(1);
-          if (!lastValidation || lastValidation.outcome !== "validated" || !lastValidation.fresh) {
+          if (!lastValidation || lastValidation.outcome !== "validated" || !lastValidation.fresh
+            || !configurationFingerprint || lastValidation.configurationFingerprint !== configurationFingerprint) {
             return { changed: false, enabled: false, validationRequired: true };
           }
         }
@@ -958,10 +960,10 @@ export function createRepo(db: Db): Repo {
         operatorId: r.operatorId, note: r.note, createdAt: r.createdAt,
       }));
     },
-    async recordProbeRegionValidation(region, outcome, operatorId) {
+    async recordProbeRegionValidation(region, outcome, operatorId, configurationFingerprint) {
       await db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${region}, 0))`);
-        await tx.insert(schema.probeRegionValidationEvent).values({ region, outcome, operatorId });
+        await tx.insert(schema.probeRegionValidationEvent).values({ region, outcome, operatorId, configurationFingerprint });
       });
     },
     async probeRegionValidationEvents(region, limit) {

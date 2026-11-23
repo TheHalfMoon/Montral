@@ -102,21 +102,41 @@ export function probeCredentialMode(id: string): "dedicated" | "shared" | "uncon
   return regionSecrets.has(id) ? "dedicated" : "shared";
 }
 
-export type ProbeRegionValidation =
-  | { status: "validated"; capabilities: string[] }
+type ProbeRegionValidationOutcome =
+  ({ status: "validated"; capabilities: string[] }
   | { status: "identity_mismatch" }
   | { status: "credential_mismatch" }
-  | { status: "unavailable" };
+  | { status: "unavailable" });
+export type ProbeRegionValidation = ProbeRegionValidationOutcome & { configurationFingerprint: string | null };
+
+/**
+ * Bind recent activation proof to the exact configured endpoint and probe key without persisting either value.
+ * HMAC uses BETTER_AUTH_SECRET so the stored fingerprint cannot be used for offline guesses at the probe key.
+ */
+async function fingerprintProbeConfiguration(id: string, probe: ProbeRegion | undefined, signingSecret: string, applicationSecret: string): Promise<string | null> {
+  if (!probe || !signingSecret || applicationSecret.length < 16) return null;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey("raw", encoder.encode(applicationSecret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const data = encoder.encode(`montral/probe-configuration/v1\0${JSON.stringify([id, probe.url, signingSecret])}`);
+  const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, data));
+  return [...mac].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export async function probeConfigurationFingerprint(id: string, applicationSecret: string): Promise<string | null> {
+  return fingerprintProbeConfiguration(id, regions.get(id), regionSecrets.get(id) ?? secret, applicationSecret);
+}
 
 /**
  * Require a fresh HMAC proof from the configured probe using the existing configured
  * key. No key or monitor target is sent. This proves key possession at the configured endpoint, not its source or
  * deployment; a shared key also cannot distinguish regions that use that same key.
  */
-export async function validateProbeRegion(id: string): Promise<ProbeRegionValidation> {
+export async function validateProbeRegion(id: string, applicationSecret = ""): Promise<ProbeRegionValidation> {
   const probe = regions.get(id);
   const signingSecret = regionSecrets.get(id) ?? secret;
-  if (!probe || !signingSecret) return { status: "unavailable" };
+  const configurationFingerprint = await fingerprintProbeConfiguration(id, probe, signingSecret, applicationSecret);
+  const result = (value: ProbeRegionValidationOutcome): ProbeRegionValidation => ({ ...value, configurationFingerprint });
+  if (!probe || !signingSecret) return result({ status: "unavailable" });
   const signal = AbortSignal.timeout(5_000);
   try {
     // Challenge the deployment-configured endpoint using the existing HMAC key; unlike its public health document,
@@ -139,20 +159,20 @@ export async function validateProbeRegion(id: string): Promise<ProbeRegionValida
     });
     if (!proofResponse.ok) {
       void proofResponse.body?.cancel().catch(() => {});
-      return { status: "unavailable" };
+      return result({ status: "unavailable" });
     }
     const rawProof = await readCapped(proofResponse, 4_096, signal);
     let proof: unknown;
-    try { proof = JSON.parse(rawProof); } catch { return { status: "unavailable" }; }
-    if (!proof || typeof proof !== "object" || Array.isArray(proof)) return { status: "unavailable" };
+    try { proof = JSON.parse(rawProof); } catch { return result({ status: "unavailable" }); }
+    if (!proof || typeof proof !== "object" || Array.isArray(proof)) return result({ status: "unavailable" });
     const response = proof as { ok?: unknown; region?: unknown; challenge?: unknown; capabilities?: unknown; signature?: unknown };
-    if (response.ok !== true) return { status: "unavailable" };
+    if (response.ok !== true) return result({ status: "unavailable" });
     if ((response.region !== null && typeof response.region !== "string")
       || typeof response.challenge !== "string" || !/^[0-9a-f]{64}$/.test(response.challenge)
       || !Array.isArray(response.capabilities) || response.capabilities.length > 16
       || response.capabilities.some((item) => typeof item !== "string" || item.length > 80)
       || typeof response.signature !== "string" || !/^[0-9a-f]{64}$/i.test(response.signature)) {
-      return { status: "credential_mismatch" };
+      return result({ status: "credential_mismatch" });
     }
     const signedRegion = response.region as string | null;
     const signedChallenge = response.challenge;
@@ -160,14 +180,14 @@ export async function validateProbeRegion(id: string): Promise<ProbeRegionValida
     if (!await verifyProbe(signingSecret, {
       timestamp: String(timestamp), signature: response.signature,
       body: probeCredentialProofBody(signedRegion, signedChallenge, signedCapabilities),
-    })) return { status: "credential_mismatch" };
-    if (signedRegion !== id) return { status: "identity_mismatch" };
-    if (signedChallenge !== challenge) return { status: "credential_mismatch" };
+    })) return result({ status: "credential_mismatch" });
+    if (signedRegion !== id) return result({ status: "identity_mismatch" });
+    if (signedChallenge !== challenge) return result({ status: "credential_mismatch" });
     const knownCapabilities = [HTTP_REQUEST_CAPABILITY, JSON_ASSERTION_CAPABILITY];
     const capabilities = [...new Set(signedCapabilities.filter((item) => knownCapabilities.includes(item as typeof knownCapabilities[number])))];
-    return { status: "validated", capabilities };
+    return result({ status: "validated", capabilities });
   } catch {
-    return { status: "unavailable" };
+    return result({ status: "unavailable" });
   }
 }
 

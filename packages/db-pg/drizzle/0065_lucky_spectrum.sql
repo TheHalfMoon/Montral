@@ -1,0 +1,2 @@
+ALTER TABLE "probe_region_validation_event" ADD COLUMN "configuration_fingerprint" text;--> statement-breakpoint
+ALTER TABLE "probe_region_validation_event" ADD CONSTRAINT "probe_region_validation_event_fingerprint_chk" CHECK ("probe_region_validation_event"."configuration_fingerprint" is null or "probe_region_validation_event"."configuration_fingerprint" ~ '^[0-9a-f]{64}$');

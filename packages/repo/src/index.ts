@@ -790,11 +790,11 @@ export interface Repo {
   /** Drain or undrain a region: a drained region is not asked, and its monitors confirm from elsewhere. */
   setProbeRegionDrain?(region: string, drain: { drained: boolean; by: string | null; note: string | null }): Promise<void>;
   /** Persistently deactivate/activate a configured probe; activation requires successful proof within five minutes. */
-  setProbeRegionEnabled?(region: string, enabled: boolean, operatorId: string): Promise<{ changed: boolean; enabled: boolean; validationRequired: boolean }>;
+  setProbeRegionEnabled?(region: string, enabled: boolean, operatorId: string, configurationFingerprint: string | null): Promise<{ changed: boolean; enabled: boolean; validationRequired: boolean }>;
   /** Latest operator actions for a probe, newest first; never exposed to workspace members. */
   probeRegionDrainEvents?(region: string, limit: number): Promise<ProbeRegionDrainEvent[]>;
   /** Persist the fixed outcome class of an operator validation attempt; no probe response or credential material. */
-  recordProbeRegionValidation?(region: string, outcome: ProbeRegionValidationEvent["outcome"], operatorId: string): Promise<void>;
+  recordProbeRegionValidation?(region: string, outcome: ProbeRegionValidationEvent["outcome"], operatorId: string, configurationFingerprint: string | null): Promise<void>;
   /** Latest secret-free operator validation outcomes, newest first. */
   probeRegionValidationEvents?(region: string, limit: number): Promise<ProbeRegionValidationEvent[]>;
   /** Latest lifecycle actions for a probe, newest first; never exposed to workspace members. */

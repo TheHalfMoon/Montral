@@ -10,7 +10,7 @@ vi.mock("./checker", async (importOriginal) => ({
   runCheck: async () => { local.calls++; return local.outcome; },
 }));
 
-const { DRAINED, HEALTH_FLIP_MS, HEALTH_WRITE_MS, combine, confirmLocally, configureProbes, drainedRegions, measure, needsConfirmation, requiredFailures, resetProbeRegionCache, runInRegion } = await import("./probes");
+const { DEACTIVATED, DRAINED, HEALTH_FLIP_MS, HEALTH_WRITE_MS, combine, confirmLocally, configureProbes, deactivatedRegions, drainedRegions, measure, needsConfirmation, requiredFailures, resetProbeRegionCache, runInRegion } = await import("./probes");
 const { capRegions, planRegionCap, withinPlanRegions } = await import("./regions");
 const { notePlanDeferral, withinCredits, checkMany, unusedRegionCredits } = await import("./scheduler");
 const { BROWSER_UNCHECKED_AFTER } = await import("./browser-check");
@@ -160,6 +160,25 @@ describe("measure with unreachable and drained probes", () => {
     const r = await measure(monitor({ regions: ["us-east"] }), repo);
     expect(asked).toEqual([]);
     expect(r.results.map((x) => x.region)).toEqual(["auto"]);
+  });
+
+  it("does not ask a persistently deactivated probe and confirms its missing vote locally", async () => {
+    const { repo } = stateRepo([{ region: "eu-central", enabled: false }]);
+    answers["eu-central"] = { ok: false, statusCode: 503 };
+    expect(await runInRegion("eu-central", monitor(), repo)).toEqual({ region: "eu-central", unreachable: DEACTIVATED });
+    const r = await measure(monitor({ regions: ["eu-central"] }), repo);
+    expect(asked).toEqual([]);
+    expect(r.results.map((x) => x.region)).toContain("auto");
+    expect(r.results.map((x) => x.region)).not.toContain("eu-central");
+  });
+
+  it("shares one lifecycle snapshot across drain and deactivate checks and fails closed on a state-read error", async () => {
+    const { repo, calls } = stateRepo([{ region: "eu-central", enabled: false }]);
+    await Promise.all([drainedRegions(repo), deactivatedRegions(repo)]);
+    expect(calls.probeRegionStates).toHaveBeenCalledTimes(1);
+    resetProbeRegionCache();
+    calls.probeRegionStates.mockRejectedValueOnce(new Error("db down"));
+    expect([...(await deactivatedRegions(repo))].sort()).toEqual(Object.keys(PROBES).sort());
   });
 
   it("reads the drained set once for concurrent checks and keeps the last one if the database fails", async () => {
@@ -353,11 +372,11 @@ describe("scheduled region credit reconciliation", () => {
   };
 
   const meter = () => {
-    const records: { kind: "reserve" | "settle"; n: number; at?: Date; operationKey?: string; results?: { region: string; ok: boolean }[] }[] = [];
+    const records: { kind: "reserve" | "settle"; n: number; at?: Date; operationKey?: string; regions?: string[]; results?: { region: string; ok: boolean }[] }[] = [];
     const entitlements = {
       failClosed: true, plan: async () => ({ maxRegions: 3 }),
       reserveRegionUsage: async (_ws: string, operations: { operationKey: string; monitorId: string; regions: string[] }[], at?: Date) => {
-        for (const op of operations) records.push({ kind: "reserve", n: op.regions.length, at, operationKey: op.operationKey });
+        for (const op of operations) records.push({ kind: "reserve", n: op.regions.length, at, operationKey: op.operationKey, regions: op.regions });
         return operations.map((op) => ({ operationKey: op.operationKey, granted: true, state: "reserved" as const }));
       },
       settleRegionUsage: async (_ws: string, operationKey: string, results: { region: string; ok: boolean }[], at?: Date) => {
@@ -376,6 +395,29 @@ describe("scheduled region credit reconciliation", () => {
     expect(records.map(({ kind, n }) => [kind, n])).toEqual([["reserve", 3], ["settle", 1]]);
     expect(records[1].at).toBe(records[0].at);
     expect(records[1].results).toEqual([{ region: "us-east", ok: true, statusCode: 200, latencyMs: undefined }]);
+  });
+
+  it("does not reserve credits or contact a deactivated region", async () => {
+    answers["us-east"] = { ok: true, statusCode: 200 };
+    answers["ap-southeast"] = { ok: true, statusCode: 200 };
+    const { entitlements, records } = meter();
+    await checkMany(repoFor([{ region: "eu-central", enabled: false }]), [due()], entitlements);
+    expect(asked).toEqual(["us-east", "ap-southeast"]);
+    expect(records[0].regions).toEqual(["us-east", "ap-southeast"]);
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["reserve", 2], ["settle", 2]]);
+  });
+
+  it("uses one local check when every remote region is deactivated", async () => {
+    const { entitlements, records } = meter();
+    await checkMany(repoFor([
+      { region: "us-east", enabled: false },
+      { region: "eu-central", enabled: false },
+      { region: "ap-southeast", enabled: false },
+    ]), [due()], entitlements);
+    expect(asked).toEqual([]);
+    expect(local.calls).toBe(1);
+    expect(records[0].regions).toEqual(["auto"]);
+    expect(records.map(({ kind, n }) => [kind, n])).toEqual([["reserve", 1], ["settle", 1]]);
   });
 
   it("charges one local fallback when all three remote regions fail", async () => {

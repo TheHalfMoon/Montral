@@ -26,6 +26,7 @@ export default function MonitorDetail({ id }: { id: string }) {
   const [quota, setQuota] = useState<QuotaRefusal | null>(null);
   const [names, setNames] = useState<Record<string, string>>({});
   const [drainedIds, setDrainedIds] = useState<string[]>([]);
+  const [deactivatedIds, setDeactivatedIds] = useState<string[]>([]);
   const [maxPerMonitor, setMaxPerMonitor] = useState<number | null>(null);
   // the answer to the last single-region request, shown under the regions table
   const [spot, setSpot] = useState<{ region: string; run: NonNullable<SpotCheck["result"]> } | null>(null);
@@ -49,6 +50,7 @@ export default function MonitorDetail({ id }: { id: string }) {
     const loadRegions = () => api.regions().then((r) => {
       setNames(Object.fromEntries(r.regions.map((x) => [x.id, x.name])));
       setDrainedIds(r.regions.filter((x) => x.drained).map((x) => x.id));
+      setDeactivatedIds(r.regions.filter((x) => x.enabled === false).map((x) => x.id));
       setMaxPerMonitor(r.maxPerMonitor);
     }).catch(() => {});
     void loadRegions();
@@ -58,6 +60,7 @@ export default function MonitorDetail({ id }: { id: string }) {
 
   const configured = m.regions?.length ? m.regions : ["auto"];
   const drained = new Set(drainedIds);
+  const deactivated = new Set(deactivatedIds);
   // a multi-region check records one row per region at the same moment: the chart and the table treat those as one run
   const runs = groupRuns(m.results, configured);
   const chrono = [...runs].reverse();
@@ -176,14 +179,16 @@ export default function MonitorDetail({ id }: { id: string }) {
             <div className="card cc">
               <div className="cc-h"><h3>{t("Regions")}</h3><span className="faint" style={{ fontSize: 13 }}>{t("last 24 h")}</span></div>
               {stats.map((s) => {
-                const mode = regionRunState(configured, s.region, maxPerMonitor, drained);
-                const note = mode === "drained" ? t("Region is drained and not being checked")
+                const mode = regionRunState(configured, s.region, maxPerMonitor, drained, deactivated);
+                const note = mode === "deactivated" ? t("Region is deactivated by an operator and is not being checked")
+                  : mode === "drained" ? t("Region is drained and not being checked")
                   : mode === "plan-capped" ? t("Region is not checked under the current plan") : null;
                 return <div className="rr reg" key={s.region} title={note ?? s.last?.error ?? undefined}>
                   <i className={`dot ${mode === "active" && s.last ? (s.last.ok ? "up" : "down") : "n"}`}
                     aria-label={note ?? (s.last ? (s.last.ok ? t("OK") : t("Failed")) : undefined)} />
                   <span className="reg-n">{regionName(s.region)}
                     {mode === "drained" && <small className="faint"> · {t("Drained")}</small>}
+                    {mode === "deactivated" && <small className="faint"> · {t("Deactivated")}</small>}
                     {mode === "plan-capped" && <small className="faint"> · {t("Plan limit")}</small>}
                   </span>
                   <span className="mono reg-v">

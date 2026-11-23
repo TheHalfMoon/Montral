@@ -430,6 +430,70 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(asked.sort()).toEqual(["e2e-north", "e2e-west"]);
   });
 
+  it("requires recent credential proof to reactivate a probe and commits lifecycle audit with concurrent-safe state changes", async () => {
+    const { operator, send, verifiedCookie } = await operatorSessions();
+    const op = async (method: string, path: string, body?: unknown) => {
+      const r = await send(`/api/operator${path}`, { method, headers: { cookie: verifiedCookie, origin: ORIGIN, "content-type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+      const text = await r.text();
+      let responseBody: unknown = null;
+      try { responseBody = JSON.parse(text); } catch { /* not JSON */ }
+      return { status: r.status, body: responseBody as any, text };
+    };
+    const region = "e2e-central";
+    const repo = db!.repo;
+    await db!.query("UPDATE probe_region_state SET enabled=true WHERE region=$1", [region]);
+    // A failed proof after an earlier successful one must prevent activation.
+    await repo.recordProbeRegionValidation!(region, "unavailable", operator.userId);
+    const [baseline] = await db!.query<{ id: number }>("SELECT coalesce(max(id),0)::int AS id FROM probe_region_lifecycle_event WHERE region=$1", [region]);
+    const deniedCustomer = await account();
+    const denied = await send(`/api/operator/probes/${region}/deactivate`, { method: "POST", headers: { cookie: deniedCustomer.cookie, origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
+    expect(denied.status).toBe(403);
+
+    const deactivated = await op("POST", `/probes/${region}/deactivate`, {});
+    expect(deactivated).toMatchObject({ status: 200, body: { id: region, enabled: false, changed: true } });
+    expect((await op("POST", `/probes/${region}/activate`, {})).body).toMatchObject({ code: "probe_activation_requires_recent_validation" });
+    expect((await db!.query<{ enabled: boolean }>("SELECT enabled FROM probe_region_state WHERE region=$1", [region]))[0].enabled).toBe(false);
+
+    const { call } = await account();
+    const m = await monitor(call, [region]);
+    reset();
+    const workspace = (await db!.query<{ organization_id: string }>("SELECT organization_id FROM monitor WHERE id=$1::uuid", [m.id]))[0].organization_id;
+    const creditsBeforeSpotCheck = spent[workspace] ?? 0;
+    const refusedSpotCheck = await call("POST", `/monitors/${m.id}/check`, { region });
+    expect(refusedSpotCheck.status).toBe(502);
+    expect(refusedSpotCheck.body).toMatchObject({ code: "probe_unreachable", region, error: "Region is deactivated by the operator" });
+    expect(asked).toEqual([]);
+    expect(spent[workspace] ?? 0).toBe(creditsBeforeSpotCheck);
+
+    try {
+      proofAnswers[region] = {};
+      expect((await op("POST", `/probes/${region}/validate`, {})).body).toMatchObject({ validated: true, credentialProof: "matched", sourceAttestation: false });
+      expect(await op("POST", `/probes/${region}/activate`, {})).toMatchObject({ status: 200, body: { id: region, enabled: true, changed: true } });
+
+      const concurrent = await Promise.all([
+        repo.setProbeRegionEnabled!(region, false, operator.userId),
+        repo.setProbeRegionEnabled!(region, false, operator.userId),
+      ]);
+      expect(concurrent.filter((r) => r.changed)).toHaveLength(1);
+      expect(concurrent.every((r) => !r.enabled)).toBe(true);
+      expect((await db!.query<{ enabled: boolean }>("SELECT enabled FROM probe_region_state WHERE region=$1", [region]))[0].enabled).toBe(false);
+
+      const audit = await op("GET", `/probes/${region}/audit?limit=10`);
+      const lifecycle = audit.body.lifecycleEvents.filter((event: { id: number }) => event.id > baseline.id);
+      expect(lifecycle.map((event: { action: string }) => event.action)).toEqual(["deactivate", "activate", "deactivate"]);
+      expect(lifecycle.map((event: { operatorId: string }) => event.operatorId)).toEqual([operator.userId, operator.userId, operator.userId]);
+      expect(audit.text).not.toMatch(/probe-regions-e2e-(?:secret|north-dedicated-secret)|probe\.test|challenge|signature/i);
+      await expect(db!.query("UPDATE probe_region_lifecycle_event SET action='activate' WHERE id=$1", [lifecycle[0].id])).rejects.toThrow();
+      await expect(db!.query("DELETE FROM probe_region_lifecycle_event WHERE id=$1", [lifecycle[0].id])).rejects.toThrow();
+      await expect(db!.query("TRUNCATE probe_region_lifecycle_event")).rejects.toThrow();
+    } finally {
+      delete proofAnswers[region];
+      await repo.recordProbeRegionValidation!(region, "validated", operator.userId);
+      await repo.setProbeRegionEnabled!(region, true, operator.userId);
+      resetProbeRegionCache();
+    }
+  });
+
   it("refuses drain and undrain to everyone but a verified operator, and refuses malformed bodies, without changing state", async () => {
     const { operator, send, signUpCookie, unverifiedCookie, verifiedCookie } = await operatorSessions();
     const customer = await account();

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { OperatorPlatformAudit } from "./OperatorPlatformAudit";
 import {
   operatorApi, operatorActionConfirmed, OperatorRequestError,
-  type OperatorRegion, type OperatorProbeAuditEvent, type OperatorSuspensionEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
+  type OperatorRegion, type OperatorProbeAuditEvent, type OperatorProbeLifecycleEvent, type OperatorSuspensionEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
 } from "../lib/operator-api";
 
 const REASONS: SuspensionReason[] = ["operator", "abuse", "payment", "legal"];
@@ -62,11 +62,13 @@ export default function OperatorConsole() {
   const [confirmation, setConfirmation] = useState("");
   const [regions, setRegions] = useState<OperatorRegion[]>([]);
   const [probeEditing, setProbeEditing] = useState<string | null>(null);
+  const [probeLifecycleEditing, setProbeLifecycleEditing] = useState<{ id: string; enabled: boolean } | null>(null);
   const [probeConfirm, setProbeConfirm] = useState("");
   const [probeNote, setProbeNote] = useState("");
   const [probesError, setProbesError] = useState("");
   const [auditRegion, setAuditRegion] = useState<string | null>(null);
   const [auditEvents, setAuditEvents] = useState<OperatorProbeAuditEvent[]>([]);
+  const [lifecycleEvents, setLifecycleEvents] = useState<OperatorProbeLifecycleEvent[]>([]);
   const [auditError, setAuditError] = useState("");
   const [auditBusy, setAuditBusy] = useState(false);
   const auditSeq = useRef(0);
@@ -164,18 +166,52 @@ export default function OperatorConsole() {
     finally { setBusy(false); }
   }
 
+  async function changeProbeLifecycle(region: OperatorRegion) {
+    const action = probeLifecycleEditing;
+    if (!action || action.id !== region.id || accessRevoked.current || busy || !operatorActionConfirmed(region.id, probeConfirm, "", 0)) return;
+    setBusy(true); setError(""); setFeedback("");
+    try {
+      if (action.enabled) await operatorApi.activate(region.id);
+      else await operatorApi.deactivate(region.id);
+      if (accessRevoked.current) return;
+      setProbeLifecycleEditing(null); setProbeConfirm("");
+      await refreshRegions();
+      setFeedback(action.enabled ? "Probe region activated." : "Probe region deactivated. Other replicas may take up to 15 seconds to apply the change; in-flight checks continue.");
+    } catch (err) {
+      setError(err instanceof OperatorRequestError && err.status === 409
+        ? "Activation requires successful credential-possession validation in the last five minutes."
+        : failure(err));
+    } finally { setBusy(false); }
+  }
+
+  async function validateProbe(region: OperatorRegion) {
+    if (accessRevoked.current || busy) return;
+    setBusy(true); setError(""); setFeedback("");
+    try {
+      const result = await operatorApi.validateProbe(region.id);
+      if (accessRevoked.current) return;
+      setFeedback(`Credential-possession validation succeeded for ${result.id}. Activate within five minutes; this does not attest probe software or deployment.`);
+    } catch (err) {
+      setError(err instanceof OperatorRequestError && err.status === 409
+        ? "Probe identity or credential proof did not match. The region was not validated."
+        : err instanceof OperatorRequestError && err.status === 502
+          ? "The probe could not be reached or validated."
+          : failure(err));
+    } finally { setBusy(false); }
+  }
+
   async function showProbeAudit(id: string) {
     if (accessRevoked.current) return;
     if (auditRegion === id) {
       auditSeq.current++;
-      setAuditRegion(null); setAuditEvents([]);
+      setAuditRegion(null); setAuditEvents([]); setLifecycleEvents([]);
       return;
     }
     const seq = ++auditSeq.current;
     setAuditRegion(id); setAuditEvents([]); setAuditError(""); setAuditBusy(true);
     try {
       const data = await operatorApi.probeAudit(id);
-      if (seq === auditSeq.current && !accessRevoked.current) setAuditEvents(data.events);
+      if (seq === auditSeq.current && !accessRevoked.current) { setAuditEvents(data.events); setLifecycleEvents(data.lifecycleEvents); }
     } catch (e) {
       if (seq === auditSeq.current && !accessRevoked.current) setAuditError(failure(e));
     } finally { if (seq === auditSeq.current) setAuditBusy(false); }
@@ -252,7 +288,7 @@ export default function OperatorConsole() {
 
       <section className="card sect" aria-label="Probe region controls">
         <h2>Probe regions</h2>
-        <p className="muted">Draining stops new probe requests after the configured cache delay; it does not cancel already-running checks. The local region cannot be drained.</p>
+        <p className="muted">Draining pauses a configured probe temporarily. Deactivation persists across restarts; reactivation requires recent credential-possession validation. Other replicas apply lifecycle changes within 15 seconds. Neither action cancels in-flight checks. Probe URLs and credentials remain deployment configuration.</p>
         <button className="btn" type="button" disabled={busy} onClick={() => void refreshRegions()}>Refresh regions</button>
         {probesError && <p role="status">{probesError}</p>}
         {regions.length === 0 && <p className="muted">No external probe regions configured.</p>}
@@ -264,6 +300,12 @@ export default function OperatorConsole() {
                 onClick={() => void showProbeAudit(r.id)} disabled={busy}>
                 {auditRegion === r.id ? "Hide audit" : "Audit history"}
               </button>
+              {r.configured && <button type="button" className="btn sm" disabled={busy}
+                onClick={() => { setProbeLifecycleEditing({ id: r.id, enabled: !r.enabled }); setProbeEditing(null); setProbeConfirm(""); }}>
+                {r.enabled ? "Deactivate" : "Activate"}
+              </button>}
+              {r.configured && <button type="button" className="btn sm" disabled={busy}
+                onClick={() => void validateProbe(r)}>Validate</button>}
               {(r.configured || r.drained) && <button type="button" className="btn sm" disabled={busy}
                 onClick={() => { setProbeEditing(probeEditing === r.id ? null : r.id); setProbeConfirm(""); setProbeNote(""); }}>
                 {r.drained ? "Undrain" : "Drain"}
@@ -285,7 +327,28 @@ export default function OperatorConsole() {
                   </tr>)}</tbody>
                 </table>
               </div>}
+            <h3>Latest lifecycle actions</h3>
+            {auditBusy ? <p role="status">Loading lifecycle history...</p> : lifecycleEvents.length === 0 ? <p className="muted">No activation or deactivation actions recorded.</p> :
+              <div style={{ overflowX: "auto" }}>
+                <table className="usage-tbl">
+                  <thead><tr><th>When</th><th>Action</th><th>Operator</th></tr></thead>
+                  <tbody>{lifecycleEvents.map((event) => <tr key={event.id}>
+                    <td>{new Date(event.createdAt).toLocaleString()}</td>
+                    <td>{event.action === "activate" ? "Activated" : "Deactivated"}</td>
+                    <td className="mono" style={{ overflowWrap: "anywhere" }}>{event.operatorId}</td>
+                  </tr>)}</tbody>
+                </table>
+              </div>}
           </section>}
+          {probeLifecycleEditing?.id === r.id && <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
+            {!probeLifecycleEditing.enabled && <p className="muted">The region will stop receiving new checks. Reactivation requires a successful credential-possession validation within five minutes.</p>}
+            {probeLifecycleEditing.enabled && <p className="muted">Run Validate first, then activate within five minutes. This proves possession of the configured key only; it does not attest probe software or deployment.</p>}
+            <label className="fld">Type region ID <strong className="mono">{r.id}</strong> to confirm
+              <input className="in" autoComplete="off" spellCheck={false} value={probeConfirm} onChange={(e) => setProbeConfirm(e.target.value)} />
+            </label>
+            <div><button type="button" className="btn" disabled={busy || !operatorActionConfirmed(r.id, probeConfirm, "", 0)}
+              onClick={() => void changeProbeLifecycle(r)}>{probeLifecycleEditing.enabled ? "Confirm activation" : "Confirm deactivation"}</button></div>
+          </div>}
           {probeEditing === r.id && <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
             {!r.drained && <label className="fld">Private drain note (optional)
               <input className="in" maxLength={200} autoComplete="off" value={probeNote} onChange={(e) => setProbeNote(e.target.value)} />

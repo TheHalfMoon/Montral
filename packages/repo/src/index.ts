@@ -187,6 +187,8 @@ export type RegionResult = { region: string; ok: boolean; statusCode?: number | 
 /** What the platform stores about one probe region (operator view): its drain flag and last-seen health. */
 export interface ProbeRegionState {
   region: string;
+  /** Operator lifecycle flag. Missing state is treated as enabled for compatibility with existing deployments. */
+  enabled?: boolean;
   drained: boolean;
   drainedAt: Date | null;
   drainedBy: string | null;
@@ -217,6 +219,15 @@ export interface ProbeRegionValidationEvent {
   id: number;
   region: string;
   outcome: "validated" | "identity_mismatch" | "credential_mismatch" | "unavailable";
+  operatorId: string;
+  createdAt: Date;
+}
+
+/** Secret-free operator action for a configured region's persistent lifecycle state. */
+export interface ProbeRegionLifecycleEvent {
+  id: number;
+  region: string;
+  action: "activate" | "deactivate";
   operatorId: string;
   createdAt: Date;
 }
@@ -778,12 +789,16 @@ export interface Repo {
   noteProbeHealth?(region: string, answered: boolean, reason?: string): Promise<void>;
   /** Drain or undrain a region: a drained region is not asked, and its monitors confirm from elsewhere. */
   setProbeRegionDrain?(region: string, drain: { drained: boolean; by: string | null; note: string | null }): Promise<void>;
+  /** Persistently deactivate/activate a configured probe; activation requires successful proof within five minutes. */
+  setProbeRegionEnabled?(region: string, enabled: boolean, operatorId: string): Promise<{ changed: boolean; enabled: boolean; validationRequired: boolean }>;
   /** Latest operator actions for a probe, newest first; never exposed to workspace members. */
   probeRegionDrainEvents?(region: string, limit: number): Promise<ProbeRegionDrainEvent[]>;
   /** Persist the fixed outcome class of an operator validation attempt; no probe response or credential material. */
   recordProbeRegionValidation?(region: string, outcome: ProbeRegionValidationEvent["outcome"], operatorId: string): Promise<void>;
   /** Latest secret-free operator validation outcomes, newest first. */
   probeRegionValidationEvents?(region: string, limit: number): Promise<ProbeRegionValidationEvent[]>;
+  /** Latest lifecycle actions for a probe, newest first; never exposed to workspace members. */
+  probeRegionLifecycleEvents?(region: string, limit: number): Promise<ProbeRegionLifecycleEvent[]>;
   /** How many unpaused monitors list each region id. */
   monitorsPerRegion?(): Promise<Record<string, number>>;
   /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */

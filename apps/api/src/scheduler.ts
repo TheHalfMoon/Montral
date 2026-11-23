@@ -3,8 +3,8 @@ import type { Monitor, Repo } from "@montral/repo";
 import { dispatchAlert, retryDeliveries, sendEscalations, sendMaintenanceReminders, sendReminders, sweepDeliveries, wasDelivered } from "./alerts";
 import type { CheckOutcome } from "./checker";
 import { sendMonthlyReports } from "./reports";
-import { measure, type Measured } from "./probes";
-import { effectiveRegions, withinPlanRegions } from "./regions";
+import { deactivatedRegions, measure, type Measured } from "./probes";
+import { AUTO, effectiveRegions, PROBE_TYPES, withinPlanRegions } from "./regions";
 import { creditCost, unmetered, type Entitlements } from "./entitlements";
 import { certificateIncidentTitle } from "./certificate";
 import { BROWSER_BUSY, BROWSER_UNCHECKED_AFTER, browserAvailable, browserCheckWorstCaseMs, browserProbeDue } from "./browser-check";
@@ -172,12 +172,18 @@ export async function withinCredits(
   monitors: Monitor[], entitlements: Entitlements,
   onPlanSkipped?: (skipped: Monitor[]) => Promise<unknown>,
   onReserved?: (monitor: Monitor, credits: number, chargedAt: Date, operationKey?: string) => void,
+  deactivated: ReadonlySet<string> = new Set(),
 ): Promise<Monitor[]> {
   const byWorkspace = new Map<string, Monitor[]>();
   for (const m of monitors) byWorkspace.set(m.organizationId, [...(byWorkspace.get(m.organizationId) ?? []), m]);
   const allowed = new Map<string, Monitor>();
   await Promise.all([...byWorkspace].map(async ([workspaceId, due]) => {
-    const list = await withinPlanRegions(due, workspaceId, entitlements, onPlanSkipped);
+    const planned = await withinPlanRegions(due, workspaceId, entitlements, onPlanSkipped);
+    const list = planned.map((m) => {
+      if (!deactivated.size || !(PROBE_TYPES as readonly string[]).includes(m.type)) return m;
+      const activeRegions = effectiveRegions(m).filter((r) => r === AUTO || !deactivated.has(r));
+      return activeRegions.length === effectiveRegions(m).length ? m : { ...m, regions: activeRegions.length ? activeRegions : [AUTO] };
+    });
     const wanted = list.reduce((n, m) => n + creditCost(m), 0);
     const chargedAt = new Date();
     // A heartbeat has no outbound region charge. It must remain eligible even
@@ -268,11 +274,13 @@ export async function checkMany(repo: Repo, due: Monitor[], entitlements: Entitl
   // Browser monitors are charged one by one just before their journey is launched (browserTask), the rest up front.
   const regionReservations = new Map<string, { credits: number; chargedAt: Date; settlementKey: string }>();
   const browser = due.filter((m) => m.type === "browser");
+  const deactivated = await deactivatedRegions(repo);
   // a multi-region monitor skipped because a metered plan could not be read counts on its deferral streak
   const others = await withinCredits(
     due.filter((m) => m.type !== "browser"), entitlements,
     (skipped) => Promise.all(skipped.map((m) => step("plan deferral", () => notePlanDeferral(repo, m)))),
     (m, credits, chargedAt, operationKey) => regionReservations.set(m.id, { credits, chargedAt, settlementKey: operationKey ?? crypto.randomUUID() }),
+    deactivated,
   );
   if (others.length + browser.length < due.length) console.warn(`credits exhausted: skipped ${due.length - others.length - browser.length} of ${due.length} checks`);
   // Browser checks run one per workspace at a time (browser-check.ts). Started all at once, a workspace's second and

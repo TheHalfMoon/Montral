@@ -360,7 +360,7 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
     }).catch(() => {});
   }, []);
   // where checks can run from on this deployment; with only `auto` the whole section stays out of the form
-  const [places, setPlaces] = useState<{ id: string; name: string }[]>([]);
+  const [places, setPlaces] = useState<{ id: string; name: string; enabled?: boolean }[]>([]);
   const [maxRegions, setMaxRegions] = useState(1);
   useEffect(() => {
     api.regions().then((r) => { setPlaces(r.regions); setMaxRegions(r.maxPerMonitor ?? Infinity); }).catch(() => {});
@@ -368,7 +368,7 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
   const [regionsOpen, setRegionsOpen] = useState(false);
   const known = new Set(places.map((p) => p.id));
   // a saved region this deployment no longer offers stays listed so it can be switched off
-  const choices = [...places, ...(monitor?.regions ?? []).filter((r) => !known.has(r)).map((id) => ({ id, name: id }))];
+  const choices: { id: string; name: string; enabled?: boolean }[] = [...places, ...(monitor?.regions ?? []).filter((r) => !known.has(r)).map((id) => ({ id, name: id, enabled: false }))];
   const [busy, setBusy] = useState(false);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((s) => ({ ...s, [k]: v }));
 
@@ -609,11 +609,12 @@ export function MonitorForm({ monitor, onClose, onSaved }: { monitor?: Monitor; 
                   {choices.map((p) => {
                     const on = f.regions.includes(p.id);
                     const full = regionLocked(f.regions, p.id, maxRegions);
+                    const disabledRegion = p.enabled === false && !on;
                     return (
-                      <button type="button" key={p.id} className={`region-opt ${on ? "on" : ""}`} aria-pressed={on} disabled={full}
-                        title={full ? t("Your plan cannot check from that many regions.") : p.id === "auto" ? t("Auto is this deployment's own location") : known.has(p.id) ? undefined : t("No longer available")}
+                      <button type="button" key={p.id} className={`region-opt ${on ? "on" : ""}`} aria-pressed={on} disabled={full && !on || disabledRegion}
+                        title={full && !on ? t("Your plan cannot check from that many regions.") : disabledRegion ? t("This probe was deactivated by an operator.") : p.id === "auto" ? t("Auto is this deployment's own location") : known.has(p.id) ? undefined : t("No longer available")}
                         onClick={() => set("regions", toggleRegion(f.regions, p.id, maxRegions))}>
-                        <span className="region-opt-mark">{on ? "✓" : ""}</span>{p.name}
+                        <span className="region-opt-mark">{on ? "✓" : ""}</span>{p.name}{disabledRegion ? ` · ${t("Deactivated")}` : ""}
                       </button>
                     );
                   })}

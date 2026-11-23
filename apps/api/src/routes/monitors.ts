@@ -16,7 +16,7 @@ import { browserConfigSchema, browserSecretsSchema, missingSecretProblem, secret
 import { applySecretUpdate, maskedSecrets } from "../browser-secrets";
 import { MASK, maskHeaders, restoreHeaders, sameJson } from "../secrets";
 import { checkOne, nextAfter, refundBrowserSeconds, refundCredits, refundRegionCredits, reserveBrowserSeconds, spendAllOrNothing, unusedBrowserSeconds, unusedRegionCredits } from "../scheduler";
-import { DRAINED, drainedRegions, isRegionConfigured, runInRegion } from "../probes";
+import { DEACTIVATED, DRAINED, deactivatedRegions, drainedRegions, isRegionConfigured, runInRegion } from "../probes";
 import { AUTO, effectiveRegions, PROBE_TYPES, REGION_ID, withinPlanRegions } from "../regions";
 
 import { HTTP_METHODS, MAX_REQUEST_BODY_BYTES, requestBodyProblem } from "../http-request";
@@ -674,6 +674,7 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ error: `Regions other than auto are available for ${PROBE_TYPES.join(" and ")} monitors only`, code: "regions_not_supported" }, 400);
       }
       if (!isRegionConfigured(region)) return c.json({ error: `Unknown region: ${region}`, code: "unknown_region", regions: [region] }, 400);
+      if (region !== AUTO && (await deactivatedRegions(repo)).has(region)) return c.json({ error: DEACTIVATED, code: "probe_unreachable", region }, 502);
       // refused before any credit is taken: a drained region is never asked
       if (region !== AUTO && (await drainedRegions(repo)).has(region)) return c.json({ error: DRAINED, code: "probe_unreachable", region }, 502);
     } else {
@@ -684,6 +685,11 @@ export const monitors = new Hono<AppEnv>()
         return c.json({ error: "Usage metering is unavailable; the check did not run. Try again shortly.", code: "metering_unavailable" }, 503);
       }
       m.regions = planned.regions;
+      if ((PROBE_TYPES as readonly string[]).includes(m.type)) {
+        const deactivated = await deactivatedRegions(repo);
+        const active = effectiveRegions(m).filter((r) => r === AUTO || !deactivated.has(r));
+        m.regions = active.length ? active : [AUTO];
+      }
     }
     // bounded per process (sockets, ping processes) and per workspace (shared by every server): see manual-check-gate.ts.
     // The process slot comes first, so a request refused as busy does not use up the workspace's allowance.

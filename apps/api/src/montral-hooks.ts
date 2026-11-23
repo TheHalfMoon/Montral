@@ -23,6 +23,7 @@ const listInbox = z.object({ name: z.string().trim().min(1).max(100) }).strict()
 const EVENT_PAGE = 50;
 const REPLAY_TIMEOUT_MS = 10_000;
 const REPLAY_RESPONSE_BYTES = 4 * 1024;
+const REPLAY_RESERVED_HEADERS = new Set(["user-agent", "x-montral-replay", "x-montral-replay-attempt"]);
 /** Link-local and cloud metadata addresses: refused for replay in every configuration. */
 export function replayAddressForbidden(ip: string): boolean {
   const a = ip.toLowerCase().replace(/^\[|\]$/g, "");
@@ -622,10 +623,13 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       console.error("webhook replay counter unavailable");
       return c.json({ error: "Replay accounting is unavailable; no outbound request was started" }, 503);
     }
-    const headers: Record<string, string> = { "user-agent": checkUserAgent(), "x-montral-replay": event.id };
+    const headers: Record<string, string> = { "user-agent": checkUserAgent() };
+    const attemptId = crypto.randomUUID();
     for (const [name, value] of Object.entries(event.headers ?? {})) {
-      if (name !== "user-agent" && typeof value === "string") headers[name] = value;
+      if (!REPLAY_RESERVED_HEADERS.has(name.toLowerCase()) && typeof value === "string") headers[name] = value;
     }
+    headers["x-montral-replay"] = event.id;
+    headers["x-montral-replay-attempt"] = attemptId;
     if (event.content_type) headers["content-type"] = event.content_type;
     const signal = AbortSignal.timeout(REPLAY_TIMEOUT_MS);
     const started = Date.now();
@@ -634,13 +638,13 @@ export function mountMontralHooks({ app, authed }: { app: Hono<AppEnv>; authed: 
       const { text, truncated } = await readReplayBody(res, REPLAY_RESPONSE_BYTES, signal);
       // the replay URL (which can carry credentials) and the response are never recorded
       await audit(c, "hook_event.replay", { type: "hook_event", id: event.id }, auditChanges({ url: true }, { method: event.method }));
-      return c.json({ status: res.status, contentType: res.headers.get("content-type"), body: text, truncated, durationMs: Date.now() - started });
+      return c.json({ attemptId, status: res.status, contentType: res.headers.get("content-type"), body: text, truncated, durationMs: Date.now() - started });
     } catch (error) {
       if (error instanceof BlockedTarget) return c.json({ error: error.message, code: "target_not_allowed" }, 400);
       // Fixed messages only: network errors can echo internal addresses.
       // Either failure can happen after the remote peer accepted the request; do not imply it is safe to retry.
-      if (signal.aborted) return c.json({ error: "The target did not answer within 10 seconds; it may have received the request", code: "replay_outcome_unknown" }, 504);
-      return c.json({ error: "Could not confirm delivery to the target; it may have received the request", code: "replay_outcome_unknown" }, 502);
+      if (signal.aborted) return c.json({ error: "The target did not answer within 10 seconds; it may have received the request", code: "replay_outcome_unknown", attemptId }, 504);
+      return c.json({ error: "Could not confirm delivery to the target; it may have received the request", code: "replay_outcome_unknown", attemptId }, 502);
     }
   });
   /**

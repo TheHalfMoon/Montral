@@ -208,12 +208,15 @@ export class ApiError extends Error {
   upgradeUrl?: string;
   /** quota refusals: when the allowance resets (ISO) */
   resetsAt?: string;
-  constructor(message: string, status: number, body: { code?: string; upgradeUrl?: string; resetsAt?: string } | null) {
+  /** Webhook replay identifier for correlating this attempt across caller and target logs. */
+  attemptId?: string;
+  constructor(message: string, status: number, body: { code?: string; upgradeUrl?: string; resetsAt?: string; attemptId?: string } | null) {
     super(message);
     this.status = status;
     this.code = body?.code;
     this.upgradeUrl = body?.upgradeUrl;
     this.resetsAt = typeof body?.resetsAt === "string" ? body.resetsAt : undefined;
+    this.attemptId = typeof body?.attemptId === "string" ? body.attemptId : undefined;
   }
 }
 
@@ -229,7 +232,7 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error("Unauthorized");
   }
   if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; code?: string; upgradeUrl?: string; resetsAt?: string } | null;
+    const body = (await res.json().catch(() => null)) as { error?: string; code?: string; upgradeUrl?: string; resetsAt?: string; attemptId?: string } | null;
     if (res.status === 403 && body?.code === WORKSPACE_SUSPENDED) noteSuspension(path, asked, true);
     // a used-up allowance: the shell's usage banner reads the new state
     if ((res.status === 402 || res.status === 429) && typeof body?.code === "string" && /_exhausted$/.test(body.code)) window.dispatchEvent(new Event("montral:usage"));
@@ -343,7 +346,7 @@ export const api = {
   /** Authenticated admitted replay requests; this is not a delivery count or a billable meter. */
   hookReplayUsage: () => req<{ attempts: string; periodStart: string; periodEnd: string; unit: "admitted_attempts"; billable: false }>("/hooks/replay-usage"),
   replayHookEvent: (inbox: string, event: string, url: string) =>
-    req<{ status: number; contentType: string | null; body: string; truncated: boolean; durationMs: number }>(`/hooks/inboxes/${inbox}/events/${event}/replay`, { method: "POST", body: JSON.stringify({ url }) }),
+    req<{ attemptId: string; status: number; contentType: string | null; body: string; truncated: boolean; durationMs: number }>(`/hooks/inboxes/${inbox}/events/${event}/replay`, { method: "POST", body: JSON.stringify({ url }) }),
   hookResponse: (id: string) => req<{ response: HookResponse | null }>(`/hooks/inboxes/${id}/response`),
   setHookResponse: (id: string, response: HookResponse) => req<{ response: HookResponse }>(`/hooks/inboxes/${id}/response`, { method: "PUT", body: JSON.stringify(response) }),
   resetHookResponse: (id: string) => req<void>(`/hooks/inboxes/${id}/response`, { method: "DELETE" }),

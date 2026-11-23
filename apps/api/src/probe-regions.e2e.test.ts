@@ -452,6 +452,9 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     const deactivated = await op("POST", `/probes/${region}/deactivate`, {});
     expect(deactivated).toMatchObject({ status: 200, body: { id: region, enabled: false, changed: true } });
     expect((await op("POST", `/probes/${region}/activate`, {})).body).toMatchObject({ code: "probe_activation_requires_recent_validation" });
+    // Historical successful rows have no configuration binding and must not authorize reactivation.
+    await repo.recordProbeRegionValidation!(region, "validated", operator.userId, null);
+    expect((await op("POST", `/probes/${region}/activate`, {})).body).toMatchObject({ code: "probe_activation_requires_recent_validation" });
     expect((await db!.query<{ enabled: boolean }>("SELECT enabled FROM probe_region_state WHERE region=$1", [region]))[0].enabled).toBe(false);
 
     const { call } = await account();

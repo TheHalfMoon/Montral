@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
 import type { Edition } from "./edition";
 import { unmetered } from "./entitlements";
-import { configureProbes, resetProbeRegionCache } from "./probes";
+import { configureProbes, probeConfigurationFingerprint, resetProbeRegionCache } from "./probes";
 import { PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "./probe-protocol";
 
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests). Region ids are unique
@@ -443,7 +443,7 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     const repo = db!.repo;
     await db!.query("UPDATE probe_region_state SET enabled=true WHERE region=$1", [region]);
     // A failed proof after an earlier successful one must prevent activation.
-    await repo.recordProbeRegionValidation!(region, "unavailable", operator.userId);
+    await repo.recordProbeRegionValidation!(region, "unavailable", operator.userId, null);
     const [baseline] = await db!.query<{ id: number }>("SELECT coalesce(max(id),0)::int AS id FROM probe_region_lifecycle_event WHERE region=$1", [region]);
     const deniedCustomer = await account();
     const denied = await send(`/api/operator/probes/${region}/deactivate`, { method: "POST", headers: { cookie: deniedCustomer.cookie, origin: ORIGIN, "content-type": "application/json" }, body: "{}" });
@@ -468,11 +468,15 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     try {
       proofAnswers[region] = {};
       expect((await op("POST", `/probes/${region}/validate`, {})).body).toMatchObject({ validated: true, credentialProof: "matched", sourceAttestation: false });
+      const configFingerprint = await probeConfigurationFingerprint(region, baseEnv.BETTER_AUTH_SECRET);
+      expect(configFingerprint).toMatch(/^[0-9a-f]{64}$/);
+      expect(await repo.setProbeRegionEnabled!(region, true, operator.userId, "0".repeat(64)))
+        .toMatchObject({ changed: false, enabled: false, validationRequired: true });
       expect(await op("POST", `/probes/${region}/activate`, {})).toMatchObject({ status: 200, body: { id: region, enabled: true, changed: true } });
 
       const concurrent = await Promise.all([
-        repo.setProbeRegionEnabled!(region, false, operator.userId),
-        repo.setProbeRegionEnabled!(region, false, operator.userId),
+        repo.setProbeRegionEnabled!(region, false, operator.userId, null),
+        repo.setProbeRegionEnabled!(region, false, operator.userId, null),
       ]);
       expect(concurrent.filter((r) => r.changed)).toHaveLength(1);
       expect(concurrent.every((r) => !r.enabled)).toBe(true);
@@ -483,13 +487,14 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
       expect(lifecycle.map((event: { action: string }) => event.action)).toEqual(["deactivate", "activate", "deactivate"]);
       expect(lifecycle.map((event: { operatorId: string }) => event.operatorId)).toEqual([operator.userId, operator.userId, operator.userId]);
       expect(audit.text).not.toMatch(/probe-regions-e2e-(?:secret|north-dedicated-secret)|probe\.test|challenge|signature/i);
+      expect(audit.text).not.toContain(configFingerprint!);
       await expect(db!.query("UPDATE probe_region_lifecycle_event SET action='activate' WHERE id=$1", [lifecycle[0].id])).rejects.toThrow();
       await expect(db!.query("DELETE FROM probe_region_lifecycle_event WHERE id=$1", [lifecycle[0].id])).rejects.toThrow();
       await expect(db!.query("TRUNCATE probe_region_lifecycle_event")).rejects.toThrow();
     } finally {
       delete proofAnswers[region];
-      await repo.recordProbeRegionValidation!(region, "validated", operator.userId);
-      await repo.setProbeRegionEnabled!(region, true, operator.userId);
+      await repo.recordProbeRegionValidation!(region, "validated", operator.userId, await probeConfigurationFingerprint(region, baseEnv.BETTER_AUTH_SECRET));
+      await repo.setProbeRegionEnabled!(region, true, operator.userId, await probeConfigurationFingerprint(region, baseEnv.BETTER_AUTH_SECRET));
       resetProbeRegionCache();
     }
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { configureProbes, isRegionConfigured, parseProbeRegions, parseProbeSecrets, availableRegions, probeCredentialMode, combine, measure, runInRegion } from "./probes";
+import { configureProbes, isRegionConfigured, parseProbeRegions, parseProbeSecrets, availableRegions, probeCredentialMode, probeConfigurationFingerprint, combine, measure, runInRegion } from "./probes";
 import { signProbe, verifyProbe } from "./probe-protocol";
 import { effectiveRegions } from "./regions";
 
@@ -44,6 +44,25 @@ describe("PROBE_REGIONS", () => {
     expect(availableRegions().map((r) => r.id)).toEqual(["auto", "us-east"]);
     expect(isRegionConfigured("us-east")).toBe(true);
     expect(isRegionConfigured("nowhere")).toBe(false);
+  });
+});
+
+describe("probe activation configuration binding", () => {
+  it("is stable for identical settings and changes with endpoint, key, or application secret without exposing them", async () => {
+    const appSecret = "synthetic-application-secret-for-probe-tests";
+    configureProbes({ PROBE_REGIONS: '{"region-north":"https://north.example.test/check"}', PROBE_SECRET: "synthetic-probe-key-long-enough" });
+    const first = await probeConfigurationFingerprint("region-north", appSecret);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(await probeConfigurationFingerprint("region-north", appSecret)).toBe(first);
+    configureProbes({ PROBE_REGIONS: '{"region-north":"https://changed.example.test/check"}', PROBE_SECRET: "synthetic-probe-key-long-enough" });
+    expect(await probeConfigurationFingerprint("region-north", appSecret)).not.toBe(first);
+    configureProbes({ PROBE_REGIONS: '{"region-north":"https://north.example.test/check"}', PROBE_SECRET: "different-synthetic-probe-key" });
+    const changedKey = await probeConfigurationFingerprint("region-north", appSecret);
+    expect(changedKey).not.toBe(first);
+    expect(await probeConfigurationFingerprint("region-north", `${appSecret}-rotated`)).not.toBe(first);
+    expect(JSON.stringify({ first, changedKey })).not.toMatch(/north\.example|synthetic-probe-key|application-secret/);
+    configureProbes({});
+    expect(await probeConfigurationFingerprint("region-north", appSecret)).toBeNull();
   });
 });
 

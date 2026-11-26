@@ -101,6 +101,47 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
     }
   });
 
+  it("discards an in-flight failing DNS result if the workspace becomes suspended", async () => {
+    const p = await verifiedPage();
+    const [page] = await q<{ organizationId: string }>("SELECT organization_id AS \"organizationId\" FROM status_page WHERE id = $1", [p.id]);
+    txt.delete(p.rec.name);
+    const suspendDuringLookup: TxtResolver = async (name) => {
+      await q("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator') ON CONFLICT (organization_id) DO NOTHING", [page.organizationId]);
+      return stub(name);
+    };
+    try {
+      expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, suspendDuringLookup)).toEqual({
+        checked: 1, matched: 0, failed: 1, withdrawn: 0, notices: 0,
+      });
+      const after = await state(p.id);
+      expect(after.verified).not.toBeNull();
+      expect(after).toMatchObject({ failures: 0, since: null, error: null });
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
+    }
+  });
+
+  it("does not clear a DNS failure streak from an in-flight match after suspension", async () => {
+    const p = await verifiedPage();
+    const [page] = await q<{ organizationId: string }>("SELECT organization_id AS \"organizationId\" FROM status_page WHERE id = $1", [p.id]);
+    txt.delete(p.rec.name);
+    expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000)).toMatchObject({ checked: 1, failed: 1, withdrawn: 0 });
+    const before = await state(p.id);
+    txt.set(p.rec.name, [p.rec.value]);
+    const suspendDuringLookup: TxtResolver = async (name) => {
+      await q("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator') ON CONFLICT (organization_id) DO NOTHING", [page.organizationId]);
+      return stub(name);
+    };
+    try {
+      expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + DOMAIN_RECHECK.failingMs + 2000, suspendDuringLookup)).toEqual({
+        checked: 1, matched: 1, failed: 0, withdrawn: 0, notices: 0,
+      });
+      expect(await state(p.id)).toMatchObject({ failures: before.failures, since: before.since, error: before.error });
+    } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
+    }
+  });
+
   it("a record that disappears briefly keeps the page served, is re-checked sooner, and the streak clears when it returns", async () => {
     const p = await verifiedPage();
     txt.delete(p.rec.name);

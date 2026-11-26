@@ -247,11 +247,14 @@ export async function recheckCustomDomains(
   const summary: RecheckSummary = { checked: 0, matched: 0, failed: 0, withdrawn: 0, notices: 0 };
   const one = async (row: { id: string; domain: string; token: string }) => {
     const outcome = await verifyDomainToken(row.domain, row.token, options.resolver ?? txtResolver);
+    // DNS may finish after the workspace is suspended; both outcome writes fence on the current suspension state.
     if (outcome.ok) {
       summary.matched++;
       await query(
         `UPDATE status_page SET custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL
-         WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 AND custom_domain_verified_at IS NOT NULL`,
+         WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 AND custom_domain_verified_at IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM workspace_suspension ws WHERE ws.organization_id = status_page.organization_id)
+         `,
         [row.id, row.domain, row.token],
       );
       return;
@@ -277,6 +280,7 @@ export async function recheckCustomDomains(
                          OR (custom_domain_check_error = 'lookup_failed') <> ($4::text = 'lookup_failed')) AS fresh
              FROM status_page WHERE id = $1) AS s
        WHERE sp.id = s.id AND sp.custom_domain = $2 AND sp.custom_domain_token = $3 AND sp.custom_domain_verified_at IS NOT NULL
+         AND NOT EXISTS (SELECT 1 FROM workspace_suspension ws WHERE ws.organization_id = sp.organization_id)
        RETURNING sp.organization_id, sp.project_id, sp.custom_domain_verified_at IS NULL AS withdrawn`,
       [row.id, row.domain, row.token, outcome.reason, now.toISOString(), p.absentMs / 1000, p.minFailures, p.unresolvableMs / 1000],
     );

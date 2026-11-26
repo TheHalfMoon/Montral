@@ -24,6 +24,52 @@ let secret = "";
 let regionSecrets = new Map<string, string>();
 let configured: string | undefined;
 
+/** JSON.parse silently keeps the final value for a repeated object key. Region identity must be unambiguous. */
+function hasDuplicateTopLevelKey(raw: string): boolean {
+  let i = 0;
+  const whitespace = () => { while (/\s/.test(raw[i] ?? "")) i++; };
+  const stringEnd = () => {
+    i++; // opening quote
+    while (i < raw.length) {
+      if (raw[i] === "\\") { i += 2; continue; }
+      if (raw[i++] === '"') return;
+    }
+  };
+  whitespace();
+  if (raw[i++] !== "{") return false;
+  const keys = new Set<string>();
+  while (i < raw.length) {
+    whitespace();
+    if (raw[i] === "}") return false;
+    if (raw[i] !== '"') return false; // JSON.parse already validates the full document.
+    const start = i;
+    stringEnd();
+    const key = JSON.parse(raw.slice(start, i)) as string;
+    if (keys.has(key)) return true;
+    keys.add(key);
+    whitespace();
+    i++; // colon
+    whitespace();
+    let depth = 0;
+    let inString = false;
+    for (; i < raw.length; i++) {
+      const ch = raw[i];
+      if (inString) {
+        if (ch === "\\") i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === "{" || ch === "[") depth++;
+      else if (ch === "}" || ch === "]") {
+        if (depth === 0) break;
+        depth--;
+      } else if (ch === "," && depth === 0) break;
+    }
+    if (raw[i] === ",") { i++; continue; }
+    return false;
+  }
+  return false;
+}
+
 /** Parses `PROBE_REGIONS`. Entries that cannot be used are reported in `problems` and left out. */
 export function parseProbeRegions(raw: string | undefined): { regions: ProbeRegion[]; problems: string[] } {
   const out: ProbeRegion[] = [];
@@ -36,6 +82,7 @@ export function parseProbeRegions(raw: string | undefined): { regions: ProbeRegi
     return { regions: out, problems: ["PROBE_REGIONS is not valid JSON"] };
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { regions: out, problems: ["PROBE_REGIONS must be a JSON object of region id to URL"] };
+  if (hasDuplicateTopLevelKey(raw)) return { regions: out, problems: ["PROBE_REGIONS contains duplicate region ids"] };
   for (const [id, value] of Object.entries(parsed as Record<string, unknown>)) {
     const entry = typeof value === "string" ? { url: value } : (value as { url?: unknown; name?: unknown } | null);
     const url = typeof entry?.url === "string" ? entry.url.trim() : "";

@@ -36,6 +36,22 @@ describe("PROBE_REGIONS", () => {
     expect(parseProbeRegions("{").problems).toHaveLength(1);
     expect(parseProbeRegions("[]").problems).toHaveLength(1);
   });
+  it("fails closed when the JSON repeats a top-level region identity", () => {
+    const parsed = parseProbeRegions('{"region-north":"https://first.example.test/probe","nested":{"region-north":"ignored"},"region-north":"https://second.example.test/probe"}');
+    expect(parsed.regions).toEqual([]);
+    expect(parsed.problems).toEqual(["PROBE_REGIONS contains duplicate region ids"]);
+    expect(parseProbeRegions('{"region\\u002dnorth":"https://first.example.test/probe","region-north":"https://second.example.test/probe"}').problems)
+      .toEqual(["PROBE_REGIONS contains duplicate region ids"]);
+    expect(parseProbeRegions('{"region-north":{"url":"https://first.example.test/probe","note":"comma, } and escaped quote \\\"","nested":[{"region-north":"metadata"}]},"region-north":"https://second.example.test/probe"}').regions)
+      .toEqual([]);
+    expect(parseProbeRegions('{"region-north":{"url":"https://north.example.test/probe","metadata":{"region-north":"not-a-region"}}}'))
+      .toMatchObject({ regions: [{ id: "region-north" }], problems: [] });
+    try {
+      configureProbes({ PROBE_REGIONS: '{"region-north":"https://first.example.test/probe","region-north":"https://second.example.test/probe"}', PROBE_SECRET: "synthetic-shared-probe-key" });
+      expect(availableRegions()).toEqual([{ id: "auto", name: "Auto" }]);
+      expect(isRegionConfigured("region-north")).toBe(false);
+    } finally { configureProbes({}); }
+  });
   it("keeps regions off without a secret", () => {
     configureProbes({ PROBE_REGIONS: '{"us-east":"https://p.example.app/a"}' });
     expect(availableRegions().map((r) => r.id)).toEqual(["auto"]);

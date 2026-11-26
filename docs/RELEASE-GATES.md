@@ -1,10 +1,29 @@
 # Montral release gates
 
-**Latest product-code exact-main qualification (2026-11-22):** `main@5e9860a063d3e04c3dc1fe963bd0dbf979f11b90`; all 12/12 required exact-SHA push workflows succeeded and `scripts/verify-main-workflows.py` passed. This qualifies the current product-code baseline; later documentation-only changes do not alter that code. It is integrated CI qualification, not security clearance or release approval. See the exact run record below.
+**Latest verified exact-main qualification before PR #213 (2026-11-26):** `main@66fe23a42afa5bea88669a36a5027d7d199979a8`; all 12/12 required exact-SHA push workflows succeeded and `scripts/verify-main-workflows.py` returned `PASS`. This is integrated CI qualification, not security clearance or release approval. See the exact run record below. PR #213 is still open and is not included in that qualification.
 
 **Security alert snapshot (2026-11-22):** at `main@5e9860a063d3e04c3dc1fe963bd0dbf979f11b90`, read-only GitHub APIs returned zero open CodeQL, Dependabot and secret-scanning alert records. Repository metadata reports Dependabot alerts/security updates, secret scanning and push protection enabled; the vulnerability-alert endpoint returned HTTP 204. Metadata reports non-provider secret-pattern scanning and validity checks disabled. These are point-in-time observations, not security clearance. The 65 historical Gitleaks matches still include one archived vendor example whose operational use and any resulting credential's validity or rotation are unverified; #169 stays open. The earlier Workbench scan remains incomplete, and the separate bounded scan was not a line-by-line or runtime assessment. See [2026-11-22 security alert recheck](evidence/2026-11-22-security-alert-status-recheck.md) and [prior scan qualification](evidence/2026-11-21-security-qualification-update.md). Community publication HOLD; Cloud/BYOC NO-GO; no owner `GREEN LIGHT MONTRAL`.
 
-## Latest product-code exact-main workflow record — 2026-11-22
+## Latest exact-main workflow record before PR #213 — 2026-11-26
+
+The following 12 GitHub Actions `push` runs all reported success for the same exact commit `66fe23a42afa5bea88669a36a5027d7d199979a8`; the repository verifier returned `PASS: 12 exact-main push workflows successful`.
+
+| Workflow | Run ID |
+|---|---:|
+| Montral app CI | [45816254852](https://github.com/TheHalfMoon/Montral/actions/runs/45816254852) |
+| Montral load qualification | [45816255076](https://github.com/TheHalfMoon/Montral/actions/runs/45816255076) |
+| Montral macOS PostgreSQL 18 qualification | [45816254767](https://github.com/TheHalfMoon/Montral/actions/runs/45816254767) |
+| Montral Docker Compose qualification | [45816255296](https://github.com/TheHalfMoon/Montral/actions/runs/45816255296) |
+| Montral failover qualification | [45816254865](https://github.com/TheHalfMoon/Montral/actions/runs/45816254865) |
+| Montral upgrade, rollback and disaster recovery | [45816254745](https://github.com/TheHalfMoon/Montral/actions/runs/45816254745) |
+| Montral cross-browser and accessibility | [45816254686](https://github.com/TheHalfMoon/Montral/actions/runs/45816254686) |
+| Montral browser checks | [45816255047](https://github.com/TheHalfMoon/Montral/actions/runs/45816255047) |
+| Montral Terraform provider | [45816255004](https://github.com/TheHalfMoon/Montral/actions/runs/45816255004) |
+| Montral CodeQL code scanning | [45816254711](https://github.com/TheHalfMoon/Montral/actions/runs/45816254711) |
+| Montral source integrity | [45816254789](https://github.com/TheHalfMoon/Montral/actions/runs/45816254789) |
+| Windows Docker prerequisite safety | [45816254662](https://github.com/TheHalfMoon/Montral/actions/runs/45816254662) |
+
+## Previous product-code exact-main workflow record — 2026-11-22
 
 The following 12 GitHub Actions `push` runs all reported success for the same exact commit `5e9860a063d3e04c3dc1fe963bd0dbf979f11b90`; the repository verifier returned `PASS: 12 exact-main push workflows successful`.
 

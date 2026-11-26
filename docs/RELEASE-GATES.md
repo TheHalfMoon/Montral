@@ -1,10 +1,31 @@
 # Montral release gates
 
-**Latest verified exact-main qualification before PR #213 (2026-11-26):** `main@66fe23a42afa5bea88669a36a5027d7d199979a8`; all 12/12 required exact-SHA push workflows succeeded and `scripts/verify-main-workflows.py` returned `PASS`. This is integrated CI qualification, not security clearance or release approval. See the exact run record below. PR #213 is still open and is not included in that qualification.
+**Latest verified exact-main qualification (2026-11-26):** `main@8838845ba93474784984b121bc1cf25ffff91e8a`; all 12/12 required exact-SHA push workflows succeeded and `scripts/verify-main-workflows.py` returned `PASS`. This is integrated CI qualification, not security clearance or release approval. See the exact run record below. Community publication remains HOLD; Cloud and BYOC remain NO-GO.
 
 **Security alert snapshot (2026-11-22):** at `main@5e9860a063d3e04c3dc1fe963bd0dbf979f11b90`, read-only GitHub APIs returned zero open CodeQL, Dependabot and secret-scanning alert records. Repository metadata reports Dependabot alerts/security updates, secret scanning and push protection enabled; the vulnerability-alert endpoint returned HTTP 204. Metadata reports non-provider secret-pattern scanning and validity checks disabled. These are point-in-time observations, not security clearance. The 65 historical Gitleaks matches still include one archived vendor example whose operational use and any resulting credential's validity or rotation are unverified; #169 stays open. The earlier Workbench scan remains incomplete, and the separate bounded scan was not a line-by-line or runtime assessment. See [2026-11-22 security alert recheck](evidence/2026-11-22-security-alert-status-recheck.md) and [prior scan qualification](evidence/2026-11-21-security-qualification-update.md). Community publication HOLD; Cloud/BYOC NO-GO; no owner `GREEN LIGHT MONTRAL`.
 
-## Latest exact-main workflow record before PR #213 — 2026-11-26
+## Latest exact-main workflow record — 2026-11-26
+
+The following 12 GitHub Actions `push` runs all reported success for the same exact commit `8838845ba93474784984b121bc1cf25ffff91e8a`; the repository verifier returned `PASS: 12 exact-main push workflows successful`.
+
+| Workflow | Run ID |
+|---|---:|
+| Montral app CI | [45824110423](https://github.com/TheHalfMoon/Montral/actions/runs/45824110423) |
+| Montral load qualification | [45824110413](https://github.com/TheHalfMoon/Montral/actions/runs/45824110413) |
+| Montral macOS PostgreSQL 18 qualification | [45824110807](https://github.com/TheHalfMoon/Montral/actions/runs/45824110807) |
+| Montral Docker Compose qualification | [45824110522](https://github.com/TheHalfMoon/Montral/actions/runs/45824110522) |
+| Montral failover qualification | [45824110635](https://github.com/TheHalfMoon/Montral/actions/runs/45824110635) |
+| Montral upgrade, rollback and disaster recovery | [45824110316](https://github.com/TheHalfMoon/Montral/actions/runs/45824110316) |
+| Montral cross-browser and accessibility | [45824110533](https://github.com/TheHalfMoon/Montral/actions/runs/45824110533) |
+| Montral browser checks | [45824110321](https://github.com/TheHalfMoon/Montral/actions/runs/45824110321) |
+| Montral Terraform provider | [45824110323](https://github.com/TheHalfMoon/Montral/actions/runs/45824110323) |
+| Montral CodeQL code scanning | [45824110449](https://github.com/TheHalfMoon/Montral/actions/runs/45824110449) |
+| Montral source integrity | [45824110690](https://github.com/TheHalfMoon/Montral/actions/runs/45824110690) |
+| Windows Docker prerequisite safety | [45824110336](https://github.com/TheHalfMoon/Montral/actions/runs/45824110336) |
+
+PR #213 (`8838845`) rejects duplicate top-level probe region IDs in `PROBE_REGIONS` before JavaScript's `JSON.parse` can silently retain the last endpoint. This qualification establishes successful integrated CI on the merged main SHA only; it does not establish independent security clearance, real probe deployment, publication readiness, or release approval.
+
+## Exact-main workflow record before PR #213 — 2026-11-26
 
 The following 12 GitHub Actions `push` runs all reported success for the same exact commit `66fe23a42afa5bea88669a36a5027d7d199979a8`; the repository verifier returned `PASS: 12 exact-main push workflows successful`.
 

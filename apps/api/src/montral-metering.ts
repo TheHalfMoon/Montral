@@ -120,6 +120,16 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     created_at timestamptz NOT NULL DEFAULT NOW(),
     PRIMARY KEY (organization_id,period_start,kind,idempotency_key)
   )`);
+  await db.query(`CREATE TABLE IF NOT EXISTS montral_email_refund (
+    organization_id text NOT NULL,
+    period_start timestamptz NOT NULL,
+    kind text NOT NULL CHECK (kind = 'emails'),
+    idempotency_key text NOT NULL CHECK (char_length(idempotency_key) BETWEEN 1 AND 200),
+    created_at timestamptz NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (organization_id,period_start,kind,idempotency_key),
+    FOREIGN KEY (organization_id,period_start,kind,idempotency_key)
+      REFERENCES montral_usage_reservation(organization_id,period_start,kind,idempotency_key) ON DELETE CASCADE
+  )`);
   await db.query(`CREATE TABLE IF NOT EXISTS montral_credit_refund (
     organization_id text NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
     period_start timestamptz NOT NULL,
@@ -371,6 +381,45 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
+  await db.query(`
+    CREATE OR REPLACE FUNCTION montral_refund_alert_email_once(p_org text, p_delivery uuid, p_key text)
+    RETURNS boolean LANGUAGE plpgsql AS $montral$
+    DECLARE p_start timestamptz; reserved integer; delivery_status text; quota_attempted boolean;
+    BEGIN
+      IF p_org IS NULL OR p_delivery IS NULL OR p_key IS NULL OR char_length(p_key) NOT BETWEEN 1 AND 200 THEN
+        RAISE EXCEPTION 'invalid alert email refund';
+      END IF;
+      SELECT period_start,granted INTO p_start,reserved FROM montral_usage_reservation
+        WHERE organization_id=p_org AND kind='emails' AND idempotency_key=p_key
+        ORDER BY period_start DESC LIMIT 1;
+      -- Legacy spendEmails debits have no per-delivery attribution and cannot be refunded safely.
+      IF NOT FOUND OR reserved <> 1 THEN RETURN false; END IF;
+      PERFORM pg_advisory_xact_lock(hashtextextended(p_org || ':' || p_start::text || ':emails',0));
+      IF EXISTS (SELECT 1 FROM montral_email_refund WHERE organization_id=p_org AND period_start=p_start AND kind='emails' AND idempotency_key=p_key) THEN
+        RETURN false;
+      END IF;
+      SELECT status,email_quota_attempted INTO delivery_status,quota_attempted
+        FROM alert_delivery WHERE id=p_delivery AND organization_id=p_org FOR UPDATE;
+      IF NOT FOUND OR delivery_status <> 'sending' OR quota_attempted IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'alert delivery is not eligible for quota settlement';
+      END IF;
+      SELECT granted INTO reserved FROM montral_usage_reservation
+        WHERE organization_id=p_org AND period_start=p_start AND kind='emails' AND idempotency_key=p_key FOR UPDATE;
+      IF reserved <> 1 THEN RETURN false; END IF;
+      UPDATE montral_usage SET used=used-1
+        WHERE organization_id=p_org AND period_start=p_start AND kind='emails' AND used >= 1;
+      IF NOT FOUND THEN RAISE EXCEPTION 'email reservation has no matching aggregate usage'; END IF;
+      INSERT INTO montral_email_refund(organization_id,period_start,kind,idempotency_key)
+        VALUES(p_org,p_start,'emails',p_key);
+      -- Commit the refund and terminal skip together. A crash cannot leave a refunded delivery claimable.
+      UPDATE alert_delivery SET status='skipped',ok=false,
+        error='skipped: workspace suspended before alert delivery',
+        status_message='skipped: workspace suspended before alert delivery',claimed_at=NULL,next_attempt_at=NULL
+        WHERE id=p_delivery AND organization_id=p_org AND status='sending';
+      RETURN true;
+    END;
+    $montral$
+  `);
   // STAGED ONLY. Move exactly one prepared monthly recipient to its first
   // attempt, coupled with its quota decision in a *single* PostgreSQL transaction.
   // Never call SMTP from this function: the caller must commit `attempted` first.
@@ -434,7 +483,7 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     END;
     $montral$
   `);
-  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_credit_refund_once_v1", "montral_region_usage_v1", "montral_monthly_outbox_quota_claim_v1"];
+  return ["montral_usage_meter_v2", "montral_usage_reservation_v1", "montral_credit_refund_once_v1", "montral_email_refund_once_v1", "montral_region_usage_v1", "montral_monthly_outbox_quota_claim_v1"];
 }
 
 /** The ledger kind of a meter; anything else is refused, so a caller can never write an arbitrary kind. */
@@ -600,6 +649,17 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
       throw new Error("Invalid email reservation result");
     return { granted: Number(record.granted) === 1, newlyReserved: record.is_new };
   };
+  const refundEmailQuotaOnce = async (org: string, key: string): Promise<boolean> => {
+    if (typeof key !== "string" || key.length < 1 || key.length > 200) throw new Error("Invalid alert email refund key");
+    const delivery = key.startsWith("alert:") ? key.slice(6) : "";
+    if (!/^[0-9a-f-]{36}$/i.test(delivery)) throw new Error("Invalid alert email refund key");
+    const rows = await database.query<{ refunded: boolean }>(
+      "SELECT montral_refund_alert_email_once($1::text,$2::uuid,$3::text) AS refunded",
+      [org, delivery, key],
+    );
+    if (typeof rows[0]?.refunded !== "boolean") throw new Error("Invalid alert email refund result");
+    return rows[0].refunded;
+  };
   const claimMonthlyOutboxAttempt = async (
     org: string, reportMonth: string, userId: string,
   ): Promise<"attempted" | "quota_denied" | "already_claimed" | "not_eligible" | "prior_reservation_uncertain"> => {
@@ -649,6 +709,7 @@ export function createMontralEntitlements(database: Database, env: Bindings): En
     creditBalance: org => balance(org, "credits"),
     spendEmails: (org, count) => spend(org, count, "emails"),
     reserveEmailQuotaOnce,
+    refundEmailQuotaOnce,
     claimMonthlyOutboxAttempt,
     emailBalance: org => balance(org, "emails"),
     spendMeter: (org, meter, count, at) => spend(org, count, meterKind(meter), at),

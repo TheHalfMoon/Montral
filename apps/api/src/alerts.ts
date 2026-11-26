@@ -383,7 +383,18 @@ async function execute(repo: Repo, orgId: string, d: Pick<AlertDelivery, "id" | 
         catch (cause) { console.error("alert quota checkpoint failed"); throw new RoutingUnavailable(); }
         if (!owned) return false;
       }
-      if ((await withinEmails(meter, channel.organizationId, [channel])).skipped) throw new Skipped(SKIPPED);
+      if (meter.reserveEmailQuotaOnce && meter.refundEmailQuotaOnce) {
+        try {
+          const reservation = await meter.reserveEmailQuotaOnce(channel.organizationId, `alert:${d.id}`);
+          if (!reservation.newlyReserved) throw new Skipped("skipped: prior email quota reservation is uncertain");
+          if (!reservation.granted) throw new Skipped(SKIPPED);
+        } catch (cause) {
+          if (cause instanceof Skipped) throw cause;
+          // Incident alerts remain fail-open when metering is unavailable. Do not issue an unkeyed second debit:
+          // the keyed reservation may have committed even if its response was lost.
+          console.error("email allowance unavailable");
+        }
+      } else if ((await withinEmails(meter, channel.organizationId, [channel])).skipped) throw new Skipped(SKIPPED);
     }
     // a repeat or an escalation is pointless once someone took the incident: checked again right before sending
     if ((d.kind === "incident.escalated" || d.kind === "incident.reminder") && (await followUpStopped(repo, ev.incident.id))) {
@@ -397,6 +408,15 @@ async function execute(repo: Repo, orgId: string, d: Pick<AlertDelivery, "id" | 
     return true;
   } catch (e) {
     if (e instanceof Skipped) {
+      if (e.message === "skipped: workspace suspended before alert delivery" && meter?.refundEmailQuotaOnce && d.emailQuotaAttempted) {
+        try { await meter.refundEmailQuotaOnce(orgId, `alert:${d.id}`); }
+        catch {
+          // Do not turn an unresolved refund into a terminal skip. A stuck-row recovery can safely retry this
+          // transaction; its refund receipt and status transition are committed together in PostgreSQL.
+          console.error("alert email quota settlement unavailable");
+          return false;
+        }
+      }
       await repo.finishDelivery(d.id, { status: "skipped", error: e.message, message: e.message }).catch((x) => console.error("could not record a skipped alert"));
       return false;
     }

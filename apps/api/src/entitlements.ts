@@ -57,6 +57,8 @@ export interface Entitlements {
    * permission to resend. Absent when metering is disabled. Not yet used by
    * the active monthly report sender. */
   reserveEmailQuotaOnce?(workspaceId: string, idempotencyKey: string): Promise<{ granted: boolean; newlyReserved: boolean }>;
+  /** Refund a known, never-submitted alert reservation exactly once. Ambiguous provider outcomes must never call this. */
+  refundEmailQuotaOnce?(workspaceId: string, idempotencyKey: string): Promise<boolean>;
   /** STAGED ONLY. Atomically reserves one recipient's quota and moves its
    * durable monthly outbox record out of `prepared`; a returned `attempted`
    * permits at most one later SMTP attempt. No active sender uses this API.

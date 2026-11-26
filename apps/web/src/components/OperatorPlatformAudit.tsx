@@ -58,7 +58,7 @@ export function OperatorPlatformAudit({ onFailure }: { onFailure: (error: unknow
     {busy ? <p role="status">Loading operator actions...</p> :
       applied === null ? <p className="muted">Use Search audit to load actions.</p> :
       events.length === 0 ? <p className="muted">No retained operator actions match this filter.</p> :
-      <div style={{ overflowX: "auto" }}>
+      <div role="region" aria-label="Operator audit results" tabIndex={0} style={{ overflowX: "auto" }}>
         <table className="usage-tbl">
           <thead><tr><th>When</th><th>Source</th><th>Target</th><th>Action</th><th>Operator</th><th>Reason</th></tr></thead>
           <tbody>{events.map((event) => <tr key={`${event.source}:${event.id}`}>

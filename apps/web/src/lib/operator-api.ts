@@ -30,7 +30,9 @@ export type OperatorProbeValidation = {
 };
 export type OperatorPlatformAuditEvent = {
   source: "workspace" | "probe"; id: string;
-  action: "workspace.suspend" | "workspace.unsuspend" | "probe.drain" | "probe.undrain";
+  action: "workspace.suspend" | "workspace.unsuspend" | "probe.drain" | "probe.undrain"
+    | "probe.activate" | "probe.deactivate" | "probe.validation.validated"
+    | "probe.validation.identity_mismatch" | "probe.validation.credential_mismatch" | "probe.validation.unavailable";
   target: string; operatorId: string | null; reason: string | null; createdAt: string;
 };
 export type SuspensionReason = "abuse" | "payment" | "legal" | "operator";

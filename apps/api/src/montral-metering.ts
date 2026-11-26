@@ -386,7 +386,8 @@ export async function migrateMontralMetering(db: Database): Promise<string[]> {
     RETURNS boolean LANGUAGE plpgsql AS $montral$
     DECLARE p_start timestamptz; reserved integer; delivery_status text; quota_attempted boolean;
     BEGIN
-      IF p_org IS NULL OR p_delivery IS NULL OR p_key IS NULL OR char_length(p_key) NOT BETWEEN 1 AND 200 THEN
+      IF p_org IS NULL OR p_delivery IS NULL OR p_key IS DISTINCT FROM ('alert:' || p_delivery::text)
+        OR char_length(p_key) NOT BETWEEN 1 AND 200 THEN
         RAISE EXCEPTION 'invalid alert email refund';
       END IF;
       SELECT period_start,granted INTO p_start,reserved FROM montral_usage_reservation

@@ -96,21 +96,14 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
       await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
       expect(await recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, counted)).toMatchObject({ checked: 1, matched: 1, failed: 0 });
       expect(lookups).toBe(1);
-    } finally {
-      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
-    }
-  });
 
-  it("discards in-flight DNS results when the workspace becomes suspended", async () => {
-    const p = await verifiedPage();
-    const [page] = await q<{ organizationId: string }>("SELECT organization_id AS \"organizationId\" FROM status_page WHERE id = $1", [p.id]);
-    txt.delete(p.rec.name);
-    const suspendDuringFailure: TxtResolver = async (name) => {
-      await q("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator') ON CONFLICT (organization_id) DO NOTHING", [page.organizationId]);
-      return stub(name);
-    };
-    try {
-      const firstCheck = p.t0 + DOMAIN_RECHECK.healthyMs + 1000;
+      // Reuse this page to exercise a suspension that commits while a claimed DNS lookup is in flight.
+      const firstCheck = p.t0 + 2 * DOMAIN_RECHECK.healthyMs + 2000;
+      txt.delete(p.rec.name);
+      const suspendDuringFailure: TxtResolver = async (name) => {
+        await q("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator') ON CONFLICT (organization_id) DO NOTHING", [page.organizationId]);
+        return stub(name);
+      };
       expect(await recheck(p.id, firstCheck, suspendDuringFailure)).toEqual({
         checked: 1, matched: 0, failed: 1, withdrawn: 0, notices: 0,
       });
@@ -119,18 +112,19 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
       expect(afterSuspendedFailure.verified).not.toBeNull();
       expect(afterSuspendedFailure).toMatchObject({ failures: 0, since: null, error: null });
 
-      // Once unsuspended, a due check can record the still-missing TXT record as a failure.
-      expect(await recheck(p.id, firstCheck + DOMAIN_RECHECK.healthyMs + 1000)).toMatchObject({ checked: 1, failed: 1, withdrawn: 0 });
-      const before = await state(p.id);
+      // Once unsuspended, a later failing result applies; a subsequent match racing suspension must not clear it.
+      const failureCheck = firstCheck + DOMAIN_RECHECK.healthyMs + 1000;
+      expect(await recheck(p.id, failureCheck)).toMatchObject({ checked: 1, failed: 1, withdrawn: 0 });
+      const beforeMatch = await state(p.id);
       txt.set(p.rec.name, [p.rec.value]);
       const suspendDuringMatch: TxtResolver = async (name) => {
         await q("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator') ON CONFLICT (organization_id) DO NOTHING", [page.organizationId]);
         return stub(name);
       };
-      expect(await recheck(p.id, firstCheck + DOMAIN_RECHECK.healthyMs + DOMAIN_RECHECK.failingMs + 2000, suspendDuringMatch)).toEqual({
+      expect(await recheck(p.id, failureCheck + DOMAIN_RECHECK.failingMs + 1000, suspendDuringMatch)).toEqual({
         checked: 1, matched: 1, failed: 0, withdrawn: 0, notices: 0,
       });
-      expect(await state(p.id)).toMatchObject({ failures: before.failures, since: before.since, error: before.error });
+      expect(await state(p.id)).toMatchObject({ failures: beforeMatch.failures, since: beforeMatch.since, error: beforeMatch.error });
     } finally {
       await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
     }

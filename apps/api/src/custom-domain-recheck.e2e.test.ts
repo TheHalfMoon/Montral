@@ -14,6 +14,11 @@ const env = {
   WEB_ORIGIN: origin,
 };
 const H = 3600_000;
+  const deferred = () => {
+    let resolve!: () => void;
+    const promise = new Promise<void>((done) => { resolve = done; });
+    return { promise, resolve };
+  };
 
 /**
  * Scheduled re-verification of verified custom domains, on real PostgreSQL with a stub resolver and an explicit clock.
@@ -35,6 +40,8 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
   afterAll(async () => { setTxtResolver(undefined); await database?.close(1); });
 
   const q = <T,>(sql: string, params?: unknown[]) => database!.query<T>(sql, params);
+  const transaction = async <T,>(work: (query: typeof q) => Promise<T>) =>
+    database!.transaction!((scoped) => work((sql, params) => scoped.query(sql, params)));
   const call = (path: string, init: RequestInit & { cookie?: string } = {}) =>
     app.fetch(new Request(origin + path, {
       ...init,
@@ -65,7 +72,12 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
   const state = async (id: string) => (await q<{ verified: Date | null; checked: Date | null; since: Date | null; failures: number; error: string | null; domain: string | null }>(
     `SELECT custom_domain_verified_at AS verified, custom_domain_checked_at AS checked, custom_domain_failing_since AS since,
             custom_domain_failures AS failures, custom_domain_check_error AS error, custom_domain AS domain FROM status_page WHERE id = $1`, [id]))[0];
-  const recheck = (id: string, at: number, resolver: TxtResolver = stub) => recheckCustomDomains(q, { now: new Date(at), resolver, pageIds: [id] });
+  const recheck = (
+    id: string,
+    at: number,
+    resolver: TxtResolver = stub,
+    runTransaction = transaction,
+  ) => recheckCustomDomains(q, { now: new Date(at), resolver, pageIds: [id], transaction: runTransaction });
   const routed = async (domain: string) => { purgeCustomDomains(); return (await lookupCustomDomain(q, domain))?.id ?? null; };
 
   it("verification stamps a check; the next re-check is due only after the healthy interval and a match keeps the domain", async () => {
@@ -126,6 +138,60 @@ describe.skipIf(!url)("custom domain re-verification (PostgreSQL)", () => {
       });
       expect(await state(p.id)).toMatchObject({ failures: beforeMatch.failures, since: beforeMatch.since, error: beforeMatch.error });
     } finally {
+      await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
+    }
+  });
+
+  it("serializes an in-flight DNS result against the operator suspension lock", async () => {
+    const p = await verifiedPage();
+    const [page] = await q<{ organizationId: string }>("SELECT organization_id AS \"organizationId\" FROM status_page WHERE id = $1", [p.id]);
+    txt.delete(p.rec.name);
+    const suspensionLockHeld = deferred();
+    const allowSuspensionCommit = deferred();
+    const suspension = database!.transaction!(async (scoped) => {
+      await scoped.query("SELECT id FROM organization WHERE id = $1::text FOR UPDATE", [page.organizationId]);
+      await scoped.query("INSERT INTO workspace_suspension (organization_id, reason) VALUES ($1, 'operator')", [page.organizationId]);
+      suspensionLockHeld.resolve();
+      await allowSuspensionCommit.promise;
+    });
+    await suspensionLockHeld.promise;
+
+    const applicationName = `montral-domain-fence-${crypto.randomUUID()}`;
+    const resultLockAttempted = deferred();
+    const trackingTransaction = async <T,>(work: (query: typeof q) => Promise<T>) => database!.transaction!(async (scoped) => {
+      await scoped.query("SELECT set_config('application_name', $1, true)", [applicationName]);
+      return work(async <R,>(sql: string, params?: unknown[]) => {
+        if (sql.includes("FROM organization WHERE id = $1::text FOR UPDATE")) resultLockAttempted.resolve();
+        return scoped.query<R>(sql, params);
+      });
+    });
+    let pendingResult: ReturnType<typeof recheck> | undefined;
+    try {
+      pendingResult = recheck(p.id, p.t0 + DOMAIN_RECHECK.healthyMs + 1000, failing("missing"), trackingTransaction);
+      await resultLockAttempted.promise;
+
+      let blockedOnOrganizationLock = false;
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const [activity] = await q<{ waitEventType: string | null }>(
+          "SELECT wait_event_type AS \"waitEventType\" FROM pg_stat_activity WHERE application_name = $1",
+          [applicationName],
+        );
+        if (activity?.waitEventType === "Lock") {
+          blockedOnOrganizationLock = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      expect(blockedOnOrganizationLock).toBe(true);
+      allowSuspensionCommit.resolve();
+      await suspension;
+      expect(await pendingResult!).toMatchObject({ checked: 1, failed: 1, withdrawn: 0 });
+      expect(await state(p.id)).toMatchObject({ failures: 0, since: null, error: null });
+      expect(await q("SELECT 1 FROM workspace_suspension WHERE organization_id = $1", [page.organizationId])).toHaveLength(1);
+    } finally {
+      allowSuspensionCommit.resolve();
+      await suspension;
+      await pendingResult?.catch(() => {});
       await q("DELETE FROM workspace_suspension WHERE organization_id = $1", [page.organizationId]);
     }
   });

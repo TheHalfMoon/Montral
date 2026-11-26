@@ -55,6 +55,7 @@ export function statusPageDomain(value: unknown, ownHosts: Set<string> = new Set
 
 /** TXT lookup: each record is a list of character strings (as node:dns returns them). */
 export type TxtResolver = (name: string) => Promise<string[][]>;
+type Transaction = <T>(work: (query: Query) => Promise<T>) => Promise<T>;
 
 let txtResolver: TxtResolver | undefined;
 /** Tests swap DNS out; undefined restores the system resolver. */
@@ -238,6 +239,8 @@ export async function recheckCustomDomains(
     pageIds?: string[];
     /** false: queue no owner/admin emails (default true) */
     notify?: boolean;
+    /** Runs each result update under the same organization lock used by operator suspension. */
+    transaction?: Transaction;
   } = {},
 ): Promise<RecheckSummary> {
   const p = { ...DOMAIN_RECHECK, ...options.policy };
@@ -245,18 +248,30 @@ export async function recheckCustomDomains(
   const startedAt = Date.now();
   const notify = options.notify ?? true;
   const summary: RecheckSummary = { checked: 0, matched: 0, failed: 0, withdrawn: 0, notices: 0 };
-  const one = async (row: { id: string; domain: string; token: string }) => {
+  const updateUnderSuspensionFence = async <T>(organizationId: string, update: (query: Query) => Promise<T>): Promise<T | undefined> => {
+    if (!options.transaction) return update(query);
+    return options.transaction(async (tx) => {
+      // Suspension takes this same row lock before inserting workspace_suspension. If this update gets it first,
+      // it commits before suspension; if suspension gets it first, this read runs after that commit and discards DNS.
+      const [organization] = await tx<{ id: string }>("SELECT id FROM organization WHERE id = $1::text FOR UPDATE", [organizationId]);
+      if (!organization) return undefined;
+      const [suspension] = await tx<{ one: number }>("SELECT 1 AS one FROM workspace_suspension WHERE organization_id = $1::text", [organizationId]);
+      if (suspension) return undefined;
+      return update(tx);
+    });
+  };
+  const one = async (row: { id: string; domain: string; token: string; organizationId: string }) => {
     const outcome = await verifyDomainToken(row.domain, row.token, options.resolver ?? txtResolver);
-    // DNS may finish after the workspace is suspended; both outcome writes fence on the current suspension state.
+    // Serialize result writes with suspension so none can commit after the suspension transaction commits.
     if (outcome.ok) {
       summary.matched++;
-      await query(
+      await updateUnderSuspensionFence(row.organizationId, (write) => write(
         `UPDATE status_page SET custom_domain_failing_since = NULL, custom_domain_failures = 0, custom_domain_check_error = NULL
          WHERE id = $1 AND custom_domain = $2 AND custom_domain_token = $3 AND custom_domain_verified_at IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM workspace_suspension ws WHERE ws.organization_id = status_page.organization_id)
          `,
         [row.id, row.domain, row.token],
-      );
+      ));
       return;
     }
     summary.failed++;
@@ -268,7 +283,7 @@ export async function recheckCustomDomains(
              ($4::text <> 'lookup_failed' AND sp.custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $6::double precision)
                AND sp.custom_domain_failures + 1 >= $7::int)
              OR ($4::text = 'lookup_failed' AND sp.custom_domain_failing_since <= $5::timestamptz - make_interval(secs => $8::double precision)))`;
-    const rows = await query<{ withdrawn: boolean; organization_id: string; project_id: string | null }>(
+    const rows = await updateUnderSuspensionFence(row.organizationId, (write) => write<{ withdrawn: boolean; organization_id: string; project_id: string | null }>(
       `UPDATE status_page AS sp SET
          custom_domain_failures = CASE WHEN s.fresh THEN 1 ELSE sp.custom_domain_failures + 1 END,
          custom_domain_failing_since = CASE WHEN s.fresh THEN $5::timestamptz ELSE sp.custom_domain_failing_since END,
@@ -283,8 +298,8 @@ export async function recheckCustomDomains(
          AND NOT EXISTS (SELECT 1 FROM workspace_suspension ws WHERE ws.organization_id = sp.organization_id)
        RETURNING sp.organization_id, sp.project_id, sp.custom_domain_verified_at IS NULL AS withdrawn`,
       [row.id, row.domain, row.token, outcome.reason, now.toISOString(), p.absentMs / 1000, p.minFailures, p.unresolvableMs / 1000],
-    );
-    if (rows[0]?.withdrawn) {
+    ));
+    if (rows?.[0]?.withdrawn) {
       summary.withdrawn++;
       // Workspace audit log, actor "system". A separate, best-effort statement: the withdrawal above is already
       // committed, and a failure here must never undo or fail it.
@@ -301,7 +316,7 @@ export async function recheckCustomDomains(
     }
   };
   while (Date.now() - startedAt < p.budgetMs && (options.shouldContinue?.() ?? true)) {
-    const due = await query<{ id: string; domain: string; token: string }>(
+    const due = await query<{ id: string; domain: string; token: string; organizationId: string }>(
       `UPDATE status_page SET custom_domain_checked_at = $1::timestamptz
        WHERE id IN (
          SELECT candidate.id FROM status_page candidate
@@ -315,7 +330,7 @@ export async function recheckCustomDomains(
          ORDER BY (candidate.custom_domain_failing_since IS NULL), candidate.custom_domain_checked_at NULLS FIRST, candidate.id
          LIMIT $4
          FOR UPDATE SKIP LOCKED)
-       RETURNING id, custom_domain AS domain, custom_domain_token AS token`,
+       RETURNING id, organization_id AS "organizationId", custom_domain AS domain, custom_domain_token AS token`,
       [now.toISOString(), p.healthyMs / 1000, p.failingMs / 1000, p.batch, options.pageIds ? options.pageIds.join(",") : null],
     );
     summary.checked += due.length;

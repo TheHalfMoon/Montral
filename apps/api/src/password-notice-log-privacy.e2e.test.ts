@@ -5,18 +5,19 @@ import { setMailTransport } from "./email";
 
 const url = process.env.TEST_DATABASE_URL;
 const base = "http://localhost:8787";
-const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-only-auth-key-12345678901234", BETTER_AUTH_URL: base, WEB_ORIGIN: base, EMAIL_FROM: "alerts@example.test" };
+const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-only-auth-key-12345678901234", BETTER_AUTH_URL: base, WEB_ORIGIN: base, EMAIL_FROM: "alerts@example.test", TRUST_PROXY: "true" };
 
 describe.skipIf(!url)("account security notice log privacy", () => {
   it("keeps a reset successful while suppressing mail-provider exception details", async () => {
     const app = createApp(openDatabase);
     const email = `notice-${crypto.randomUUID()}@example.test`;
     const marker = `synthetic-diagnostic-${crypto.randomUUID()}`;
+    const testIp = `2001:db8:${crypto.randomUUID().replaceAll("-", "").slice(0, 4)}::1`;
     const sent: { to: string; subject: string; text: string }[] = [];
     const logs = vi.spyOn(console, "error").mockImplementation(() => {});
     let attempted = false;
     const post = (path: string, body: unknown) => app.fetch(new Request(base + path, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
+      method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": testIp }, body: JSON.stringify(body),
     }), env as never);
     try {
       setMailTransport(async (msg) => {

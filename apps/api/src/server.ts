@@ -244,7 +244,12 @@ let domainRecheckRunning = false;
 const domainRecheck = setInterval(() => {
   if (domainRecheckRunning || stopping) return;
   domainRecheckRunning = true;
-  recheckCustomDomains((sql, params) => database.query(sql, params), { shouldContinue: () => !stopping })
+  recheckCustomDomains((sql, params) => database.query(sql, params), {
+    shouldContinue: () => !stopping,
+    transaction: database.transaction
+      ? (work) => database.transaction!((scoped) => work((sql, params) => scoped.query(sql, params)))
+      : undefined,
+  })
     .then((r) => { if (r.withdrawn) console.error(`custom domains: verification withdrawn for ${r.withdrawn} domain(s) whose TXT record is gone`); })
     .catch(() => { if (!stopping) console.error("custom domain re-check failed; private diagnostic suppressed"); })
     // verified single sign-on email domains follow the same policy (sso-domains.ts)

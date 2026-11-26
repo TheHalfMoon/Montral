@@ -114,6 +114,8 @@ describe.skipIf(!url)("idempotent monthly email quota primitive (staged; no send
       VALUES ($1,$2,'synthetic','email','incident.opened',false,'sending',true)`, [delivery, org]);
     expect(await quota!.reserveEmailQuotaOnce!(org, key)).toEqual({ granted: true, newlyReserved: true });
     expect(await quota!.emailBalance(org)).toMatchObject({ used: 1 });
+    await expect(quota!.refundEmailQuotaOnce!(org, `alert:${crypto.randomUUID()}`)).rejects.toThrow("invalid alert email refund");
+    expect(await quota!.emailBalance(org)).toMatchObject({ used: 1 });
     await expect(db!.migrateEdition!(async tx => {
       await tx.query("SELECT montral_refund_alert_email_once($1::text,$2::uuid,$3::text)", [org, delivery, key]);
       throw new Error("synthetic crash before settlement commit");

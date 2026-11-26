@@ -371,7 +371,7 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     const probeNote = "private-probe-note-must-never-leak";
     const fingerprint = "a".repeat(64);
     try {
-      const eventAt = new Date("2026-11-25T12:00:00.000Z");
+      const eventAt = "2026-11-25T12:00:00.000Z";
       await db!.query(`INSERT INTO probe_region_drain_event(region,action,operator_id,note,created_at)
         VALUES ($1,'drain',$2,$3,$4)`, [probeRegion, operator.id, probeNote, eventAt]);
       await db!.query(`INSERT INTO probe_region_lifecycle_event(region,action,operator_id,created_at)

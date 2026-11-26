@@ -912,4 +912,5 @@ export const zh: Record<string, string> = {
   "Push delivery is not configured on this server, so these phones get no alerts.": "此服务器未配置推送，这些手机不会收到告警。",
   "No phones yet. Registration requires a compatible, separately configured native client.": "还没有手机。注册需要另行配置兼容的原生客户端。", "Development build": "开发版", "Critical alerts on": "已开启危急提醒", "Push alerts on": "已开启推送告警",
   "Replay attempts this month": "本月重放次数", "counts admitted requests, not confirmed deliveries": "按已受理请求计数，不代表已送达", "counter resets on {date} (UTC)": "计数于 {date}（UTC）清零", "not billed": "不计费",
+  "Regional check usage": "各区域检查用量", "UTC accounting month": "UTC 记账月份", "Completed results are observed probe responses. An unavailable or unverified result does not prove that no remote work occurred. Unverified reservations are not automatically refunded.": "已完成结果表示收到了探测响应。区域不可用或结果未验证，并不能证明远端没有执行工作。未验证的预留额度不会自动退款。", "No regional checks have been recorded this month.": "本月尚无区域检查记录。", "Planned": "计划", "Completed results": "已完成结果", "Failed results": "失败结果", "Unavailable": "不可用", "Reserved": "已预留", "Unverified": "未验证", "Credits charged": "已扣额度", "Credits refunded": "已退额度",
 };

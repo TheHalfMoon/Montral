@@ -121,6 +121,21 @@ function takeEarly(path: string): Promise<unknown> | undefined {
   return e && Date.now() - e.at < EARLY_TTL ? e.p : undefined;
 }
 export type Quota = { limit: number; used: number; periodStart: string; periodEnd: string };
+export type RegionUsageSummary = {
+  periodStart: string;
+  periodEnd: string;
+  regions: Array<{
+    region: string;
+    planned: number;
+    completed: number;
+    failedResults: number;
+    unavailable: number;
+    reserved: number;
+    unverified: number;
+    creditsCharged: number;
+    creditsRefunded: number;
+  }>;
+};
 export type Usage =
   | { metered: false }
   | {
@@ -135,6 +150,8 @@ export type Usage =
       webhookEvents?: Quota | null;
       /** browser-check runtime seconds this month; absent or null when not metered */
       browserSeconds?: Quota | null;
+      /** Persistent current-UTC-month region check accounting; absent when this deployment has no region meter. */
+      regionUsage?: RegionUsageSummary | null;
       activeMonitors: number;
       plan: { id: string; name: string; maxActiveMonitors: number | null; minIntervalSec: number; maxRegions?: number | null; upgradeUrl?: string; manageUrl?: string } | null;
     };

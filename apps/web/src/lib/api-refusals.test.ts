@@ -41,6 +41,17 @@ describe("API refusals the shell reacts to", () => {
     expect(events).toEqual(["montral:usage"]);
   });
 
+  it("preserves the replay attempt ID when the target outcome is unknown", async () => {
+    vi.stubGlobal("fetch", answer(502, {
+      error: "Could not confirm delivery; the target may have received it",
+      code: "replay_outcome_unknown",
+      attemptId: "7a465fd8-0cd4-4e79-b5e5-f9ff081e8ca5",
+    }));
+    const { api } = await import("./api");
+    await expect(api.replayHookEvent("inbox", "event", "https://sink.example/hook"))
+      .rejects.toMatchObject({ code: "replay_outcome_unknown", attemptId: "7a465fd8-0cd4-4e79-b5e5-f9ff081e8ca5" });
+  });
+
   it("a plan-limit refusal (not a used-up allowance) does not refresh the banner", async () => {
     vi.stubGlobal("fetch", answer(402, { error: "limit", code: "monitor_limit", upgradeUrl: "/app/billing" }));
     const { api } = await import("./api");

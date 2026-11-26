@@ -71,8 +71,8 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     expect(created.status).toBe(201);
     return created.body as { id: string; path: string };
   }
-  const send = async (path: string, body: string | Uint8Array = '{"synthetic":true}', method = "POST"): Promise<Response> => app.fetch(new Request(origin + path, {
-    method, headers: { "content-type": "application/json", "x-event-type": "synthetic.test" }, body: body as BodyInit,
+  const send = async (path: string, body: string | Uint8Array = '{"synthetic":true}', method = "POST", extraHeaders: Record<string, string> = {}): Promise<Response> => app.fetch(new Request(origin + path, {
+    method, headers: { "content-type": "application/json", "x-event-type": "synthetic.test", ...extraHeaders }, body: body as BodyInit,
   }), env as never);
   const privateHeaders = (res: Response | Res) => {
     expect(res.headers.get("cache-control")).toBe("private, no-store");
@@ -273,11 +273,15 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     const stranger = await signUp("replay-stranger");
     expect((await call("/api/hooks/replay-usage", { cookie: stranger.cookie })).body.attempts).toBe("0");
     expect((await call(`/api/hooks/inboxes/${id}/response`, { method: "PUT", cookie: owner.cookie, body: { status: 503, body: "configured-down", headers: [{ name: "X-Mock", value: "1" }] } })).status).toBe(200);
-    expect((await send(path, '{"order":7}')).status).toBe(503);
+    expect((await send(path, '{"order":7}', "POST", {
+      "X-Montral-Replay-Attempt": "spoofed-attempt-id",
+      "X-Montral-Replay": "spoofed-event-id",
+    })).status).toBe(503);
     const [event] = (await call(`/api/hooks/inboxes/${id}/events`, { cookie: owner.cookie })).body.events as { id: string; response_status: number }[];
     expect(event.response_status).toBe(503);
     let seen: { headers?: IncomingHttpHeaders; body?: string } = {};
     let target = "";
+    let firstAttemptId = "";
     const sink = createServer((req, res) => {
       let body = "";
       req.on("data", (c) => { body += c; });
@@ -289,6 +293,12 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
       const replayed = await call(`/api/hooks/inboxes/${id}/events/${event.id}/replay`, { method: "POST", cookie: owner.cookie, body: { url: target }, env: { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" } });
       expect(replayed.status).toBe(200);
       expect(replayed.body).toMatchObject({ status: 201, body: "sink-ok" });
+      expect(replayed.body.attemptId).toMatch(/^[0-9a-f-]{36}$/i);
+      firstAttemptId = replayed.body.attemptId;
+      expect(seen.headers?.["x-montral-replay-attempt"]).toBe(replayed.body.attemptId);
+      expect(seen.headers?.["x-montral-replay-attempt"]).not.toBe("spoofed-attempt-id");
+      expect(seen.headers?.["x-montral-replay"]).toBe(event.id);
+      expect(seen.headers?.["x-montral-replay"]).not.toBe("spoofed-event-id");
       expect(seen.body).toBe('{"order":7}');
       expect(seen.headers?.["x-mock"]).toBeUndefined();
       expect(JSON.stringify(replayed.body)).not.toContain("configured-down");
@@ -304,6 +314,8 @@ describe.skipIf(!url)("Montral configurable webhook responses (PostgreSQL)", () 
     }
     const ambiguous = await call(`/api/hooks/inboxes/${id}/events/${event.id}/replay`, { method: "POST", cookie: owner.cookie, body: { url: target }, env: { MONTRAL_REPLAY_PRIVATE_TARGETS: "true" } });
     expect(ambiguous.status).toBe(502);
+    expect(ambiguous.body.attemptId).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(ambiguous.body.attemptId).not.toBe(firstAttemptId);
     const usageAfterAmbiguous = await call("/api/hooks/replay-usage", { cookie: owner.cookie });
     expect(usageAfterAmbiguous.body).toMatchObject({ attempts: "2", unit: "admitted_attempts", billable: false });
     // Replay stores no new event/body/URL; only its monthly aggregate count persists.

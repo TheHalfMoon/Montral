@@ -292,11 +292,12 @@ function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; 
   const [result, setResult] = useState<ReplayResult | null>(null);
   const [error, setError] = useState("");
   const [outcomeUnknown, setOutcomeUnknown] = useState(false);
+  const [unknownAttemptId, setUnknownAttemptId] = useState<string | null>(null);
   const replay = async (e: React.SyntheticEvent) => {
-    e.preventDefault(); setBusy(true); setError(""); setOutcomeUnknown(false); setResult(null);
+    e.preventDefault(); setBusy(true); setError(""); setOutcomeUnknown(false); setUnknownAttemptId(null); setResult(null);
     try { setResult(await api.replayHookEvent(inbox, event.id, url.trim())); }
     catch (x) {
-      if (x instanceof ApiError && x.code === "replay_outcome_unknown") setOutcomeUnknown(true);
+      if (x instanceof ApiError && x.code === "replay_outcome_unknown") { setOutcomeUnknown(true); setUnknownAttemptId(x.attemptId ?? null); }
       else setError((x as Error).message);
     }
     // an attempt is counted even when the target answers with an error, so refresh the count either way
@@ -304,7 +305,7 @@ function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; 
   };
   const remove = async () => {
     if (!(await ask(t("Delete this captured request? This cannot be undone."), t("Delete request")))) return;
-    setBusy(true); setError(""); setOutcomeUnknown(false);
+    setBusy(true); setError(""); setOutcomeUnknown(false); setUnknownAttemptId(null);
     try { await api.deleteHookEvent(inbox, event.id); onDeleted(); }
     catch (x) { setError((x as Error).message); setBusy(false); }
   };
@@ -317,9 +318,10 @@ function EventActions({ inbox, event, onDeleted, onReplayed }: { inbox: string; 
     </form>
     <p className="faint" style={{ fontSize: 13, margin: 0 }}>{t("Sends this request's method, body and stored headers to the URL. Private and internal addresses are refused, redirects are not followed, and nothing about the replay is stored.")}</p>
     {error && <p className="err" role="alert">{error}</p>}
-    {outcomeUnknown && <p className="err" role="alert">{t("The delivery outcome is unknown. The target may have processed this replay; retry only if duplicate delivery is acceptable.")}</p>}
+    {outcomeUnknown && <p className="err" role="alert">{t("The delivery outcome is unknown. The target may have processed this replay; retry only if duplicate delivery is acceptable.")} {unknownAttemptId && <><br />{t("Replay attempt ID")}: <code>{unknownAttemptId}</code></>}</p>}
     {result && <div role="status">
       <b>{t("Response")} {result.status}</b> <span className="muted">· {result.durationMs} ms{result.truncated ? " · " + t("first 4 KiB") : ""}</span>
+      <p className="faint" style={{ fontSize: 13 }}>{t("Replay attempt ID")}: <code>{result.attemptId}</code></p>
       <pre className="code2" style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{result.body || t("(empty body)")}</pre>
     </div>}
   </div>;

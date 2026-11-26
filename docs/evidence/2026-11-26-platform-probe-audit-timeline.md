@@ -13,6 +13,10 @@ The MFA-gated platform timeline included workspace suspension and probe drain/un
 
 ## Verification
 
-The added PostgreSQL E2E regression covers all four probe audit families, fixed-time keyset pagination with one row per page, distinct IDs, combined workspace/probe results, target-only filtering, and exclusion of synthetic private notes and configuration fingerprints. The browser journey displays lifecycle and validation entries using synthetic responses. Local API/web typechecks and builds passed; API cursor tests passed 19/19 and the web operator API tests passed 6/6. The PostgreSQL E2E is skipped locally because `TEST_DATABASE_URL` is unset, and the browser journey was not run locally. Hosted exact-head qualification is pending.
+The added PostgreSQL E2E regression covers all four probe audit families, fixed-time keyset pagination with one row per page, distinct IDs, combined workspace/probe results, target-only filtering, and exclusion of synthetic private notes and configuration fingerprints. The browser journey displays lifecycle and validation entries using synthetic responses. Local API/web typechecks and builds passed; API cursor tests passed 19/19 and the web operator API tests passed 6/6. The PostgreSQL E2E is skipped locally because `TEST_DATABASE_URL` is unset, and the browser journey was not run locally.
+
+The first hosted run found a serious `scrollable-region-focusable` accessibility violation in the new horizontal results scroller on mobile Chromium and WebKit. The scroller is now a labelled, keyboard-focusable region. The exact implementation head `a2fbf93cd5a9b4e6f6becb92c1c8c54995486908` then passed all 23 PR checks, including PostgreSQL 17 and 18 E2E, Chromium/Firefox/WebKit/mobile WCAG checks, CodeQL analysis, failover, upgrade/rollback, load/backpressure, and macOS ARM64. This evidence update does not change runtime code; its final PR head is being qualified separately.
+
+No independent human review was available: the PR has no review requests or reviews and the repository has no branch protection. CI and the local source review are not substitutes for that independent review.
 
 This change improves audit visibility. It does not prove that a probe binary or deployment is trusted, establish security clearance, or alter the Community HOLD or Cloud/BYOC NO-GO gates.

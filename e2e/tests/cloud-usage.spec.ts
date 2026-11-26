@@ -65,6 +65,7 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await page.goto("/app/usage");
     await expect(page.getByText("This deployment has no plans or usage limits.")).toBeVisible();
     await expect(page.locator(".meter, [data-usage-alert]")).toHaveCount(0);
+      await expect(page.getByRole("region", { name: "Regional check usage" })).toHaveCount(0);
   });
 
   await test.step("after the first monitor the checklist stays until an alert channel exists, and can be hidden", async () => {
@@ -165,6 +166,32 @@ test("onboarding checklist, usage banner, quota message and suspended notice", a
     await expect(page.getByRole("progressbar", { name: "Webhook events" })).toHaveAttribute("aria-valuenow", "85");
     await expect(page.getByRole("progressbar", { name: "Checks" })).toHaveAttribute("aria-valuenow", "0");
     await checkA11y(page, testInfo, "usage-near");
+  });
+
+  await test.step("metered regional usage distinguishes observed, unavailable, reserved and unverified work", async () => {
+    await page.unroute(isUsage);
+    await answerUsage(page, syntheticUsage({
+      plan: { id: "synthetic-multiregion", name: "Synthetic plan", maxActiveMonitors: 3, minIntervalSec: 120, maxRegions: 3 },
+      regionUsage: {
+        periodStart: quota(0, 1).periodStart,
+        periodEnd: nextUtcMonth(),
+        regions: [{ region: "eu-west", planned: 8, completed: 5, failedResults: 1, unavailable: 1, reserved: 1, unverified: 2, creditsCharged: 6, creditsRefunded: 2 }],
+      },
+    }));
+    await page.goto("/app/usage");
+    const regional = page.getByRole("region", { name: "Regional check usage" });
+    await expect(regional).toBeVisible();
+    await expect(regional).toContainText("UTC accounting month");
+    await expect(regional).toContainText("eu-west");
+    await expect(regional).toContainText("Failed results");
+    await expect(regional).toContainText("Unavailable");
+    await expect(regional).toContainText("Reserved");
+    await expect(regional).toContainText("Unverified");
+    await expect(regional).toContainText("Credits charged");
+    await expect(regional).toContainText("Credits refunded");
+    await expect(regional).toContainText("Unverified reservations are not automatically refunded.");
+    await checkA11y(page, testInfo, "regional-usage-summary");
+    await page.unroute(isUsage);
   });
 
   await test.step("metered, used up: the banner says so and can be dismissed for the session", async () => {

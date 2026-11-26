@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, type Monitor, type Quota, type Usage as UsageData } from "../lib/api";
+import { api, type Monitor, type Quota, type RegionUsageSummary, type Usage as UsageData } from "../lib/api";
 import { t } from "../lib/i18n";
 import { formatResetDate, meterLevel, resetDate } from "../lib/usage-alerts";
 
@@ -21,6 +21,36 @@ function Meter({ label, q, note, upgradeUrl }: { label: string; q: Quota; note: 
   );
 }
 
+/** Per-region accounting is shown only when the metered API returns its persistent UTC-month summary. */
+export function RegionUsageSummaryView({ summary }: { summary: RegionUsageSummary }) {
+  const month = summary.periodStart.slice(0, 7);
+  return (
+    <section className="card sect" aria-labelledby="region-usage-heading">
+      <h2 id="region-usage-heading">{t("Regional check usage")}</h2>
+      <p className="muted">{t("UTC accounting month")}: <span className="mono">{month}</span></p>
+      <p className="muted">{t("Completed results are observed probe responses. An unavailable or unverified result does not prove that no remote work occurred. Unverified reservations are not automatically refunded.")}</p>
+      {summary.regions.length === 0 ? <p className="muted">{t("No regional checks have been recorded this month.")}</p> :
+        <div className="region-usage-grid">
+          {summary.regions.map((region) => (
+            <article className="card region-usage-card" key={region.region}>
+              <h3>{region.region}</h3>
+              <dl className="region-usage-list">
+                <div><dt>{t("Planned")}</dt><dd>{fmt(region.planned)}</dd></div>
+                <div><dt>{t("Completed results")}</dt><dd>{fmt(region.completed)}</dd></div>
+                <div><dt>{t("Failed results")}</dt><dd>{fmt(region.failedResults)}</dd></div>
+                <div><dt>{t("Unavailable")}</dt><dd>{fmt(region.unavailable)}</dd></div>
+                <div><dt>{t("Reserved")}</dt><dd>{fmt(region.reserved)}</dd></div>
+                <div><dt>{t("Unverified")}</dt><dd>{fmt(region.unverified)}</dd></div>
+                <div><dt>{t("Credits charged")}</dt><dd>{fmt(region.creditsCharged)}</dd></div>
+                <div><dt>{t("Credits refunded")}</dt><dd>{fmt(region.creditsRefunded)}</dd></div>
+              </dl>
+            </article>
+          ))}
+        </div>}
+    </section>
+  );
+}
+
 /** Plan, allowances and what uses them. Shown only where the deployment has plans; self-hosted never links here. */
 export default function Usage() {
   const [u, setU] = useState<UsageData | null>(null);
@@ -38,7 +68,7 @@ export default function Usage() {
       </>
     );
   }
-  const { plan, credits, emails, webhookEvents, browserSeconds, activeMonitors } = u;
+  const { plan, credits, emails, webhookEvents, browserSeconds, activeMonitors, regionUsage } = u;
   // the checks each monitor makes in a month at its interval: where the allowance goes
   const perMonth = (m: Monitor) => (m.type === "heartbeat" || m.status === "paused" ? 0 : Math.round((30 * 86400) / Math.max(1, m.intervalSec)));
   const top = [...monitors].map((m) => ({ m, n: perMonth(m) })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n).slice(0, 5);
@@ -76,6 +106,7 @@ export default function Usage() {
           {webhookEvents && <Meter label={t("Webhook events")} q={webhookEvents} note={t("Requests captured by webhook inboxes.")} upgradeUrl={upgradeUrl} />}
           {browserSeconds && <Meter label={t("Browser check time")} q={browserSeconds} note={t("Seconds. Each check reserves its journey timeout; unused seconds are returned.")} upgradeUrl={upgradeUrl} />}
         </div>
+        {regionUsage && <RegionUsageSummaryView summary={regionUsage} />}
         {top.length > 0 && (
           <section className="card sect">
             <h3>{t("Monitors that use the most checks")}</h3>

@@ -70,6 +70,10 @@ test("operator console is denied by default and confirms every synthetic state c
       ...workspace(), suspension: suspended ? { reason: "operator", note: null, suspendedBy: "synthetic",
         suspendedAt: "2026-01-01T00:00:00.000Z" } : null, usage: { credits: null, emails: null },
     });
+    if (path === "/audit") return answer(route, 200, { events: [
+      { source: "probe", id: "lifecycle:1", action: "probe.deactivate", target: "synthetic-east", operatorId: "synthetic-operator", reason: null, createdAt: "2026-01-01T00:00:00.000Z" },
+      { source: "probe", id: "validation:1", action: "probe.validation.validated", target: "synthetic-east", operatorId: "synthetic-operator", reason: null, createdAt: "2026-01-01T00:00:00.000Z" },
+    ], next: null });
     if (path === "/probes") return denyProbeOnFirstMock
       ? answer(route, 403, { error: "private operator configuration" })
       : answer(route, 200, { auto: { monitors: 0 }, regions: [region()] });
@@ -112,6 +116,12 @@ test("operator console is denied by default and confirms every synthetic state c
   await expect(suspensionHistory).toContainText("Suspended");
   await expect(suspensionHistory).toContainText("operator");
   await expect(suspensionHistory).not.toContainText("private operator note");
+
+  const platformAudit = page.getByRole("region", { name: "Platform operator audit" });
+  await platformAudit.getByRole("button", { name: "Search audit" }).click();
+  await expect(platformAudit).toContainText("probe.deactivate");
+  await expect(platformAudit).toContainText("probe.validation.validated");
+  await expect(platformAudit).not.toContainText("credential fingerprint");
 
   const probes = page.getByRole("region", { name: "Probe region controls" });
   await probes.getByRole("button", { name: "Audit history" }).click();

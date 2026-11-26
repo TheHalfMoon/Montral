@@ -119,7 +119,7 @@ without the note.
 
 ## Probe regions
 
-The restricted, unlinked platform console at `/app/operator` can display the latest 50 drain/undrain events for each configured or formerly configured region, including the timestamp, action, operator identity and private note. This read-only view uses the existing MFA-protected audit API and never makes events available to customer workspaces.
+The restricted, unlinked platform console at `/app/operator` can display the latest 50 drain/undrain events for each configured or formerly configured region, including the timestamp, action, operator identity and private note. A separate read-only platform timeline can search the existing drain, activation/deactivation, and credential-possession validation records across regions. Probe actions are listed with fixed outcome labels and operator identity; private drain notes, endpoint URLs, credentials, and challenge material are excluded. The timeline uses the existing MFA-protected audit API and never makes events available to customer workspaces. Credential-possession outcomes do not attest probe software or deployment.
 
 
 Remote check regions are deployment configuration (`PROBE_REGIONS`, `PROBE_SECRET` and optional private `PROBE_SECRETS`; see [EDGE-PROBE.md](EDGE-PROBE.md)).

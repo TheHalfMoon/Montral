@@ -44,12 +44,15 @@ describe("unified operator audit keyset cursor", () => {
     const uuid = "a6789012-2345-4567-89ab-0123456789ab";
     expect(decodePlatformAuditCursor(encodePlatformAuditCursor(at, "workspace", uuid))).toEqual({ at, source: "workspace", id: uuid });
     expect(decodePlatformAuditCursor(encodePlatformAuditCursor(at, "probe", "987654321"))).toEqual({ at, source: "probe", id: "987654321" });
+    for (const id of ["drain:9", "lifecycle:10", "validation:11"])
+      expect(decodePlatformAuditCursor(encodePlatformAuditCursor(at, "probe", id))).toEqual({ at, source: "probe", id });
     for (const bad of ["", "%%%", btoa('[]'), btoa('["x","probe","1"]'),
       encodePlatformAuditCursor(at, "workspace", "not-uuid"),
       encodePlatformAuditCursor("2026-02-30T09:00:00.000000", "probe", "1"),
       encodePlatformAuditCursor("2026-11-13T25:00:00.000000", "probe", "1"),
       encodePlatformAuditCursor(at, "probe", "-1"),
       encodePlatformAuditCursor(at, "probe", "0"),
+      encodePlatformAuditCursor(at, "probe", "unknown:1"),
       btoa(JSON.stringify([at, "customer", "1"])),
       btoa(JSON.stringify([at, "probe", "1", "extra"]))])
       expect(decodePlatformAuditCursor(bad)).toBeNull();

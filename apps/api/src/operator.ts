@@ -59,10 +59,11 @@ export function decodePlatformAuditCursor(raw: string): { at: string; source: "w
     const [at, source, id] = parsed;
     const parsedTime = typeof at === "string" && OPERATOR_AUDIT_CURSOR_AT.test(at)
       ? Date.parse(at.slice(0, 19) + "Z") : NaN;
+    const validProbeId = typeof id === "string" && /^(?:[1-9]\d{0,18}|(?:drain|lifecycle|validation):[1-9]\d{0,18})$/.test(id);
     if (!Number.isFinite(parsedTime) || new Date(parsedTime).toISOString().slice(0, 19) !== at.slice(0, 19)
       || (source !== "workspace" && source !== "probe")
       || typeof id !== "string"
-      || (source === "workspace" ? !UUID.test(id) : !/^[1-9]\d{0,18}$/.test(id))) return null;
+      || (source === "workspace" ? !UUID.test(id) : !validProbeId)) return null;
     return { at, source, id };
   } catch { return null; }
 }
@@ -251,16 +252,16 @@ export const operatorApi = new Hono<AppEnv>()
     if (cursor) {
       params.push(cursor.at, cursor.source, cursor.id);
       const n = params.length;
-      filters.push(`(created_at AT TIME ZONE 'UTC', source, id) < ($${n - 2}::timestamp, $${n - 1}::text, $${n}::text)`);
+      filters.push(`(created_at AT TIME ZONE 'UTC', source, sort_id) < ($${n - 2}::timestamp, $${n - 1}::text, $${n}::text)`);
     }
     params.push(limit + 1);
     const rows = await c.get("database").query<{
-      source: "workspace" | "probe"; id: string; action: string; target: string;
+      source: "workspace" | "probe"; id: string; sort_id: string; action: string; target: string;
       operator_id: string | null; reason: string | null;
       created_at: Date | string; cursor_at: string;
     }>(`
       WITH actions AS (
-        SELECT 'workspace'::text AS source, a.id::text AS id,
+        SELECT 'workspace'::text AS source, a.id::text AS id, a.id::text AS sort_id,
           a.action, a.organization_id::text AS target,
           w.operator_id, a.changes->'values'->>'reason' AS reason,
           a.created_at
@@ -270,17 +271,29 @@ export const operatorApi = new Hono<AppEnv>()
           AND a.target_type='workspace' AND a.target_id=a.organization_id
           AND a.action IN ('workspace.suspend','workspace.unsuspend')
         UNION ALL
-        SELECT 'probe'::text AS source, p.id::text AS id,
+        SELECT 'probe'::text AS source, ('drain:' || p.id)::text AS id, p.id::text AS sort_id,
           ('probe.' || p.action)::text AS action, p.region::text AS target,
           p.operator_id::text AS operator_id, NULL::text AS reason, p.created_at
         FROM probe_region_drain_event p
         WHERE p.action IN ('drain','undrain')
+        UNION ALL
+        SELECT 'probe'::text AS source, ('lifecycle:' || p.id)::text AS id, ('lifecycle:' || p.id)::text AS sort_id,
+          ('probe.' || p.action)::text AS action, p.region::text AS target,
+          p.operator_id::text AS operator_id, NULL::text AS reason, p.created_at
+        FROM probe_region_lifecycle_event p
+        WHERE p.action IN ('activate','deactivate')
+        UNION ALL
+        SELECT 'probe'::text AS source, ('validation:' || p.id)::text AS id, ('validation:' || p.id)::text AS sort_id,
+          ('probe.validation.' || p.outcome)::text AS action, p.region::text AS target,
+          p.operator_id::text AS operator_id, NULL::text AS reason, p.created_at
+        FROM probe_region_validation_event p
+        WHERE p.outcome IN ('validated','identity_mismatch','credential_mismatch','unavailable')
       )
-      SELECT source,id,action,target,operator_id,reason,created_at,
+      SELECT source,id,sort_id,action,target,operator_id,reason,created_at,
         to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US') AS cursor_at
       FROM actions
       ${filters.length ? `WHERE ${filters.join(" AND ")}` : ""}
-      ORDER BY created_at DESC, source DESC, id DESC LIMIT $${params.length}::int
+      ORDER BY created_at DESC, source DESC, sort_id DESC LIMIT $${params.length}::int
     `, params);
     const more = rows.length > limit;
     const shown = more ? rows.slice(0, limit) : rows;
@@ -290,7 +303,7 @@ export const operatorApi = new Hono<AppEnv>()
       // Historical/older-replica actions have no private identity; keep null.
       operatorId: r.operator_id, reason: r.reason,
       createdAt: new Date(r.created_at).toISOString(),
-    })), next: more && last ? encodePlatformAuditCursor(last.cursor_at, last.source, last.id) : null });
+    })), next: more && last ? encodePlatformAuditCursor(last.cursor_at, last.source, last.sort_id) : null });
   })
   .get("/workspaces", async (c) => {
     const q = (c.req.query("q") ?? "").trim();

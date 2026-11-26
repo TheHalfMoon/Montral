@@ -37,7 +37,7 @@ export function OperatorPlatformAudit({ onFailure }: { onFailure: (error: unknow
 
   return <section className="card sect" aria-label="Platform operator audit">
     <h2>Platform audit</h2>
-    <p className="muted">Read-only operator actions recorded for workspace suspensions and probe drain controls. Search uses target IDs only; private notes and customer activity are excluded.</p>
+    <p className="muted">Read-only workspace suspension and probe management history, including drain, lifecycle, and credential-possession validation outcomes. Search uses target IDs only; private notes, credentials, and customer activity are excluded.</p>
     <form onSubmit={submit} style={{ display: "flex", alignItems: "end", gap: 10, flexWrap: "wrap" }}>
       <label className="fld" style={{ flex: "1 1 210px" }}>Target ID or probe region
         <input className="in" value={target} maxLength={100} autoComplete="off"
@@ -47,7 +47,7 @@ export function OperatorPlatformAudit({ onFailure }: { onFailure: (error: unknow
         <select className="in" value={source} onChange={(e) => setSource(e.target.value as Source)}>
           <option value="all">All operator actions</option>
           <option value="workspace">Workspace suspensions</option>
-          <option value="probe">Probe drains</option>
+          <option value="probe">Probe actions</option>
         </select>
       </label>
       <button className="btn" type="submit" disabled={busy}>Search audit</button>
@@ -73,6 +73,6 @@ export function OperatorPlatformAudit({ onFailure }: { onFailure: (error: unknow
       </div>}
     {next && applied && <button className="btn" type="button" disabled={busy}
       onClick={() => void load(applied.target, applied.source, next)}>Next 25 actions</button>}
-    <p className="muted">This view is limited to existing retained operator events. Workspace operator identities were not recorded historically. No private notes are included.</p>
+    <p className="muted">This view is limited to existing retained operator events. Workspace operator identities were not recorded historically. Probe validation records show fixed outcomes only; they do not attest probe software or deployment.</p>
   </section>;
 }

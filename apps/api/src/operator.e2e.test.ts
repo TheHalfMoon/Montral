@@ -366,27 +366,58 @@ describe.skipIf(!url)("operator control plane and workspace suspension (PostgreS
     await expect(db!.query(`UPDATE workspace_operator_audit SET operator_id='forged' WHERE audit_event_id=$1::uuid`, [eventId])).rejects.toThrow();
     await expect(db!.query(`DELETE FROM workspace_operator_audit WHERE audit_event_id=$1::uuid`, [eventId])).rejects.toThrow();
 
-    // Match the same safe target prefix in both audit sources to test a true UNION view.
+    // Match the same safe target prefix across operator sources and every probe audit family.
     const probeRegion = owner.orgId.slice(0, 16);
     const probeNote = "private-probe-note-must-never-leak";
+    const fingerprint = "a".repeat(64);
     try {
-      await db!.query(`INSERT INTO probe_region_drain_event(region,action,operator_id,note)
-        VALUES ($1,'drain',$2,$3)`, [probeRegion, operator.id, probeNote]);
-      const platform = await operatorCall(opCookie, `/audit?source=probe&q=${probeRegion}&limit=5`);
-      expect(platform.status).toBe(200);
-      expect(platform.body.events).toHaveLength(1);
-      expect(platform.body.events[0]).toMatchObject({
-        source: "probe", target: probeRegion, action: "probe.drain", operatorId: operator.id, reason: null,
+      const eventAt = new Date("2026-11-25T12:00:00.000Z");
+      await db!.query(`INSERT INTO probe_region_drain_event(region,action,operator_id,note,created_at)
+        VALUES ($1,'drain',$2,$3,$4)`, [probeRegion, operator.id, probeNote, eventAt]);
+      await db!.query(`INSERT INTO probe_region_lifecycle_event(region,action,operator_id,created_at)
+        VALUES ($1,'deactivate',$2,$3)`, [probeRegion, operator.id, eventAt]);
+      await db!.query(`INSERT INTO probe_region_validation_event(region,outcome,configuration_fingerprint,operator_id,created_at)
+        VALUES ($1,'validated',$2,$3,$4), ($1,'credential_mismatch',$2,$3,$4)`,
+      [probeRegion, fingerprint, operator.id, eventAt]);
+
+      // Multiple append-only tables can reuse the same numeric ID. Namespace IDs
+      // in the union cursor so tied events remain distinct and keyset paging cannot skip one.
+      const probeEvents: any[] = [];
+      let next: string | null = null;
+      do {
+        const page = await operatorCall(opCookie,
+          `/audit?source=probe&q=${probeRegion}&limit=1${next ? `&cursor=${encodeURIComponent(next)}` : ""}`);
+        expect(page.status).toBe(200);
+        expect(page.body.events).toHaveLength(1);
+        probeEvents.push(...page.body.events);
+        next = page.body.next;
+      } while (next);
+      expect(probeEvents).toHaveLength(4);
+      expect(new Set(probeEvents.map((event) => event.id)).size).toBe(4);
+      expect(probeEvents.map((event) => event.action).sort()).toEqual([
+        "probe.deactivate", "probe.drain", "probe.validation.credential_mismatch", "probe.validation.validated",
+      ]);
+      for (const event of probeEvents) expect(event).toMatchObject({
+        source: "probe", target: probeRegion, operatorId: operator.id, reason: null,
       });
+      expect(probeEvents.map((event) => event.id)).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^drain:/), expect.stringMatching(/^lifecycle:/),
+        expect.stringMatching(/^validation:/),
+      ]));
+      const platform = await operatorCall(opCookie, `/audit?source=probe&q=${probeRegion}&limit=5`);
+      expect(platform.body.events).toHaveLength(4);
       expect(platform.text).not.toContain(probeNote);
+      expect(platform.text).not.toContain(fingerprint);
       expect(platform.text).not.toContain(NOTE);
       // A search for a private note returns nothing; only safe target IDs are searchable.
       expect((await operatorCall(opCookie, `/audit?q=${probeNote}`)).body.events).toEqual([]);
-      const combined = await operatorCall(opCookie, `/audit?q=${probeRegion}&limit=5`);
+      const combined = await operatorCall(opCookie, `/audit?q=${probeRegion}&limit=10`);
       expect(combined.status).toBe(200);
-      expect(combined.body.events).toHaveLength(3);
-      expect(combined.body.events.map((entry: { action: string }) => entry.action).sort())
-        .toEqual(["probe.drain", "workspace.suspend", "workspace.unsuspend"]);
+      expect(combined.body.events).toHaveLength(6);
+      expect(combined.body.events.map((entry: { action: string }) => entry.action).sort()).toEqual([
+        "probe.deactivate", "probe.drain", "probe.validation.credential_mismatch", "probe.validation.validated",
+        "workspace.suspend", "workspace.unsuspend",
+      ]);
       expect(combined.text).not.toContain(probeNote);
       expect(combined.text).not.toContain(NOTE);
       expect((await operatorCall(opCookie, `/audit?source=workspace&q=${probeRegion}`)).body.events).toHaveLength(2);

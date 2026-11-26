@@ -105,6 +105,32 @@ describe.skipIf(!url)("idempotent monthly email quota primitive (staged; no send
     expect(await quota!.emailBalance(org)).toMatchObject({ used: 0 });
   });
 
+  it("settles a suspended alert reservation exactly once and rolls the refund back on transaction failure", async () => {
+    const org = await ownerOrg();
+    const delivery = crypto.randomUUID();
+    const key = `alert:${delivery}`;
+    await db!.query(`INSERT INTO alert_delivery
+      (id,organization_id,channel_name,channel_type,kind,ok,status,email_quota_attempted)
+      VALUES ($1,$2,'synthetic','email','incident.opened',false,'sending',true)`, [delivery, org]);
+    expect(await quota!.reserveEmailQuotaOnce!(org, key)).toEqual({ granted: true, newlyReserved: true });
+    expect(await quota!.emailBalance(org)).toMatchObject({ used: 1 });
+    await expect(db!.query("SELECT montral_refund_alert_email_once($1::text,$2::uuid,$3::text)",
+      [org, delivery, `alert:${crypto.randomUUID()}`])).rejects.toThrow("invalid alert email refund");
+    expect(await quota!.emailBalance(org)).toMatchObject({ used: 1 });
+    await expect(db!.migrateEdition!(async tx => {
+      await tx.query("SELECT montral_refund_alert_email_once($1::text,$2::uuid,$3::text)", [org, delivery, key]);
+      throw new Error("synthetic crash before settlement commit");
+    })).rejects.toThrow("synthetic crash");
+    expect(await quota!.emailBalance(org)).toMatchObject({ used: 1 });
+    expect((await db!.query<{ status: string }>("SELECT status FROM alert_delivery WHERE id=$1", [delivery]))[0].status).toBe("sending");
+    const refunds = await Promise.all(Array.from({ length: 8 }, () => quota!.refundEmailQuotaOnce!(org, key)));
+    expect(refunds.filter(Boolean)).toHaveLength(1);
+    expect(refunds.filter(value => !value)).toHaveLength(7);
+    expect(await quota!.emailBalance(org)).toMatchObject({ used: 0 });
+    expect((await db!.query<{ status: string }>("SELECT status FROM alert_delivery WHERE id=$1", [delivery]))[0].status).toBe("skipped");
+    expect((await db!.query<{ n: number }>("SELECT COUNT(*)::int AS n FROM montral_email_refund WHERE organization_id=$1 AND idempotency_key=$2", [org, key]))[0].n).toBe(1);
+  });
+
   it("is absent when metering is disabled, so staged callers must fail closed", () => {
     expect(createMontralEntitlements(db!, { MONTRAL_METERING_ENABLED: "false" } as Bindings).reserveEmailQuotaOnce).toBeUndefined();
   });

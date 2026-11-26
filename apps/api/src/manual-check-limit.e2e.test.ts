@@ -6,14 +6,15 @@ import { MANUAL_CHECKS_PER_WINDOW } from "./manual-check-gate";
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests).
 const url = process.env.TEST_DATABASE_URL;
 const ORIGIN = "http://localhost:8787";
-const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron" };
+const env = { DATABASE_URL: url, BETTER_AUTH_SECRET: "test-secret-test-secret-test-secret-123", BETTER_AUTH_URL: ORIGIN, WEB_ORIGIN: ORIGIN, CRON_SECRET: "cron", TRUST_PROXY: "true" };
 
 describe.skipIf(!url)("manual check limits", () => {
   const app = createApp(openDatabase);
   const raw = (path: string, init: RequestInit = {}) => app.fetch(new Request(`${ORIGIN}${path}`, init), env as never);
   async function workspace() {
+    const testIp = `2001:db8:${crypto.randomUUID().replaceAll("-", "").slice(0, 4)}::1`;
     const su = await raw("/api/auth/sign-up/email", {
-      method: "POST", headers: { "content-type": "application/json", origin: ORIGIN },
+      method: "POST", headers: { "content-type": "application/json", origin: ORIGIN, "x-forwarded-for": testIp },
       body: JSON.stringify({ email: `mcheck-${crypto.randomUUID()}@example.com`, password: "correct horse battery", name: "Ada" }),
     });
     expect(su.status).toBe(200);

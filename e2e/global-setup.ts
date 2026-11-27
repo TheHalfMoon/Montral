@@ -84,6 +84,10 @@ export default async function globalSetup() {
       api.kill("SIGKILL");
       throw new Error("Node server did not stop within 15 s of SIGTERM");
     }
-    if (exit.code !== 0) throw new Error(`Node server exited ${exit.code ?? exit.signal} on SIGTERM:\n${log}`);
+    // On Windows, ChildProcess.kill("SIGTERM") is surfaced as termination by that signal rather than a clean exit
+    // code, even when it is the teardown action above. The server-alive check before sending it distinguishes that
+    // requested stop from an earlier crash; Unix must still demonstrate its graceful SIGTERM handler.
+    const expectedWindowsStop = process.platform === "win32" && exit.signal === "SIGTERM";
+    if (exit.code !== 0 && !expectedWindowsStop) throw new Error(`Node server exited ${exit.code ?? exit.signal} on SIGTERM:\n${log}`);
   };
 }

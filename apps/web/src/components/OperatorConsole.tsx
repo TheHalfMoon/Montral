@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { OperatorPlatformAudit } from "./OperatorPlatformAudit";
+import { ManagedProbeRegistrations } from "./ManagedProbeRegistrations";
 import {
   operatorApi, operatorActionConfirmed, OperatorRequestError,
   type OperatorRegion, type OperatorProbeAuditEvent, type OperatorProbeLifecycleEvent, type OperatorSuspensionEvent, type OperatorWorkspace, type OperatorWorkspaceDetail, type SuspensionReason,
@@ -361,6 +362,8 @@ export default function OperatorConsole() {
           </div>}
         </div>)}
       </section>
+
+      <ManagedProbeRegistrations onFailure={failure} />
     </div>}
     {error && <p className="err" role="alert">{error}</p>}
     {feedback && <p className="state-ok" role="status">{feedback}</p>}

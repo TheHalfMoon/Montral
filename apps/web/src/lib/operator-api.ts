@@ -28,6 +28,15 @@ export type OperatorProbeLifecycleEvent = {
 export type OperatorProbeValidation = {
   id: string; validated: true; identity: "reported_match"; credentialProof: "matched"; sourceAttestation: false; capabilities: string[];
 };
+export type ManagedProbeRegistration = {
+  region: string; displayName: string; endpointUrl: string;
+  state: "registered" | "suspended" | "revoked"; createdBy: string; updatedBy: string;
+  createdAt: string; updatedAt: string; executionEnabled: false;
+};
+export type ManagedProbeRegistrationEvent = {
+  id: number; region: string; action: "register" | "suspend" | "restore" | "revoke";
+  operatorId: string; createdAt: string;
+};
 export type OperatorPlatformAuditEvent = {
   source: "workspace" | "probe"; id: string;
   action: "workspace.suspend" | "workspace.unsuspend" | "probe.drain" | "probe.undrain"
@@ -76,6 +85,16 @@ export function makeOperatorApi(fetcher: typeof fetch = fetch) {
       call<{ id: string; suspended: true }>(`/workspaces/${encodeURIComponent(id)}/suspend`, { reason, note }),
     unsuspend: (id: string) => call<{ id: string; suspended: false }>(`/workspaces/${encodeURIComponent(id)}/unsuspend`, {}),
     probes: () => call<{ auto: { monitors: number }; regions: OperatorRegion[] }>("/probes"),
+    managedProbes: (limit = 50, after?: string) => {
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (after) query.set("after", after);
+      return call<{ registrations: ManagedProbeRegistration[]; nextCursor: string | null }>(`/managed-probes?${query}`);
+    },
+    registerManagedProbe: (input: { region: string; displayName: string; endpointUrl: string }) =>
+      call<{ registration: ManagedProbeRegistration }>("/managed-probes", input),
+    transitionManagedProbe: (id: string, action: "suspend" | "restore" | "revoke") =>
+      call<{ registration: ManagedProbeRegistration }>(`/managed-probes/${encodeURIComponent(id)}/${action}`, {}),
+    managedProbeAudit: (id: string) => call<{ region: string; events: ManagedProbeRegistrationEvent[] }>(`/managed-probes/${encodeURIComponent(id)}/audit?limit=50`),
     probeAudit: (id: string) => call<{ region: string; events: OperatorProbeAuditEvent[]; lifecycleEvents: OperatorProbeLifecycleEvent[] }>(`/probes/${encodeURIComponent(id)}/audit?limit=50`),
     validateProbe: (id: string) => call<OperatorProbeValidation>(`/probes/${encodeURIComponent(id)}/validate`, {}),
     drain: (id: string, note: string) => call<{ id: string; drained: true }>(`/probes/${encodeURIComponent(id)}/drain`, { note }),

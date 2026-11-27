@@ -28,6 +28,12 @@ test("operator console is denied by default and confirms every synthetic state c
   let suspended = false;
   let drained = false;
   let enabled = true;
+  let managedState: "registered" | "suspended" | "revoked" = "registered";
+  let managedRegistrationCreated = false;
+  let holdManagedLists = false;
+  const heldManagedRequests: import("@playwright/test").Request[] = [];
+  let releaseManagedLists!: () => void;
+  const managedListGate = new Promise<void>((resolve) => { releaseManagedLists = resolve; });
   let denyProbeOnFirstMock = true;
   const posted: { path: string; body: Record<string, unknown> }[] = [];
   const workspace = () => ({
@@ -40,13 +46,27 @@ test("operator console is denied by default and confirms every synthetic state c
     monitors: 3, drained, lastAnswerAt: "2026-01-01T00:00:00.000Z", lastUnreachableAt: null,
     lastUnreachableReason: null, drainedAt: null,
   });
+  const managedRegistration = () => ({
+    region: "synthetic-managed-east", displayName: "Synthetic Managed East",
+    endpointUrl: "https://probe.synthetic.test/api/probe/synthetic-managed-east", state: managedState,
+    createdBy: "synthetic-operator", updatedBy: "synthetic-operator", createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z", executionEnabled: false,
+  });
   await page.route((url) => url.pathname.startsWith("/api/operator/"), async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace("/api/operator", "");
     if (request.method() === "POST") {
       const body = request.postDataJSON() as Record<string, unknown>;
       posted.push({ path, body });
-      if (path === "/workspaces/synthetic-org-1/suspend") suspended = true;
+      if (path === "/managed-probes") {
+        managedRegistrationCreated = true;
+        return answer(route, 201, { registration: managedRegistration() });
+      }
+      if (path === "/managed-probes/synthetic-managed-east/suspend") managedState = "suspended";
+      else if (path === "/managed-probes/synthetic-managed-east/restore") managedState = "registered";
+      else if (path === "/managed-probes/synthetic-managed-east/revoke") managedState = "revoked";
+      else if (path.startsWith("/managed-probes/")) return answer(route, 200, { registration: managedRegistration() });
+      else if (path === "/workspaces/synthetic-org-1/suspend") suspended = true;
       else if (path === "/workspaces/synthetic-org-1/unsuspend") suspended = false;
       else if (path === "/probes/synthetic-east/drain") drained = true;
       else if (path === "/probes/synthetic-east/undrain") drained = false;
@@ -74,6 +94,20 @@ test("operator console is denied by default and confirms every synthetic state c
       { source: "probe", id: "lifecycle:1", action: "probe.deactivate", target: "synthetic-east", operatorId: "synthetic-operator", reason: null, createdAt: "2026-01-01T00:00:00.000Z" },
       { source: "probe", id: "validation:1", action: "probe.validation.validated", target: "synthetic-east", operatorId: "synthetic-operator", reason: null, createdAt: "2026-01-01T00:00:00.000Z" },
     ], next: null });
+    if (path === "/managed-probes") {
+      if (!managedRegistrationCreated) {
+        if (holdManagedLists) {
+          heldManagedRequests.push(request);
+          await managedListGate;
+        }
+        return answer(route, 200, { registrations: [], nextCursor: null });
+      }
+      return answer(route, 200, { registrations: [managedRegistration()], nextCursor: null });
+    }
+    if (path === "/managed-probes/synthetic-managed-east/audit") return answer(route, 200, { region: "synthetic-managed-east", events: [
+      { id: 1, region: "synthetic-managed-east", action: "register", operatorId: "synthetic-operator", createdAt: "2026-01-01T00:00:00.000Z" },
+      { id: 2, region: "synthetic-managed-east", action: managedState === "registered" ? "restore" : managedState, operatorId: "synthetic-operator", createdAt: "2026-01-02T00:00:00.000Z" },
+    ] });
     if (path === "/probes") return denyProbeOnFirstMock
       ? answer(route, 403, { error: "private operator configuration" })
       : answer(route, 200, { auto: { monitors: 0 }, regions: [region()] });
@@ -94,8 +128,30 @@ test("operator console is denied by default and confirms every synthetic state c
   await expect(page.getByRole("heading", { name: "Operator access denied" })).toBeVisible();
   await expect(page.getByText("Synthetic Platform")).toHaveCount(0);
   denyProbeOnFirstMock = false;
+  holdManagedLists = true;
+  const initialManagedRequest = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/operator/managed-probes");
   await page.reload();
+  await initialManagedRequest;
   await expect(page.getByRole("heading", { name: "Platform operations" })).toBeVisible();
+  const managed = page.getByRole("region", { name: "Managed probe registrations" });
+  await expect(managed).toContainText("does not create or deliver credentials");
+  await managed.getByLabel("Region ID").fill("synthetic-managed-east");
+  await managed.getByLabel("Display name").fill("Synthetic Managed East");
+  await managed.getByLabel("HTTPS probe endpoint").fill("https://probe.synthetic.test/api/probe/synthetic-managed-east");
+  const freshManagedList = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/operator/managed-probes" && response.request().method() === "GET" && response.status() === 200;
+  });
+  await managed.getByRole("button", { name: "Register metadata" }).click();
+  await freshManagedList;
+  await expect(managed.getByText("Disabled", { exact: true })).toBeVisible();
+  expect(posted.at(-1)).toEqual({ path: "/managed-probes", body: {
+    region: "synthetic-managed-east", displayName: "Synthetic Managed East", endpointUrl: "https://probe.synthetic.test/api/probe/synthetic-managed-east",
+  } });
+  expect(heldManagedRequests.length).toBeGreaterThan(0);
+  const heldResponses = heldManagedRequests.map((request) => page.waitForResponse((response) => response.request() === request));
+  releaseManagedLists();
+  await Promise.all(heldResponses);
   await page.getByRole("button", { name: /Synthetic Platform/ }).click();
   const detail = page.getByRole("region", { name: "Selected workspace" });
   await expect(detail.getByText("owner@synthetic.test")).toBeVisible();
@@ -106,11 +162,11 @@ test("operator console is denied by default and confirms every synthetic state c
   await expect(detail.getByRole("button", { name: "Suspend workspace" })).toBeEnabled();
   await detail.getByRole("button", { name: "Suspend workspace" }).click();
   await expect(detail.getByRole("button", { name: "Lift suspension" })).toBeVisible();
-  expect(posted[0]).toEqual({ path: "/workspaces/synthetic-org-1/suspend", body: { reason: "operator", note: "" } });
+  expect(posted.find((p) => p.path === "/workspaces/synthetic-org-1/suspend")).toEqual({ path: "/workspaces/synthetic-org-1/suspend", body: { reason: "operator", note: "" } });
   await detail.getByLabel(/Type the exact workspace slug/).fill("synthetic-platform");
   await detail.getByRole("button", { name: "Lift suspension" }).click();
   await expect(detail.getByRole("button", { name: "Suspend workspace" })).toBeVisible();
-  expect(posted[1]?.path).toBe("/workspaces/synthetic-org-1/unsuspend");
+  expect(posted.find((p) => p.path === "/workspaces/synthetic-org-1/unsuspend")?.path).toBe("/workspaces/synthetic-org-1/unsuspend");
   const suspensionHistory = detail.getByRole("region", { name: "Workspace suspension history" });
   await expect(suspensionHistory).toContainText("Suspension lifted");
   await expect(suspensionHistory).toContainText("Suspended");
@@ -135,15 +191,15 @@ test("operator console is denied by default and confirms every synthetic state c
   await probes.getByLabel(/Type region ID/).fill("synthetic-east");
   await probes.getByRole("button", { name: "Confirm drain" }).click();
   await expect(probes.getByRole("button", { name: "Undrain", exact: true })).toBeVisible();
-  expect(posted[2]).toEqual({ path: "/probes/synthetic-east/drain", body: { note: "" } });
+  expect(posted.find((p) => p.path === "/probes/synthetic-east/drain")).toEqual({ path: "/probes/synthetic-east/drain", body: { note: "" } });
   await probes.getByRole("button", { name: "Undrain", exact: true }).click();
   await probes.getByLabel(/Type region ID/).fill("synthetic-east");
   await probes.getByRole("button", { name: "Confirm undrain" }).click();
   await expect(probes.getByRole("button", { name: "Drain", exact: true })).toBeVisible();
-  expect(posted[3]?.path).toBe("/probes/synthetic-east/undrain");
+  expect(posted.find((p) => p.path === "/probes/synthetic-east/undrain")?.path).toBe("/probes/synthetic-east/undrain");
 
   await probes.getByRole("button", { name: "Validate", exact: true }).click();
-  await expect(page.getByRole("status")).toContainText("Credential-possession validation succeeded");
+  await expect(page.getByText(/Credential-possession validation succeeded/)).toBeVisible();
   await probes.getByRole("button", { name: "Deactivate", exact: true }).click();
   await probes.getByLabel(/Type region ID/).fill("synthetic-east");
   await probes.getByRole("button", { name: "Confirm deactivation" }).click();
@@ -152,8 +208,31 @@ test("operator console is denied by default and confirms every synthetic state c
   await probes.getByLabel(/Type region ID/).fill("synthetic-east");
   await probes.getByRole("button", { name: "Confirm activation" }).click();
   await expect(probes.getByRole("button", { name: "Deactivate", exact: true })).toBeVisible();
-  expect(posted.slice(4).map((p) => p.path)).toEqual([
+  expect(posted.filter((p) => ["/probes/synthetic-east/validate", "/probes/synthetic-east/deactivate", "/probes/synthetic-east/activate"].includes(p.path)).map((p) => p.path)).toEqual([
     "/probes/synthetic-east/validate", "/probes/synthetic-east/deactivate", "/probes/synthetic-east/activate",
+  ]);
+
+  await expect(managed).toContainText("Synthetic Managed East");
+  await expect(managed.getByText("Disabled", { exact: true })).toBeVisible();
+  await managed.getByRole("button", { name: "Registration audit" }).click();
+  const managedAudit = managed.getByRole("region", { name: "Registration audit for synthetic-managed-east" });
+  await expect(managedAudit).toContainText("register");
+  await expect(managedAudit).toContainText("synthetic-operator");
+  await managed.getByRole("button", { name: "Suspend metadata" }).click();
+  await managed.getByLabel(/Type the exact region ID/).fill("synthetic-managed-east");
+  await managed.getByRole("button", { name: "Confirm metadata suspension" }).click();
+  await expect(managed).toContainText("suspended");
+  await expect(managed.getByText("Disabled", { exact: true })).toBeVisible();
+  await managed.getByRole("button", { name: "Restore metadata" }).click();
+  await managed.getByLabel(/Type the exact region ID/).fill("synthetic-managed-east");
+  await managed.getByRole("button", { name: "Confirm metadata restore" }).click();
+  await managed.getByRole("button", { name: "Revoke metadata" }).click();
+  await managed.getByLabel(/Type the exact region ID/).fill("synthetic-managed-east");
+  await managed.getByRole("button", { name: "Confirm metadata revocation" }).click();
+  await expect(managed).toContainText("revoked");
+  await expect(managed.getByRole("button", { name: /^(Suspend|Restore|Revoke) metadata$/ })).toHaveCount(0);
+  expect(posted.filter((p) => p.path.startsWith("/managed-probes/")).map((p) => p.path)).toEqual([
+    "/managed-probes/synthetic-managed-east/suspend", "/managed-probes/synthetic-managed-east/restore", "/managed-probes/synthetic-managed-east/revoke",
   ]);
   await checkA11y(page, testInfo, "operator-console-synthetic");
 

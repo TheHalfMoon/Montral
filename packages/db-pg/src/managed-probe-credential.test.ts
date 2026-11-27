@@ -79,6 +79,30 @@ describe.skipIf(!url)("managed probe credential envelope persistence", () => {
     expect(await repo.managedProbeCredentialEvents!(malformedRegion, 100)).toEqual([]);
   });
 
+  it("reads only the exact prepared envelope for a registered region and hides suspended or revoked material", async () => {
+    const region = randomRegion();
+    const versionId = crypto.randomUUID();
+    const input = { ...envelope(versionId), region };
+    await register(region);
+    expect(await repo.prepareManagedProbeCredential!(input)).toBe("prepared");
+
+    const stored = await repo.preparedManagedProbeCredentialEnvelope!(region, versionId);
+    expect(stored).toEqual({
+      region, versionId, formatVersion: 1, algorithm: "A256GCM", keyVersion: input.keyVersion,
+      nonce: input.nonce, ciphertext: input.ciphertext,
+    });
+    expect(await repo.preparedManagedProbeCredentialEnvelope!(region, crypto.randomUUID())).toBeNull();
+    expect(await repo.preparedManagedProbeCredentialEnvelope!(randomRegion(), versionId)).toBeNull();
+
+    expect(await repo.revokeManagedProbeCredential!(region, versionId, "synthetic-operator")).toBe("revoked");
+    expect(await repo.preparedManagedProbeCredentialEnvelope!(region, versionId)).toBeNull();
+
+    const nextVersion = crypto.randomUUID();
+    expect(await repo.prepareManagedProbeCredential!({ ...envelope(nextVersion), region })).toBe("prepared");
+    await repo.transitionManagedProbeRegistration!(region, "suspended", "synthetic-operator");
+    expect(await repo.preparedManagedProbeCredentialEnvelope!(region, nextVersion)).toBeNull();
+  });
+
   it("rolls back credential state whenever its audit insert fails", async () => {
     const region = randomRegion();
     const versionId = crypto.randomUUID();

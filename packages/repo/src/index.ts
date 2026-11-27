@@ -262,6 +262,17 @@ export interface ManagedProbeCredentialEvent {
   createdAt: Date;
 }
 
+/** Encrypted credential bytes for one prepared version. Never expose this shape from a public API or event listing. */
+export interface PreparedManagedProbeCredentialEnvelope {
+  region: string;
+  versionId: string;
+  formatVersion: 1;
+  algorithm: "A256GCM";
+  keyVersion: number;
+  nonce: Uint8Array;
+  ciphertext: Uint8Array;
+}
+
 /** A monitor's last day from one region, for the regions it has been checked from. */
 export interface RegionStat {
   region: string;
@@ -849,6 +860,8 @@ export interface Repo {
     region: string; versionId: string; formatVersion: 1; algorithm: "A256GCM"; keyVersion: number;
     nonce: Uint8Array; ciphertext: Uint8Array; operatorId: string;
   }): Promise<"prepared" | "missing_registration" | "registration_inactive" | "credential_exists" | "prepared_credential_exists">;
+  /** Read exactly one encrypted, prepared envelope for a registered region. No decryption or execution occurs here. */
+  preparedManagedProbeCredentialEnvelope?(region: string, versionId: string): Promise<PreparedManagedProbeCredentialEnvelope | null>;
   /** Revoke inactive credential material and append its audit event atomically. */
   revokeManagedProbeCredential?(region: string, versionId: string, operatorId: string): Promise<"revoked" | "missing" | "already_revoked">;
   /** Secret-free credential lifecycle events, newest first, with a bounded limit. */

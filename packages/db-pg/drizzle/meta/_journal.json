@@ -470,6 +470,13 @@
       "when": 1795769975045,
       "tag": "0066_white_calypso",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1795780358054,
+      "tag": "0067_managed_probe_credential_storage",
+      "breakpoints": true
     }
   ]
 }

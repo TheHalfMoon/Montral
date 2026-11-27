@@ -1,5 +1,11 @@
 # Probe credential lifecycle: implementation design
 
+## Current implementation boundary
+
+The merged registration inventory persists non-secret region metadata only. The current credential-storage slice adds a PostgreSQL table for AES-256-GCM envelopes, version/algorithm/key-version metadata, and an append-only audit trail. Preparation accepts envelope bytes from an internal caller, serializes against registration state transitions, and commits the envelope and audit event atomically. The database limits each region to one `prepared` envelope and permits only a `prepared` → `revoked` transition; ciphertext cannot be updated or deleted through ordinary SQL operations. Audit reads return metadata only.
+
+No operator endpoint, enrollment or delivery flow, KEK loader, credential retrieval/decryption path, probe authentication path, or scheduler integration is enabled by this storage slice. It does not prove that caller-supplied bytes are encrypted. Any future provisioning endpoint must compose generation/encryption and persistence behind one controlled service path and must never accept caller-supplied ciphertext. Prepared and revoked rows retain ciphertext; revocation is a database lifecycle state, not cryptographic erasure. Before credentials are used, qualify KEK rotation/rewrap, stale-backup recovery, bounded overlap, delivery acknowledgement, and replica-wide revocation.
+
 ## Decision
 
 Keep the current configuration-managed lifecycle active. Do not enable API-created credentials, dynamic endpoint registration, or secret delivery until the enrollment and replica-revocation boundary below is implemented and qualified. The operator inventory, challenge-response validation, activation/deactivation, and configuration binding already present remain useful controls; they do not provision credentials or attest probe software.

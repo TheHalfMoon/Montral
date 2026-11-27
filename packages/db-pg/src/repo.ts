@@ -22,6 +22,7 @@ import {
   type ManagedProbeRegistration,
   type ManagedProbeRegistrationEvent,
   type ManagedProbeRegistrationState,
+  type ManagedProbeCredentialEvent,
   type ImportResult,
   type Scope,
 } from "@montral/repo";
@@ -1061,6 +1062,55 @@ export function createRepo(db: Db): Repo {
       const records = await db.select().from(t).where(eq(t.region, region)).orderBy(desc(t.id)).limit(safeLimit);
       return records.map((r): ManagedProbeRegistrationEvent => ({
         id: r.id, region: r.region, action: r.action as ManagedProbeRegistrationEvent["action"], operatorId: r.operatorId, createdAt: r.createdAt,
+      }));
+    },
+    async prepareManagedProbeCredential(input) {
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + input.region}, 0))`);
+        const [registration] = await tx.select({ state: schema.managedProbeRegistration.state })
+          .from(schema.managedProbeRegistration).where(eq(schema.managedProbeRegistration.region, input.region)).for("update");
+        if (!registration) return "missing_registration" as const;
+        if (registration.state !== "registered") return "registration_inactive" as const;
+        const inserted = await tx.insert(schema.managedProbeCredential).values({
+          region: input.region, versionId: input.versionId, formatVersion: input.formatVersion,
+          algorithm: input.algorithm, keyVersion: input.keyVersion, nonce: input.nonce,
+          ciphertext: input.ciphertext, createdBy: input.operatorId,
+        }).onConflictDoNothing().returning({ region: schema.managedProbeCredential.region });
+        if (!inserted.length) {
+          const [sameVersion] = await tx.select({ versionId: schema.managedProbeCredential.versionId })
+            .from(schema.managedProbeCredential)
+            .where(and(eq(schema.managedProbeCredential.region, input.region), eq(schema.managedProbeCredential.versionId, input.versionId)));
+          return sameVersion ? "credential_exists" as const : "prepared_credential_exists" as const;
+        }
+        await tx.insert(schema.managedProbeCredentialEvent).values({
+          region: input.region, versionId: input.versionId, action: "prepare", operatorId: input.operatorId,
+        });
+        return "prepared" as const;
+      });
+    },
+    async revokeManagedProbeCredential(region, versionId, operatorId) {
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + region}, 0))`);
+        const [credential] = await tx.select().from(schema.managedProbeCredential).where(and(
+          eq(schema.managedProbeCredential.region, region), eq(schema.managedProbeCredential.versionId, versionId),
+        )).for("update");
+        if (!credential) return "missing" as const;
+        if (credential.state === "revoked") return "already_revoked" as const;
+        await tx.update(schema.managedProbeCredential).set({ state: "revoked", revokedBy: operatorId, revokedAt: new Date() }).where(and(
+          eq(schema.managedProbeCredential.region, region), eq(schema.managedProbeCredential.versionId, versionId),
+        ));
+        await tx.insert(schema.managedProbeCredentialEvent).values({ region, versionId, action: "revoke", operatorId });
+        return "revoked" as const;
+      });
+    },
+    async managedProbeCredentialEvents(region, limit) {
+      const safeLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
+      const records = await db.select().from(schema.managedProbeCredentialEvent)
+        .where(eq(schema.managedProbeCredentialEvent.region, region))
+        .orderBy(desc(schema.managedProbeCredentialEvent.id)).limit(safeLimit);
+      return records.map((r): ManagedProbeCredentialEvent => ({
+        id: r.id, region: r.region, versionId: r.versionId,
+        action: r.action as ManagedProbeCredentialEvent["action"], operatorId: r.operatorId, createdAt: r.createdAt,
       }));
     },
     async monitorsPerRegion() {

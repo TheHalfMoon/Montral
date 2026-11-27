@@ -23,6 +23,7 @@ import {
   type ManagedProbeRegistrationEvent,
   type ManagedProbeRegistrationState,
   type ManagedProbeCredentialEvent,
+  type PreparedManagedProbeCredentialEnvelope,
   type ImportResult,
   type Scope,
 } from "@montral/repo";
@@ -1087,6 +1088,35 @@ export function createRepo(db: Db): Repo {
         });
         return "prepared" as const;
       });
+    },
+    async preparedManagedProbeCredentialEnvelope(region, versionId) {
+      const credential = schema.managedProbeCredential;
+      const registration = schema.managedProbeRegistration;
+      const [row] = await db.select({
+        region: credential.region,
+        versionId: credential.versionId,
+        formatVersion: credential.formatVersion,
+        algorithm: credential.algorithm,
+        keyVersion: credential.keyVersion,
+        nonce: credential.nonce,
+        ciphertext: credential.ciphertext,
+      }).from(credential).innerJoin(registration, eq(registration.region, credential.region)).where(and(
+        eq(credential.region, region),
+        eq(credential.versionId, versionId),
+        eq(credential.state, "prepared"),
+        eq(registration.state, "registered"),
+      )).limit(1);
+      if (!row) return null;
+      if (row.formatVersion !== 1 || row.algorithm !== "A256GCM") throw new Error("Unsupported managed probe credential envelope");
+      return {
+        region: row.region,
+        versionId: row.versionId,
+        formatVersion: 1,
+        algorithm: "A256GCM",
+        keyVersion: row.keyVersion,
+        nonce: new Uint8Array(row.nonce),
+        ciphertext: new Uint8Array(row.ciphertext),
+      } satisfies PreparedManagedProbeCredentialEnvelope;
     },
     async revokeManagedProbeCredential(region, versionId, operatorId) {
       return db.transaction(async (tx) => {

@@ -1,5 +1,8 @@
 import { createDb, createRepo, eq, migrate, schema } from "@montral/db-pg";
 import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   decryptManagedProbeCredentialWithProvider,
@@ -7,6 +10,7 @@ import {
   type ManagedProbeKekProvider,
 } from "./managed-probe-kek-provider";
 import { withPreparedManagedProbeCredential } from "./managed-probe-credential-access";
+import { createFileManagedProbeKekProvider } from "./managed-probe-kek-file-provider";
 
 const url = process.env.TEST_DATABASE_URL;
 const db = url ? createDb(url, { max: 2 }) : (undefined as never);
@@ -97,6 +101,70 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
     } finally {
       generated.credential.fill(0);
       kek.fill(0);
+    }
+  });
+
+  it("recovers a persisted envelope through the file provider after active-key rotation", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "montral-kek-storage-e2e-"));
+    const region = `probe-${crypto.randomUUID().slice(0, 12)}`;
+    const operatorId = "synthetic-file-kek-test";
+    const key1 = crypto.getRandomValues(new Uint8Array(32));
+    const key2 = crypto.getRandomValues(new Uint8Array(32));
+    const provider = createFileManagedProbeKekProvider(directory);
+    let generated: Awaited<ReturnType<typeof generateEncryptedManagedProbeCredentialWithProvider>> | undefined;
+    let observedCredential: Uint8Array | undefined;
+    try {
+      await writeFile(join(directory, "kek-1.bin"), key1);
+      await writeFile(join(directory, "active-version"), "1\n", "ascii");
+      const registered = await repo.createManagedProbeRegistration!({
+        region,
+        displayName: "Synthetic file-backed probe",
+        endpointUrl: `https://${region}.example.test/probe`,
+        createdBy: operatorId,
+      });
+      expect(registered.created).toBe(true);
+
+      generated = await generateEncryptedManagedProbeCredentialWithProvider(region, provider);
+      const current = generated;
+      expect(current.envelope.keyVersion).toBe(1);
+      expect(await repo.prepareManagedProbeCredential!({
+        region,
+        versionId: current.credentialVersionId,
+        formatVersion: current.envelope.formatVersion,
+        algorithm: current.envelope.algorithm,
+        keyVersion: current.envelope.keyVersion,
+        nonce: current.envelope.nonce,
+        ciphertext: current.envelope.ciphertext,
+        operatorId,
+      })).toBe("prepared");
+
+      await writeFile(join(directory, "kek-2.bin"), key2);
+      await writeFile(join(directory, "active-version"), "2\n", "ascii");
+      const storedEnvelope = await repo.preparedManagedProbeCredentialEnvelope!(region, current.credentialVersionId);
+      expect(storedEnvelope?.keyVersion).toBe(1);
+
+      await withPreparedManagedProbeCredential(repo, region, current.credentialVersionId, provider, (credential) => {
+        observedCredential = credential;
+        expect(credential).toEqual(current.credential);
+      });
+      expect(observedCredential).toBeDefined();
+      expect(observedCredential).toEqual(new Uint8Array(current.credential.length));
+
+      const active = await provider.getActiveKey();
+      expect(active).toBeDefined();
+      try {
+        expect(active?.version).toBe(2);
+        expect(active?.key).toEqual(key2);
+      } finally {
+        if (active) provider.releaseKey?.(active.key);
+      }
+      expect(active?.key).toEqual(new Uint8Array(32));
+    } finally {
+      observedCredential?.fill(0);
+      generated?.credential.fill(0);
+      key1.fill(0);
+      key2.fill(0);
+      await rm(directory, { recursive: true, force: true });
     }
   });
 });

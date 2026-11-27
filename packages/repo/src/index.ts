@@ -262,6 +262,17 @@ export interface ManagedProbeCredentialEvent {
   createdAt: Date;
 }
 
+/** Secret-free lifecycle event for a short-lived, single-use enrollment authorization. */
+export interface ManagedProbeEnrollmentGrantEvent {
+  id: number;
+  grantId: string;
+  region: string;
+  versionId: string;
+  action: "issue" | "consume" | "expire" | "revoke";
+  actorId: string;
+  createdAt: Date;
+}
+
 /** Encrypted credential bytes for one prepared version. Never expose this shape from a public API or event listing. */
 export interface PreparedManagedProbeCredentialEnvelope {
   region: string;
@@ -866,6 +877,17 @@ export interface Repo {
   revokeManagedProbeCredential?(region: string, versionId: string, operatorId: string): Promise<"revoked" | "missing" | "already_revoked">;
   /** Secret-free credential lifecycle events, newest first, with a bounded limit. */
   managedProbeCredentialEvents?(region: string, limit: number): Promise<ManagedProbeCredentialEvent[]>;
+  /** Persist only token and nonce digests; registration, endpoint, and prepared credential are revalidated transactionally. */
+  issueManagedProbeEnrollmentGrant?(input: {
+    id: string; region: string; versionId: string; endpointUrl: string; tokenDigest: Uint8Array; nonceDigest: Uint8Array;
+    expiresAt: Date; operatorId: string;
+  }): Promise<"issued" | "missing_registration" | "registration_inactive" | "endpoint_mismatch" | "credential_unavailable" | "pending_grant_exists" | "invalid_expiry">;
+  /** Atomically consume a grant only when token, nonce, region, exact endpoint, credential version, and live state match. */
+  consumeManagedProbeEnrollmentGrant?(input: {
+    tokenDigest: Uint8Array; nonceDigest: Uint8Array; region: string; versionId: string; endpointUrl: string; actorId: string;
+  }): Promise<"consumed" | "unavailable">;
+  /** Secret-free enrollment audit, newest first and bounded. */
+  managedProbeEnrollmentGrantEvents?(region: string, limit: number): Promise<ManagedProbeEnrollmentGrantEvent[]>;
   /** How many unpaused monitors list each region id. */
   monitorsPerRegion?(): Promise<Record<string, number>>;
   /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */

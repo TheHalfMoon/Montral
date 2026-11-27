@@ -96,8 +96,13 @@ export async function generateEncryptedManagedProbeCredential(
 ): Promise<{ credentialVersionId: string; credential: Uint8Array; envelope: ManagedProbeCredentialEnvelope }> {
   const credentialVersionId = generateManagedProbeCredentialVersionId();
   const credential = generateManagedProbeCredential();
-  const envelope = await encryptManagedProbeCredential(regionId, credentialVersionId, keyVersion, kek, credential);
-  return { credentialVersionId, credential, envelope };
+  try {
+    const envelope = await encryptManagedProbeCredential(regionId, credentialVersionId, keyVersion, kek, credential);
+    return { credentialVersionId, credential, envelope };
+  } catch (error) {
+    credential.fill(0);
+    throw error;
+  }
 }
 
 /**

@@ -3,6 +3,11 @@ import {
   decryptManagedProbeCredential,
   generateEncryptedManagedProbeCredential,
 } from "./managed-probe-credential-envelope";
+import {
+  decryptManagedProbeCredentialWithProvider,
+  generateEncryptedManagedProbeCredentialWithProvider,
+  type ManagedProbeKekProvider,
+} from "./managed-probe-kek-provider";
 
 const region = "probe-west";
 const kek = () => crypto.getRandomValues(new Uint8Array(32));
@@ -73,5 +78,72 @@ describe("managed probe credential envelope", () => {
     await expect(decryptManagedProbeCredential(region, generated.credentialVersionId, goodKek, { ...envelope, algorithm: "AES-CBC" } as never)).rejects.toThrow("Invalid managed probe credential envelope");
     await expect(decryptManagedProbeCredential(region, generated.credentialVersionId, goodKek, { ...envelope, ciphertext: new Uint8Array(47) })).rejects.toThrow("Invalid managed probe credential envelope");
     await expect(decryptManagedProbeCredential(null as never, generated.credentialVersionId, goodKek, envelope)).rejects.toThrow("Invalid managed probe credential envelope");
+  });
+});
+
+describe("external managed probe KEK provider", () => {
+  it("selects explicit key versions across rotation and key-source recovery", async () => {
+    const key1 = kek();
+    const key2 = kek();
+    const key1Before = new Uint8Array(key1);
+    const key2Before = new Uint8Array(key2);
+    const keys = new Map([[1, key1], [2, key2]]);
+    let activeVersion = 1;
+    const provider: ManagedProbeKekProvider = {
+      getActiveKey: async () => ({ version: activeVersion, key: keys.get(activeVersion)! }),
+      getKey: async (version) => keys.get(version) ?? null,
+    };
+
+    const oldVersion = await generateEncryptedManagedProbeCredentialWithProvider(region, provider);
+    activeVersion = 2;
+    const newVersion = await generateEncryptedManagedProbeCredentialWithProvider(region, provider);
+    expect(oldVersion.envelope.keyVersion).toBe(1);
+    expect(newVersion.envelope.keyVersion).toBe(2);
+    await expect(decryptManagedProbeCredentialWithProvider(region, oldVersion.credentialVersionId, oldVersion.envelope, provider))
+      .resolves.toEqual(oldVersion.credential);
+    await expect(decryptManagedProbeCredentialWithProvider(region, newVersion.credentialVersionId, newVersion.envelope, provider))
+      .resolves.toEqual(newVersion.credential);
+    expect(key1).toEqual(key1Before);
+    expect(key2).toEqual(key2Before);
+
+    const recoveredProvider: ManagedProbeKekProvider = {
+      getActiveKey: async () => ({ version: 2, key: new Uint8Array(key2) }),
+      getKey: async (version) => keys.get(version) ? new Uint8Array(keys.get(version)!) : null,
+    };
+    await expect(decryptManagedProbeCredentialWithProvider(region, oldVersion.credentialVersionId, oldVersion.envelope, recoveredProvider))
+      .resolves.toEqual(oldVersion.credential);
+    await expect(decryptManagedProbeCredentialWithProvider(region, newVersion.credentialVersionId, newVersion.envelope, recoveredProvider))
+      .resolves.toEqual(newVersion.credential);
+
+    keys.delete(1);
+    await expect(decryptManagedProbeCredentialWithProvider(region, oldVersion.credentialVersionId, oldVersion.envelope, provider))
+      .rejects.toThrow("Managed probe credential unavailable");
+    await expect(decryptManagedProbeCredentialWithProvider(region, newVersion.credentialVersionId, newVersion.envelope, provider))
+      .resolves.toEqual(newVersion.credential);
+  });
+
+  it("fails closed and sanitizes missing keys, malformed keys, and provider errors", async () => {
+    const secretBearingProvider: ManagedProbeKekProvider = {
+      getActiveKey: async () => { throw new Error("private key material leaked in provider error"); },
+      getKey: async () => { throw new Error("private key material leaked in provider error"); },
+    };
+    const sanitizedEncryptionFailure = await generateEncryptedManagedProbeCredentialWithProvider(region, secretBearingProvider)
+      .then(() => null, (error: Error) => error);
+    expect(sanitizedEncryptionFailure?.message).toBe("Managed probe credential encryption failed");
+    expect(sanitizedEncryptionFailure?.message).not.toContain("private key material");
+
+    const unavailable: ManagedProbeKekProvider = { getActiveKey: async () => null, getKey: async () => null };
+    await expect(generateEncryptedManagedProbeCredentialWithProvider(region, unavailable))
+      .rejects.toThrow("Managed probe credential encryption failed");
+
+    const generated = await generateEncryptedManagedProbeCredential(region, 4, kek());
+    const malformed: ManagedProbeKekProvider = {
+      getActiveKey: async () => ({ version: 1, key: new Uint8Array(31) }),
+      getKey: async () => new Uint8Array(31),
+    };
+    await expect(decryptManagedProbeCredentialWithProvider(region, generated.credentialVersionId, generated.envelope, malformed))
+      .rejects.toThrow("Managed probe credential unavailable");
+    await expect(decryptManagedProbeCredentialWithProvider(region, generated.credentialVersionId, generated.envelope, secretBearingProvider))
+      .rejects.toThrow("Managed probe credential unavailable");
   });
 });

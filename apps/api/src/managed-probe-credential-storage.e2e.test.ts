@@ -6,6 +6,7 @@ import {
   generateEncryptedManagedProbeCredentialWithProvider,
   type ManagedProbeKekProvider,
 } from "./managed-probe-kek-provider";
+import { withPreparedManagedProbeCredential } from "./managed-probe-credential-access";
 
 const url = process.env.TEST_DATABASE_URL;
 const db = url ? createDb(url, { max: 2 }) : (undefined as never);
@@ -51,6 +52,14 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
       expect(stored.ciphertext).not.toEqual(generated.credential);
       expect(Object.keys(stored)).not.toContain("kek");
 
+      let observedCredential: Uint8Array | undefined;
+      await withPreparedManagedProbeCredential(repo, region, stored.versionId, keyProvider, (credential) => {
+        observedCredential = credential;
+        expect(credential).toEqual(generated.credential);
+      });
+      expect(observedCredential).toBeDefined();
+      expect(observedCredential).toEqual(new Uint8Array(generated.credential.length));
+
       // Persisted database fields contain ciphertext and metadata, never the plaintext credential or its external KEK.
       const backupRow = JSON.stringify({
         region: stored.region,
@@ -76,6 +85,8 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
         recovered.fill(0);
       }
       const noKeys: ManagedProbeKekProvider = { getActiveKey: async () => null, getKey: async () => null };
+      await expect(withPreparedManagedProbeCredential(repo, region, stored.versionId, noKeys, () => undefined))
+        .rejects.toThrow("Managed probe credential unavailable");
       await expect(decryptManagedProbeCredentialWithProvider(region, stored.versionId, {
         formatVersion: stored.formatVersion as 1,
         algorithm: stored.algorithm as "A256GCM",

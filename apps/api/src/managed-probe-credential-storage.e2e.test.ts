@@ -13,6 +13,14 @@ import { withPreparedManagedProbeCredential } from "./managed-probe-credential-a
 import { createFileManagedProbeKekProvider } from "./managed-probe-kek-file-provider";
 
 const url = process.env.TEST_DATABASE_URL;
+const pgDumpRequired = process.env.MONTRAL_TEST_PG_DUMP_REQUIRED === "1";
+if (pgDumpRequired) {
+  const parsed = url ? new URL(url) : null;
+  const database = parsed ? decodeURIComponent(parsed.pathname.slice(1)) : "";
+  if (!parsed || !["127.0.0.1", "localhost"].includes(parsed.hostname) || !database.startsWith("montral_test_")) {
+    throw new Error("Managed probe backup tests require a local montral_test_ database");
+  }
+}
 const db = url ? createDb(url, { max: 2 }) : (undefined as never);
 const repo = url ? createRepo(db) : (undefined as never);
 
@@ -169,7 +177,7 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
   });
 });
 
-describe.skipIf(!url || process.env.MONTRAL_TEST_PG_DUMP_REQUIRED !== "1")("managed probe credential database-only backup", () => {
+describe.skipIf(!url || !pgDumpRequired)("managed probe credential database-only backup", () => {
   it("keeps plaintext credentials and KEKs out of a real pg_dump data archive", async () => {
     const region = `probe-${crypto.randomUUID().slice(0, 12)}`;
     const operatorId = "synthetic-pg-dump-test";
@@ -213,11 +221,137 @@ describe.skipIf(!url || process.env.MONTRAL_TEST_PG_DUMP_REQUIRED !== "1")("mana
       expect(dump).toContain(Buffer.from(generated.envelope.ciphertext).toString("hex"));
       expect(dump).not.toContain(Buffer.from(generated.credential).toString("hex"));
       expect(dump).not.toContain(Buffer.from(generated.credential).toString("base64"));
+      expect(dump).not.toContain(Buffer.from(generated.credential).toString("base64url"));
       expect(dump).not.toContain(Buffer.from(kek).toString("hex"));
       expect(dump).not.toContain(Buffer.from(kek).toString("base64"));
+      expect(dump).not.toContain(Buffer.from(kek).toString("base64url"));
     } finally {
       generated.credential.fill(0);
       kek.fill(0);
+    }
+  });
+
+  it("restores managed probe envelopes and audit rows into a fresh database with an external KEK", async () => {
+    const region = `probe-${crypto.randomUUID().slice(0, 12)}`;
+    const operatorId = "synthetic-managed-probe-restore-test";
+    const kek = crypto.getRandomValues(new Uint8Array(32));
+    const provider: ManagedProbeKekProvider = {
+      getActiveKey: async () => ({ version: 8, key: kek }),
+      getKey: async (version) => version === 8 ? kek : null,
+    };
+    const parsed = new URL(url!);
+    const restoreDatabase = `montral_test_restore_${crypto.randomUUID().replaceAll("-", "")}`;
+    const restoreUrl = new URL(url!);
+    restoreUrl.pathname = `/${restoreDatabase}`;
+    const env = { ...process.env, PGPASSWORD: decodeURIComponent(parsed.password) };
+    const pgArgs = ["--host", parsed.hostname, "--port", parsed.port || "5432", "--username", decodeURIComponent(parsed.username)];
+    const archiveDirectory = await mkdtemp(join(tmpdir(), "montral-managed-probe-restore-"));
+    const archivePath = join(archiveDirectory, "managed-probe-data.dump");
+    let restoreDb: ReturnType<typeof createDb> | undefined;
+    let databaseCreated = false;
+    let generated: Awaited<ReturnType<typeof generateEncryptedManagedProbeCredentialWithProvider>> | undefined;
+    let restoredCredential: Uint8Array | undefined;
+    try {
+      const registered = await repo.createManagedProbeRegistration!({
+        region,
+        displayName: "Synthetic restored probe",
+        endpointUrl: `https://${region}.example.test/probe`,
+        createdBy: operatorId,
+      });
+      expect(registered.created).toBe(true);
+      generated = await generateEncryptedManagedProbeCredentialWithProvider(region, provider);
+      const current = generated;
+      expect(await repo.prepareManagedProbeCredential!({
+        region,
+        versionId: current.credentialVersionId,
+        formatVersion: current.envelope.formatVersion,
+        algorithm: current.envelope.algorithm,
+        keyVersion: current.envelope.keyVersion,
+        nonce: current.envelope.nonce,
+        ciphertext: current.envelope.ciphertext,
+        operatorId,
+      })).toBe("prepared");
+
+      execFileSync("pg_dump", [
+        "--format=custom", "--data-only", "--no-owner", "--no-privileges",
+        "--table=public.managed_probe_registration", "--table=public.managed_probe_registration_event",
+        "--table=public.managed_probe_credential", "--table=public.managed_probe_credential_event",
+        "--table=public.managed_probe_registration_event_id_seq", "--table=public.managed_probe_credential_event_id_seq",
+        "--host", parsed.hostname, "--port", parsed.port || "5432",
+        "--username", decodeURIComponent(parsed.username), "--dbname", decodeURIComponent(parsed.pathname.slice(1)),
+        "--file", archivePath,
+      ], { env, stdio: "pipe" });
+      const archiveSql = execFileSync("pg_restore", ["--file=-", archivePath], {
+        encoding: "utf8",
+        maxBuffer: 16 * 1024 * 1024,
+        env,
+      });
+      expect(archiveSql).toContain(Buffer.from(current.envelope.ciphertext).toString("hex"));
+      expect(archiveSql).not.toContain(Buffer.from(current.credential).toString("hex"));
+      expect(archiveSql).not.toContain(Buffer.from(current.credential).toString("base64"));
+      expect(archiveSql).not.toContain(Buffer.from(current.credential).toString("base64url"));
+      expect(archiveSql).not.toContain(Buffer.from(kek).toString("hex"));
+      expect(archiveSql).not.toContain(Buffer.from(kek).toString("base64"));
+      expect(archiveSql).not.toContain(Buffer.from(kek).toString("base64url"));
+
+      execFileSync("createdb", [...pgArgs, restoreDatabase], { env, stdio: "pipe" });
+      databaseCreated = true;
+      restoreDb = createDb(restoreUrl.toString(), { max: 2 });
+      await migrate(restoreDb);
+      execFileSync("pg_restore", [
+        "--data-only", "--no-owner", "--no-privileges", "--exit-on-error",
+        "--dbname", restoreUrl.toString(), archivePath,
+      ], { env, stdio: "pipe" });
+
+      const restoredRepo = createRepo(restoreDb);
+      const restoredEnvelope = await restoredRepo.preparedManagedProbeCredentialEnvelope!(region, current.credentialVersionId);
+      expect(restoredEnvelope).toMatchObject({
+        region,
+        versionId: current.credentialVersionId,
+        formatVersion: current.envelope.formatVersion,
+        algorithm: current.envelope.algorithm,
+        keyVersion: current.envelope.keyVersion,
+        nonce: current.envelope.nonce,
+        ciphertext: current.envelope.ciphertext,
+      });
+      await withPreparedManagedProbeCredential(restoredRepo, region, current.credentialVersionId, provider, (credential) => {
+        restoredCredential = credential;
+        expect(credential).toEqual(current.credential);
+      });
+      expect(restoredCredential).toEqual(new Uint8Array(current.credential.length));
+      const secondRegion = `probe-${crypto.randomUUID().slice(0, 12)}`;
+      expect(await restoredRepo.createManagedProbeRegistration!({
+        region: secondRegion,
+        displayName: "Synthetic sequence probe",
+        endpointUrl: `https://${secondRegion}.example.test/probe`,
+        createdBy: operatorId,
+      })).toMatchObject({ created: true });
+      expect(await restoredRepo.revokeManagedProbeCredential!(region, current.credentialVersionId, operatorId)).toBe("revoked");
+      const restoredEvents = await restoreDb.select({ action: schema.managedProbeCredentialEvent.action, id: schema.managedProbeCredentialEvent.id })
+        .from(schema.managedProbeCredentialEvent)
+        .where(eq(schema.managedProbeCredentialEvent.region, region))
+        .orderBy(schema.managedProbeCredentialEvent.id);
+      expect(restoredEvents.map((event) => event.action)).toEqual(["prepare", "revoke"]);
+      const registrationEvents = await restoreDb.select({ action: schema.managedProbeRegistrationEvent.action, id: schema.managedProbeRegistrationEvent.id })
+        .from(schema.managedProbeRegistrationEvent)
+        .where(eq(schema.managedProbeRegistrationEvent.region, region))
+        .orderBy(schema.managedProbeRegistrationEvent.id);
+      expect(registrationEvents.map((event) => event.action)).toEqual(["register"]);
+    } finally {
+      restoredCredential?.fill(0);
+      generated?.credential.fill(0);
+      kek.fill(0);
+      try {
+        await restoreDb?.$client.end();
+      } finally {
+        try {
+          if (databaseCreated) {
+            execFileSync("dropdb", ["--force", ...pgArgs, restoreDatabase], { env, stdio: "pipe" });
+          }
+        } finally {
+          await rm(archiveDirectory, { recursive: true, force: true });
+        }
+      }
     }
   });
 });

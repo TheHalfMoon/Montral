@@ -45,6 +45,32 @@ describe("operator console request isolation", () => {
     expect(init).toMatchObject({ credentials: "include", cache: "no-store", method: "GET", referrerPolicy: "no-referrer" });
   });
 
+  it("manages only non-secret probe registration metadata through session-only calls", async () => {
+    const request = vi.fn(async (path: string | URL | Request, init?: RequestInit) => {
+      const url = String(path);
+      const body = init?.body ? JSON.parse(init.body as string) : undefined;
+      return new Response(JSON.stringify(url.endsWith("/audit?limit=50")
+        ? { region: "north/west", events: [] }
+        : url.endsWith("/managed-probes") && init?.method === "POST"
+          ? { registration: { region: body.region, executionEnabled: false } }
+          : { registrations: [], nextCursor: null }), { status: 200 });
+    });
+    const api = makeOperatorApi(request as typeof fetch);
+    await expect(api.managedProbes(25, "cursor +/=")).resolves.toEqual({ registrations: [], nextCursor: null });
+    await expect(api.registerManagedProbe({ region: "north-west", displayName: "North", endpointUrl: "https://probe.example/api/probe/north-west" }))
+      .resolves.toMatchObject({ registration: { region: "north-west", executionEnabled: false } });
+    await api.transitionManagedProbe("north/west", "suspend");
+    await expect(api.managedProbeAudit("north/west")).resolves.toEqual({ region: "north/west", events: [] });
+    const calls = request.mock.calls as unknown as Array<[string, RequestInit]>;
+    expect(new URL(calls[0]![0], "https://local.test").searchParams.get("after")).toBe("cursor +/=");
+    expect(calls[1]![0]).toBe("/api/operator/managed-probes");
+    expect(JSON.parse(calls[1]![1].body as string)).toEqual({ region: "north-west", displayName: "North", endpointUrl: "https://probe.example/api/probe/north-west" });
+    expect(calls[2]![0]).toBe("/api/operator/managed-probes/north%2Fwest/suspend");
+    expect(calls[3]![0]).toBe("/api/operator/managed-probes/north%2Fwest/audit?limit=50");
+    expect(calls.every(([, init]) => init.credentials === "include" && init.cache === "no-store" && init.redirect === "error" && init.referrerPolicy === "no-referrer")).toBe(true);
+    expect(JSON.stringify(calls.map(([, init]) => init))).not.toMatch(/authorization|x-api-key|localStorage|sessionStorage/i);
+  });
+
   it("reads the unified operator audit through the session only, safely encoding target and cursor", async () => {
     const request = vi.fn(async () => new Response(JSON.stringify({ events: [], next: null }), { status: 200 }));
     const api = makeOperatorApi(request as typeof fetch);

@@ -30,7 +30,10 @@ test("operator console is denied by default and confirms every synthetic state c
   let enabled = true;
   let managedState: "registered" | "suspended" | "revoked" = "registered";
   let managedRegistrationCreated = false;
-  let staleManagedResponses = 0;
+  let holdManagedLists = false;
+  const heldManagedRequests: import("@playwright/test").Request[] = [];
+  let releaseManagedLists!: () => void;
+  const managedListGate = new Promise<void>((resolve) => { releaseManagedLists = resolve; });
   let denyProbeOnFirstMock = true;
   const posted: { path: string; body: Record<string, unknown> }[] = [];
   const workspace = () => ({
@@ -93,8 +96,10 @@ test("operator console is denied by default and confirms every synthetic state c
     ], next: null });
     if (path === "/managed-probes") {
       if (!managedRegistrationCreated) {
-        await new Promise((resolve) => setTimeout(resolve, 7_000));
-        staleManagedResponses++;
+        if (holdManagedLists) {
+          heldManagedRequests.push(request);
+          await managedListGate;
+        }
         return answer(route, 200, { registrations: [], nextCursor: null });
       }
       return answer(route, 200, { registrations: [managedRegistration()], nextCursor: null });
@@ -123,6 +128,7 @@ test("operator console is denied by default and confirms every synthetic state c
   await expect(page.getByRole("heading", { name: "Operator access denied" })).toBeVisible();
   await expect(page.getByText("Synthetic Platform")).toHaveCount(0);
   denyProbeOnFirstMock = false;
+  holdManagedLists = true;
   const initialManagedRequest = page.waitForRequest((request) => new URL(request.url()).pathname === "/api/operator/managed-probes");
   await page.reload();
   await initialManagedRequest;
@@ -142,6 +148,10 @@ test("operator console is denied by default and confirms every synthetic state c
   expect(posted.at(-1)).toEqual({ path: "/managed-probes", body: {
     region: "synthetic-managed-east", displayName: "Synthetic Managed East", endpointUrl: "https://probe.synthetic.test/api/probe/synthetic-managed-east",
   } });
+  expect(heldManagedRequests.length).toBeGreaterThan(0);
+  const heldResponses = heldManagedRequests.map((request) => page.waitForResponse((response) => response.request() === request));
+  releaseManagedLists();
+  await Promise.all(heldResponses);
   await page.getByRole("button", { name: /Synthetic Platform/ }).click();
   const detail = page.getByRole("region", { name: "Selected workspace" });
   await expect(detail.getByText("owner@synthetic.test")).toBeVisible();
@@ -202,7 +212,6 @@ test("operator console is denied by default and confirms every synthetic state c
     "/probes/synthetic-east/validate", "/probes/synthetic-east/deactivate", "/probes/synthetic-east/activate",
   ]);
 
-  await expect.poll(() => staleManagedResponses).toBeGreaterThan(0);
   await expect(managed).toContainText("Synthetic Managed East");
   await expect(managed.getByText("Disabled", { exact: true })).toBeVisible();
   await managed.getByRole("button", { name: "Registration audit" }).click();

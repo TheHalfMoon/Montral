@@ -111,9 +111,13 @@ jobs:
           /usr/lib/postgresql/${{ matrix.postgres }}/bin/pg_restore --version
           echo /usr/lib/postgresql/${{ matrix.postgres }}/bin >> "$GITHUB_PATH"
       - name: Verify managed probe credentials stay encrypted in database-only backups
-        env:
-          MONTRAL_TEST_PG_DUMP_REQUIRED: "1"
-        run: pnpm --filter @montral/api exec vitest run src/managed-probe-credential-storage.e2e.test.ts
+        shell: bash
+        run: |
+          set -euo pipefail
+          probe_db="${TEST_DATABASE_URL%/*}/montral_test_managed_probe_ci"
+          psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c 'CREATE DATABASE montral_test_managed_probe_ci'
+          trap 'psql "$TEST_DATABASE_URL" -X -v ON_ERROR_STOP=1 -c "DROP DATABASE IF EXISTS montral_test_managed_probe_ci WITH (FORCE)"' EXIT
+          TEST_DATABASE_URL="$probe_db" MONTRAL_TEST_PG_DUMP_REQUIRED="1" pnpm --filter @montral/api exec vitest run src/managed-probe-credential-storage.e2e.test.ts
       - name: Qualify full-table PostgreSQL backup and content restore
         shell: bash
         run: |

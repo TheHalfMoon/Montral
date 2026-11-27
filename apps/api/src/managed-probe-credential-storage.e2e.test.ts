@@ -10,6 +10,7 @@ import {
   type ManagedProbeKekProvider,
 } from "./managed-probe-kek-provider";
 import { withPreparedManagedProbeCredential } from "./managed-probe-credential-access";
+import { generateAndPrepareManagedProbeCredential } from "./managed-probe-credential-prepare";
 import { createFileManagedProbeKekProvider } from "./managed-probe-kek-file-provider";
 
 const url = process.env.TEST_DATABASE_URL;
@@ -28,6 +29,50 @@ beforeAll(async () => { if (url) await migrate(db); });
 afterAll(async () => { if (url) await db.$client.end(); });
 
 describe.skipIf(!url)("managed probe envelope persistence and database-only recovery", () => {
+  it("generates and persists inactive credentials through the controlled helper", async () => {
+    const region = `probe-${crypto.randomUUID().slice(0, 12)}`;
+    const operatorId = "synthetic-prepare-helper-test";
+    const kek = crypto.getRandomValues(new Uint8Array(32));
+    const keyProvider: ManagedProbeKekProvider = {
+      getActiveKey: async () => ({ version: 17, key: kek }),
+      getKey: async (version) => version === 17 ? kek : null,
+    };
+    const registration = await repo.createManagedProbeRegistration!({
+      region,
+      displayName: "Synthetic helper credential",
+      endpointUrl: `https://${region}.example.test/probe`,
+      createdBy: operatorId,
+    });
+    expect(registration.created).toBe(true);
+
+    try {
+      const outcomes = await Promise.all([
+        generateAndPrepareManagedProbeCredential(repo, region, operatorId, keyProvider),
+        generateAndPrepareManagedProbeCredential(repo, region, operatorId, keyProvider),
+      ]);
+      expect(outcomes.sort()).toEqual(["prepared", "prepared_credential_exists"]);
+      const [stored] = await db.select().from(schema.managedProbeCredential).where(eq(schema.managedProbeCredential.region, region));
+      expect(stored).toBeDefined();
+      expect(stored?.state).toBe("prepared");
+      expect(stored?.keyVersion).toBe(17);
+      expect(stored?.nonce).toHaveLength(12);
+      expect(stored?.ciphertext).toHaveLength(48);
+
+      let plaintext: Uint8Array | undefined;
+      await withPreparedManagedProbeCredential(repo, region, stored!.versionId, keyProvider, (credential) => {
+        plaintext = credential;
+        expect(credential).toHaveLength(32);
+        expect(credential.some((byte) => byte !== 0)).toBe(true);
+      });
+      expect(plaintext).toEqual(new Uint8Array(32));
+      expect(await repo.managedProbeCredentialEvents!(region, 10)).toEqual([
+        expect.objectContaining({ action: "prepare", operatorId }),
+      ]);
+    } finally {
+      kek.fill(0);
+    }
+  });
+
   it("persists only the envelope, round-trips with an external KEK, and fails closed without it", async () => {
     const region = `probe-${crypto.randomUUID().slice(0, 12)}`;
     const operatorId = "synthetic-envelope-test";

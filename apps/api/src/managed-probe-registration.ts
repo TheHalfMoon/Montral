@@ -1,4 +1,5 @@
 import { AUTO, REGION_ID } from "./regions";
+import { hostBlocked } from "./netguard";
 
 export interface ManagedProbeRegistrationInput {
   region: string;
@@ -32,7 +33,7 @@ export function parseManagedProbeRegistrationInput(value: Record<string, unknown
   const isIpv4Literal = /^(?:\d{1,3}\.){3}\d{1,3}$/.test(hostname);
   if (
     endpoint.protocol !== "https:" || endpoint.username || endpoint.password || endpoint.search || endpoint.hash || rawEndpoint.includes("?") || rawEndpoint.includes("#") ||
-    !hostname || hostname === "localhost" || hostname.endsWith(".localhost") || hostname.includes(":") || isIpv4Literal ||
+    !hostname || hostBlocked(hostname) || hostname.includes(":") || isIpv4Literal ||
     endpoint.pathname !== `/api/probe/${region}`
   ) return { ok: false, code: "invalid_endpoint" };
   return { ok: true, value: { region, displayName, endpointUrl: endpoint.toString() } };

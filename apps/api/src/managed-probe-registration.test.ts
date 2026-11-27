@@ -22,6 +22,9 @@ describe("parseManagedProbeRegistrationInput", () => {
     "https://probe.example.test/api/probe/iad-east#fragment",
     "https://probe.example.test/api/probe/other-region",
     "https://localhost/api/probe/iad-east",
+    "https://probe.internal/api/probe/iad-east",
+    "https://probe.local/api/probe/iad-east",
+    "https://probe/api/probe/iad-east",
     "https://127.0.0.1/api/probe/iad-east",
     "https://[::1]/api/probe/iad-east",
   ])("rejects unsafe or mismatched endpoint %s", (endpointUrl) => {

@@ -23,6 +23,7 @@ import {
   type ManagedProbeRegistrationEvent,
   type ManagedProbeRegistrationState,
   type ManagedProbeCredentialEvent,
+  type ManagedProbeEnrollmentGrantEvent,
   type PreparedManagedProbeCredentialEnvelope,
   type ImportResult,
   type Scope,
@@ -1050,6 +1051,12 @@ export function createRepo(db: Db): Repo {
         const action = state === "revoked" ? "revoke" : state === "suspended" ? "suspend" : "restore";
         const [updated] = await tx.update(t).set({ state, updatedBy: operatorId, updatedAt: new Date() }).where(eq(t.region, region)).returning();
         await tx.insert(schema.managedProbeRegistrationEvent).values({ region, action, operatorId });
+        const invalidated = await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "revoked" })
+          .where(and(eq(schema.managedProbeEnrollmentGrant.region, region), eq(schema.managedProbeEnrollmentGrant.state, "issued")))
+          .returning({ id: schema.managedProbeEnrollmentGrant.id, versionId: schema.managedProbeEnrollmentGrant.versionId });
+        if (invalidated.length) await tx.insert(schema.managedProbeEnrollmentGrantEvent).values(invalidated.map((grant) => ({
+          grantId: grant.id, region, versionId: grant.versionId, action: "revoke", actorId: operatorId,
+        })));
         return { outcome: "changed" as const, registration: {
           region: updated.region, displayName: updated.displayName, endpointUrl: updated.endpointUrl,
           state: updated.state as ManagedProbeRegistrationState, createdBy: updated.createdBy, updatedBy: updated.updatedBy,
@@ -1130,6 +1137,13 @@ export function createRepo(db: Db): Repo {
           eq(schema.managedProbeCredential.region, region), eq(schema.managedProbeCredential.versionId, versionId),
         ));
         await tx.insert(schema.managedProbeCredentialEvent).values({ region, versionId, action: "revoke", operatorId });
+        const invalidated = await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "revoked" }).where(and(
+          eq(schema.managedProbeEnrollmentGrant.region, region), eq(schema.managedProbeEnrollmentGrant.versionId, versionId),
+          eq(schema.managedProbeEnrollmentGrant.state, "issued"),
+        )).returning({ id: schema.managedProbeEnrollmentGrant.id });
+        if (invalidated.length) await tx.insert(schema.managedProbeEnrollmentGrantEvent).values(invalidated.map((grant) => ({
+          grantId: grant.id, region, versionId, action: "revoke", actorId: operatorId,
+        })));
         return "revoked" as const;
       });
     },
@@ -1141,6 +1155,89 @@ export function createRepo(db: Db): Repo {
       return records.map((r): ManagedProbeCredentialEvent => ({
         id: r.id, region: r.region, versionId: r.versionId,
         action: r.action as ManagedProbeCredentialEvent["action"], operatorId: r.operatorId, createdAt: r.createdAt,
+      }));
+    },
+    async issueManagedProbeEnrollmentGrant(input) {
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + input.region}, 0))`);
+        const expiresAt = input.expiresAt.toISOString();
+        const [expiry] = await rows<{ valid: boolean }>(tx.execute(sql`
+          select (${expiresAt}::timestamptz > clock_timestamp()
+            and ${expiresAt}::timestamptz <= clock_timestamp() + interval '5 minutes') as valid`));
+        if (!expiry?.valid || input.tokenDigest.byteLength !== 32 || input.nonceDigest.byteLength !== 32) return "invalid_expiry" as const;
+        const [registration] = await tx.select().from(schema.managedProbeRegistration)
+          .where(eq(schema.managedProbeRegistration.region, input.region)).for("update");
+        if (!registration) return "missing_registration" as const;
+        if (registration.state !== "registered") return "registration_inactive" as const;
+        if (registration.endpointUrl !== input.endpointUrl) return "endpoint_mismatch" as const;
+        const [credential] = await tx.select({ state: schema.managedProbeCredential.state }).from(schema.managedProbeCredential).where(and(
+          eq(schema.managedProbeCredential.region, input.region), eq(schema.managedProbeCredential.versionId, input.versionId),
+        )).for("update");
+        if (!credential || credential.state !== "prepared") return "credential_unavailable" as const;
+        const expired = await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "expired" }).where(and(
+          eq(schema.managedProbeEnrollmentGrant.region, input.region), eq(schema.managedProbeEnrollmentGrant.state, "issued"),
+          lte(schema.managedProbeEnrollmentGrant.expiresAt, sql`clock_timestamp()`),
+        )).returning({ id: schema.managedProbeEnrollmentGrant.id, versionId: schema.managedProbeEnrollmentGrant.versionId });
+        if (expired.length) await tx.insert(schema.managedProbeEnrollmentGrantEvent).values(expired.map((grant) => ({
+          grantId: grant.id, region: input.region, versionId: grant.versionId, action: "expire", actorId: "system",
+        })));
+        const [pending] = await tx.select({ id: schema.managedProbeEnrollmentGrant.id }).from(schema.managedProbeEnrollmentGrant)
+          .where(and(eq(schema.managedProbeEnrollmentGrant.region, input.region), eq(schema.managedProbeEnrollmentGrant.state, "issued"))).limit(1);
+        if (pending) return "pending_grant_exists" as const;
+        await tx.insert(schema.managedProbeEnrollmentGrant).values({
+          id: input.id, region: input.region, versionId: input.versionId, endpointUrl: input.endpointUrl,
+          tokenDigest: input.tokenDigest, nonceDigest: input.nonceDigest, expiresAt: input.expiresAt, createdBy: input.operatorId,
+        });
+        await tx.insert(schema.managedProbeEnrollmentGrantEvent).values({
+          grantId: input.id, region: input.region, versionId: input.versionId, action: "issue", actorId: input.operatorId,
+        });
+        return "issued" as const;
+      });
+    },
+    async consumeManagedProbeEnrollmentGrant(input) {
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + input.region}, 0))`);
+        const [grant] = await tx.select().from(schema.managedProbeEnrollmentGrant)
+          .where(eq(schema.managedProbeEnrollmentGrant.tokenDigest, input.tokenDigest)).for("update");
+        if (!grant || grant.region !== input.region || grant.versionId !== input.versionId || grant.endpointUrl !== input.endpointUrl ||
+            grant.nonceDigest.byteLength !== input.nonceDigest.byteLength ||
+            !Buffer.from(grant.nonceDigest).equals(Buffer.from(input.nonceDigest)) || grant.state !== "issued") {
+          return "unavailable" as const;
+        }
+        const [registration] = await tx.select({ state: schema.managedProbeRegistration.state, endpointUrl: schema.managedProbeRegistration.endpointUrl })
+          .from(schema.managedProbeRegistration).where(eq(schema.managedProbeRegistration.region, input.region)).for("update");
+        const [credential] = await tx.select({ state: schema.managedProbeCredential.state }).from(schema.managedProbeCredential).where(and(
+          eq(schema.managedProbeCredential.region, input.region), eq(schema.managedProbeCredential.versionId, input.versionId),
+        )).for("update");
+        if (!registration || registration.state !== "registered" || registration.endpointUrl !== input.endpointUrl || !credential || credential.state !== "prepared") {
+          return "unavailable" as const;
+        }
+        const [consumed] = await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "consumed", consumedAt: sql`clock_timestamp()` })
+          .where(and(eq(schema.managedProbeEnrollmentGrant.id, grant.id), eq(schema.managedProbeEnrollmentGrant.state, "issued"), gt(schema.managedProbeEnrollmentGrant.expiresAt, sql`clock_timestamp()`)))
+          .returning({ id: schema.managedProbeEnrollmentGrant.id });
+        if (!consumed) {
+          await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "expired" }).where(and(
+            eq(schema.managedProbeEnrollmentGrant.id, grant.id), eq(schema.managedProbeEnrollmentGrant.state, "issued"),
+          ));
+          await tx.insert(schema.managedProbeEnrollmentGrantEvent).values({
+            grantId: grant.id, region: input.region, versionId: input.versionId, action: "expire", actorId: "system",
+          });
+          return "unavailable" as const;
+        }
+        await tx.insert(schema.managedProbeEnrollmentGrantEvent).values({
+          grantId: grant.id, region: input.region, versionId: input.versionId, action: "consume", actorId: input.actorId,
+        });
+        return "consumed" as const;
+      });
+    },
+    async managedProbeEnrollmentGrantEvents(region, limit) {
+      const safeLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
+      const events = await db.select().from(schema.managedProbeEnrollmentGrantEvent)
+        .where(eq(schema.managedProbeEnrollmentGrantEvent.region, region))
+        .orderBy(desc(schema.managedProbeEnrollmentGrantEvent.id)).limit(safeLimit);
+      return events.map((event): ManagedProbeEnrollmentGrantEvent => ({
+        id: event.id, grantId: event.grantId, region: event.region, versionId: event.versionId,
+        action: event.action as ManagedProbeEnrollmentGrantEvent["action"], actorId: event.actorId, createdAt: event.createdAt,
       }));
     },
     async monitorsPerRegion() {

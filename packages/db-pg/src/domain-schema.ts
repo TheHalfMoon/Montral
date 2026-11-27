@@ -7,6 +7,7 @@ import {
   check,
   customType,
   doublePrecision,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -1131,6 +1132,54 @@ export const managedProbeCredentialEvent = pgTable(
     check("managed_probe_credential_event_region_chk", sql`char_length(${t.region}) between 2 and 24`),
     check("managed_probe_credential_event_action_chk", sql`${t.action} in ('prepare','revoke')`),
     check("managed_probe_credential_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
+  ],
+);
+
+/** One-time enrollment authorization metadata. Only SHA-256 digests of the bearer token and nonce are stored. */
+export const managedProbeEnrollmentGrant = pgTable(
+  "managed_probe_enrollment_grant",
+  {
+    id: uuid("id").primaryKey(),
+    region: text("region").notNull(),
+    versionId: uuid("version_id").notNull(),
+    endpointUrl: text("endpoint_url").notNull(),
+    tokenDigest: bytea("token_digest").notNull(),
+    nonceDigest: bytea("nonce_digest").notNull(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    state: text("state").notNull().default("issued"),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    consumedAt: timestamp("consumed_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("managed_probe_enrollment_grant_token_digest_unique").on(t.tokenDigest),
+    uniqueIndex("managed_probe_enrollment_grant_one_issued_per_region_unique").on(t.region).where(sql`${t.state} = 'issued'`),
+    index("managed_probe_enrollment_grant_expiry_idx").on(t.state, t.expiresAt),
+    check("managed_probe_enrollment_grant_digest_chk", sql`octet_length(${t.tokenDigest}) = 32 and octet_length(${t.nonceDigest}) = 32`),
+    check("managed_probe_enrollment_grant_endpoint_chk", sql`char_length(${t.endpointUrl}) between 1 and 2048 and ${t.endpointUrl} ~ '^https://'`),
+    check("managed_probe_enrollment_grant_state_chk", sql`(${t.state} = 'issued' and ${t.consumedAt} is null) or (${t.state} = 'consumed' and ${t.consumedAt} is not null) or (${t.state} in ('expired','revoked') and ${t.consumedAt} is null)`),
+    check("managed_probe_enrollment_grant_created_by_chk", sql`char_length(${t.createdBy}) between 1 and 200`),
+    foreignKey({ columns: [t.region, t.versionId], foreignColumns: [managedProbeCredential.region, managedProbeCredential.versionId], name: "managed_probe_enrollment_grant_credential_fk" }).onDelete("restrict"),
+  ],
+);
+
+/** Secret-free, append-only events for one-time enrollment authorization. */
+export const managedProbeEnrollmentGrantEvent = pgTable(
+  "managed_probe_enrollment_grant_event",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    grantId: uuid("grant_id").notNull(),
+    region: text("region").notNull(),
+    versionId: uuid("version_id").notNull(),
+    action: text("action").notNull(),
+    actorId: text("actor_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("managed_probe_enrollment_grant_event_region_id_idx").on(t.region, t.id),
+    check("managed_probe_enrollment_grant_event_region_chk", sql`char_length(${t.region}) between 2 and 24`),
+    check("managed_probe_enrollment_grant_event_action_chk", sql`${t.action} in ('issue','consume','expire','revoke')`),
+    check("managed_probe_enrollment_grant_event_actor_chk", sql`char_length(${t.actorId}) between 1 and 200`),
   ],
 );
 

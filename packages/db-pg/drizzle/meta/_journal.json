@@ -477,6 +477,13 @@
       "when": 1795780358054,
       "tag": "0067_managed_probe_credential_storage",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1795807802309,
+      "tag": "0068_yielding_hellfire_club",
+      "breakpoints": true
     }
   ]
 }

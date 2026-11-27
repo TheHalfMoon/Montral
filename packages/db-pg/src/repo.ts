@@ -19,10 +19,13 @@ import {
   type ProbeRegionDrainEvent,
   type ProbeRegionValidationEvent,
   type ProbeRegionLifecycleEvent,
+  type ManagedProbeRegistration,
+  type ManagedProbeRegistrationEvent,
+  type ManagedProbeRegistrationState,
   type ImportResult,
   type Scope,
 } from "@montral/repo";
-import { and, asc, count, desc, eq, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
+import { and, asc, count, desc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, notInArray, or, sql, type SQL, type SQLWrapper } from "drizzle-orm";
 import type { Db } from "./client";
 import * as schema from "./schema";
 import { coverageTime, recordHeartbeatObservation, recordObservation, timeCoverage } from "./coverage";
@@ -982,6 +985,82 @@ export function createRepo(db: Db): Repo {
       const records = await db.select().from(t).where(eq(t.region, region)).orderBy(desc(t.id)).limit(safeLimit);
       return records.map((r): ProbeRegionLifecycleEvent => ({
         id: r.id, region: r.region, action: r.action as ProbeRegionLifecycleEvent["action"], operatorId: r.operatorId, createdAt: r.createdAt,
+      }));
+    },
+    async listManagedProbeRegistrations(limit, afterRegion) {
+      const t = schema.managedProbeRegistration;
+      const safeLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
+      const rows = await db.select().from(t).where(afterRegion ? gt(t.region, afterRegion) : undefined).orderBy(asc(t.region)).limit(safeLimit + 1);
+      const hasMore = rows.length > safeLimit;
+      const page = hasMore ? rows.slice(0, safeLimit) : rows;
+      return { registrations: page.map((r): ManagedProbeRegistration => ({
+        region: r.region, displayName: r.displayName, endpointUrl: r.endpointUrl,
+        state: r.state as ManagedProbeRegistrationState, createdBy: r.createdBy, updatedBy: r.updatedBy,
+        createdAt: r.createdAt, updatedAt: r.updatedAt,
+      })), nextCursor: hasMore ? page.at(-1)?.region ?? null : null };
+    },
+    async createManagedProbeRegistration(input) {
+      const t = schema.managedProbeRegistration;
+      return db.transaction(async (tx) => {
+        // Serialize same-region creates on every API replica. The primary key and endpoint unique index also fence races.
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + input.region}, 0))`);
+        const [regionConflict] = await tx.select({ region: t.region }).from(t).where(eq(t.region, input.region)).for("update");
+        if (regionConflict) return { created: false as const, conflict: "region" as const };
+        const [endpointConflict] = await tx.select({ region: t.region }).from(t).where(eq(t.endpointUrl, input.endpointUrl)).for("update");
+        if (endpointConflict) return { created: false as const, conflict: "endpoint" as const };
+        const [row] = await tx.insert(t).values({
+          region: input.region, displayName: input.displayName, endpointUrl: input.endpointUrl,
+          state: "registered", createdBy: input.createdBy, updatedBy: input.createdBy,
+        }).onConflictDoNothing().returning();
+        if (!row) {
+          const [existingRegion] = await tx.select({ region: t.region }).from(t).where(eq(t.region, input.region));
+          return { created: false as const, conflict: existingRegion ? "region" as const : "endpoint" as const };
+        }
+        await tx.insert(schema.managedProbeRegistrationEvent).values({ region: input.region, action: "register", operatorId: input.createdBy });
+        return {
+          created: true as const,
+          registration: {
+            region: row.region, displayName: row.displayName, endpointUrl: row.endpointUrl,
+            state: row.state as ManagedProbeRegistrationState, createdBy: row.createdBy, updatedBy: row.updatedBy,
+            createdAt: row.createdAt, updatedAt: row.updatedAt,
+          },
+        };
+      });
+    },
+    async transitionManagedProbeRegistration(region, state, operatorId) {
+      const t = schema.managedProbeRegistration;
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + region}, 0))`);
+        const [current] = await tx.select().from(t).where(eq(t.region, region)).for("update");
+        if (!current) return { outcome: "missing" as const };
+        const currentState = current.state as ManagedProbeRegistrationState;
+        if (currentState === state) {
+          return { outcome: "unchanged" as const, registration: {
+            region: current.region, displayName: current.displayName, endpointUrl: current.endpointUrl,
+            state: currentState, createdBy: current.createdBy, updatedBy: current.updatedBy,
+            createdAt: current.createdAt, updatedAt: current.updatedAt,
+          } };
+        }
+        const valid = currentState !== "revoked" && (
+          state === "revoked" || (currentState === "registered" && state === "suspended") || (currentState === "suspended" && state === "registered")
+        );
+        if (!valid) return { outcome: "invalid_transition" as const, current: currentState };
+        const action = state === "revoked" ? "revoke" : state === "suspended" ? "suspend" : "restore";
+        const [updated] = await tx.update(t).set({ state, updatedBy: operatorId, updatedAt: new Date() }).where(eq(t.region, region)).returning();
+        await tx.insert(schema.managedProbeRegistrationEvent).values({ region, action, operatorId });
+        return { outcome: "changed" as const, registration: {
+          region: updated.region, displayName: updated.displayName, endpointUrl: updated.endpointUrl,
+          state: updated.state as ManagedProbeRegistrationState, createdBy: updated.createdBy, updatedBy: updated.updatedBy,
+          createdAt: updated.createdAt, updatedAt: updated.updatedAt,
+        } };
+      });
+    },
+    async managedProbeRegistrationEvents(region, limit) {
+      const t = schema.managedProbeRegistrationEvent;
+      const safeLimit = Math.max(1, Math.min(100, Number.isInteger(limit) ? limit : 50));
+      const records = await db.select().from(t).where(eq(t.region, region)).orderBy(desc(t.id)).limit(safeLimit);
+      return records.map((r): ManagedProbeRegistrationEvent => ({
+        id: r.id, region: r.region, action: r.action as ManagedProbeRegistrationEvent["action"], operatorId: r.operatorId, createdAt: r.createdAt,
       }));
     },
     async monitorsPerRegion() {

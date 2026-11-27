@@ -131,8 +131,19 @@ fingerprint used only to bind recent proof to the active endpoint and key. The a
 operator ID, fixed outcome class and timestamp; raw endpoint URLs, challenge/response bodies, capabilities and keys
 are never stored there. The fingerprint is not returned by the API:
 
+Managed probe registrations are a separate, non-secret operator inventory. They are not merged into `availableRegions()`,
+are not visible to the scheduler, and cannot be contacted or activated by registration state. Their `executionEnabled`
+response field is always `false` until a separately reviewed credential and execution lifecycle is qualified. Every route
+below uses the existing platform-operator gate, including a second-factor-verified browser session.
+
 | Endpoint | Does |
 | --- | --- |
+| `GET /api/operator/managed-probes?limit=50&after=:region` | Lists persistent registration metadata and explicit state in bounded pages (1–100 rows). It returns no credentials; every record reports `executionEnabled: false`. |
+| `POST /api/operator/managed-probes` | Registers `{region, displayName, endpointUrl}` after region, HTTPS endpoint, duplicate, and deployment-configuration conflict checks. Registration and its append-only audit event commit together. It makes no network request. |
+| `POST /api/operator/managed-probes/:id/suspend` | Changes a registered record to suspended and appends an audit event atomically. |
+| `POST /api/operator/managed-probes/:id/restore` | Restores a suspended record to registered; revoked records cannot be restored. This does not activate execution. |
+| `POST /api/operator/managed-probes/:id/revoke` | Permanently revokes the registration identity and appends an audit event atomically. |
+| `GET /api/operator/managed-probes/:id/audit` | Returns bounded secret-free registration lifecycle events; endpoint URLs are not copied into the audit log. |
 | `GET /api/operator/probes` | Every configured region, plus any region with stored state that is no longer configured (`configured: false`): `status` (`up`, `unreachable`, `drained`, `deactivated` or `unknown`), `enabled`, `credentialMode` (`dedicated`, `shared` or `unconfigured`), `lastAnswerAt`, `lastUnreachableAt`, `lastUnreachableReason`, `unreachableSince`, the drain fields and how many unpaused monitors list the region. `auto.monitors` counts monitors on this deployment's own location. Credential mode never includes a key, URL or secret fingerprint. |
 | `POST /api/operator/probes/:id/validate` | Accepts only `{}` and only an already configured region. Sends a bounded, redirect-disabled HMAC-signed challenge to the configured probe with no key value or monitor target. The response proof binds the fresh challenge, reported region ID, and capabilities to the existing configured key. It returns only the match result and recognized capabilities. A keyed configuration fingerprint binds recent activation proof to the exact configured endpoint and signing key without storing or returning either value. This proves possession of the configured key at the endpoint, **not source, deployment, or binary integrity**; a shared key also cannot distinguish regions using that same key. Returns 409 for an identity/key mismatch and 502 when the endpoint cannot be validated. Each attempted validation outcome is durably recorded before the response; if that audit write fails, the endpoint returns 503 and does not report a result. It is rate-limited with the operator write bucket. |
 | `POST /api/operator/probes/:id/drain` | Body `{"note"?: string}` (at most 200 characters). Only a configured region; `auto` cannot be drained. |

@@ -1042,6 +1042,49 @@ export const probeRegionLifecycleEvent = pgTable(
   ],
 );
 
+/** Persistent non-secret inventory for operator-managed probes. This table is deliberately not read by the scheduler. */
+export const managedProbeRegistration = pgTable(
+  "managed_probe_registration",
+  {
+    region: text("region").primaryKey(),
+    displayName: text("display_name").notNull(),
+    endpointUrl: text("endpoint_url").notNull(),
+    state: text("state").notNull().default("registered"),
+    createdBy: text("created_by").notNull(),
+    updatedBy: text("updated_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("managed_probe_registration_endpoint_unique").on(t.endpointUrl),
+    index("managed_probe_registration_state_region_idx").on(t.state, t.region),
+    check("managed_probe_registration_region_chk", sql`${t.region} ~ '^[a-z0-9][a-z0-9-]{1,23}$' and ${t.region} <> 'auto'`),
+    check("managed_probe_registration_name_chk", sql`char_length(trim(${t.displayName})) between 1 and 60`),
+    check("managed_probe_registration_endpoint_chk", sql`char_length(${t.endpointUrl}) between 1 and 2048 and ${t.endpointUrl} ~ '^https://'`),
+    check("managed_probe_registration_state_chk", sql`${t.state} in ('registered','suspended','revoked')`),
+    check("managed_probe_registration_created_by_chk", sql`char_length(${t.createdBy}) between 1 and 200`),
+    check("managed_probe_registration_updated_by_chk", sql`char_length(${t.updatedBy}) between 1 and 200`),
+  ],
+);
+
+/** Append-only actions; deliberately excludes endpoint values, credentials, and request payloads. */
+export const managedProbeRegistrationEvent = pgTable(
+  "managed_probe_registration_event",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    region: text("region").notNull(),
+    action: text("action").notNull(),
+    operatorId: text("operator_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("managed_probe_registration_event_region_id_idx").on(t.region, t.id),
+    check("managed_probe_registration_event_region_chk", sql`char_length(${t.region}) between 2 and 24`),
+    check("managed_probe_registration_event_action_chk", sql`${t.action} in ('register','suspend','restore','revoke')`),
+    check("managed_probe_registration_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
+  ],
+);
+
 export const monitorRelations = relations(monitor, ({ many }) => ({
   results: many(checkResult),
   incidents: many(incident),

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import {
   DEFAULT_ALERT_LOG_DAYS,
   AUDIT_PRUNE_BATCH,
@@ -1198,10 +1198,13 @@ export function createRepo(db: Db): Repo {
       return db.transaction(async (tx) => {
         await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + input.region}, 0))`);
         const [grant] = await tx.select().from(schema.managedProbeEnrollmentGrant)
-          .where(eq(schema.managedProbeEnrollmentGrant.tokenDigest, input.tokenDigest)).for("update");
+          .where(and(
+            eq(schema.managedProbeEnrollmentGrant.tokenDigest, input.tokenDigest),
+            eq(schema.managedProbeEnrollmentGrant.region, input.region),
+          )).for("update");
         if (!grant || grant.region !== input.region || grant.versionId !== input.versionId || grant.endpointUrl !== input.endpointUrl ||
             grant.nonceDigest.byteLength !== input.nonceDigest.byteLength ||
-            !Buffer.from(grant.nonceDigest).equals(Buffer.from(input.nonceDigest)) || grant.state !== "issued") {
+            !timingSafeEqual(grant.nonceDigest, input.nonceDigest) || grant.state !== "issued") {
           return "unavailable" as const;
         }
         const [registration] = await tx.select({ state: schema.managedProbeRegistration.state, endpointUrl: schema.managedProbeRegistration.endpointUrl })

@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createApp } from "./app";
 import type { Edition } from "./edition";
 import { unmetered } from "./entitlements";
-import { configureProbes, probeConfigurationFingerprint, resetProbeRegionCache } from "./probes";
+import { availableRegions, configureProbes, probeConfigurationFingerprint, resetProbeRegionCache } from "./probes";
 import { PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "./probe-protocol";
 
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests). Region ids are unique
@@ -570,5 +570,95 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(after["e2e-central"]).toMatchObject({ drained: false, drained_by: null, drain_note: null, drained_at: null });
     await repo.setProbeRegionDrain!("e2e-east", { drained: false, by: null, note: null });
     resetProbeRegionCache();
+  });
+
+  it("persists operator-managed probe metadata with MFA, configuration fences, atomic audit and no execution path", async () => {
+    const { operator, send, unverifiedCookie, verifiedCookie } = await operatorSessions();
+    const region = `managed-${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
+    const endpointUrl = `https://probe.test/api/probe/${region}`;
+    const body = { region, displayName: "Synthetic managed probe", endpointUrl };
+    const sendJson = (path: string, cookie: string | undefined, method: string, value?: unknown) => send(path, {
+      method,
+      headers: { ...(cookie ? { cookie } : {}), origin: ORIGIN, "content-type": "application/json" },
+      ...(value === undefined ? {} : { body: JSON.stringify(value) }),
+    });
+    const op = (path: string, method: string, value?: unknown) => sendJson(`/api/operator${path}`, verifiedCookie, method, value);
+
+    expect((await sendJson("/api/operator/managed-probes", undefined, "GET")).status).toBe(403);
+    expect((await sendJson("/api/operator/managed-probes", unverifiedCookie, "GET")).status).toBe(403);
+    expect((await sendJson("/api/operator/managed-probes", unverifiedCookie, "POST", body)).status).toBe(403);
+    expect((await op("/managed-probes", "POST", { ...body, region: "e2e-west", endpointUrl: PROBES["e2e-west"] })).status).toBe(409);
+    const unkeyedRegion = `bare-${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
+    const unkeyedEnv = {
+      ...baseEnv, MONTRAL_OPERATOR_USER_IDS: operator.userId, PROBE_REGIONS: JSON.stringify({ ...PROBES, [unkeyedRegion]: `https://probe.test/api/probe/${unkeyedRegion}` }),
+      PROBE_SECRET: "", PROBE_SECRETS: "{}",
+    };
+    const unkeyedConflict = await app.fetch(new Request(`${ORIGIN}/api/operator/managed-probes`, {
+      method: "POST", headers: { cookie: verifiedCookie, origin: ORIGIN, "content-type": "application/json" },
+      body: JSON.stringify({ region: unkeyedRegion, displayName: "Missing-key configured probe", endpointUrl: `https://probe.test/api/probe/${unkeyedRegion}` }),
+    }), unkeyedEnv as never);
+    expect(unkeyedConflict.status).toBe(409);
+    configureProbes(baseEnv);
+    expect((await op("/managed-probes", "POST", { ...body, region: `other-${region}`, endpointUrl: "http://probe.test/api/probe/x" })).status).toBe(400);
+
+    const attempts = await Promise.all([op("/managed-probes", "POST", body), op("/managed-probes", "POST", body)]);
+    expect(attempts.map((response) => response.status).sort()).toEqual([201, 409]);
+    const duplicateEndpoint = await db!.repo.createManagedProbeRegistration!({
+      region: `copy-${region}`, displayName: "Synthetic duplicate endpoint", endpointUrl, createdBy: operator.userId,
+    });
+    expect(duplicateEndpoint).toEqual({ created: false, conflict: "endpoint" });
+    expect((await op("/managed-probes", "POST", { ...body, region: `copy-${region}` })).status).toBe(400);
+
+    expect((await op("/managed-probes?limit=0", "GET")).status).toBe(400);
+    expect((await op("/managed-probes?after=auto", "GET")).status).toBe(400);
+    const pagedRegions: string[] = [];
+    let cursor: string | null = null;
+    for (let pageNumber = 0; pageNumber < 100; pageNumber++) {
+      const query = `?limit=1${cursor ? `&after=${encodeURIComponent(cursor)}` : ""}`;
+      const listing = await op(`/managed-probes${query}`, "GET");
+      expect(listing.status).toBe(200);
+      const page = (await listing.json()) as { registrations: Array<Record<string, unknown>>; nextCursor: string | null };
+      pagedRegions.push(...page.registrations.map((item) => String(item.region)));
+      cursor = page.nextCursor;
+      if (cursor === null) break;
+    }
+    expect(cursor).toBeNull();
+    expect(pagedRegions).toContain(region);
+    const registrations = (await (await op("/managed-probes?limit=100", "GET")).json()) as { registrations: Array<Record<string, unknown>> };
+    expect(registrations.registrations.find((item) => item.region === region)).toMatchObject({
+      region, displayName: "Synthetic managed probe", endpointUrl, state: "registered", createdBy: operator.userId, executionEnabled: false,
+    });
+    expect(availableRegions().some((configured) => configured.id === region)).toBe(false);
+
+    const suspended = await Promise.all([op(`/managed-probes/${region}/suspend`, "POST", {}), op(`/managed-probes/${region}/suspend`, "POST", {})]);
+    expect(suspended.map((response) => response.status)).toEqual([200, 200]);
+    expect((await op(`/managed-probes/${region}/restore`, "POST", {})).status).toBe(200);
+    expect((await op(`/managed-probes/${region}/revoke`, "POST", {})).status).toBe(200);
+    expect((await op(`/managed-probes/${region}/restore`, "POST", {})).status).toBe(409);
+
+    const historyResponse = await op(`/managed-probes/${region}/audit`, "GET");
+    const history = (await historyResponse.json()) as { events: Array<Record<string, unknown>> };
+    expect(history.events.map((event) => event.action)).toEqual(["revoke", "restore", "suspend", "register"]);
+    expect(history.events.every((event) => !("endpointUrl" in event) && !("secret" in event))).toBe(true);
+    await expect(db!.query(`DELETE FROM managed_probe_registration_event WHERE region = $1`, [region])).rejects.toThrow(/append-only/);
+    await expect(db!.query(`UPDATE managed_probe_registration_event SET action = 'register' WHERE region = $1`, [region])).rejects.toThrow(/append-only/);
+    await expect(db!.query(`TRUNCATE managed_probe_registration_event`)).rejects.toThrow(/append-only/);
+
+    const failedRegion = `fail-${region}`;
+    await db!.query(`DROP TRIGGER IF EXISTS test_fail_managed_probe_registration_audit ON public.managed_probe_registration_event`);
+    await db!.query(`DROP FUNCTION IF EXISTS public.test_fail_managed_probe_registration_audit()`);
+    await db!.query(`CREATE OR REPLACE FUNCTION public.test_fail_managed_probe_registration_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'synthetic audit failure'; END $$`);
+    await db!.query(`CREATE TRIGGER test_fail_managed_probe_registration_audit BEFORE INSERT ON public.managed_probe_registration_event FOR EACH ROW EXECUTE FUNCTION public.test_fail_managed_probe_registration_audit()`);
+    try {
+      const failed = await op("/managed-probes", "POST", {
+        region: failedRegion, displayName: "Synthetic rollback probe", endpointUrl: `https://probe.test/api/probe/${failedRegion}`,
+      });
+      expect(failed.status).toBe(503);
+      const persisted = await db!.query<{ count: string }>(`SELECT count(*)::text AS count FROM managed_probe_registration WHERE region = $1`, [failedRegion]);
+      expect(persisted[0]?.count).toBe("0");
+    } finally {
+      await db!.query(`DROP TRIGGER test_fail_managed_probe_registration_audit ON public.managed_probe_registration_event`);
+      await db!.query(`DROP FUNCTION public.test_fail_managed_probe_registration_audit()`);
+    }
   });
 });

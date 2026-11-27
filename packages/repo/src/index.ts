@@ -232,6 +232,27 @@ export interface ProbeRegionLifecycleEvent {
   createdAt: Date;
 }
 
+/** Non-secret registration metadata. A registered managed probe is never an execution target by itself. */
+export type ManagedProbeRegistrationState = "registered" | "suspended" | "revoked";
+export interface ManagedProbeRegistration {
+  region: string;
+  displayName: string;
+  endpointUrl: string;
+  state: ManagedProbeRegistrationState;
+  createdBy: string;
+  updatedBy: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+/** Append-only, non-secret lifecycle audit for managed probe registration metadata. */
+export interface ManagedProbeRegistrationEvent {
+  id: number;
+  region: string;
+  action: "register" | "suspend" | "restore" | "revoke";
+  operatorId: string;
+  createdAt: Date;
+}
+
 /** A monitor's last day from one region, for the regions it has been checked from. */
 export interface RegionStat {
   region: string;
@@ -799,6 +820,21 @@ export interface Repo {
   probeRegionValidationEvents?(region: string, limit: number): Promise<ProbeRegionValidationEvent[]>;
   /** Latest lifecycle actions for a probe, newest first; never exposed to workspace members. */
   probeRegionLifecycleEvents?(region: string, limit: number): Promise<ProbeRegionLifecycleEvent[]>;
+  /** List non-secret managed registration records; they are not probe execution targets. */
+  listManagedProbeRegistrations?(limit: number, afterRegion?: string): Promise<{ registrations: ManagedProbeRegistration[]; nextCursor: string | null }>;
+  /** Create a registration and append its audit record in one transaction. */
+  createManagedProbeRegistration?(input: Pick<ManagedProbeRegistration, "region" | "displayName" | "endpointUrl" | "createdBy">): Promise<
+    | { created: true; registration: ManagedProbeRegistration }
+    | { created: false; conflict: "region" | "endpoint" }
+  >;
+  /** Apply a valid registration-state transition and audit it atomically. */
+  transitionManagedProbeRegistration?(region: string, state: ManagedProbeRegistrationState, operatorId: string): Promise<
+    | { outcome: "missing" }
+    | { outcome: "invalid_transition"; current: ManagedProbeRegistrationState }
+    | { outcome: "unchanged" | "changed"; registration: ManagedProbeRegistration }
+  >;
+  /** List a bounded, non-secret registration audit history. */
+  managedProbeRegistrationEvents?(region: string, limit: number): Promise<ManagedProbeRegistrationEvent[]>;
   /** How many unpaused monitors list each region id. */
   monitorsPerRegion?(): Promise<Record<string, number>>;
   /** A run happened: the monitor is checked again (a conditional UPDATE in the database, never based on a stale read). */

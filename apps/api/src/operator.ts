@@ -6,8 +6,9 @@ import { limitedJsonBody, strictJsonObjectBody } from "./json-body-budget";
 import { crossOriginSessionWrite } from "./middleware";
 import { operatorMfaSatisfied } from "./operator-mfa";
 import { allow, clientIp } from "./ratelimit";
-import { availableRegions, isRegionConfigured, probeCredentialMode, probeConfigurationFingerprint, resetProbeRegionCache, validateProbeRegion } from "./probes";
+import { availableRegions, isRegionConfigured, parseProbeRegions, probeCredentialMode, probeConfigurationFingerprint, resetProbeRegionCache, validateProbeRegion } from "./probes";
 import { AUTO, REGION_ID } from "./regions";
+import { parseManagedProbeRegistrationInput } from "./managed-probe-registration";
 import type { ProbeRegionState } from "@montral/repo";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
 
@@ -195,6 +196,35 @@ async function changeProbeEnabled(c: Context<AppEnv>, enabled: boolean) {
     logProbeAction(operatorId, enabled ? "activate" : "deactivate", id);
   }
   return c.json({ id, enabled: result.enabled, changed: result.changed });
+}
+
+function managedProbeRegistrationView(registration: {
+  region: string; displayName: string; endpointUrl: string; state: string; createdBy: string; updatedBy: string; createdAt: Date; updatedAt: Date;
+}) {
+  return {
+    ...registration,
+    createdAt: new Date(registration.createdAt).toISOString(),
+    updatedAt: new Date(registration.updatedAt).toISOString(),
+    // Registration metadata is not proof of credential possession and is never an execution target.
+    executionEnabled: false as const,
+  };
+}
+
+async function changeManagedProbeRegistrationState(c: Context<AppEnv>, state: "registered" | "suspended" | "revoked") {
+  const region = c.req.param("id");
+  if (!region || !REGION_ID.test(region) || region === AUTO) return c.json({ error: "Not found" }, 404);
+  const repo = c.get("repo");
+  if (!repo.transitionManagedProbeRegistration) return c.json({ error: "Managed probe registration is not available on this backend" }, 501);
+  const operatorId = c.get("operatorId")!;
+  if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+  const body = await strictJsonObjectBody(c.req.raw, 2048);
+  if (Object.keys(body).length) return c.json({ error: "Lifecycle actions accept an empty object only" }, 400);
+  let result: Awaited<ReturnType<NonNullable<typeof repo.transitionManagedProbeRegistration>>>;
+  try { result = await repo.transitionManagedProbeRegistration(region, state, operatorId); }
+  catch { return c.json({ error: "Managed probe lifecycle action could not be recorded" }, 503); }
+  if (result.outcome === "missing") return c.json({ error: "Not found" }, 404);
+  if (result.outcome === "invalid_transition") return c.json({ error: "Invalid managed probe lifecycle transition", state: result.current }, 409);
+  return c.json({ registration: managedProbeRegistrationView(result.registration) });
 }
 
 type Query = <T>(sql: string, params?: unknown[]) => Promise<T[]>;
@@ -429,6 +459,62 @@ export const operatorApi = new Hono<AppEnv>()
     if (outcome === "missing") return c.json({ error: "Not found" }, 404);
     if (outcome === "lifted") logAction(operatorId, "unsuspend", id, null);
     return c.json({ id, suspended: false });
+  })
+  // Managed registration is a metadata-only inventory. The scheduler continues to use deployment configuration only.
+  .get("/managed-probes", async (c) => {
+    const repo = c.get("repo");
+    if (!repo.listManagedProbeRegistrations) return c.json({ error: "Managed probe registration is not available on this backend" }, 501);
+    const rawLimit = c.req.query("limit");
+    const limit = rawLimit === undefined ? 50 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
+    const afterRegion = c.req.query("after");
+    if (afterRegion !== undefined && (!REGION_ID.test(afterRegion) || afterRegion === AUTO)) return c.json({ error: "after must be a valid region id" }, 400);
+    try {
+      const page = await repo.listManagedProbeRegistrations(limit, afterRegion);
+      return c.json({ registrations: page.registrations.map(managedProbeRegistrationView), nextCursor: page.nextCursor });
+    } catch {
+      return c.json({ error: "Managed probe registrations could not be loaded" }, 503);
+    }
+  })
+  .post("/managed-probes", async (c) => {
+    const repo = c.get("repo");
+    if (!repo.createManagedProbeRegistration) return c.json({ error: "Managed probe registration is not available on this backend" }, 501);
+    const operatorId = c.get("operatorId")!;
+    if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const body = await strictJsonObjectBody(c.req.raw, 4096);
+    const parsed = parseManagedProbeRegistrationInput(body);
+    if (!parsed.ok) return c.json({ error: "Invalid managed probe registration", code: parsed.code }, 400);
+    const configured = parseProbeRegions(c.env.PROBE_REGIONS).regions;
+    if (configured.some((region) => region.id === parsed.value.region || region.url === parsed.value.endpointUrl)) {
+      return c.json({ error: "Managed probe conflicts with deployment configuration", code: "probe_registration_configuration_conflict" }, 409);
+    }
+    let result: Awaited<ReturnType<NonNullable<typeof repo.createManagedProbeRegistration>>>;
+    try {
+      result = await repo.createManagedProbeRegistration({ ...parsed.value, createdBy: operatorId });
+    } catch {
+      return c.json({ error: "Managed probe registration could not be recorded" }, 503);
+    }
+    if (!result.created) return c.json({ error: "Managed probe registration already exists", code: result.conflict === "region" ? "probe_registration_region_exists" : "probe_registration_endpoint_exists" }, 409);
+    return c.json({ registration: managedProbeRegistrationView(result.registration) }, 201);
+  })
+  .post("/managed-probes/:id/suspend", (c) => changeManagedProbeRegistrationState(c, "suspended"))
+  .post("/managed-probes/:id/restore", (c) => changeManagedProbeRegistrationState(c, "registered"))
+  .post("/managed-probes/:id/revoke", (c) => changeManagedProbeRegistrationState(c, "revoked"))
+  .get("/managed-probes/:id/audit", async (c) => {
+    const region = c.req.param("id");
+    if (!REGION_ID.test(region) || region === AUTO) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    if (!repo.managedProbeRegistrationEvents) return c.json({ error: "Managed probe audit is not available on this backend" }, 501);
+    const rawLimit = c.req.query("limit");
+    const limit = rawLimit === undefined ? 50 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
+    try {
+      const events = await repo.managedProbeRegistrationEvents(region, limit);
+      if (!events.length) return c.json({ error: "Not found" }, 404);
+      return c.json({ region, events: events.map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() })) });
+    } catch {
+      return c.json({ error: "Managed probe audit could not be loaded" }, 503);
+    }
   })
   // Probe regions: the configured ones (PROBE_REGIONS) and any with stored state that is no longer configured.
   .get("/probes", async (c) => {

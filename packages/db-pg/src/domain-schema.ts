@@ -1085,6 +1085,55 @@ export const managedProbeRegistrationEvent = pgTable(
   ],
 );
 
+/** Sealed, inactive credential envelopes. This storage is intentionally not connected to the probe scheduler. */
+export const managedProbeCredential = pgTable(
+  "managed_probe_credential",
+  {
+    region: text("region").notNull().references(() => managedProbeRegistration.region, { onDelete: "restrict" }),
+    versionId: uuid("version_id").notNull(),
+    formatVersion: integer("format_version").notNull(),
+    algorithm: text("algorithm").notNull(),
+    keyVersion: integer("key_version").notNull(),
+    nonce: bytea("nonce").notNull(),
+    ciphertext: bytea("ciphertext").notNull(),
+    state: text("state").notNull().default("prepared"),
+    createdBy: text("created_by").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    revokedBy: text("revoked_by"),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.region, t.versionId], name: "managed_probe_credential_pk" }),
+    uniqueIndex("managed_probe_credential_one_prepared_per_region_unique").on(t.region).where(sql`${t.state} = 'prepared'`),
+    check("managed_probe_credential_format_chk", sql`${t.formatVersion} = 1 and ${t.algorithm} = 'A256GCM'`),
+    check("managed_probe_credential_key_version_chk", sql`${t.keyVersion} between 1 and 2147483647`),
+    check("managed_probe_credential_nonce_chk", sql`octet_length(${t.nonce}) = 12`),
+    check("managed_probe_credential_ciphertext_chk", sql`octet_length(${t.ciphertext}) = 48`),
+    check("managed_probe_credential_state_chk", sql`(${t.state} = 'prepared' and ${t.revokedBy} is null and ${t.revokedAt} is null) or (${t.state} = 'revoked' and ${t.revokedBy} is not null and ${t.revokedAt} is not null)`),
+    check("managed_probe_credential_created_by_chk", sql`char_length(${t.createdBy}) between 1 and 200`),
+    check("managed_probe_credential_revoked_by_chk", sql`${t.revokedBy} is null or char_length(${t.revokedBy}) between 1 and 200`),
+  ],
+);
+
+/** Append-only, secret-free audit events for sealed credential lifecycle operations. */
+export const managedProbeCredentialEvent = pgTable(
+  "managed_probe_credential_event",
+  {
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    region: text("region").notNull(),
+    versionId: uuid("version_id").notNull(),
+    action: text("action").notNull(),
+    operatorId: text("operator_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    index("managed_probe_credential_event_region_id_idx").on(t.region, t.id),
+    check("managed_probe_credential_event_region_chk", sql`char_length(${t.region}) between 2 and 24`),
+    check("managed_probe_credential_event_action_chk", sql`${t.action} in ('prepare','revoke')`),
+    check("managed_probe_credential_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
+  ],
+);
+
 export const monitorRelations = relations(monitor, ({ many }) => ({
   results: many(checkResult),
   incidents: many(incident),

@@ -1186,12 +1186,115 @@ export function createRepo(db: Db): Repo {
         if (pending) return "pending_grant_exists" as const;
         await tx.insert(schema.managedProbeEnrollmentGrant).values({
           id: input.id, region: input.region, versionId: input.versionId, endpointUrl: input.endpointUrl,
-          tokenDigest: input.tokenDigest, nonceDigest: input.nonceDigest, expiresAt: input.expiresAt, createdBy: input.operatorId,
+          tokenDigest: input.tokenDigest, nonceDigest: input.nonceDigest, signedEnvelope: input.signedEnvelope,
+          expiresAt: input.expiresAt, createdBy: input.operatorId,
         });
         await tx.insert(schema.managedProbeEnrollmentGrantEvent).values({
           grantId: input.id, region: input.region, versionId: input.versionId, action: "issue", actorId: input.operatorId,
         });
         return "issued" as const;
+      });
+    },
+    async managedProbeEnrollmentGrantForDelivery(id, region) {
+      const [grant] = await db.select().from(schema.managedProbeEnrollmentGrant).where(and(
+        eq(schema.managedProbeEnrollmentGrant.id, id), eq(schema.managedProbeEnrollmentGrant.region, region),
+      )).limit(1);
+      if (!grant || grant.state !== "issued" || grant.expiresAt.getTime() <= Date.now() || !grant.signedEnvelope) return null;
+      const [registration] = await db.select({ state: schema.managedProbeRegistration.state, endpointUrl: schema.managedProbeRegistration.endpointUrl })
+        .from(schema.managedProbeRegistration).where(eq(schema.managedProbeRegistration.region, region)).limit(1);
+      const [credential] = await db.select({ state: schema.managedProbeCredential.state }).from(schema.managedProbeCredential).where(and(
+        eq(schema.managedProbeCredential.region, region), eq(schema.managedProbeCredential.versionId, grant.versionId),
+      )).limit(1);
+      if (!registration || registration.state !== "registered" || registration.endpointUrl !== grant.endpointUrl || credential?.state !== "prepared") return null;
+      return {
+        id: grant.id, region: grant.region, versionId: grant.versionId, endpointUrl: grant.endpointUrl,
+        signedEnvelope: grant.signedEnvelope, expiresAt: grant.expiresAt, state: grant.state as "issued",
+      };
+    },
+    async managedProbeIssuedEnrollmentGrantForDelivery(region) {
+      const [grant] = await db.select().from(schema.managedProbeEnrollmentGrant).where(and(
+        eq(schema.managedProbeEnrollmentGrant.region, region), eq(schema.managedProbeEnrollmentGrant.state, "issued"),
+        gt(schema.managedProbeEnrollmentGrant.expiresAt, sql`clock_timestamp()`),
+      )).limit(1);
+      if (!grant || !grant.signedEnvelope) return null;
+      const [registration] = await db.select({ state: schema.managedProbeRegistration.state, endpointUrl: schema.managedProbeRegistration.endpointUrl })
+        .from(schema.managedProbeRegistration).where(eq(schema.managedProbeRegistration.region, region)).limit(1);
+      const [credential] = await db.select({ state: schema.managedProbeCredential.state }).from(schema.managedProbeCredential).where(and(
+        eq(schema.managedProbeCredential.region, region), eq(schema.managedProbeCredential.versionId, grant.versionId),
+      )).limit(1);
+      if (!registration || registration.state !== "registered" || registration.endpointUrl !== grant.endpointUrl || credential?.state !== "prepared") return null;
+      return {
+        id: grant.id, region: grant.region, versionId: grant.versionId, endpointUrl: grant.endpointUrl,
+        signedEnvelope: grant.signedEnvelope, expiresAt: grant.expiresAt, state: "issued" as const,
+      };
+    },
+    async managedProbeRegistrationForEnrollment(region) {
+      const [registration] = await db.select({
+        region: schema.managedProbeRegistration.region,
+        endpointUrl: schema.managedProbeRegistration.endpointUrl,
+        state: schema.managedProbeRegistration.state,
+      }).from(schema.managedProbeRegistration).where(eq(schema.managedProbeRegistration.region, region)).limit(1);
+      if (!registration || registration.state !== "registered") return null;
+      return { region: registration.region, endpointUrl: registration.endpointUrl };
+    },
+    async managedProbeCredentialState(region, versionId) {
+      const [credential] = await db.select({ state: schema.managedProbeCredential.state }).from(schema.managedProbeCredential).where(and(
+        eq(schema.managedProbeCredential.region, region), eq(schema.managedProbeCredential.versionId, versionId),
+      )).limit(1);
+      return credential && ["prepared", "verified", "revoked"].includes(credential.state)
+        ? credential.state as "prepared" | "verified" | "revoked"
+        : null;
+    },
+    async managedProbeEnrollmentCredentialVersion(region) {
+      const [credential] = await db.select({ versionId: schema.managedProbeCredential.versionId, state: schema.managedProbeCredential.state })
+        .from(schema.managedProbeCredential).where(and(
+          eq(schema.managedProbeCredential.region, region), ne(schema.managedProbeCredential.state, "revoked"),
+        )).orderBy(desc(schema.managedProbeCredential.createdAt)).limit(1);
+      if (!credential || (credential.state !== "prepared" && credential.state !== "verified")) return null;
+      return { versionId: credential.versionId, state: credential.state };
+    },
+    async consumeManagedProbeEnrollmentGrantById(input) {
+      return db.transaction(async (tx) => {
+        await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${"managed-probe-registration:" + input.region}, 0))`);
+        const [grant] = await tx.select().from(schema.managedProbeEnrollmentGrant).where(and(
+          eq(schema.managedProbeEnrollmentGrant.id, input.id), eq(schema.managedProbeEnrollmentGrant.region, input.region),
+        )).for("update");
+        if (!grant || grant.versionId !== input.versionId || grant.endpointUrl !== input.endpointUrl ||
+            grant.nonceDigest.byteLength !== input.nonceDigest.byteLength || !timingSafeEqual(grant.nonceDigest, input.nonceDigest) || grant.state !== "issued") {
+          return "unavailable" as const;
+        }
+        const [registration] = await tx.select({ state: schema.managedProbeRegistration.state, endpointUrl: schema.managedProbeRegistration.endpointUrl })
+          .from(schema.managedProbeRegistration).where(eq(schema.managedProbeRegistration.region, input.region)).for("update");
+        const [credential] = await tx.select({ state: schema.managedProbeCredential.state }).from(schema.managedProbeCredential).where(and(
+          eq(schema.managedProbeCredential.region, input.region), eq(schema.managedProbeCredential.versionId, input.versionId),
+        )).for("update");
+        if (!registration || registration.state !== "registered" || registration.endpointUrl !== input.endpointUrl || !credential || credential.state !== "prepared") {
+          return "unavailable" as const;
+        }
+        const [consumed] = await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "consumed", consumedAt: sql`clock_timestamp()` })
+          .where(and(eq(schema.managedProbeEnrollmentGrant.id, grant.id), eq(schema.managedProbeEnrollmentGrant.state, "issued"), gt(schema.managedProbeEnrollmentGrant.expiresAt, sql`clock_timestamp()`)))
+          .returning({ id: schema.managedProbeEnrollmentGrant.id });
+        if (!consumed) {
+          await tx.update(schema.managedProbeEnrollmentGrant).set({ state: "expired" }).where(and(
+            eq(schema.managedProbeEnrollmentGrant.id, grant.id), eq(schema.managedProbeEnrollmentGrant.state, "issued"),
+          ));
+          await tx.insert(schema.managedProbeEnrollmentGrantEvent).values({
+            grantId: grant.id, region: input.region, versionId: grant.versionId, action: "expire", actorId: "system",
+          });
+          return "unavailable" as const;
+        }
+        const [verified] = await tx.update(schema.managedProbeCredential).set({ state: "verified" }).where(and(
+          eq(schema.managedProbeCredential.region, input.region), eq(schema.managedProbeCredential.versionId, input.versionId),
+          eq(schema.managedProbeCredential.state, "prepared"),
+        )).returning({ versionId: schema.managedProbeCredential.versionId });
+        if (!verified) throw new Error("Managed probe credential state changed during enrollment settlement");
+        await tx.insert(schema.managedProbeCredentialEvent).values({
+          region: input.region, versionId: grant.versionId, action: "verify", operatorId: input.actorId,
+        });
+        await tx.insert(schema.managedProbeEnrollmentGrantEvent).values({
+          grantId: grant.id, region: input.region, versionId: grant.versionId, action: "consume", actorId: input.actorId,
+        });
+        return "consumed" as const;
       });
     },
     async consumeManagedProbeEnrollmentGrant(input) {

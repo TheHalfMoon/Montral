@@ -194,7 +194,8 @@ export class ManagedProbeCredentialStore {
     try {
       const cipher = createCipheriv("aes-256-gcm", key, nonce, { authTagLength: TAG_BYTES });
       cipher.setAAD(aad(this.region, input.versionId, active.version));
-      ciphertext = Buffer.concat([cipher.update(credential), cipher.final(), cipher.getAuthTag()]);
+      const encrypted = Buffer.concat([cipher.update(credential), cipher.final(), cipher.getAuthTag()]);
+      ciphertext = encrypted;
       const now = Date.now();
       this.db.exec("BEGIN IMMEDIATE");
       const existingVersion = statement(this.db, "SELECT 1 FROM credential_version WHERE region=? AND version_id=?").get(this.region, input.versionId);
@@ -210,7 +211,7 @@ export class ManagedProbeCredentialStore {
       statement(this.db, `INSERT INTO credential_version
         (region,version_id,purpose,state,format_version,algorithm,key_version,nonce,ciphertext,created_at_ms,updated_at_ms)
         VALUES(?,?,?,'prepared',1,'A256GCM',?,?,?,?,?)`).run(
-          this.region, input.versionId, PURPOSE, active.version, nonce, ciphertext, now, now,
+          this.region, input.versionId, PURPOSE, active.version, nonce, encrypted, now, now,
         );
       this.db.exec("COMMIT");
       return "prepared";
@@ -271,12 +272,13 @@ export class ManagedProbeCredentialStore {
       const decipher = createDecipheriv("aes-256-gcm", key, nonceCopy, { authTagLength: TAG_BYTES });
       decipher.setAAD(aad(this.region, versionId, row.key_version));
       decipher.setAuthTag(storedCopy.subarray(CREDENTIAL_BYTES));
-      credential = Buffer.concat([decipher.update(storedCopy.subarray(0, CREDENTIAL_BYTES)), decipher.final()]);
-      if (credential.byteLength !== CREDENTIAL_BYTES) throw unavailable();
+      const decrypted = Buffer.concat([decipher.update(storedCopy.subarray(0, CREDENTIAL_BYTES)), decipher.final()]);
+      credential = decrypted;
+      if (decrypted.byteLength !== CREDENTIAL_BYTES) throw unavailable();
 
       let result: T;
       try {
-        result = callback(credential);
+        result = callback(decrypted);
       } catch (error) {
         callbackThrew = true;
         throw error;

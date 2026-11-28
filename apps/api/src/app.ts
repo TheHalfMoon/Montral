@@ -41,7 +41,10 @@ import { suspendedResponse, workspaceSuspended } from "./suspension";
 import { allowanceResetUtc } from "./entitlements";
 import { operatorApi } from "./operator";
 
-export function createApp(openDatabase: OpenDatabase, options: { edition?: Edition } = {}) {
+export function createApp(openDatabase: OpenDatabase, options: {
+  edition?: Edition;
+  managedProbeKekProvider?: import("./managed-probe-kek-provider").ManagedProbeKekProvider;
+} = {}) {
   const edition = options.edition ?? community;
   const app = new Hono<AppEnv>();
 
@@ -56,6 +59,7 @@ export function createApp(openDatabase: OpenDatabase, options: { edition?: Editi
     const database = openDatabase(connectionString(c.env), { max: 1 });
     c.set("repo", database.repo);
     c.set("database", database);
+    if (options.managedProbeKekProvider) c.set("managedProbeKekProvider", options.managedProbeKekProvider);
     // an edition's request middleware may query after the route has answered (edition.ts): never release early then
     c.set("earlyDatabaseRelease", !edition.requestMiddleware);
     c.set("auth", createAuth(database, c.env));

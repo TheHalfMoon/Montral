@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -14,13 +14,14 @@ const syntheticSecrets: Uint8Array[] = [];
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "montral-kek-test-"));
+  await chmod(directory, 0o700);
   directories.push(directory);
   const key1 = crypto.getRandomValues(new Uint8Array(32));
   const key2 = crypto.getRandomValues(new Uint8Array(32));
   syntheticSecrets.push(key1, key2);
-  await writeFile(join(directory, "kek-1.bin"), key1);
-  await writeFile(join(directory, "kek-2.bin"), key2);
-  await writeFile(join(directory, "active-version"), "1\n", "ascii");
+  await writeFile(join(directory, "kek-1.bin"), key1, { mode: 0o600 });
+  await writeFile(join(directory, "kek-2.bin"), key2, { mode: 0o600 });
+  await writeFile(join(directory, "active-version"), "1\n", { encoding: "ascii", mode: 0o600 });
   return { directory, key1, key2, provider: createFileManagedProbeKekProvider(directory) };
 }
 
@@ -29,7 +30,7 @@ afterEach(async () => {
   for (const secret of syntheticSecrets.splice(0)) secret.fill(0);
 });
 
-describe("file-backed managed probe KEK provider", () => {
+describe.skipIf(process.platform !== "linux")("file-backed managed probe KEK provider", () => {
   it("selects the active version, retains exact old versions, and releases returned key bytes", async () => {
     const f = await fixture();
     const leases: Uint8Array[] = [];
@@ -95,5 +96,14 @@ describe("file-backed managed probe KEK provider", () => {
     expect(failure?.message).toBe("Managed probe key unavailable");
     expect(failure?.message).not.toContain(directory);
     expect(await readFile(join(directory, "active-version")).catch(() => null)).toBeNull();
+  });
+
+  it("fails closed when the directory or key files are accessible to other users", async () => {
+    const f = await fixture();
+    await chmod(join(f.directory, "kek-1.bin"), 0o644);
+    await expect(f.provider.getActiveKey()).rejects.toThrow("Managed probe key unavailable");
+    await chmod(join(f.directory, "kek-1.bin"), 0o600);
+    await chmod(f.directory, 0o755);
+    await expect(f.provider.getActiveKey()).rejects.toThrow("Managed probe key unavailable");
   });
 });

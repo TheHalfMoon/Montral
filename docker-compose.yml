@@ -65,6 +65,11 @@ services:
       PROBE_SECRET: ${PROBE_SECRET:-}
       # Optional dedicated signing keys by region, stored only in private deployment secrets.
       PROBE_SECRETS: ${PROBE_SECRETS:-}
+      # Managed probe enrollment is opt-in and leaves received credentials inactive. The KEK directory must be mounted privately.
+      MONTRAL_MANAGED_PROBE_KEK_DIR: ${MONTRAL_MANAGED_PROBE_KEK_DIR:-}
+      # Keep the Ed25519 private key in an operator-controlled secret source; PEM may use literal backslash-n line breaks.
+      MONTRAL_MANAGED_PROBE_ENROLLMENT_KEY_ID: ${MONTRAL_MANAGED_PROBE_ENROLLMENT_KEY_ID:-}
+      MONTRAL_MANAGED_PROBE_ENROLLMENT_PRIVATE_KEY: ${MONTRAL_MANAGED_PROBE_ENROLLMENT_PRIVATE_KEY:-}
       # iOS push notifications (APNs); all four needed, see /docs/self-host#apns
       APNS_KEY: ${APNS_KEY:-}
       APNS_KEY_ID: ${APNS_KEY_ID:-}

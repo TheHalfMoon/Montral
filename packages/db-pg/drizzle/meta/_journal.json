@@ -484,6 +484,20 @@
       "when": 1795807802309,
       "tag": "0068_yielding_hellfire_club",
       "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1795876730911,
+      "tag": "0069_woozy_outlaw_kid",
+      "breakpoints": true
+    },
+    {
+      "idx": 70,
+      "version": "7",
+      "when": 1795877476848,
+      "tag": "0070_massive_susan_delgado",
+      "breakpoints": true
     }
   ]
 }

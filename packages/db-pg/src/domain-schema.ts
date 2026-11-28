@@ -1105,12 +1105,12 @@ export const managedProbeCredential = pgTable(
   },
   (t) => [
     primaryKey({ columns: [t.region, t.versionId], name: "managed_probe_credential_pk" }),
-    uniqueIndex("managed_probe_credential_one_prepared_per_region_unique").on(t.region).where(sql`${t.state} = 'prepared'`),
+    uniqueIndex("managed_probe_credential_one_unrevoked_per_region_unique").on(t.region).where(sql`${t.state} in ('prepared', 'verified')`),
     check("managed_probe_credential_format_chk", sql`${t.formatVersion} = 1 and ${t.algorithm} = 'A256GCM'`),
     check("managed_probe_credential_key_version_chk", sql`${t.keyVersion} between 1 and 2147483647`),
     check("managed_probe_credential_nonce_chk", sql`octet_length(${t.nonce}) = 12`),
     check("managed_probe_credential_ciphertext_chk", sql`octet_length(${t.ciphertext}) = 48`),
-    check("managed_probe_credential_state_chk", sql`(${t.state} = 'prepared' and ${t.revokedBy} is null and ${t.revokedAt} is null) or (${t.state} = 'revoked' and ${t.revokedBy} is not null and ${t.revokedAt} is not null)`),
+    check("managed_probe_credential_state_chk", sql`(${t.state} in ('prepared', 'verified') and ${t.revokedBy} is null and ${t.revokedAt} is null) or (${t.state} = 'revoked' and ${t.revokedBy} is not null and ${t.revokedAt} is not null)`),
     check("managed_probe_credential_created_by_chk", sql`char_length(${t.createdBy}) between 1 and 200`),
     check("managed_probe_credential_revoked_by_chk", sql`${t.revokedBy} is null or char_length(${t.revokedBy}) between 1 and 200`),
   ],
@@ -1130,7 +1130,7 @@ export const managedProbeCredentialEvent = pgTable(
   (t) => [
     index("managed_probe_credential_event_region_id_idx").on(t.region, t.id),
     check("managed_probe_credential_event_region_chk", sql`char_length(${t.region}) between 2 and 24`),
-    check("managed_probe_credential_event_action_chk", sql`${t.action} in ('prepare','revoke')`),
+    check("managed_probe_credential_event_action_chk", sql`${t.action} in ('prepare','verify','revoke')`),
     check("managed_probe_credential_event_operator_chk", sql`char_length(${t.operatorId}) between 1 and 200`),
   ],
 );
@@ -1145,6 +1145,8 @@ export const managedProbeEnrollmentGrant = pgTable(
     endpointUrl: text("endpoint_url").notNull(),
     tokenDigest: bytea("token_digest").notNull(),
     nonceDigest: bytea("nonce_digest").notNull(),
+    /** Public signed grant envelope retained for bounded crash-safe delivery retries. */
+    signedEnvelope: jsonb("signed_envelope").$type<unknown>(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     state: text("state").notNull().default("issued"),
     createdBy: text("created_by").notNull(),

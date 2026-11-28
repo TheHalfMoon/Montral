@@ -144,6 +144,8 @@ below uses the existing platform-operator gate, including a second-factor-verifi
 | `POST /api/operator/managed-probes/:id/restore` | Restores a suspended record to registered; revoked records cannot be restored. This does not activate execution. |
 | `POST /api/operator/managed-probes/:id/revoke` | Permanently revokes the registration identity and appends an audit event atomically. |
 | `GET /api/operator/managed-probes/:id/audit` | Returns bounded secret-free registration lifecycle events; endpoint URLs are not copied into the audit log. |
+| `POST /api/operator/managed-probes/:id/credentials` | When a Node self-hosted API has an external file-backed KEK configured, creates one encrypted, prepared credential or returns its existing non-secret version metadata. It never returns key material. |
+| `POST /api/operator/managed-probes/:id/enroll` | With an Ed25519 enrollment signer configured, delivers the prepared credential to the exact registered public HTTPS endpoint with a signed short-lived grant, bounded body/deadline and at most one identical retry. It requires a matching possession proof before recording `verified`; `executionEnabled` and activation remain false. |
 | `GET /api/operator/probes` | Every configured region, plus any region with stored state that is no longer configured (`configured: false`): `status` (`up`, `unreachable`, `drained`, `deactivated` or `unknown`), `enabled`, `credentialMode` (`dedicated`, `shared` or `unconfigured`), `lastAnswerAt`, `lastUnreachableAt`, `lastUnreachableReason`, `unreachableSince`, the drain fields and how many unpaused monitors list the region. `auto.monitors` counts monitors on this deployment's own location. Credential mode never includes a key, URL or secret fingerprint. |
 | `POST /api/operator/probes/:id/validate` | Accepts only `{}` and only an already configured region. Sends a bounded, redirect-disabled HMAC-signed challenge to the configured probe with no key value or monitor target. The response proof binds the fresh challenge, reported region ID, and capabilities to the existing configured key. It returns only the match result and recognized capabilities. A keyed configuration fingerprint binds recent activation proof to the exact configured endpoint and signing key without storing or returning either value. This proves possession of the configured key at the endpoint, **not source, deployment, or binary integrity**; a shared key also cannot distinguish regions using that same key. Returns 409 for an identity/key mismatch and 502 when the endpoint cannot be validated. Each attempted validation outcome is durably recorded before the response; if that audit write fails, the endpoint returns 503 and does not report a result. It is rate-limited with the operator write bucket. |
 | `POST /api/operator/probes/:id/drain` | Body `{"note"?: string}` (at most 200 characters). Only a configured region; `auto` cannot be drained. |
@@ -151,6 +153,16 @@ below uses the existing platform-operator gate, including a second-factor-verifi
 | `POST /api/operator/probes/:id/deactivate` | Accepts only `{}` for a configured region and persists `enabled=false` with an append-only lifecycle audit event in one transaction. Requests already in flight are not canceled; other replicas apply the flag after the 15-second region-state cache expires. |
 | `POST /api/operator/probes/:id/activate` | Accepts only `{}` for a configured region. Requires the most recent credential-possession validation outcome to be successful and less than five minutes old; validation and activation serialize per region. Returns 409 if the proof is absent, stale, or the latest outcome failed. |
 | `GET /api/operator/probes/:id/audit?limit=50` | Returns separate `events` (latest drain/undrain actions), `validationEvents` (latest fixed validation outcomes), and `lifecycleEvents` (latest activate/deactivate actions), each limited to 1 to 100 (default 50), newest first. Validation and lifecycle events expose only region, result/action, operator ID and timestamp. Customer sessions, API keys and non-MFA operator sessions get 403. |
+
+Managed provisioning is unavailable by default. For synthetic self-hosted qualification only, a Node API may be configured with
+`MONTRAL_MANAGED_PROBE_KEK_DIR` pointing to an operator-mounted directory containing `active-version` and immutable 32-byte
+`kek-<version>.bin` files, plus `MONTRAL_MANAGED_PROBE_ENROLLMENT_KEY_ID` and a private Ed25519 PEM in
+`MONTRAL_MANAGED_PROBE_ENROLLMENT_PRIVATE_KEY`. Keep the directory and private key outside the repository and restrict access
+to the API process. The matching API public key must be pinned in the probe's managed receiver configuration. These values
+are not set in the examples. A successful enrollment proves the registered receiver held and durably staged the delivered
+credential; it does not attest its software or deployment. The database state `verified` means possession confirmed and is
+not an active signing credential. The probe scheduler still uses only `PROBE_REGIONS` and `PROBE_SECRETS`; activation,
+rotation overlap, revocation propagation to a running probe, recovery, and operator-console controls remain unqualified.
 
 Persistent deactivation is separate from a temporary drain. Existing configured probes default to enabled for compatibility. A lifecycle change and its audit row commit atomically; the event table rejects update, delete and truncate. A database read failure temporarily disables configured remote probes until state can be read again. Activation requires a fresh successful possession proof bound to the current endpoint and signing key; changing either requires a new validation. The fingerprint is a keyed HMAC under `BETTER_AUTH_SECRET`, is not an exported credential, and is not included in operator API or audit responses. Validation still does not attest source, binary or deployment. Probe endpoint URLs still come only from `PROBE_REGIONS`; signing keys remain in deployment secret configuration and are not copied to registration or audit records.
 
@@ -213,10 +225,16 @@ Persistent deactivation is separate from a temporary drain. Existing configured 
 - Workspace suspension actions are still recorded in the affected customer's audit log and the server log,
   not in a general platform audit table. Probe drain/undrain actions now have their own append-only platform audit
   history; the operator plane still has no unified audit history across all other actions.
-- Probe regions are still added and removed through deployment configuration; there is no operator registration API,
-  database storage for probe keys, or automatic secret provisioning. Operators can durably deactivate a configured
-  endpoint and reactivate it after fresh credential-possession validation; this revokes scheduling through this API,
-  not the signing key at an already deployed probe. Per-region signing keys through `PROBE_SECRETS` and an expiring
-  probe-side rollover are supported. Probe-region accounting is persisted per UTC month
-  and the metered usage API reports regional reservations, outcomes and refunds. Stale reservations remain unverified;
-  historical aggregates are not rewritten. Real probes remain deployment-managed and are not live-qualified.
+- Managed probe registrations and encrypted credential metadata can now be created through the MFA-protected operator
+  API. Credential preparation and signed HTTPS enrollment are unavailable unless the Node API is explicitly configured
+  with `MONTRAL_MANAGED_PROBE_KEK_DIR` and an Ed25519 enrollment signing key. The receiver stages an encrypted
+  credential and proves possession; PostgreSQL records it as `verified` only after the proof and fresh lifecycle checks.
+  `verified` does not mean active: the probe receiver is not mounted by default, no scheduler consumes these credentials,
+  and the operator API reports `activationEnabled: false`. Existing deployment-configured probes remain the only active
+  authentication path. Dynamic activation, rotation overlap, replica-wide revocation and recovery are not qualified.
+  Operators can still durably deactivate a configured endpoint and reactivate it after fresh credential-possession
+  validation; this revokes scheduling through this API, not the signing key at an already deployed probe. Per-region
+  signing keys through `PROBE_SECRETS` and an expiring probe-side rollover are supported. Probe-region accounting is
+  persisted per UTC month and the metered usage API reports regional reservations, outcomes and refunds. Stale
+  reservations remain unverified; historical aggregates are not rewritten. Real probes remain deployment-managed and
+  are not live-qualified.

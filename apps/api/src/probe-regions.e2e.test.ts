@@ -1,5 +1,5 @@
 import { openDatabase } from "@montral/db-pg";
-import { createHmac } from "node:crypto";
+import { createHmac, generateKeyPairSync } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -31,6 +31,7 @@ const baseEnv = {
   // the monitored target is a local server, so this location's own check can confirm or refute the probes
   ALLOW_PRIVATE_TARGETS: "true",
 };
+const enrollmentSigningKey = generateKeyPairSync("ed25519").privateKey;
 
 /** RFC 6238 TOTP (SHA-1, 6 digits, 30 s) from the base32 secret of an otpauth:// URI. */
 function totp(uri: string, at = Date.now()): string {
@@ -589,6 +590,7 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect((await sendJson("/api/operator/managed-probes", undefined, "GET")).status).toBe(403);
     expect((await sendJson("/api/operator/managed-probes", unverifiedCookie, "GET")).status).toBe(403);
     expect((await sendJson("/api/operator/managed-probes", unverifiedCookie, "POST", body)).status).toBe(403);
+    expect((await sendJson(`/api/operator/managed-probes/${region}/credentials`, undefined, "POST", {})).status).toBe(403);
     expect((await op("/managed-probes", "POST", { ...body, region: "e2e-west", endpointUrl: PROBES["e2e-west"] })).status).toBe(409);
     const unkeyedRegion = `bare-${crypto.randomUUID().replace(/-/g, "").slice(0, 10)}`;
     const unkeyedEnv = {
@@ -605,6 +607,8 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
 
     const attempts = await Promise.all([op("/managed-probes", "POST", body), op("/managed-probes", "POST", body)]);
     expect(attempts.map((response) => response.status).sort()).toEqual([201, 409]);
+    expect((await op(`/managed-probes/${region}/credentials`, "POST", {})).status).toBe(503);
+    expect((await op(`/managed-probes/${region}/enroll`, "POST", {})).status).toBe(503);
     const duplicateEndpoint = await db!.repo.createManagedProbeRegistration!({
       region: `copy-${region}`, displayName: "Synthetic duplicate endpoint", endpointUrl, createdBy: operator.userId,
     });
@@ -644,7 +648,10 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
     expect(storedEnvelope).not.toBeNull();
     const encodedNonce = Buffer.from(storedEnvelope!.nonce).toString("base64");
     const encodedCiphertext = Buffer.from(storedEnvelope!.ciphertext).toString("base64");
-    const grant = await createManagedProbeEnrollmentGrant(db!.repo, { region, versionId: credentialVersionId, endpointUrl, operatorId: operator.userId });
+    const grant = await createManagedProbeEnrollmentGrant(db!.repo, {
+      region, versionId: credentialVersionId, endpointUrl, operatorId: operator.userId,
+      keyId: "synthetic-e2e", signingKey: enrollmentSigningKey,
+    });
     expect(await consumeManagedProbeEnrollmentGrant(db!.repo, { token: grant.token, nonce: grant.nonce, region, versionId: credentialVersionId, endpointUrl })).toBe(true);
     expect((await op(`/managed-probes/${region}/credential-audit?limit=0`, "GET")).status).toBe(400);
     const credentialAuditResponse = await op(`/managed-probes/${region}/credential-audit`, "GET");

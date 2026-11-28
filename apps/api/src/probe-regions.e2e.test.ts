@@ -8,6 +8,8 @@ import type { Edition } from "./edition";
 import { unmetered } from "./entitlements";
 import { availableRegions, configureProbes, probeConfigurationFingerprint, resetProbeRegionCache } from "./probes";
 import { PROBE_VALIDATION_TYPE, probeCredentialProofBody, signProbe, verifyProbe } from "./probe-protocol";
+import { createManagedProbeEnrollmentGrant, consumeManagedProbeEnrollmentGrant } from "./managed-probe-enrollment";
+import { generateAndPrepareManagedProbeCredential } from "./managed-probe-credential-prepare";
 
 // Runs only when TEST_DATABASE_URL points at a database (shared with the other end-to-end tests). Region ids are unique
 // to this file: the probe region table is platform-wide and other suites write to it too.
@@ -629,6 +631,36 @@ describe.skipIf(!url)("probe regions: confirmation, drain, health and the plan c
       region, displayName: "Synthetic managed probe", endpointUrl, state: "registered", createdBy: operator.userId, executionEnabled: false,
     });
     expect(availableRegions().some((configured) => configured.id === region)).toBe(false);
+
+    const key = crypto.getRandomValues(new Uint8Array(32));
+    const preparationOutcome = await generateAndPrepareManagedProbeCredential(db!.repo, region, operator.userId, {
+      getActiveKey: async () => ({ version: 9, key }), getKey: async (version) => version === 9 ? key : null,
+    });
+    key.fill(0);
+    expect(preparationOutcome).toBe("prepared");
+    const preparedEvent = (await db!.repo.managedProbeCredentialEvents!(region, 1))[0]!;
+    const credentialVersionId = preparedEvent.versionId;
+    const storedEnvelope = await db!.repo.preparedManagedProbeCredentialEnvelope!(region, credentialVersionId);
+    expect(storedEnvelope).not.toBeNull();
+    const encodedNonce = Buffer.from(storedEnvelope!.nonce).toString("base64");
+    const encodedCiphertext = Buffer.from(storedEnvelope!.ciphertext).toString("base64");
+    const grant = await createManagedProbeEnrollmentGrant(db!.repo, { region, versionId: credentialVersionId, endpointUrl, operatorId: operator.userId });
+    expect(await consumeManagedProbeEnrollmentGrant(db!.repo, { token: grant.token, nonce: grant.nonce, region, versionId: credentialVersionId, endpointUrl })).toBe(true);
+    expect((await op(`/managed-probes/${region}/credential-audit?limit=0`, "GET")).status).toBe(400);
+    const credentialAuditResponse = await op(`/managed-probes/${region}/credential-audit`, "GET");
+    expect(credentialAuditResponse.status).toBe(200);
+    const credentialAudit = await credentialAuditResponse.text();
+    expect(credentialAudit).toContain("credential.prepare");
+    expect(credentialAudit).toContain("enrollment.issue");
+    expect(credentialAudit).toContain("enrollment.consume");
+    expect(credentialAudit).not.toContain(grant.token);
+    expect(credentialAudit).not.toContain(grant.nonce);
+    expect(credentialAudit).not.toContain("ciphertext");
+    expect(credentialAudit).not.toContain(encodedNonce);
+    expect(credentialAudit).not.toContain(encodedCiphertext);
+    expect(credentialAudit).not.toContain("grantId");
+    expect((await sendJson(`/api/operator/managed-probes/${region}/credential-audit`, undefined, "GET")).status).toBe(403);
+    expect((await sendJson(`/api/operator/managed-probes/${region}/credential-audit`, unverifiedCookie, "GET")).status).toBe(403);
 
     const suspended = await Promise.all([op(`/managed-probes/${region}/suspend`, "POST", {}), op(`/managed-probes/${region}/suspend`, "POST", {})]);
     expect(suspended.map((response) => response.status)).toEqual([200, 200]);

@@ -138,6 +138,11 @@ export class ManagedProbeCredentialStore {
     private readonly keyProvider: ManagedProbeKekProvider,
   ) {}
 
+  /** Non-secret identity binding used to prevent a receiver from staging one region into another region's store. */
+  get regionId(): string {
+    return this.region;
+  }
+
   static open(input: {
     databasePath: string;
     region: string;

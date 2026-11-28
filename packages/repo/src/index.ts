@@ -257,7 +257,7 @@ export interface ManagedProbeCredentialEvent {
   id: number;
   region: string;
   versionId: string;
-  action: "prepare" | "revoke";
+  action: "prepare" | "verify" | "revoke";
   operatorId: string;
   createdAt: Date;
 }
@@ -271,6 +271,12 @@ export interface ManagedProbeEnrollmentGrantEvent {
   action: "issue" | "consume" | "expire" | "revoke";
   actorId: string;
   createdAt: Date;
+}
+
+/** Public signed bootstrap envelope and its immutable binding, retained so replicas can retry after a restart. */
+export interface ManagedProbeEnrollmentGrantDelivery {
+  id: string; region: string; versionId: string; endpointUrl: string; signedEnvelope: unknown;
+  expiresAt: Date; state: "issued" | "consumed" | "expired" | "revoked";
 }
 
 /** Encrypted credential bytes for one prepared version. Never expose this shape from a public API or event listing. */
@@ -877,11 +883,25 @@ export interface Repo {
   revokeManagedProbeCredential?(region: string, versionId: string, operatorId: string): Promise<"revoked" | "missing" | "already_revoked">;
   /** Secret-free credential lifecycle events, newest first, with a bounded limit. */
   managedProbeCredentialEvents?(region: string, limit: number): Promise<ManagedProbeCredentialEvent[]>;
-  /** Persist only token and nonce digests; registration, endpoint, and prepared credential are revalidated transactionally. */
+  /** Persist the token digest and public signed envelope; revalidate registration, endpoint, and prepared credential transactionally. */
   issueManagedProbeEnrollmentGrant?(input: {
     id: string; region: string; versionId: string; endpointUrl: string; tokenDigest: Uint8Array; nonceDigest: Uint8Array;
-    expiresAt: Date; operatorId: string;
+    signedEnvelope: unknown; expiresAt: Date; operatorId: string;
   }): Promise<"issued" | "missing_registration" | "registration_inactive" | "endpoint_mismatch" | "credential_unavailable" | "pending_grant_exists" | "invalid_expiry">;
+  /** Load one still-live, immutable grant envelope for retry; callers must revalidate it cryptographically. */
+  managedProbeEnrollmentGrantForDelivery?(id: string, region: string): Promise<ManagedProbeEnrollmentGrantDelivery | null>;
+  /** Find the current still-live grant for a region so an operator retry reuses it after a replica restart. */
+  managedProbeIssuedEnrollmentGrantForDelivery?(region: string): Promise<ManagedProbeEnrollmentGrantDelivery | null>;
+  /** Read the exact endpoint only while the persistent registration is eligible for enrollment. */
+  managedProbeRegistrationForEnrollment?(region: string): Promise<{ region: string; endpointUrl: string } | null>;
+  /** Read only non-secret lifecycle state after a proof settlement or restart. */
+  managedProbeCredentialState?(region: string, versionId: string): Promise<"prepared" | "verified" | "revoked" | null>;
+  /** Current unrevoked credential version for operator display; no encrypted or plaintext credential bytes. */
+  managedProbeEnrollmentCredentialVersion?(region: string): Promise<{ versionId: string; state: "prepared" | "verified" } | null>;
+  /** Consume a grant after proof verification, bound to the persisted nonce digest and current registration state. */
+  consumeManagedProbeEnrollmentGrantById?(input: {
+    id: string; nonceDigest: Uint8Array; region: string; versionId: string; endpointUrl: string; actorId: string;
+  }): Promise<"consumed" | "unavailable">;
   /** Atomically consume a grant only when token, nonce, region, exact endpoint, credential version, and live state match. */
   consumeManagedProbeEnrollmentGrant?(input: {
     tokenDigest: Uint8Array; nonceDigest: Uint8Array; region: string; versionId: string; endpointUrl: string; actorId: string;

@@ -11,6 +11,9 @@ import { AUTO, REGION_ID } from "./regions";
 import { parseManagedProbeRegistrationInput } from "./managed-probe-registration";
 import type { ProbeRegionState } from "@montral/repo";
 import { isSuspensionReason, SUSPENSION_NOTE_MAX } from "./suspension";
+import { createPrivateKey } from "node:crypto";
+import { generateAndPrepareManagedProbeCredential } from "./managed-probe-credential-prepare";
+import { deliverManagedProbeEnrollment } from "./managed-probe-enrollment-delivery";
 
 /**
  * Operator (platform staff) control plane, mounted at /api/operator outside requireOrg. See docs/OPERATOR.md.
@@ -208,6 +211,19 @@ function managedProbeRegistrationView(registration: {
     // Registration metadata is not proof of credential possession and is never an execution target.
     executionEnabled: false as const,
   };
+}
+
+function managedProbeGrantSigner(c: Context<AppEnv>) {
+  const keyId = c.env.MONTRAL_MANAGED_PROBE_ENROLLMENT_KEY_ID?.trim();
+  const pem = c.env.MONTRAL_MANAGED_PROBE_ENROLLMENT_PRIVATE_KEY;
+  if (!keyId || !/^[A-Za-z0-9_-]{1,32}$/.test(keyId) || !pem || pem.length > 8192) return null;
+  try {
+    const signingKey = createPrivateKey(pem.replace(/\\n/g, "\n"));
+    if (signingKey.asymmetricKeyType !== "ed25519" || signingKey.type !== "private") return null;
+    return { keyId, signingKey };
+  } catch {
+    return null;
+  }
 }
 
 async function changeManagedProbeRegistrationState(c: Context<AppEnv>, state: "registered" | "suspended" | "revoked") {
@@ -496,6 +512,75 @@ export const operatorApi = new Hono<AppEnv>()
     }
     if (!result.created) return c.json({ error: "Managed probe registration already exists", code: result.conflict === "region" ? "probe_registration_region_exists" : "probe_registration_endpoint_exists" }, 409);
     return c.json({ registration: managedProbeRegistrationView(result.registration) }, 201);
+  })
+  .post("/managed-probes/:id/credentials", async (c) => {
+    const region = c.req.param("id");
+    if (!region || !REGION_ID.test(region) || region === AUTO) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    const operatorId = c.get("operatorId")!;
+    if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const body = await strictJsonObjectBody(c.req.raw, 2048);
+    if (Object.keys(body).length) return c.json({ error: "Credential preparation accepts an empty object only" }, 400);
+    const provider = c.get("managedProbeKekProvider");
+    if (!provider || !repo.managedProbeRegistrationForEnrollment || !repo.managedProbeEnrollmentCredentialVersion) {
+      return c.json({ error: "Managed probe credential provisioning is unavailable" }, 503);
+    }
+    try {
+      if (!(await repo.managedProbeRegistrationForEnrollment(region))) return c.json({ error: "Not found" }, 404);
+      let credential = await repo.managedProbeEnrollmentCredentialVersion(region);
+      if (!credential) {
+        const result = await generateAndPrepareManagedProbeCredential(repo, region, operatorId, provider);
+        if (result !== "prepared") return c.json({ error: "Managed probe credential could not be prepared" }, 409);
+        credential = await repo.managedProbeEnrollmentCredentialVersion(region);
+      }
+      if (!credential) return c.json({ error: "Managed probe credential is unavailable" }, 503);
+      return c.json({
+        region, credentialVersionId: credential.versionId, credentialState: credential.state,
+        executionEnabled: false, activationEnabled: false,
+      }, credential.state === "prepared" ? 201 : 200);
+    } catch {
+      return c.json({ error: "Managed probe credential could not be prepared" }, 503);
+    }
+  })
+  .post("/managed-probes/:id/enroll", async (c) => {
+    const region = c.req.param("id");
+    if (!region || !REGION_ID.test(region) || region === AUTO) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    const operatorId = c.get("operatorId")!;
+    if (!(await allow(repo, `operator:write:${operatorId}`, 30, 600))) return c.json({ error: "Too many requests, try again later" }, 429);
+    const body = await strictJsonObjectBody(c.req.raw, 2048);
+    if (Object.keys(body).length) return c.json({ error: "Enrollment accepts an empty object only" }, 400);
+    const provider = c.get("managedProbeKekProvider");
+    const signer = managedProbeGrantSigner(c);
+    if (!provider || !signer || !repo.managedProbeEnrollmentCredentialVersion ||
+        !repo.managedProbeRegistrationForEnrollment) {
+      return c.json({ error: "Managed probe enrollment is unavailable" }, 503);
+    }
+    try {
+      const configured = parseProbeRegions(c.env.PROBE_REGIONS).regions;
+      const registration = await repo.managedProbeRegistrationForEnrollment(region);
+      if (!registration) return c.json({ error: "Not found" }, 404);
+      if (configured.some((entry) => entry.id === region || entry.url === registration.endpointUrl)) {
+        return c.json({ error: "Managed probe conflicts with deployment configuration" }, 409);
+      }
+      const credential = await repo.managedProbeEnrollmentCredentialVersion(region);
+      if (!credential) return c.json({ error: "Prepare a managed credential before enrollment" }, 409);
+      if (credential.state === "verified") {
+        return c.json({
+          region, credentialVersionId: credential.versionId, enrollmentState: "proof_verified",
+          executionEnabled: false, activationEnabled: false,
+        });
+      }
+      const outcome = await deliverManagedProbeEnrollment({
+        repo, region, versionId: credential.versionId, operatorId, ...signer, kekProvider: provider,
+      });
+      return c.json({
+        region, credentialVersionId: credential.versionId, enrollmentState: outcome,
+        executionEnabled: false, activationEnabled: false,
+      }, outcome === "proof_verified" ? 200 : 202);
+    } catch {
+      return c.json({ error: "Managed probe enrollment could not be confirmed" }, 503);
+    }
   })
   .post("/managed-probes/:id/suspend", (c) => changeManagedProbeRegistrationState(c, "suspended"))
   .post("/managed-probes/:id/restore", (c) => changeManagedProbeRegistrationState(c, "registered"))

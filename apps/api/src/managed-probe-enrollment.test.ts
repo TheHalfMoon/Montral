@@ -1,16 +1,53 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { createDb, createRepo, eq, migrate, schema } from "@montral/db-pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { consumeManagedProbeEnrollmentGrant, createManagedProbeEnrollmentGrant } from "./managed-probe-enrollment";
+import { consumeManagedProbeEnrollmentGrant, consumeManagedProbeEnrollmentGrantById, createManagedProbeEnrollmentGrant } from "./managed-probe-enrollment";
 
 const url = process.env.TEST_DATABASE_URL;
 const db = url ? createDb(url, { max: 5 }) : undefined;
 const repo = db ? createRepo(db) : undefined;
+const signingKey = generateKeyPairSync("ed25519").privateKey;
+const grantSigner = { keyId: "synthetic-test", signingKey };
 
 beforeAll(async () => { if (db) await migrate(db); });
 afterAll(async () => { if (db) await db.$client.end(); });
 
 describe.skipIf(!url)("managed probe enrollment authorization (PostgreSQL)", () => {
+  it("retains the exact public grant for retry and consumes it once after proof verification", async () => {
+    const region = `retry-${randomUUID().slice(0, 12)}`;
+    const endpointUrl = `https://${region}.example.test/api/probe/${region}`;
+    const versionId = randomUUID();
+    const operatorId = "synthetic-enrollment-retry-test";
+    expect((await repo!.createManagedProbeRegistration!({ region, displayName: "Synthetic retry", endpointUrl, createdBy: operatorId })).created).toBe(true);
+    expect(await repo!.prepareManagedProbeCredential!({
+      region, versionId, formatVersion: 1, algorithm: "A256GCM", keyVersion: 1,
+      nonce: new Uint8Array(12), ciphertext: new Uint8Array(48), operatorId,
+    })).toBe("prepared");
+
+    const created = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId, ...grantSigner });
+    const firstRead = await repo!.managedProbeEnrollmentGrantForDelivery!(created.id, region);
+    const replicaDb = createDb(url!, { max: 2 });
+    const replicaRepo = createRepo(replicaDb);
+    const retryRead = await replicaRepo.managedProbeEnrollmentGrantForDelivery!(created.id, region);
+    expect(firstRead?.signedEnvelope).toEqual(created.signedEnvelope);
+    expect(retryRead?.signedEnvelope).toEqual(firstRead?.signedEnvelope);
+    expect(await replicaRepo.managedProbeEnrollmentGrantForDelivery!(created.id, `wrong-${region}`)).toBeNull();
+    await expect(db!.update(schema.managedProbeEnrollmentGrant).set({ signedEnvelope: { modified: true } })
+      .where(eq(schema.managedProbeEnrollmentGrant.id, created.id))).rejects.toThrow();
+    expect((await replicaRepo.managedProbeEnrollmentGrantForDelivery!(created.id, region))?.signedEnvelope).toEqual(created.signedEnvelope);
+
+    const claims = created.signedEnvelope.claims;
+    const consumed = await Promise.all([
+      consumeManagedProbeEnrollmentGrantById(repo!, { claims, actorId: "synthetic-probe" }),
+      consumeManagedProbeEnrollmentGrantById(replicaRepo, { claims, actorId: "synthetic-probe-replica" }),
+    ]);
+    expect(consumed.filter(Boolean)).toHaveLength(1);
+    expect(await replicaRepo.managedProbeEnrollmentGrantForDelivery!(created.id, region)).toBeNull();
+    expect(await replicaRepo.managedProbeCredentialState!(region, versionId)).toBe("verified");
+    expect((await replicaRepo.managedProbeCredentialEvents!(region, 10)).map((event) => event.action)).toContain("verify");
+    await replicaDb.$client.end();
+  });
+
   it("stores only digests, binds authorization, serializes concurrent use, and invalidates on suspension", async () => {
     const region = `enroll-${randomUUID().slice(0, 12)}`;
     const endpointUrl = `https://${region}.example.test/api/probe/${region}`;
@@ -23,15 +60,17 @@ describe.skipIf(!url)("managed probe enrollment authorization (PostgreSQL)", () 
       nonce: new Uint8Array(12), ciphertext: new Uint8Array(48), operatorId,
     })).toBe("prepared");
 
-    const grant = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId });
+    const grant = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId, ...grantSigner });
     const [stored] = await db!.select().from(schema.managedProbeEnrollmentGrant).where(eq(schema.managedProbeEnrollmentGrant.id, grant.id));
     expect(stored).toBeDefined();
     expect(stored.tokenDigest).toEqual(new Uint8Array(createHash("sha256").update(Buffer.from(grant.token, "base64url")).digest()));
     expect(stored.nonceDigest).toEqual(new Uint8Array(createHash("sha256").update(Buffer.from(grant.nonce, "base64url")).digest()));
     expect(JSON.stringify(stored)).not.toContain(grant.token);
-    expect(JSON.stringify(stored)).not.toContain(grant.nonce);
+    expect((stored.signedEnvelope as typeof grant.signedEnvelope).claims.nonce).toBe(grant.nonce);
     expect(stored.endpointUrl).toBe(endpointUrl);
     expect(stored.versionId).toBe(versionId);
+    expect(stored.signedEnvelope).toEqual(grant.signedEnvelope);
+    expect(JSON.stringify(stored.signedEnvelope)).not.toContain(grant.token);
 
     expect(await consumeManagedProbeEnrollmentGrant(repo!, { ...grant, region: `other-${region}`, versionId, endpointUrl })).toBe(false);
     expect(await consumeManagedProbeEnrollmentGrant(repo!, { ...grant, region, versionId, endpointUrl: `${endpointUrl}/changed` })).toBe(false);
@@ -52,7 +91,7 @@ describe.skipIf(!url)("managed probe enrollment authorization (PostgreSQL)", () 
     expect(simultaneous.filter(Boolean)).toHaveLength(1);
     expect(await consumeManagedProbeEnrollmentGrant(repo!, { ...grant, region, versionId, endpointUrl })).toBe(false);
 
-    const second = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId });
+    const second = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId, ...grantSigner });
     expect((await repo!.transitionManagedProbeRegistration!(region, "suspended", operatorId)).outcome).toBe("changed");
     expect(await consumeManagedProbeEnrollmentGrant(repo!, { ...second, region, versionId, endpointUrl })).toBe(false);
     const events = await repo!.managedProbeEnrollmentGrantEvents!(region, 20);
@@ -88,7 +127,7 @@ describe.skipIf(!url)("managed probe enrollment authorization (PostgreSQL)", () 
     expect(expired.state).toBe("expired");
     expect((await repo!.managedProbeEnrollmentGrantEvents!(region, 10)).map((event) => event.action)).toContain("expire");
 
-    const pending = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId });
+    const pending = await createManagedProbeEnrollmentGrant(repo!, { region, versionId, endpointUrl, operatorId, ...grantSigner });
     expect(await repo!.revokeManagedProbeCredential!(region, versionId, operatorId)).toBe("revoked");
     expect(await consumeManagedProbeEnrollmentGrant(repo!, { ...pending, region, versionId, endpointUrl })).toBe(false);
     const [revoked] = await db!.select().from(schema.managedProbeEnrollmentGrant).where(eq(schema.managedProbeEnrollmentGrant.id, pending.id));

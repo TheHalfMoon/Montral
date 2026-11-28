@@ -1,5 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { Repo } from "@montral/repo";
+import type { KeyLike } from "node:crypto";
+import { signManagedProbeEnrollmentGrant, type SignedManagedProbeEnrollmentGrant } from "./managed-probe-enrollment-grant";
 
 const TOKEN_BYTES = 32;
 const NONCE_BYTES = 32;
@@ -21,8 +23,8 @@ function decodeOpaque(value: string): Uint8Array | null {
  */
 export async function createManagedProbeEnrollmentGrant(
   repo: Pick<Repo, "issueManagedProbeEnrollmentGrant">,
-  input: { region: string; versionId: string; endpointUrl: string; operatorId: string },
-): Promise<{ id: string; token: string; nonce: string; expiresAt: Date }> {
+  input: { region: string; versionId: string; endpointUrl: string; operatorId: string; keyId: string; signingKey: KeyLike },
+): Promise<{ id: string; token: string; nonce: string; expiresAt: Date; signedEnvelope: SignedManagedProbeEnrollmentGrant }> {
   const issue = repo.issueManagedProbeEnrollmentGrant;
   if (!issue) throw new Error("Managed probe enrollment is unavailable");
   const tokenBytes = randomBytes(TOKEN_BYTES);
@@ -34,21 +36,57 @@ export async function createManagedProbeEnrollmentGrant(
   const tokenDigest = digest(tokenBytes);
   const nonceDigest = digest(nonceBytes);
   try {
+    const issuedAtMs = Date.now();
+    const expiresAtMs = expiresAt.getTime();
+    const signedEnvelope = signManagedProbeEnrollmentGrant({
+      version: 1, keyId: input.keyId, grantId: id, region: input.region, endpointUrl: input.endpointUrl,
+      purpose: "probe-hmac-signing", credentialVersionId: input.versionId, nonce,
+      issuedAtMs, expiresAtMs,
+    }, input.signingKey, issuedAtMs);
     const outcome = await issue.call(repo, {
-      ...input,
       id,
+      region: input.region,
+      versionId: input.versionId,
+      endpointUrl: input.endpointUrl,
+      operatorId: input.operatorId,
       tokenDigest,
       nonceDigest,
+      signedEnvelope,
       expiresAt,
     });
     if (outcome !== "issued") throw new Error("Managed probe enrollment is unavailable");
-    return { id, token, nonce, expiresAt };
+    return { id, token, nonce, expiresAt, signedEnvelope };
   } catch {
     throw new Error("Managed probe enrollment is unavailable");
   } finally {
     tokenBytes.fill(0);
     nonceBytes.fill(0);
     tokenDigest.fill(0);
+    nonceDigest.fill(0);
+  }
+}
+
+/** Consume only after the exact persisted grant and a valid credential possession proof have been verified. */
+export async function consumeManagedProbeEnrollmentGrantById(
+  repo: Pick<Repo, "consumeManagedProbeEnrollmentGrantById">,
+  input: { claims: SignedManagedProbeEnrollmentGrant["claims"]; actorId: string },
+): Promise<boolean> {
+  const consume = repo.consumeManagedProbeEnrollmentGrantById;
+  if (!consume) return false;
+  const nonce = decodeOpaque(input.claims.nonce);
+  if (!nonce) return false;
+  const nonceDigest = digest(nonce);
+  try {
+    try {
+      return await consume.call(repo, {
+        id: input.claims.grantId, nonceDigest, region: input.claims.region,
+        versionId: input.claims.credentialVersionId, endpointUrl: input.claims.endpointUrl, actorId: input.actorId,
+      }) === "consumed";
+    } catch {
+      throw new Error("Managed probe enrollment is unavailable");
+    }
+  } finally {
+    nonce.fill(0);
     nonceDigest.fill(0);
   }
 }

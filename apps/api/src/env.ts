@@ -117,6 +117,11 @@ export type Bindings = {
   PROBE_SECRET?: string;
   /** Private JSON map of region id to HMAC key; invalid config disables all remote regions (never silently falls back). */
   PROBE_SECRETS?: string;
+  /** Optional self-hosted managed-probe KEK directory; unset keeps enrollment provisioning unavailable. */
+  MONTRAL_MANAGED_PROBE_KEK_DIR?: string;
+  /** Optional Ed25519 key identifier and private PEM for short-lived probe enrollment grants. */
+  MONTRAL_MANAGED_PROBE_ENROLLMENT_KEY_ID?: string;
+  MONTRAL_MANAGED_PROBE_ENROLLMENT_PRIVATE_KEY?: string;
   /**
    * iOS push notifications (APNs). All four must be set: the APNs Auth Key (.p8 file contents; literal `\n` is accepted),
    * its key id, the Apple team id and the app's bundle id.
@@ -144,6 +149,8 @@ export type RequestPrincipal = Readonly<RequestIdentity & {
 export type Variables = {
   /** Set only by requireOperator (operator.ts): the platform operator making this request. */
   operatorId?: string;
+  /** Self-hosted file-backed KEK provider; absent in Workers unless explicitly adapted. */
+  managedProbeKekProvider?: import("./managed-probe-kek-provider").ManagedProbeKekProvider;
   /** Present only after requireOrg has successfully verified identity, membership and selected project access. */
   requestPrincipal?: RequestPrincipal;
   statusResponsePrivate?: boolean;

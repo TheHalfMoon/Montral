@@ -30,6 +30,7 @@ import { recheckSsoDomains } from "./sso-domains";
 import { routeCustomDomain, STATUS_DOMAIN_HEADER } from "./custom-domain-node";
 import { auditRetentionDays } from "./audit";
 import { fatalMigrationProblem } from "./startup-schema";
+import { createFileManagedProbeKekProvider } from "./managed-probe-kek-file-provider";
 
 /**
  * Self-hosted entry point (Docker): one Node process serving the API, the Astro web build and the check
@@ -108,7 +109,11 @@ const shared: OpenDatabase = () => ({ ...database, close: async () => {} });
 /** The edition: self-hosted is the open-source one, unmetered. */
 const edition: Edition = montralEdition;
 const entitlements = edition.entitlements({ database, env: env as never });
-const app = createApp(shared, { edition });
+const managedProbeKekDirectory = env.MONTRAL_MANAGED_PROBE_KEK_DIR?.trim();
+const managedProbeKekProvider = managedProbeKekDirectory
+  ? createFileManagedProbeKekProvider(managedProbeKekDirectory)
+  : undefined;
+const app = createApp(shared, { edition, managedProbeKekProvider });
 
 // In-process Cloudflare Queue substitute. Reserve every delayed, ready and
 // running task inside one finite, atomically accepting backpressure budget.

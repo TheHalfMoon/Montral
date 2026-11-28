@@ -157,7 +157,7 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
     }
   });
 
-  it("recovers a persisted envelope through the file provider after active-key rotation", async () => {
+  it.skipIf(process.platform !== "linux")("recovers a persisted envelope through the Linux file provider after active-key rotation", async () => {
     const directory = await mkdtemp(join(tmpdir(), "montral-kek-storage-e2e-"));
     const region = `probe-${crypto.randomUUID().slice(0, 12)}`;
     const operatorId = "synthetic-file-kek-test";
@@ -167,8 +167,8 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
     let generated: Awaited<ReturnType<typeof generateEncryptedManagedProbeCredentialWithProvider>> | undefined;
     let observedCredential: Uint8Array | undefined;
     try {
-      await writeFile(join(directory, "kek-1.bin"), key1);
-      await writeFile(join(directory, "active-version"), "1\n", "ascii");
+      await writeFile(join(directory, "kek-1.bin"), key1, { mode: 0o600 });
+      await writeFile(join(directory, "active-version"), "1\n", { encoding: "ascii", mode: 0o600 });
       const registered = await repo.createManagedProbeRegistration!({
         region,
         displayName: "Synthetic file-backed probe",
@@ -191,7 +191,7 @@ describe.skipIf(!url)("managed probe envelope persistence and database-only reco
         operatorId,
       })).toBe("prepared");
 
-      await writeFile(join(directory, "kek-2.bin"), key2);
+      await writeFile(join(directory, "kek-2.bin"), key2, { mode: 0o600 });
       await writeFile(join(directory, "active-version"), "2\n", "ascii");
       const storedEnvelope = await repo.preparedManagedProbeCredentialEnvelope!(region, current.credentialVersionId);
       expect(storedEnvelope?.keyVersion).toBe(1);

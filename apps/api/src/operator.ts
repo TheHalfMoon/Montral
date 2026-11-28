@@ -516,6 +516,38 @@ export const operatorApi = new Hono<AppEnv>()
       return c.json({ error: "Managed probe audit could not be loaded" }, 503);
     }
   })
+  .get("/managed-probes/:id/credential-audit", async (c) => {
+    const region = c.req.param("id");
+    if (!REGION_ID.test(region) || region === AUTO) return c.json({ error: "Not found" }, 404);
+    const repo = c.get("repo");
+    if (!repo.managedProbeCredentialEvents || !repo.managedProbeEnrollmentGrantEvents) {
+      return c.json({ error: "Managed probe credential audit is not available on this backend" }, 501);
+    }
+    const rawLimit = c.req.query("limit");
+    const limit = rawLimit === undefined ? 50 : Number(rawLimit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) return c.json({ error: "limit must be between 1 and 100" }, 400);
+    try {
+      const [credentials, enrollment] = await Promise.all([
+        repo.managedProbeCredentialEvents(region, limit),
+        repo.managedProbeEnrollmentGrantEvents(region, limit),
+      ]);
+      const events = [
+        ...credentials.map((event) => ({
+          id: `credential-${event.id}`, versionId: event.versionId, action: `credential.${event.action}`,
+          actorId: event.operatorId, createdAt: event.createdAt,
+        })),
+        ...enrollment.map((event) => ({
+          id: `enrollment-${event.id}`, versionId: event.versionId, action: `enrollment.${event.action}`,
+          actorId: event.actorId, createdAt: event.createdAt,
+        })),
+      ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || b.id.localeCompare(a.id))
+        .slice(0, limit)
+        .map((event) => ({ ...event, createdAt: new Date(event.createdAt).toISOString() }));
+      return c.json({ region, events });
+    } catch {
+      return c.json({ error: "Managed probe credential audit could not be loaded" }, 503);
+    }
+  })
   // Probe regions: the configured ones (PROBE_REGIONS) and any with stored state that is no longer configured.
   .get("/probes", async (c) => {
     const repo = c.get("repo");

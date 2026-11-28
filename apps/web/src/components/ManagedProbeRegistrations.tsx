@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type SyntheticEvent } from "react";
-import { operatorActionConfirmed, operatorApi, type ManagedProbeRegistration, type ManagedProbeRegistrationEvent } from "../lib/operator-api";
+import { operatorActionConfirmed, operatorApi, type ManagedProbeRegistration, type ManagedProbeRegistrationEvent, type ManagedProbeCredentialAuditEvent } from "../lib/operator-api";
 
 type Props = { onFailure: (error: unknown) => string };
 
@@ -19,9 +19,13 @@ export function ManagedProbeRegistrations({ onFailure }: Props) {
   const [auditFor, setAuditFor] = useState<string | null>(null);
   const [events, setEvents] = useState<ManagedProbeRegistrationEvent[]>([]);
   const [auditError, setAuditError] = useState("");
+  const [credentialAuditFor, setCredentialAuditFor] = useState<string | null>(null);
+  const [credentialEvents, setCredentialEvents] = useState<ManagedProbeCredentialAuditEvent[]>([]);
+  const [credentialAuditError, setCredentialAuditError] = useState("");
   const alive = useRef(true);
   const listSeq = useRef(0);
   const auditSeq = useRef(0);
+  const credentialAuditSeq = useRef(0);
   const onFailureRef = useRef(onFailure);
   onFailureRef.current = onFailure;
 
@@ -40,7 +44,7 @@ export function ManagedProbeRegistrations({ onFailure }: Props) {
   useEffect(() => {
     alive.current = true;
     void load();
-    return () => { alive.current = false; listSeq.current++; auditSeq.current++; };
+    return () => { alive.current = false; listSeq.current++; auditSeq.current++; credentialAuditSeq.current++; };
   }, []);
 
   async function create(e: SyntheticEvent<HTMLFormElement>) {
@@ -81,6 +85,16 @@ export function ManagedProbeRegistrations({ onFailure }: Props) {
     } catch (err) { if (alive.current && auditSeq.current === seq) setAuditError(onFailureRef.current(err)); }
   }
 
+  async function toggleCredentialAudit(id: string) {
+    if (credentialAuditFor === id) { credentialAuditSeq.current++; setCredentialAuditFor(null); setCredentialEvents([]); setCredentialAuditError(""); return; }
+    const seq = ++credentialAuditSeq.current;
+    setCredentialAuditFor(id); setCredentialEvents([]); setCredentialAuditError("");
+    try {
+      const result = await operatorApi.managedProbeCredentialAudit(id);
+      if (alive.current && credentialAuditSeq.current === seq) setCredentialEvents(result.events);
+    } catch (err) { if (alive.current && credentialAuditSeq.current === seq) setCredentialAuditError(onFailureRef.current(err)); }
+  }
+
   return <section className="card sect" aria-label="Managed probe registrations">
     <h2>Managed probe registrations</h2>
     <p className="muted">This inventory stores operator-managed metadata only. Registration does not create or deliver credentials, validate endpoint connectivity, enable monitoring, or prove probe software identity. Deployment-configured probes continue to run independently.</p>
@@ -117,6 +131,9 @@ export function ManagedProbeRegistrations({ onFailure }: Props) {
             <button className="btn sm" type="button" disabled={busy} aria-expanded={auditFor === registration.region} onClick={() => void toggleAudit(registration.region)}>
               {auditFor === registration.region ? "Hide registration audit" : "Registration audit"}
             </button>
+            <button className="btn sm" type="button" disabled={busy} aria-expanded={credentialAuditFor === registration.region} onClick={() => void toggleCredentialAudit(registration.region)}>
+              {credentialAuditFor === registration.region ? "Hide credential history" : "Credential history"}
+            </button>
             {registration.state !== "revoked" && <>
               <button className="btn sm" type="button" disabled={busy} onClick={() => { setPending({ id: registration.region, action: registration.state === "suspended" ? "restore" : "suspend" }); setConfirm(""); }}>
                 {registration.state === "suspended" ? "Restore metadata" : "Suspend metadata"}
@@ -132,6 +149,9 @@ export function ManagedProbeRegistrations({ onFailure }: Props) {
                 <tbody>{events.map((event) => <tr key={event.id}><td>{new Date(event.createdAt).toLocaleString()}</td><td>{event.action}</td><td className="mono" style={{ overflowWrap: "anywhere" }}>{event.operatorId}</td></tr>)}</tbody>
               </table></div>}
           </section>}
+          {credentialAuditFor === registration.region && <section aria-label={`Credential history for ${registration.region}`}>
+            <ManagedProbeCredentialAuditView region={registration.region} events={credentialEvents} error={credentialAuditError} />
+          </section>}
           {pending?.id === registration.region && <div style={{ display: "grid", gap: 8, marginTop: 10 }}>
             <p className="muted">This changes registration metadata only. It does not enable or stop configured probe checks. Revocation is terminal.</p>
             <label className="fld">Type the exact region ID <strong className="mono">{registration.region}</strong> to confirm
@@ -145,4 +165,18 @@ export function ManagedProbeRegistrations({ onFailure }: Props) {
         {next && <button className="btn" type="button" disabled={busy || loading} onClick={() => void load(next)}>Load next registrations</button>}
       </div>}
   </section>;
+}
+
+export function ManagedProbeCredentialAuditView({ region, events, error }: {
+  region: string; events: ManagedProbeCredentialAuditEvent[]; error: string;
+}) {
+  return <>
+    <h4>Credential lifecycle history</h4>
+    <p className="muted">This history contains version and event metadata only. It never displays credentials, ciphertext, encryption nonces, or enrollment tokens; history does not mean monitoring is enabled.</p>
+    {error ? <p role="alert">{error}</p> : events.length === 0 ? <p className="muted">No credential lifecycle events found for {region}.</p> :
+      <div style={{ overflowX: "auto" }}><table className="usage-tbl">
+        <thead><tr><th>When</th><th>Action</th><th>Version</th><th>Actor</th></tr></thead>
+        <tbody>{events.map((event) => <tr key={event.id}><td>{new Date(event.createdAt).toLocaleString()}</td><td>{event.action}</td><td className="mono" style={{ overflowWrap: "anywhere" }}>{event.versionId}</td><td className="mono" style={{ overflowWrap: "anywhere" }}>{event.actorId}</td></tr>)}</tbody>
+      </table></div>}
+  </>;
 }

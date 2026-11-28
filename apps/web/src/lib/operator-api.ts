@@ -37,6 +37,11 @@ export type ManagedProbeRegistrationEvent = {
   id: number; region: string; action: "register" | "suspend" | "restore" | "revoke";
   operatorId: string; createdAt: string;
 };
+export type ManagedProbeCredentialAuditEvent = {
+  id: string; versionId: string;
+  action: "credential.prepare" | "credential.revoke" | "enrollment.issue" | "enrollment.consume" | "enrollment.expire" | "enrollment.revoke";
+  actorId: string; createdAt: string;
+};
 export type OperatorPlatformAuditEvent = {
   source: "workspace" | "probe"; id: string;
   action: "workspace.suspend" | "workspace.unsuspend" | "probe.drain" | "probe.undrain"
@@ -95,6 +100,7 @@ export function makeOperatorApi(fetcher: typeof fetch = fetch) {
     transitionManagedProbe: (id: string, action: "suspend" | "restore" | "revoke") =>
       call<{ registration: ManagedProbeRegistration }>(`/managed-probes/${encodeURIComponent(id)}/${action}`, {}),
     managedProbeAudit: (id: string) => call<{ region: string; events: ManagedProbeRegistrationEvent[] }>(`/managed-probes/${encodeURIComponent(id)}/audit?limit=50`),
+    managedProbeCredentialAudit: (id: string) => call<{ region: string; events: ManagedProbeCredentialAuditEvent[] }>(`/managed-probes/${encodeURIComponent(id)}/credential-audit?limit=50`),
     probeAudit: (id: string) => call<{ region: string; events: OperatorProbeAuditEvent[]; lifecycleEvents: OperatorProbeLifecycleEvent[] }>(`/probes/${encodeURIComponent(id)}/audit?limit=50`),
     validateProbe: (id: string) => call<OperatorProbeValidation>(`/probes/${encodeURIComponent(id)}/validate`, {}),
     drain: (id: string, note: string) => call<{ id: string; drained: true }>(`/probes/${encodeURIComponent(id)}/drain`, { note }),

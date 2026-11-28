@@ -108,6 +108,12 @@ test("operator console is denied by default and confirms every synthetic state c
       { id: 1, region: "synthetic-managed-east", action: "register", operatorId: "synthetic-operator", createdAt: "2026-01-01T00:00:00.000Z" },
       { id: 2, region: "synthetic-managed-east", action: managedState === "registered" ? "restore" : managedState, operatorId: "synthetic-operator", createdAt: "2026-01-02T00:00:00.000Z" },
     ] });
+    if (path === "/managed-probes/synthetic-managed-east/credential-audit") return answer(route, 200, {
+      region: "synthetic-managed-east", events: [
+        { id: "credential-1", versionId: "synthetic-version-1", action: "credential.prepare", actorId: "synthetic-operator", createdAt: "2026-01-03T00:00:00.000Z" },
+        { id: "enrollment-2", versionId: "synthetic-version-1", action: "enrollment.consume", actorId: "probe-enrollment", createdAt: "2026-01-04T00:00:00.000Z" },
+      ],
+    });
     if (path === "/probes") return denyProbeOnFirstMock
       ? answer(route, 403, { error: "private operator configuration" })
       : answer(route, 200, { auto: { monitors: 0 }, regions: [region()] });
@@ -218,6 +224,14 @@ test("operator console is denied by default and confirms every synthetic state c
   const managedAudit = managed.getByRole("region", { name: "Registration audit for synthetic-managed-east" });
   await expect(managedAudit).toContainText("register");
   await expect(managedAudit).toContainText("synthetic-operator");
+  await managed.getByRole("button", { name: "Credential history" }).click();
+  const credentialHistory = managed.getByRole("region", { name: "Credential history for synthetic-managed-east" });
+  await expect(credentialHistory).toContainText("credential.prepare");
+  await expect(credentialHistory).toContainText("enrollment.consume");
+  await expect(credentialHistory).toContainText("synthetic-version-1");
+  await expect(credentialHistory).toContainText("never displays credentials, ciphertext, encryption nonces, or enrollment tokens");
+  await expect(credentialHistory).toContainText("history does not mean monitoring is enabled");
+  expect(await credentialHistory.innerText()).not.toContain("synthetic-enrollment-token");
   await managed.getByRole("button", { name: "Suspend metadata" }).click();
   await managed.getByLabel(/Type the exact region ID/).fill("synthetic-managed-east");
   await managed.getByRole("button", { name: "Confirm metadata suspension" }).click();
